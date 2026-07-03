@@ -1,0 +1,53 @@
+# AgentNexus configuration (example). Copy to config.toml and edit.
+# ${ENV_VAR} placeholders are expanded from the environment.
+
+display_mode = "normal"  # quiet | compact | normal | full
+
+[server]
+addr = "127.0.0.1:8765"
+
+[bridge]
+enabled = false
+# token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
+
+# ---- Projects: pair an agent with one or more IM platforms ----
+[[projects]]
+name = "demo"
+agent = "claudecode"
+work_dir = "."
+system_prompt = "You are a helpful coding assistant."
+
+  [projects.env]
+  # ANTHROPIC_API_KEY = "${MY_KEY}"
+
+  [[projects.platforms]]
+  type = "feishu"
+  app_id = "${FEISHU_APP_ID}"
+  app_secret = "${FEISHU_APP_SECRET}"
+
+# ---- Lifecycle hooks ----
+# [[hooks]]
+# event = "error"
+# type = "shell"
+# command = "echo error >> /tmp/aib.log"
+
+# ---- Provider management ----
+[provider]
+failover = true
+
+# ---- Token usage analytics ----
+[usage]
+sources = ["claude", "codex", "cursor", "gemini"]
+offline = false
+# cache_dir = "~/.cache/agentnexus"
+
+# Optional: collect usage from remote machines over SSH.
+# [[usage.ssh]]
+# name = "build-box"
+# host = "10.0.0.5"
+# port = 22
+# user = "dev"
+# key_path = "~/.ssh/id_ed25519"
+# sources = ["claude", "codex"]
+#   [usage.ssh.paths]
+#   claude = ".claude"

@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/useasync.ts","./src/panels/gatewaypanel.tsx","./src/panels/guardpanel.tsx","./src/panels/mcppanel.tsx","./src/panels/memorypanel.tsx","./src/panels/overviewpanel.tsx","./src/panels/providerspanel.tsx","./src/panels/skillspanel.tsx","./src/panels/usagepanel.tsx"],"version":"5.9.3"}

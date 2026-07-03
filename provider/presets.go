@@ -1,0 +1,52 @@
+package provider
+
+import (
+	_ "embed"
+	"encoding/json"
+
+	"github.com/agentnexus/agentnexus/core"
+)
+
+//go:embed presets.json
+var presetsRaw []byte
+
+// presetEntry is the on-disk preset shape.
+type presetEntry struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	BaseURL   string   `json:"base_url"`
+	APIKeyEnv string   `json:"api_key_env"`
+	Model     string   `json:"model"`
+	Tools     []string `json:"tools"`
+}
+
+// Presets returns the built-in provider presets as core.Provider templates.
+func Presets() []*core.Provider {
+	var entries []presetEntry
+	if err := json.Unmarshal(presetsRaw, &entries); err != nil {
+		return nil
+	}
+	out := make([]*core.Provider, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, &core.Provider{
+			ID:        e.ID,
+			Name:      e.Name,
+			Preset:    e.ID,
+			BaseURL:   e.BaseURL,
+			APIKeyEnv: e.APIKeyEnv,
+			Model:     e.Model,
+			Tools:     e.Tools,
+		})
+	}
+	return out
+}
+
+// PresetByID returns a single preset template, or nil.
+func PresetByID(id string) *core.Provider {
+	for _, p := range Presets() {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}

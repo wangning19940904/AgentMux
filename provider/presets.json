@@ -1,0 +1,18 @@
+[
+  { "id": "anthropic-official", "name": "Anthropic (Official)", "base_url": "https://api.anthropic.com", "api_key_env": "ANTHROPIC_API_KEY", "tools": ["claudecode"], "model": "claude-opus-4-8" },
+  { "id": "openai-official", "name": "OpenAI (Official)", "base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY", "tools": ["codex"], "model": "gpt-5" },
+  { "id": "gemini-official", "name": "Google Gemini (Official)", "base_url": "https://generativelanguage.googleapis.com", "api_key_env": "GEMINI_API_KEY", "tools": ["gemini"], "model": "gemini-2.5-pro" },
+  { "id": "aws-bedrock", "name": "AWS Bedrock", "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com", "api_key_env": "AWS_BEARER_TOKEN_BEDROCK", "tools": ["claudecode"], "model": "anthropic.claude-opus-4-8" },
+  { "id": "openrouter", "name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY", "tools": ["codex", "claudecode"] },
+  { "id": "deepseek", "name": "DeepSeek", "base_url": "https://api.deepseek.com", "api_key_env": "DEEPSEEK_API_KEY", "tools": ["codex"], "model": "deepseek-chat" },
+  { "id": "moonshot-kimi", "name": "Moonshot (Kimi)", "base_url": "https://api.moonshot.cn/v1", "api_key_env": "MOONSHOT_API_KEY", "tools": ["claudecode", "codex"], "model": "kimi-k2.6" },
+  { "id": "siliconflow", "name": "SiliconFlow", "base_url": "https://api.siliconflow.cn", "api_key_env": "SILICONFLOW_API_KEY", "tools": ["claudecode", "codex"], "model": "Pro/moonshotai/Kimi-K2.5" },
+  { "id": "zhipu-glm", "name": "Zhipu GLM", "base_url": "https://open.bigmodel.cn/api/paas/v4", "api_key_env": "ZHIPU_API_KEY", "tools": ["codex"], "model": "glm-4.6" },
+  { "id": "groq", "name": "Groq", "base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY", "tools": ["codex"] },
+  { "id": "together", "name": "Together AI", "base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY", "tools": ["codex"] },
+  { "id": "fireworks", "name": "Fireworks AI", "base_url": "https://api.fireworks.ai/inference/v1", "api_key_env": "FIREWORKS_API_KEY", "tools": ["codex"] },
+  { "id": "nvidia-nim", "name": "NVIDIA NIM", "base_url": "https://integrate.api.nvidia.com/v1", "api_key_env": "NVIDIA_API_KEY", "tools": ["codex"] },
+  { "id": "mistral", "name": "Mistral", "base_url": "https://api.mistral.ai/v1", "api_key_env": "MISTRAL_API_KEY", "tools": ["codex"] },
+  { "id": "xai-grok", "name": "xAI Grok", "base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY", "tools": ["codex"], "model": "grok-4" },
+  { "id": "qwen-dashscope", "name": "Qwen (DashScope)", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "api_key_env": "DASHSCOPE_API_KEY", "tools": ["codex"], "model": "qwen-max" }
+]

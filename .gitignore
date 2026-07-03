@@ -1,0 +1,22 @@
+# Binaries
+/anx
+/agent-nexus
+/dist/
+macos-menubar/AgentNexusMenuBar
+desktop/build/
+desktop/frontend
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Local data / databases
+*.db
+*.db-wal
+*.db-shm
+
+# Config (keep the example)
+config.toml
+
+# OS
+.DS_Store

@@ -1,0 +1,131 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"strings"
+	"time"
+
+	"github.com/agentnexus/agentnexus/core"
+)
+
+func joinTools(t []string) string { return strings.Join(t, ",") }
+func splitTools(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, ",")
+}
+
+// ListProviders returns all providers ordered by name.
+func (s *Store) ListProviders(ctx context.Context) ([]*core.Provider, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,preset,base_url,api_key_env,
+		model,tools,extra,enabled,created_at,updated_at FROM providers ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*core.Provider
+	for rows.Next() {
+		p, err := scanProvider(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetProvider returns one provider or (nil,nil) if absent.
+func (s *Store) GetProvider(ctx context.Context, id string) (*core.Provider, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,name,preset,base_url,api_key_env,
+		model,tools,extra,enabled,created_at,updated_at FROM providers WHERE id=?`, id)
+	p, err := scanProvider(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return p, err
+}
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProvider(sc scanner) (*core.Provider, error) {
+	var p core.Provider
+	var preset, apiKeyEnv, model, tools, extra, created, updated sql.NullString
+	var enabled int
+	if err := sc.Scan(&p.ID, &p.Name, &preset, &p.BaseURL, &apiKeyEnv,
+		&model, &tools, &extra, &enabled, &created, &updated); err != nil {
+		return nil, err
+	}
+	p.Preset = preset.String
+	p.APIKeyEnv = apiKeyEnv.String
+	p.Model = model.String
+	p.Tools = splitTools(tools.String)
+	p.Enabled = enabled != 0
+	if extra.String != "" {
+		_ = json.Unmarshal([]byte(extra.String), &p.Extra)
+	}
+	p.CreatedAt, _ = time.Parse(time.RFC3339Nano, created.String)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated.String)
+	return &p, nil
+}
+
+// UpsertProvider inserts or updates a provider atomically.
+func (s *Store) UpsertProvider(ctx context.Context, p *core.Provider) error {
+	extra, _ := json.Marshal(p.Extra)
+	enabled := 0
+	if p.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO providers
+		(id,name,preset,base_url,api_key_env,model,tools,extra,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,
+		base_url=excluded.base_url,api_key_env=excluded.api_key_env,model=excluded.model,
+		tools=excluded.tools,extra=excluded.extra,enabled=excluded.enabled,
+		updated_at=excluded.updated_at`,
+		p.ID, p.Name, p.Preset, p.BaseURL, p.APIKeyEnv, p.Model, joinTools(p.Tools),
+		string(extra), enabled, p.CreatedAt.Format(time.RFC3339Nano), p.UpdatedAt.Format(time.RFC3339Nano))
+	return err
+}
+
+// DeleteProvider removes a provider by id.
+func (s *Store) DeleteProvider(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, id)
+	return err
+}
+
+// SetActiveProvider marks provider id active for a tool (and flips enabled flags).
+func (s *Store) SetActiveProvider(ctx context.Context, tool, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO active_provider(tool,provider_id)
+		VALUES(?,?) ON CONFLICT(tool) DO UPDATE SET provider_id=excluded.provider_id`,
+		tool, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE providers SET enabled=1 WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ActiveProviderID returns the active provider id for a tool.
+func (s *Store) ActiveProviderID(ctx context.Context, tool string) (string, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT provider_id FROM active_provider WHERE tool=?`, tool)
+	var id string
+	switch err := row.Scan(&id); err {
+	case nil:
+		return id, true, nil
+	case sql.ErrNoRows:
+		return "", false, nil
+	default:
+		return "", false, err
+	}
+}
