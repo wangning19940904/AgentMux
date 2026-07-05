@@ -18,14 +18,16 @@ import (
 )
 
 // newServer wires the management server with provider + usage backends plus
-// the Memory, Skills, MCP Registry and Guard modules.
-func newServer(cfg *config.Config, st *store.Store) *server.Server {
-	pm := provider.NewManager(st)
+// the Memory, Skills, MCP Registry and Guard modules. The returned provider
+// service owns the local routing proxy (takeover + failover).
+func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.Service) {
+	svc := provider.NewService(logger, st, cfg.Provider.ProxyAddr)
 	eng := usage.NewEngine(cfg, st, logger)
 	reporter := func(ctx context.Context, period string, since time.Time) (any, error) {
 		return eng.Report(ctx, period, since)
 	}
-	srv := server.New(cfg, logger, st, pm, reporter)
+	srv := server.New(cfg, logger, st, svc, reporter)
+	srv.SetProviderService(svc)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(
 		memory.New(st),
@@ -33,5 +35,5 @@ func newServer(cfg *config.Config, st *store.Store) *server.Server {
 		mcp.New(st),
 		guard.New(st, core.GuardAsk),
 	)
-	return srv
+	return srv, svc
 }

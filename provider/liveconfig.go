@@ -1,3 +1,7 @@
+// Package provider: live-config writers ported from cc-switch. Switching a
+// provider rewrites the target tool's live config (e.g. ~/.claude/settings.json,
+// ~/.codex/config.toml, Claude Desktop's Claude-3p profile) atomically, only
+// touching keys AgentNexus manages.
 package provider
 
 import (
@@ -6,50 +10,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/agentnexus/agentnexus/core"
 	"github.com/agentnexus/agentnexus/store"
 )
 
-const claudeDesktopProfileID = "00000000-0000-4000-8000-000000157210"
-const claudeDesktopProfileName = "AgentNexus"
-
-// ClaudeDesktopConfigStatus is the read model for the Claude-3p local profile.
-type ClaudeDesktopConfigStatus struct {
-	Enabled           bool   `json:"enabled"`
-	Configured        bool   `json:"configured"`
-	ConfigDir         string `json:"config_dir"`
-	ProfilePath       string `json:"profile_path,omitempty"`
-	ActiveProfileID   string `json:"active_profile_id,omitempty"`
-	ActiveProfileName string `json:"active_profile_name,omitempty"`
-	BaseURL           string `json:"base_url,omitempty"`
-	AuthScheme        string `json:"auth_scheme,omitempty"`
-	ModelCount        int    `json:"model_count"`
-	ProviderID        string `json:"provider_id,omitempty"`
-	ProviderName      string `json:"provider_name,omitempty"`
-	BackupPath        string `json:"backup_path,omitempty"`
-	Message           string `json:"message,omitempty"`
-}
-
 // WriteLiveConfig writes a tool's live config file to point at provider p.
 // It mirrors cc-switch's "write to live files on switch" behavior, using an
 // atomic temp+rename write. Only the provider-relevant keys are touched.
 func WriteLiveConfig(tool string, p *core.Provider) error {
+	return WriteLiveConfigForSwitch(tool, p, nil)
+}
+
+// WriteLiveConfigForSwitch writes tool's live config for p, additionally
+// cleaning keys the previous provider (prev, may be nil) left behind.
+func WriteLiveConfigForSwitch(tool string, p, prev *core.Provider) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	switch tool {
+	switch liveConfigTool(tool) {
 	case "claudecode":
-		return writeClaudeConfig(home, p)
+		return writeClaudeConfig(home, p, prev)
 	case "claude-desktop":
 		return writeClaudeDesktopConfig(home, p)
 	case "codex":
-		return writeCodexConfig(home, p)
+		return writeCodexConfig(home, p, prev)
 	case "gemini":
 		return writeGeminiConfig(home, p)
 	default:
@@ -57,130 +45,126 @@ func WriteLiveConfig(tool string, p *core.Provider) error {
 	}
 }
 
-func writeClaudeConfig(home string, p *core.Provider) error {
+func liveConfigTool(tool string) string {
+	switch strings.TrimSpace(tool) {
+	case "claude", "claudecode", "claudecode-cli", "claude-code-cli":
+		return "claudecode"
+	case "claude-desktop", "claudecode-desktop", "claude-code-desktop":
+		return "claude-desktop"
+	case "codex", "codex-cli", "codex-app", "codex-desktop", "codex-app-server":
+		return "codex"
+	default:
+		return strings.TrimSpace(tool)
+	}
+}
+
+// managedClaudeEnvKeys are the env keys in ~/.claude/settings.json that
+// AgentNexus owns; every switch clears them before writing the new provider
+// (cc-switch clears these via full settingsConfig replacement).
+var managedClaudeEnvKeys = []string{
+	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_MODEL",
+	"ANTHROPIC_DEFAULT_SONNET_MODEL",
+	"ANTHROPIC_DEFAULT_OPUS_MODEL",
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	"ANTHROPIC_SMALL_FAST_MODEL",
+}
+
+const defaultAnthropicBaseURL = "https://api.anthropic.com"
+
+// claudeAuthScheme resolves which credential env key Claude Code gets.
+// cc-switch's third-party presets default to ANTHROPIC_AUTH_TOKEN; official
+// direct API access uses ANTHROPIC_API_KEY (apiKeyField in cc-switch).
+func claudeAuthScheme(p *core.Provider) string {
+	switch p.Meta.ClaudeAuthScheme {
+	case "auth_token", "api_key":
+		return p.Meta.ClaudeAuthScheme
+	}
+	if p.Category == "official" {
+		return "api_key"
+	}
+	return "auth_token"
+}
+
+// providerAPIKey resolves the real credential: the APIKeyEnv environment
+// variable first, then the transient write-only APIKey field.
+func providerAPIKey(p *core.Provider) string {
+	if p == nil {
+		return ""
+	}
+	if p.APIKeyEnv != "" {
+		if v := os.Getenv(p.APIKeyEnv); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(p.APIKey)
+}
+
+// providerEnvSnippet returns the extra env passthrough map from
+// settings_config.env (e.g. API_TIMEOUT_MS), mirroring cc-switch's
+// settingsConfig.env shape.
+func providerEnvSnippet(p *core.Provider) map[string]any {
+	if p == nil || p.SettingsConfig == nil {
+		return nil
+	}
+	env, _ := p.SettingsConfig["env"].(map[string]any)
+	return env
+}
+
+func writeClaudeConfig(home string, p, prev *core.Provider) error {
 	path := filepath.Join(claudeConfigDir(home, p), "settings.json")
 	existing := readJSONObject(path)
 	env, _ := existing["env"].(map[string]any)
 	if env == nil {
 		env = map[string]any{}
 	}
-	if p.BaseURL != "" {
+	// Clear every key we manage plus extras the previous provider wrote, so
+	// stale routing (e.g. a third-party ANTHROPIC_BASE_URL after switching
+	// back to official) can never leak through.
+	for _, k := range managedClaudeEnvKeys {
+		delete(env, k)
+	}
+	for k := range providerEnvSnippet(prev) {
+		delete(env, k)
+	}
+
+	// Official base URL is Claude Code's default; omitting it (cc-switch's
+	// official preset has an empty env) lets OAuth login keep working.
+	if p.BaseURL != "" && !strings.EqualFold(strings.TrimRight(p.BaseURL, "/"), defaultAnthropicBaseURL) {
 		env["ANTHROPIC_BASE_URL"] = p.BaseURL
 	}
-	if p.APIKeyEnv != "" {
-		if v := os.Getenv(p.APIKeyEnv); v != "" {
-			env["ANTHROPIC_API_KEY"] = v
+	if key := providerAPIKey(p); key != "" {
+		if claudeAuthScheme(p) == "api_key" {
+			env["ANTHROPIC_API_KEY"] = key
 		} else {
-			delete(env, "ANTHROPIC_API_KEY")
+			env["ANTHROPIC_AUTH_TOKEN"] = key
 		}
 	}
 	if p.Model != "" {
 		env["ANTHROPIC_MODEL"] = p.Model
 	}
-	existing["env"] = env
+	if v := p.Meta.ClaudeSonnetModel; v != "" {
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = v
+	}
+	if v := p.Meta.ClaudeOpusModel; v != "" {
+		env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = v
+	}
+	if v := p.Meta.ClaudeHaikuModel; v != "" {
+		env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = v
+		env["ANTHROPIC_SMALL_FAST_MODEL"] = v
+	}
+	for k, v := range providerEnvSnippet(p) {
+		env[k] = v
+	}
+
+	if len(env) == 0 {
+		delete(existing, "env")
+	} else {
+		existing["env"] = env
+	}
 	return writeJSONObject(path, existing)
-}
-
-func writeCodexConfig(home string, p *core.Provider) error {
-	path := filepath.Join(codexConfigDir(home, p), "config.toml")
-	doc := readTOMLObject(path)
-	providerID := codexProviderID(p)
-	doc["model_provider"] = providerID
-	if p.Model != "" {
-		doc["model"] = p.Model
-	}
-	providers := ensureMap(doc, "model_providers")
-	block := map[string]any{
-		"name":     p.Name,
-		"base_url": p.BaseURL,
-		"wire_api": codexWireAPI(p),
-	}
-	if p.APIKeyEnv != "" {
-		block["env_key"] = p.APIKeyEnv
-	}
-	providers[providerID] = block
-	return writeTOMLObject(path, doc)
-}
-
-func writeClaudeDesktopConfig(home string, p *core.Provider) error {
-	if p.Meta.ClaudeDesktopMode != "" && p.Meta.ClaudeDesktopMode != "direct" {
-		return fmt.Errorf("claude desktop mode %q is not supported in core mode", p.Meta.ClaudeDesktopMode)
-	}
-	if p.Model != "" && !isClaudeDesktopDirectModel(p.Model) {
-		return fmt.Errorf("model %q is not a Claude Desktop direct-mode route", p.Model)
-	}
-	base, err := claudeDesktopConfigDir(home, p)
-	if err != nil {
-		return err
-	}
-	apiKey := ""
-	if p.APIKeyEnv != "" {
-		apiKey = os.Getenv(p.APIKeyEnv)
-	}
-	models := p.Meta.ClaudeDesktopModels
-	if len(models) == 0 && p.Model != "" {
-		models = []core.ClaudeDesktopModel{{ID: p.Model, Name: p.Model, DisplayName: p.Model}}
-	}
-	for _, model := range models {
-		if model.ID != "" && !isClaudeDesktopDirectModel(model.ID) {
-			return fmt.Errorf("model %q is not a Claude Desktop direct-mode route", model.ID)
-		}
-	}
-	profile := map[string]any{
-		"coworkEgressAllowedHosts":     []string{"*"},
-		"disableDeploymentModeChooser": true,
-		"id":                           claudeDesktopProfileID,
-		"name":                         claudeDesktopProfileName,
-		"isActive":                     true,
-		"inferenceGatewayBaseUrl":      p.BaseURL,
-		"inferenceGatewayApiKey":       apiKey,
-		"inferenceGatewayAuthScheme":   orDefault(p.Meta.ClaudeDesktopAuthMode, "bearer"),
-		"inferenceModels":              claudeDesktopModelsJSON(models),
-		"inferenceProvider":            "gateway",
-	}
-	if err := writeJSONObject(filepath.Join(base, "configLibrary", claudeDesktopProfileID+".json"), profile); err != nil {
-		return err
-	}
-	if err := writeClaudeDesktopMeta(base, claudeDesktopProfileID, claudeDesktopProfileName); err != nil {
-		return err
-	}
-	indexPath := filepath.Join(base, "claude_desktop_config.json")
-	index := readJSONObject(indexPath)
-	index["activeProfileId"] = claudeDesktopProfileID
-	index["profileName"] = claudeDesktopProfileName
-	index["profilePath"] = filepath.Join("configLibrary", claudeDesktopProfileID+".json")
-	return writeJSONObject(indexPath, index)
-}
-
-// ClaudeDesktopStatus returns whether the AgentNexus Claude-3p profile is active.
-func ClaudeDesktopStatus(p *core.Provider) (ClaudeDesktopConfigStatus, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ClaudeDesktopConfigStatus{}, err
-	}
-	base, err := claudeDesktopConfigDir(home, p)
-	if err != nil {
-		return ClaudeDesktopConfigStatus{}, err
-	}
-	return claudeDesktopStatusForBase(base, "")
-}
-
-// DisableClaudeDesktopConfig removes the AgentNexus Claude-3p profile from the
-// active config library, backing up touched files next to Claude-3p first.
-func DisableClaudeDesktopConfig(p *core.Provider) (ClaudeDesktopConfigStatus, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ClaudeDesktopConfigStatus{}, err
-	}
-	base, err := claudeDesktopConfigDir(home, p)
-	if err != nil {
-		return ClaudeDesktopConfigStatus{}, err
-	}
-	backupPath, err := disableClaudeDesktopProfile(base)
-	if err != nil {
-		return ClaudeDesktopConfigStatus{}, err
-	}
-	return claudeDesktopStatusForBase(base, backupPath)
 }
 
 func writeGeminiConfig(home string, p *core.Provider) error {
@@ -215,23 +199,6 @@ func codexConfigDir(home string, p *core.Provider) string {
 	return filepath.Join(home, ".codex")
 }
 
-func claudeDesktopConfigDir(home string, p *core.Provider) (string, error) {
-	if v := configString(p, "claude_desktop_dir"); v != "" {
-		return v, nil
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "Claude-3p"), nil
-	case "windows":
-		if v := os.Getenv("APPDATA"); v != "" {
-			return filepath.Join(v, "Claude-3p"), nil
-		}
-		return filepath.Join(home, "AppData", "Roaming", "Claude-3p"), nil
-	default:
-		return "", fmt.Errorf("claude desktop direct mode is unsupported on %s", runtime.GOOS)
-	}
-}
-
 func configString(p *core.Provider, key string) string {
 	if p == nil {
 		return ""
@@ -242,228 +209,6 @@ func configString(p *core.Provider, key string) string {
 	if p.SettingsConfig != nil {
 		if v, ok := p.SettingsConfig[key].(string); ok {
 			return v
-		}
-	}
-	return ""
-}
-
-func codexProviderID(p *core.Provider) string {
-	if v := configString(p, "codex_provider_id"); v != "" {
-		return v
-	}
-	id := p.ID
-	if id == "" {
-		id = "agentnexus"
-	}
-	return strings.Map(func(r rune) rune {
-		if r == '-' || r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' {
-			return r
-		}
-		return '_'
-	}, id)
-}
-
-func codexWireAPI(p *core.Provider) string {
-	if p.Meta.CodexWireAPI != "" {
-		return p.Meta.CodexWireAPI
-	}
-	switch p.Meta.APIFormat {
-	case "openai_responses":
-		return "responses"
-	case "openai_chat":
-		return "chat"
-	default:
-		if strings.Contains(strings.ToLower(p.ID), "openai") {
-			return "responses"
-		}
-		return "chat"
-	}
-}
-
-func isClaudeDesktopDirectModel(model string) bool {
-	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "claude-") || strings.HasPrefix(model, "anthropic/claude-")
-}
-
-func claudeDesktopModelsJSON(models []core.ClaudeDesktopModel) []map[string]string {
-	out := make([]map[string]string, 0, len(models))
-	for _, model := range models {
-		id := model.ID
-		if id == "" {
-			id = model.Name
-		}
-		if id == "" {
-			continue
-		}
-		name := model.Name
-		if name == "" {
-			name = id
-		}
-		display := model.DisplayName
-		if display == "" {
-			display = name
-		}
-		out = append(out, map[string]string{
-			"id":            id,
-			"name":          name,
-			"displayName":   display,
-			"labelOverride": display,
-		})
-	}
-	return out
-}
-
-func writeClaudeDesktopMeta(base, id, name string) error {
-	path := filepath.Join(base, "configLibrary", "_meta.json")
-	meta := readJSONObject(path)
-	meta["appliedId"] = id
-	meta["entries"] = appendClaudeDesktopEntry(meta["entries"], id, name)
-	return writeJSONObject(path, meta)
-}
-
-func appendClaudeDesktopEntry(raw any, id, name string) []any {
-	entries := filterClaudeDesktopEntries(raw, id)
-	return append(entries, map[string]any{"id": id, "name": name})
-}
-
-func filterClaudeDesktopEntries(raw any, id string) []any {
-	entries := make([]any, 0)
-	if list, ok := raw.([]any); ok {
-		for _, item := range list {
-			entry, ok := item.(map[string]any)
-			if !ok || stringValue(entry["id"]) == id {
-				continue
-			}
-			entries = append(entries, entry)
-		}
-	}
-	return entries
-}
-
-func disableClaudeDesktopProfile(base string) (string, error) {
-	configLibrary := filepath.Join(base, "configLibrary")
-	profilePath := filepath.Join(configLibrary, claudeDesktopProfileID+".json")
-	metaPath := filepath.Join(configLibrary, "_meta.json")
-	indexPath := filepath.Join(base, "claude_desktop_config.json")
-	backupDir := filepath.Join(base, "configLibrary.backup."+time.Now().Format("20060102-150405"))
-	changed := false
-
-	meta := readJSONObject(metaPath)
-	if len(meta) > 0 {
-		if err := backupClaudeDesktopFile(metaPath, backupDir); err != nil {
-			return "", err
-		}
-		if stringValue(meta["appliedId"]) == claudeDesktopProfileID {
-			meta["appliedId"] = nil
-			changed = true
-		}
-		filtered := filterClaudeDesktopEntries(meta["entries"], claudeDesktopProfileID)
-		if len(filtered) != lenFromJSONArray(meta["entries"]) {
-			meta["entries"] = filtered
-			changed = true
-		}
-		if changed {
-			if err := writeJSONObject(metaPath, meta); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	index := readJSONObject(indexPath)
-	if len(index) > 0 && stringValue(index["activeProfileId"]) == claudeDesktopProfileID {
-		if err := backupClaudeDesktopFile(indexPath, backupDir); err != nil {
-			return "", err
-		}
-		delete(index, "activeProfileId")
-		delete(index, "profileName")
-		delete(index, "profilePath")
-		if err := writeJSONObject(indexPath, index); err != nil {
-			return "", err
-		}
-		changed = true
-	}
-
-	if fileExists(profilePath) {
-		if err := os.MkdirAll(backupDir, 0o755); err != nil {
-			return "", err
-		}
-		if err := os.Rename(profilePath, filepath.Join(backupDir, filepath.Base(profilePath)+".moved")); err != nil {
-			return "", err
-		}
-		changed = true
-	}
-	if !changed {
-		return "", nil
-	}
-	return backupDir, nil
-}
-
-func backupClaudeDesktopFile(path, backupDir string) error {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(backupDir, filepath.Base(path)), data, 0o600)
-}
-
-func claudeDesktopStatusForBase(base, backupPath string) (ClaudeDesktopConfigStatus, error) {
-	profilePath := filepath.Join(base, "configLibrary", claudeDesktopProfileID+".json")
-	profile := readJSONObject(profilePath)
-	meta := readJSONObject(filepath.Join(base, "configLibrary", "_meta.json"))
-	index := readJSONObject(filepath.Join(base, "claude_desktop_config.json"))
-
-	activeID := stringValue(meta["appliedId"])
-	activeName := claudeDesktopEntryName(meta["entries"], activeID)
-	if activeID == "" {
-		activeID = stringValue(index["activeProfileId"])
-		activeName = stringValue(index["profileName"])
-	}
-	if activeName == "" && activeID == claudeDesktopProfileID {
-		activeName = stringValue(profile["name"])
-	}
-	enabled := activeID == claudeDesktopProfileID
-	configured := len(profile) > 0
-	status := ClaudeDesktopConfigStatus{
-		Enabled:           enabled,
-		Configured:        configured,
-		ConfigDir:         base,
-		ProfilePath:       profilePath,
-		ActiveProfileID:   activeID,
-		ActiveProfileName: activeName,
-		BaseURL:           stringValue(profile["inferenceGatewayBaseUrl"]),
-		AuthScheme:        stringValue(profile["inferenceGatewayAuthScheme"]),
-		ModelCount:        lenFromJSONArray(profile["inferenceModels"]),
-		BackupPath:        backupPath,
-	}
-	switch {
-	case enabled:
-		status.Message = "Claude-3p is enabled through AgentNexus."
-	case configured:
-		status.Message = "AgentNexus Claude-3p profile is installed but inactive."
-	default:
-		status.Message = "No AgentNexus Claude-3p profile is active."
-	}
-	return status, nil
-}
-
-func claudeDesktopEntryName(raw any, id string) string {
-	if id == "" {
-		return ""
-	}
-	list, ok := raw.([]any)
-	if !ok {
-		return ""
-	}
-	for _, item := range list {
-		entry, ok := item.(map[string]any)
-		if ok && stringValue(entry["id"]) == id {
-			return stringValue(entry["name"])
 		}
 	}
 	return ""

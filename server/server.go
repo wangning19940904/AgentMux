@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/core"
+	providerpkg "github.com/agentnexus/agentnexus/provider"
 	sessionstore "github.com/agentnexus/agentnexus/sessions"
 	"github.com/agentnexus/agentnexus/store"
 )
@@ -22,6 +23,7 @@ type Server struct {
 	log      *slog.Logger
 	st       *store.Store
 	provider core.ProviderManager
+	proxySvc *providerpkg.Service
 	usageFn  UsageReporter
 	sender   core.Sender
 	presets  any
@@ -70,6 +72,15 @@ func (s *Server) SetModules(mem core.MemoryStore, sk core.SkillManager, mcp core
 // SetSessions attaches the Claude/Codex session manager. Nil disables routes.
 func (s *Server) SetSessions(svc *sessionstore.Service) { s.sessions = svc }
 
+// SetProviderService attaches the takeover-aware provider service (local
+// routing REST + hot-switch path).
+func (s *Server) SetProviderService(svc *providerpkg.Service) {
+	s.proxySvc = svc
+	if svc != nil {
+		s.provider = svc
+	}
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
@@ -85,6 +96,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/providers/presets", s.handleProviderPresets)
 	s.mux.HandleFunc("POST /api/v1/providers/probe", s.handleProviderProbe)
 	s.mux.HandleFunc("POST /api/v1/providers/switch", s.handleProviderSwitch)
+	s.mux.HandleFunc("POST /api/v1/providers/failover", s.handleProviderFailover)
+	s.mux.HandleFunc("GET /api/v1/proxy/status", s.handleProxyStatus)
+	s.mux.HandleFunc("POST /api/v1/proxy/takeover", s.handleProxyTakeover)
+	s.mux.HandleFunc("POST /api/v1/proxy/config", s.handleProxyConfigUpdate)
 	s.mux.HandleFunc("GET /api/v1/system/claude-3p", s.handleClaude3PStatus)
 	s.mux.HandleFunc("POST /api/v1/system/claude-3p", s.handleClaude3PToggle)
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)

@@ -21,7 +21,7 @@ func splitTools(s string) []string {
 // ListProviders returns all providers ordered by name.
 func (s *Store) ListProviders(ctx context.Context) ([]*core.Provider, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,name,preset,category,base_url,api_key_env,
-		model,tools,extra,settings_config,meta,enabled,created_at,updated_at FROM providers ORDER BY name`)
+		model,tools,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at FROM providers ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func (s *Store) ListProviders(ctx context.Context) ([]*core.Provider, error) {
 // GetProvider returns one provider or (nil,nil) if absent.
 func (s *Store) GetProvider(ctx context.Context, id string) (*core.Provider, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id,name,preset,category,base_url,api_key_env,
-		model,tools,extra,settings_config,meta,enabled,created_at,updated_at FROM providers WHERE id=?`, id)
+		model,tools,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at FROM providers WHERE id=?`, id)
 	p, err := scanProvider(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -56,8 +56,9 @@ func scanProvider(sc scanner) (*core.Provider, error) {
 	var p core.Provider
 	var preset, category, apiKeyEnv, model, tools, extra, settingsConfig, meta, created, updated sql.NullString
 	var enabled int
+	var inFailoverQueue, sortIndex sql.NullInt64
 	if err := sc.Scan(&p.ID, &p.Name, &preset, &category, &p.BaseURL, &apiKeyEnv,
-		&model, &tools, &extra, &settingsConfig, &meta, &enabled, &created, &updated); err != nil {
+		&model, &tools, &extra, &settingsConfig, &meta, &enabled, &inFailoverQueue, &sortIndex, &created, &updated); err != nil {
 		return nil, err
 	}
 	p.Preset = preset.String
@@ -66,6 +67,8 @@ func scanProvider(sc scanner) (*core.Provider, error) {
 	p.Model = model.String
 	p.Tools = splitTools(tools.String)
 	p.Enabled = enabled != 0
+	p.InFailoverQueue = inFailoverQueue.Int64 != 0
+	p.SortIndex = int(sortIndex.Int64)
 	if extra.String != "" {
 		_ = json.Unmarshal([]byte(extra.String), &p.Extra)
 	}
@@ -89,15 +92,32 @@ func (s *Store) UpsertProvider(ctx context.Context, p *core.Provider) error {
 	if p.Enabled {
 		enabled = 1
 	}
+	inQueue := 0
+	if p.InFailoverQueue {
+		inQueue = 1
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO providers
-		(id,name,preset,category,base_url,api_key_env,model,tools,extra,settings_config,meta,enabled,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		(id,name,preset,category,base_url,api_key_env,model,tools,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,
 		category=excluded.category,base_url=excluded.base_url,api_key_env=excluded.api_key_env,model=excluded.model,
 		tools=excluded.tools,extra=excluded.extra,settings_config=excluded.settings_config,meta=excluded.meta,enabled=excluded.enabled,
+		in_failover_queue=excluded.in_failover_queue,sort_index=excluded.sort_index,
 		updated_at=excluded.updated_at`,
 		p.ID, p.Name, p.Preset, p.Category, p.BaseURL, p.APIKeyEnv, p.Model, joinTools(p.Tools),
-		string(extra), string(settingsConfig), string(meta), enabled, p.CreatedAt.Format(time.RFC3339Nano), p.UpdatedAt.Format(time.RFC3339Nano))
+		string(extra), string(settingsConfig), string(meta), enabled, inQueue, p.SortIndex,
+		p.CreatedAt.Format(time.RFC3339Nano), p.UpdatedAt.Format(time.RFC3339Nano))
+	return err
+}
+
+// SetFailoverQueue updates a provider's failover-queue membership and order.
+func (s *Store) SetFailoverQueue(ctx context.Context, id string, inQueue bool, sortIndex int) error {
+	v := 0
+	if inQueue {
+		v = 1
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE providers SET in_failover_queue=?, sort_index=? WHERE id=?`, v, sortIndex, id)
 	return err
 }
 

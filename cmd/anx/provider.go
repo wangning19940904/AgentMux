@@ -89,13 +89,15 @@ func providerSwitchCmd() *cobra.Command {
 		Short: "Switch the active provider for a tool",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, st, err := bootstrapStore()
+			cfg, st, err := bootstrapStore()
 			if err != nil {
 				return err
 			}
 			defer st.Close()
-			pm := provider.NewManager(st)
-			if err := pm.Switch(cmd.Context(), args[0], tool); err != nil {
+			// Takeover-aware: switching a proxied tool hot-switches instead of
+			// rewriting the live config away from the local routing proxy.
+			svc := provider.NewService(logger, st, cfg.Provider.ProxyAddr)
+			if err := svc.Switch(cmd.Context(), args[0], tool); err != nil {
 				return err
 			}
 			cmd.Printf("switched %s -> provider %s\n", tool, args[0])

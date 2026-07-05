@@ -21,6 +21,10 @@ type presetEntry struct {
 	Tools                 []string                  `json:"tools"`
 	APIFormat             string                    `json:"api_format"`
 	CodexWireAPI          string                    `json:"codex_wire_api"`
+	ClaudeAuthScheme      string                    `json:"claude_auth_scheme"`
+	ClaudeSonnetModel     string                    `json:"claude_sonnet_model"`
+	ClaudeOpusModel       string                    `json:"claude_opus_model"`
+	ClaudeHaikuModel      string                    `json:"claude_haiku_model"`
 	ClaudeDesktopMode     string                    `json:"claude_desktop_mode"`
 	ClaudeDesktopModels   []core.ClaudeDesktopModel `json:"claude_desktop_models"`
 	ClaudeDesktopAuthMode string                    `json:"claude_desktop_auth_mode"`
@@ -46,6 +50,10 @@ func Presets() []*core.Provider {
 			Meta: core.ProviderMeta{
 				APIFormat:             e.APIFormat,
 				CodexWireAPI:          e.CodexWireAPI,
+				ClaudeAuthScheme:      e.ClaudeAuthScheme,
+				ClaudeSonnetModel:     e.ClaudeSonnetModel,
+				ClaudeOpusModel:       e.ClaudeOpusModel,
+				ClaudeHaikuModel:      e.ClaudeHaikuModel,
 				ClaudeDesktopMode:     e.ClaudeDesktopMode,
 				ClaudeDesktopModels:   e.ClaudeDesktopModels,
 				ClaudeDesktopAuthMode: e.ClaudeDesktopAuthMode,

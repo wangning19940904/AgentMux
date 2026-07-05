@@ -6,13 +6,14 @@
     "base_url": "https://api.anthropic.com",
     "api_key_env": "ANTHROPIC_API_KEY",
     "tools": ["claudecode"],
-    "model": "claude-opus-4-8",
-    "api_format": "anthropic"
+    "model": "",
+    "api_format": "anthropic",
+    "claude_auth_scheme": "api_key"
   },
   {
     "id": "claude-desktop-official",
     "name": "Claude Desktop Direct",
-    "category": "official",
+    "category": "third_party",
     "base_url": "https://api.anthropic.com",
     "api_key_env": "ANTHROPIC_API_KEY",
     "tools": ["claude-desktop"],
@@ -26,12 +27,22 @@
     ]
   },
   {
+    "id": "claude-desktop-builtin",
+    "name": "Claude Desktop (Official Login)",
+    "category": "official",
+    "base_url": "",
+    "api_key_env": "",
+    "tools": ["claude-desktop"],
+    "api_format": "anthropic",
+    "claude_desktop_mode": "official"
+  },
+  {
     "id": "openai-official",
     "name": "OpenAI (Official)",
     "category": "official",
     "base_url": "https://api.openai.com/v1",
     "api_key_env": "OPENAI_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "model": "gpt-5",
     "api_format": "openai_responses",
     "codex_wire_api": "responses"
@@ -61,31 +72,92 @@
     "category": "third_party",
     "base_url": "https://openrouter.ai/api/v1",
     "api_key_env": "OPENROUTER_API_KEY",
-    "tools": ["codex", "claudecode"],
+    "tools": ["codex", "codex-app", "claudecode"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
   {
     "id": "deepseek",
-    "name": "DeepSeek",
+    "name": "DeepSeek (Codex)",
     "category": "third_party",
     "base_url": "https://api.deepseek.com",
     "api_key_env": "DEEPSEEK_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "model": "deepseek-chat",
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
   {
+    "id": "deepseek-claude",
+    "name": "DeepSeek (Claude Code)",
+    "category": "third_party",
+    "base_url": "https://api.deepseek.com/anthropic",
+    "api_key_env": "DEEPSEEK_API_KEY",
+    "tools": ["claudecode"],
+    "model": "deepseek-chat",
+    "api_format": "anthropic",
+    "claude_auth_scheme": "auth_token",
+    "claude_sonnet_model": "deepseek-chat",
+    "claude_opus_model": "deepseek-reasoner",
+    "claude_haiku_model": "deepseek-chat"
+  },
+  {
     "id": "moonshot-kimi",
-    "name": "Moonshot (Kimi)",
+    "name": "Moonshot Kimi (Codex)",
     "category": "third_party",
     "base_url": "https://api.moonshot.cn/v1",
     "api_key_env": "MOONSHOT_API_KEY",
-    "tools": ["claudecode", "codex"],
+    "tools": ["codex", "codex-app"],
     "model": "kimi-k2.6",
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
+  },
+  {
+    "id": "moonshot-kimi-claude",
+    "name": "Moonshot Kimi (Claude Code)",
+    "category": "third_party",
+    "base_url": "https://api.moonshot.cn/anthropic",
+    "api_key_env": "MOONSHOT_API_KEY",
+    "tools": ["claudecode"],
+    "model": "kimi-k2.6",
+    "api_format": "anthropic",
+    "claude_auth_scheme": "auth_token",
+    "claude_sonnet_model": "kimi-k2.6",
+    "claude_haiku_model": "kimi-k2.6"
+  },
+  {
+    "id": "zhipu-glm",
+    "name": "Zhipu GLM (Codex)",
+    "category": "third_party",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "api_key_env": "ZHIPU_API_KEY",
+    "tools": ["codex", "codex-app"],
+    "model": "glm-4.6",
+    "api_format": "openai_chat",
+    "codex_wire_api": "chat"
+  },
+  {
+    "id": "zhipu-glm-claude",
+    "name": "Zhipu GLM (Claude Code)",
+    "category": "third_party",
+    "base_url": "https://open.bigmodel.cn/api/anthropic",
+    "api_key_env": "ZHIPU_API_KEY",
+    "tools": ["claudecode"],
+    "model": "glm-4.6",
+    "api_format": "anthropic",
+    "claude_auth_scheme": "auth_token",
+    "claude_sonnet_model": "glm-4.6",
+    "claude_haiku_model": "glm-4.5-air"
+  },
+  {
+    "id": "minimax-claude",
+    "name": "MiniMax (Claude Code)",
+    "category": "third_party",
+    "base_url": "https://api.minimaxi.com/anthropic",
+    "api_key_env": "MINIMAX_API_KEY",
+    "tools": ["claudecode"],
+    "api_format": "anthropic",
+    "claude_auth_scheme": "auth_token"
   },
   {
     "id": "siliconflow",
@@ -93,19 +165,8 @@
     "category": "third_party",
     "base_url": "https://api.siliconflow.cn",
     "api_key_env": "SILICONFLOW_API_KEY",
-    "tools": ["claudecode", "codex"],
+    "tools": ["codex", "codex-app"],
     "model": "Pro/moonshotai/Kimi-K2.5",
-    "api_format": "openai_chat",
-    "codex_wire_api": "chat"
-  },
-  {
-    "id": "zhipu-glm",
-    "name": "Zhipu GLM",
-    "category": "third_party",
-    "base_url": "https://open.bigmodel.cn/api/paas/v4",
-    "api_key_env": "ZHIPU_API_KEY",
-    "tools": ["codex"],
-    "model": "glm-4.6",
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -115,7 +176,7 @@
     "category": "third_party",
     "base_url": "https://api.groq.com/openai/v1",
     "api_key_env": "GROQ_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -125,7 +186,7 @@
     "category": "third_party",
     "base_url": "https://api.together.xyz/v1",
     "api_key_env": "TOGETHER_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -135,7 +196,7 @@
     "category": "third_party",
     "base_url": "https://api.fireworks.ai/inference/v1",
     "api_key_env": "FIREWORKS_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -145,7 +206,7 @@
     "category": "third_party",
     "base_url": "https://integrate.api.nvidia.com/v1",
     "api_key_env": "NVIDIA_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -155,7 +216,7 @@
     "category": "third_party",
     "base_url": "https://api.mistral.ai/v1",
     "api_key_env": "MISTRAL_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
   },
@@ -165,7 +226,7 @@
     "category": "third_party",
     "base_url": "https://api.x.ai/v1",
     "api_key_env": "XAI_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "model": "grok-4",
     "api_format": "openai_chat",
     "codex_wire_api": "chat"
@@ -176,7 +237,7 @@
     "category": "third_party",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "api_key_env": "DASHSCOPE_API_KEY",
-    "tools": ["codex"],
+    "tools": ["codex", "codex-app"],
     "model": "qwen-max",
     "api_format": "openai_chat",
     "codex_wire_api": "chat"

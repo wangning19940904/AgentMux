@@ -24,15 +24,19 @@ import { api, Provider, ProviderProbeCheck, ProviderRoute } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
-const TOOL_ORDER = ["claudecode", "codex", "claude-desktop", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
+const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
+const DEFAULT_ROUTE_TOOLS = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini"];
 const CURATED_PRESET_IDS = [
   "anthropic-official",
   "openai-official",
   "claude-desktop-official",
+  "claude-desktop-builtin",
   "openrouter",
   "gemini-official",
+  "deepseek-claude",
   "deepseek",
-  "moonshot-kimi",
+  "zhipu-glm-claude",
+  "moonshot-kimi-claude",
   "qwen-dashscope",
 ];
 
@@ -55,6 +59,13 @@ type ProviderDraft = {
   website: string;
   api_format: string;
   codex_wire_api: string;
+  claude_auth_scheme: string;
+  claude_sonnet_model: string;
+  claude_opus_model: string;
+  claude_haiku_model: string;
+  supported_models: string[];
+  supported_api_formats: string[];
+  supported_protocols: string[];
   claude_desktop_mode: string;
   manual_models: boolean;
   model_list: string;
@@ -65,6 +76,7 @@ type ProviderDraft = {
 type RouteDraft = {
   tool: string;
   provider_id: string;
+  original_tool?: string;
 };
 
 const emptyDraft: ProviderDraft = {
@@ -79,10 +91,17 @@ const emptyDraft: ProviderDraft = {
   website: "",
   api_format: "",
   codex_wire_api: "",
+  claude_auth_scheme: "",
+  claude_sonnet_model: "",
+  claude_opus_model: "",
+  claude_haiku_model: "",
+  supported_models: [],
+  supported_api_formats: [],
+  supported_protocols: [],
   claude_desktop_mode: "",
   manual_models: false,
   model_list: "",
-  tools: ["codex"],
+  tools: ["codex", "codex-app"],
   enabled: false,
 };
 
@@ -100,6 +119,12 @@ function extraString(provider: Provider, key: string) {
   return provider.extra?.[key] ?? "";
 }
 
+function metaStringArray(provider: Provider, key: string) {
+  const value = provider.meta?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 function modelListString(provider: Provider) {
   const models = provider.meta?.claude_desktop_models;
   if (!Array.isArray(models)) return "";
@@ -107,9 +132,10 @@ function modelListString(provider: Provider) {
     .map((item) => {
       if (!item || typeof item !== "object") return "";
       const model = item as Record<string, unknown>;
-      const id = model.id;
-      const name = model.name;
-      return typeof id === "string" ? id : typeof name === "string" ? name : "";
+      const id = typeof model.id === "string" ? model.id : typeof model.name === "string" ? model.name : "";
+      if (!id) return "";
+      const upstream = typeof model.upstream_model === "string" ? model.upstream_model : "";
+      return upstream ? `${id}=${upstream}` : id;
     })
     .filter(Boolean)
     .join("\n");
@@ -129,6 +155,13 @@ function providerToDraft(provider: Provider): ProviderDraft {
     website: extraString(provider, "website"),
     api_format: metaString(provider, "api_format"),
     codex_wire_api: metaString(provider, "codex_wire_api"),
+    claude_auth_scheme: metaString(provider, "claude_auth_scheme"),
+    claude_sonnet_model: metaString(provider, "claude_sonnet_model"),
+    claude_opus_model: metaString(provider, "claude_opus_model"),
+    claude_haiku_model: metaString(provider, "claude_haiku_model"),
+    supported_models: metaStringArray(provider, "supported_models"),
+    supported_api_formats: metaStringArray(provider, "supported_api_formats"),
+    supported_protocols: metaStringArray(provider, "supported_protocols"),
     claude_desktop_mode: metaString(provider, "claude_desktop_mode"),
     manual_models: modelList.length > 0,
     model_list: modelList,
@@ -142,14 +175,109 @@ function parseModelList(value: string) {
     .split(/[\n,]/)
     .map((model) => model.trim())
     .filter(Boolean)
-    .map((model) => ({ id: model, name: model, display_name: model }));
+    .map((entry) => {
+      // "route=upstream" maps a Claude Desktop route id to a real upstream
+      // model (used by local routing proxy mode).
+      const eq = entry.indexOf("=");
+      if (eq > 0) {
+        const id = entry.slice(0, eq).trim();
+        const upstream = entry.slice(eq + 1).trim();
+        if (id && upstream) {
+          return { id, name: id, display_name: id, upstream_model: upstream };
+        }
+      }
+      return { id: entry, name: entry, display_name: entry };
+    });
 }
 
 function capabilityName(name: string) {
-  if (name === "chat_completions") return "chat/completions";
-  if (name === "openai_responses") return "openai responses";
-  if (name === "openai_chat") return "openai chat";
+  if (name === "anthropic") return "Anthropic";
+  if (["chat", "chat_completions", "openai_chat"].includes(name)) return "OpenAI Chat Completions";
+  if (["responses", "openai_responses"].includes(name)) return "OpenAI Responses";
   return name;
+}
+
+function uniqueValues(values: string[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  values.forEach((value) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(trimmed);
+  });
+  return out;
+}
+
+function normalizeTool(tool: string) {
+  const value = tool.trim();
+  if (["claude", "claudecode-cli", "claude-code-cli"].includes(value)) return "claudecode";
+  if (["claudecode-desktop", "claude-code-desktop"].includes(value)) return "claude-desktop";
+  if (["codex-cli"].includes(value)) return "codex";
+  if (["codex-desktop", "codex-app-server"].includes(value)) return "codex-app";
+  return value;
+}
+
+function routeToolsForCapability(tool: string) {
+  const normalized = normalizeTool(tool);
+  if (normalized === "codex") return ["codex", "codex-app"];
+  return normalized ? [normalized] : [];
+}
+
+function providerSupportsRouteTool(provider: Provider, tool: string) {
+  const normalizedTool = normalizeTool(tool);
+  return provider.tools.some((candidate) => {
+    const normalizedCandidate = normalizeTool(candidate);
+    return (
+      normalizedCandidate === normalizedTool ||
+      (normalizedTool === "codex-app" && normalizedCandidate === "codex") ||
+      (normalizedTool === "codex" && normalizedCandidate === "codex-app")
+    );
+  });
+}
+
+function okCheckNames(checks: ProviderProbeCheck[]) {
+  return checks.filter((check) => check.ok).map((check) => check.name);
+}
+
+function claudeDesktopModelIDs(provider: Provider) {
+  const models = provider.meta?.claude_desktop_models;
+  if (!Array.isArray(models)) return [];
+  return models
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const model = item as Record<string, unknown>;
+      const id = model.id;
+      const name = model.name;
+      return typeof id === "string" ? id : typeof name === "string" ? name : "";
+    })
+    .filter(Boolean);
+}
+
+function providerSupportedModels(provider: Provider) {
+  return uniqueValues([
+    ...metaStringArray(provider, "supported_models"),
+    ...claudeDesktopModelIDs(provider),
+    provider.model || "",
+  ]);
+}
+
+function providerProtocolValues(provider: Provider) {
+  return uniqueValues([
+    ...metaStringArray(provider, "supported_api_formats"),
+    ...metaStringArray(provider, "supported_protocols"),
+    metaString(provider, "api_format"),
+    metaString(provider, "codex_wire_api"),
+  ]);
+}
+
+function protocolLabels(values: string[]) {
+  return uniqueValues(values.map(capabilityName));
+}
+
+function providerSupportedProtocols(provider: Provider) {
+  const labels = protocolLabels(providerProtocolValues(provider));
+  return labels.length > 0 ? labels : [providerProtocol(provider)];
 }
 
 function slugifyProviderID(name: string) {
@@ -176,7 +304,7 @@ function generateProviderID(name: string, providers: Provider[]) {
 function defaultToolsForDraft(draft: ProviderDraft) {
   if (draft.claude_desktop_mode) return ["claude-desktop"];
   if (draft.api_format === "anthropic") return ["claudecode"];
-  return ["codex"];
+  return ["codex", "codex-app"];
 }
 
 function toolsForDraft(draft: ProviderDraft) {
@@ -189,6 +317,13 @@ function draftToProvider(draft: ProviderDraft, providers: Provider[]): Provider 
   const id = draft.id.trim() || generateProviderID(draft.name, providers);
   if (draft.api_format) meta.api_format = draft.api_format;
   if (draft.codex_wire_api) meta.codex_wire_api = draft.codex_wire_api;
+  if (draft.claude_auth_scheme) meta.claude_auth_scheme = draft.claude_auth_scheme;
+  if (draft.claude_sonnet_model.trim()) meta.claude_sonnet_model = draft.claude_sonnet_model.trim();
+  if (draft.claude_opus_model.trim()) meta.claude_opus_model = draft.claude_opus_model.trim();
+  if (draft.claude_haiku_model.trim()) meta.claude_haiku_model = draft.claude_haiku_model.trim();
+  if (draft.supported_models.length > 0) meta.supported_models = uniqueValues(draft.supported_models);
+  if (draft.supported_api_formats.length > 0) meta.supported_api_formats = uniqueValues(draft.supported_api_formats);
+  if (draft.supported_protocols.length > 0) meta.supported_protocols = uniqueValues(draft.supported_protocols);
   if (draft.claude_desktop_mode) {
     meta.claude_desktop_mode = draft.claude_desktop_mode;
     meta.claude_desktop_auth_mode = "bearer";
@@ -256,29 +391,35 @@ function ProviderMark({
 }
 
 function providerProtocol(provider: Provider) {
-  const desktopMode = metaString(provider, "claude_desktop_mode");
-  const apiFormat = metaString(provider, "api_format");
-  const wireAPI = metaString(provider, "codex_wire_api");
-  if (desktopMode) return "Claude Desktop";
-  if (apiFormat === "anthropic") return "Anthropic";
-  if (apiFormat === "openai_responses") return "OpenAI Responses";
-  if (apiFormat === "openai_chat") return "OpenAI Chat";
-  if (wireAPI === "responses") return "Responses";
-  if (wireAPI === "chat") return "Chat Completions";
-  return "OpenAI compatible";
+  return protocolLabels(providerProtocolValues(provider))[0] || "OpenAI compatible";
 }
 
 function toolLabel(tool: string) {
-  if (tool === "claudecode") return "Claude Code";
-  if (tool === "claude-desktop") return "Claude Desktop";
-  if (tool === "opencode") return "OpenCode";
-  if (tool === "qoder") return "Qoder";
-  if (tool === "iflow") return "iFlow";
-  if (tool === "kimi") return "Kimi";
-  if (tool === "gemini") return "Gemini";
-  if (tool === "codex") return "Codex";
-  if (tool === "cursor") return "Cursor";
+  const normalized = normalizeTool(tool);
+  if (normalized === "claudecode") return "Claude Code CLI";
+  if (normalized === "claude-desktop") return "Claude Desktop";
+  if (normalized === "opencode") return "OpenCode";
+  if (normalized === "qoder") return "Qoder";
+  if (normalized === "iflow") return "iFlow";
+  if (normalized === "kimi") return "Kimi";
+  if (normalized === "gemini") return "Gemini";
+  if (normalized === "codex") return "Codex CLI";
+  if (normalized === "codex-app") return "Codex Desktop";
+  if (normalized === "cursor") return "Cursor";
   return tool;
+}
+
+function CapabilityBadges({ items }: { items: string[] }) {
+  const displayItems = items.length > 0 ? items : ["—"];
+  return (
+    <>
+      {displayItems.map((item) => (
+        <span className="pill" key={item}>
+          {item}
+        </span>
+      ))}
+    </>
+  );
 }
 
 export function GatewayPanel() {
@@ -287,6 +428,7 @@ export function GatewayPanel() {
   const providers = useAsync(() => api.providers(), []);
   const presets = useAsync(() => api.presets(), []);
   const activeRoutes = useAsync(() => api.activeRoutes(), []);
+  const proxyStatus = useAsync(() => api.proxyStatus(), []);
   const [activeTab, setActiveTab] = useState<"providers" | "routing">("providers");
   const [providerFormOpen, setProviderFormOpen] = useState(false);
   const [routeFormOpen, setRouteFormOpen] = useState(false);
@@ -309,32 +451,25 @@ export function GatewayPanel() {
     return CURATED_PRESET_IDS.map((id) => byID.get(id)).filter((provider): provider is Provider => Boolean(provider));
   }, [presetList]);
 
-  const routeByTool = useMemo(() => new Map(routeList.map((route) => [route.tool, route])), [routeList]);
-
-  const activeToolsByProvider = useMemo(() => {
-    const next = new Map<string, string[]>();
-    routeList.forEach((route) => {
-      if (!route.provider_id) return;
-      const tools = next.get(route.provider_id) ?? [];
-      tools.push(route.tool);
-      next.set(route.provider_id, tools);
-    });
+  const routeByTool = useMemo(() => {
+    const next = new Map<string, ProviderRoute>();
+    routeList.forEach((route) => next.set(normalizeTool(route.tool), route));
     return next;
   }, [routeList]);
 
   const tools = useMemo(() => {
-    const names = new Set<string>(["claudecode", "codex", "claude-desktop", "gemini"]);
-    (agents.data ?? []).forEach((tool) => names.add(tool));
-    providerList.forEach((provider) => provider.tools.forEach((tool) => names.add(tool)));
-    curatedPresets.forEach((provider) => provider.tools.forEach((tool) => names.add(tool)));
+    const names = new Set<string>(DEFAULT_ROUTE_TOOLS);
+    (agents.data ?? []).forEach((tool) => routeToolsForCapability(tool).forEach((routeTool) => names.add(routeTool)));
+    providerList.forEach((provider) => provider.tools.forEach((tool) => routeToolsForCapability(tool).forEach((routeTool) => names.add(routeTool))));
+    curatedPresets.forEach((provider) => provider.tools.forEach((tool) => routeToolsForCapability(tool).forEach((routeTool) => names.add(routeTool))));
     return Array.from(names).sort(sortTools);
   }, [agents.data, curatedPresets, providerList]);
 
   const routeTools = useMemo(() => {
-    const names = new Set<string>();
-    (agents.data ?? []).forEach((tool) => names.add(tool));
-    routeList.forEach((route) => names.add(route.tool));
-    if (names.size === 0) tools.forEach((tool) => names.add(tool));
+    const names = new Set<string>(DEFAULT_ROUTE_TOOLS);
+    (agents.data ?? []).forEach((tool) => routeToolsForCapability(tool).forEach((routeTool) => names.add(routeTool)));
+    routeList.forEach((route) => names.add(normalizeTool(route.tool)));
+    tools.forEach((tool) => names.add(tool));
     return Array.from(names).sort(sortTools);
   }, [agents.data, routeList, tools]);
 
@@ -358,6 +493,47 @@ export function GatewayPanel() {
   function reloadProviders() {
     providers.reload();
     activeRoutes.reload();
+    proxyStatus.reload();
+  }
+
+  async function toggleTakeover(tool: string, enabled: boolean) {
+    setBusy(`takeover:${tool}`);
+    setNotice("");
+    try {
+      await api.setTakeover(tool, enabled);
+      setNotice(t("gateway.takeoverUpdated"));
+      reloadProviders();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleAutoFailover(cfg: { tool: string; auto_failover: boolean }) {
+    setBusy(`auto-failover:${cfg.tool}`);
+    setNotice("");
+    try {
+      await api.setProxyToolConfig({ tool: cfg.tool, auto_failover: !cfg.auto_failover });
+      reloadProviders();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleFailoverQueue(provider: Provider) {
+    setBusy(`failover:${provider.id}`);
+    setNotice("");
+    try {
+      await api.setFailoverQueue(provider.id, !provider.in_failover_queue, provider.sort_index ?? 0);
+      reloadProviders();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
   }
 
   function resetProviderDraft() {
@@ -373,20 +549,22 @@ export function GatewayPanel() {
   }
 
   function providersForTool(tool: string) {
-    return providerList.filter((provider) => provider.tools.includes(tool));
+    return providerList.filter((provider) => providerSupportsRouteTool(provider, tool));
   }
 
-  function routeDraftForTool(tool: string, providerID = ""): RouteDraft {
-    const candidates = providersForTool(tool);
+  function routeDraftForTool(tool: string, providerID = "", originalTool?: string): RouteDraft {
+    const routeTool = normalizeTool(tool);
+    const candidates = providersForTool(routeTool);
     const compatibleProviderID = candidates.some((provider) => provider.id === providerID) ? providerID : "";
     return {
-      tool,
+      tool: routeTool,
       provider_id: compatibleProviderID || candidates[0]?.id || "",
+      original_tool: originalTool,
     };
   }
 
   function openNewRoute() {
-    const firstUnrouted = routeTools.find((tool) => !routeByTool.has(tool));
+    const firstUnrouted = routeTools.find((tool) => !routeByTool.has(normalizeTool(tool)));
     const tool = firstUnrouted || routeTools[0] || tools[0] || "";
     setNotice("");
     setRouteDraft(routeDraftForTool(tool));
@@ -397,14 +575,14 @@ export function GatewayPanel() {
 
   function editRoute(route: ProviderRoute) {
     setNotice("");
-    setRouteDraft(routeDraftForTool(route.tool, route.provider_id));
+    setRouteDraft(routeDraftForTool(route.tool, route.provider_id, route.tool));
     setActiveTab("routing");
     setProviderFormOpen(false);
     setRouteFormOpen(true);
   }
 
   function updateRouteTool(tool: string) {
-    setRouteDraft(routeDraftForTool(tool));
+    setRouteDraft((current) => routeDraftForTool(tool, current.provider_id, current.original_tool));
   }
 
   function updateRouteProvider(providerID: string) {
@@ -452,15 +630,25 @@ export function GatewayPanel() {
         apiFormat: result.api_format,
         codexWireAPI: result.codex_wire_api,
       });
+      const supportedAPIFormats = okCheckNames(result.formats ?? []);
+      const supportedProtocols = okCheckNames(result.protocols ?? []);
       if (models.length > 0) {
         setDraft((current) => ({
           ...current,
           api_format: result.api_format || current.api_format,
           model: current.model.trim() && models.includes(current.model.trim()) ? current.model : models[0],
           model_list: current.manual_models ? models.join("\n") : current.model_list,
+          supported_models: models,
+          supported_api_formats: supportedAPIFormats,
+          supported_protocols: supportedProtocols,
         }));
       } else if (result.api_format) {
-        setDraft((current) => ({ ...current, api_format: result.api_format || current.api_format }));
+        setDraft((current) => ({
+          ...current,
+          api_format: result.api_format || current.api_format,
+          supported_api_formats: supportedAPIFormats,
+          supported_protocols: supportedProtocols,
+        }));
       }
       setProbeNotice({
         kind: "success",
@@ -523,6 +711,9 @@ export function GatewayPanel() {
     setNotice("");
     try {
       await api.switchProvider(providerID, tool);
+      if (routeDraft.original_tool && routeDraft.original_tool !== tool) {
+        await api.disableRoute(routeDraft.original_tool);
+      }
       setNotice(t("gateway.routeSaved"));
       reloadProviders();
       setRouteFormOpen(false);
@@ -547,7 +738,11 @@ export function GatewayPanel() {
     }
   }
 
-  const canSave = Boolean(draft.name.trim() && draft.base_url.trim() && toolsForDraft(draft).length > 0);
+  // Official presets (e.g. Claude Desktop official login) restore built-in
+  // behavior and legitimately have no base URL.
+  const canSave = Boolean(
+    draft.name.trim() && (draft.base_url.trim() || draft.category === "official") && toolsForDraft(draft).length > 0
+  );
   const canProbe = Boolean(draft.base_url.trim() && (draft.api_key.trim() || draft.api_key_env.trim()));
   const routeCandidates = providersForTool(routeDraft.tool);
   const selectedRouteProvider = providerList.find((provider) => provider.id === routeDraft.provider_id);
@@ -762,6 +957,75 @@ export function GatewayPanel() {
                 </div>
               )}
 
+              <details className="capability-panel provider-advanced">
+                <summary className="capability-title">{t("gateway.advanced")}</summary>
+                <div className="field-grid">
+                  <label className="field">
+                    <span>{t("gateway.claudeAuthScheme")}</span>
+                    <select
+                      value={draft.claude_auth_scheme}
+                      onChange={(event) => updateDraft("claude_auth_scheme", event.target.value)}
+                    >
+                      <option value="">{t("gateway.authSchemeAuto")}</option>
+                      <option value="auth_token">ANTHROPIC_AUTH_TOKEN</option>
+                      <option value="api_key">ANTHROPIC_API_KEY</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.claudeDesktopMode")}</span>
+                    <select
+                      value={draft.claude_desktop_mode}
+                      onChange={(event) => updateDraft("claude_desktop_mode", event.target.value)}
+                    >
+                      <option value="">—</option>
+                      <option value="direct">direct</option>
+                      <option value="official">official</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.sonnetModel")}</span>
+                    <input
+                      value={draft.claude_sonnet_model}
+                      onChange={(event) => updateDraft("claude_sonnet_model", event.target.value)}
+                      placeholder="deepseek-v4-pro"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.opusModel")}</span>
+                    <input
+                      value={draft.claude_opus_model}
+                      onChange={(event) => updateDraft("claude_opus_model", event.target.value)}
+                      placeholder="deepseek-v4-pro"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.haikuModel")}</span>
+                    <input
+                      value={draft.claude_haiku_model}
+                      onChange={(event) => updateDraft("claude_haiku_model", event.target.value)}
+                      placeholder="deepseek-v4-flash"
+                    />
+                  </label>
+                  <label className="field wide">
+                    <span>{t("gateway.desktopModels")}</span>
+                    <textarea
+                      rows={3}
+                      value={draft.model_list}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setDraft((current) => ({
+                          ...current,
+                          model_list: value,
+                          manual_models: value.trim().length > 0,
+                        }));
+                      }}
+                      placeholder={"claude-sonnet-4-8\nclaude-opus-4-8=deepseek-v4-pro"}
+                    />
+                    <small>{t("gateway.desktopModelsHint")}</small>
+                  </label>
+                </div>
+              </details>
+
               <div className="form-actions">
                 <button className="ghost-action" onClick={() => setProviderFormOpen(false)}>
                   <X size={15} />
@@ -927,8 +1191,9 @@ export function GatewayPanel() {
           </div>
           <div className="surface-body provider-list-grid">
             {providerList.map((provider) => {
-              const activeTools = activeToolsByProvider.get(provider.id) ?? [];
               const keyConfigured = Boolean(provider.api_key_env);
+              const supportedModels = providerSupportedModels(provider);
+              const supportedProtocols = providerSupportedProtocols(provider);
               return (
                 <article className="provider-card" key={provider.id}>
                   <header>
@@ -953,13 +1218,17 @@ export function GatewayPanel() {
                     </span>
                   </header>
                   <dl className="provider-facts">
-                    <div>
+                    <div className="provider-fact-wide">
                       <dt>{t("providers.model")}</dt>
-                      <dd>{provider.model || "—"}</dd>
+                      <dd className="provider-fact-chips">
+                        <CapabilityBadges items={supportedModels} />
+                      </dd>
                     </div>
-                    <div>
+                    <div className="provider-fact-wide">
                       <dt>{t("gateway.protocol")}</dt>
-                      <dd>{providerProtocol(provider)}</dd>
+                      <dd className="provider-fact-chips">
+                        <CapabilityBadges items={supportedProtocols} />
+                      </dd>
                     </div>
                     <div>
                       <dt>{t("gateway.keyStatus")}</dt>
@@ -970,17 +1239,19 @@ export function GatewayPanel() {
                       <dd className="mono">{provider.base_url || "—"}</dd>
                     </div>
                   </dl>
-                  <div className="provider-chip-row">
-                    {provider.tools.map((tool) => (
-                      <span className={activeTools.includes(tool) ? "pill on" : "pill"} key={tool}>
-                        {toolLabel(tool)}
-                      </span>
-                    ))}
-                  </div>
                   <footer className="provider-card-actions">
                     <button className="ghost-action" onClick={() => editProvider(provider)}>
                       <Settings2 size={14} />
                       {t("common.edit")}
+                    </button>
+                    <button
+                      className={provider.in_failover_queue ? "ghost-action active" : "ghost-action"}
+                      disabled={busy === `failover:${provider.id}`}
+                      title={provider.in_failover_queue ? t("gateway.removeFromFailover") : t("gateway.addToFailover")}
+                      onClick={() => toggleFailoverQueue(provider)}
+                    >
+                      <Workflow size={14} />
+                      {provider.in_failover_queue ? t("gateway.inFailoverQueue") : t("gateway.addToFailover")}
                     </button>
                     <button
                       className="ghost-action danger-action"
@@ -1012,9 +1283,73 @@ export function GatewayPanel() {
     );
   }
 
+  function renderLocalRouting() {
+    const status = proxyStatus.data;
+    const toolConfigs = status?.tools ?? [];
+    return (
+      <section className="surface local-routing">
+        <div className="surface-header">
+          <div>
+            <h2>{t("gateway.localRouting")}</h2>
+            <p className="subtle-copy">{t("gateway.localRoutingSubtitle")}</p>
+          </div>
+          <div className="table-actions">
+            <span className={status?.running ? "status-badge success" : "status-badge"}>
+              <span className="status-dot" />
+              {status?.running ? t("gateway.proxyRunning") : t("gateway.proxyStopped")}
+            </span>
+            {status?.running && <span className="pill mono">{status.base_url}</span>}
+          </div>
+        </div>
+        {proxyStatus.error && <div className="surface-body error">{proxyStatus.error}</div>}
+        <div className="surface-body local-routing-grid">
+          {toolConfigs.map((cfg) => {
+            const takeoverBusy = busy === `takeover:${cfg.tool}`;
+            const failoverBusy = busy === `auto-failover:${cfg.tool}`;
+            return (
+              <article className={cfg.enabled ? "route-card enabled" : "route-card"} key={cfg.tool}>
+                <header>
+                  <span className="route-card-title">
+                    <Workflow size={17} />
+                    <span>
+                      <strong>{toolLabel(cfg.tool)}</strong>
+                      <small>{cfg.tool}</small>
+                    </span>
+                  </span>
+                  <span className={cfg.enabled ? "status-badge success" : "status-badge"}>
+                    {cfg.enabled ? t("gateway.takeoverOn") : t("gateway.takeoverOff")}
+                  </span>
+                </header>
+                <footer className="provider-card-actions">
+                  <button
+                    className={cfg.enabled ? "ghost-action danger-action" : "ghost-action"}
+                    disabled={takeoverBusy}
+                    onClick={() => toggleTakeover(cfg.tool, !cfg.enabled)}
+                  >
+                    <PlugZap size={14} />
+                    {cfg.enabled ? t("gateway.disableTakeover") : t("gateway.enableTakeover")}
+                  </button>
+                  <button
+                    className={cfg.auto_failover ? "ghost-action active" : "ghost-action"}
+                    disabled={failoverBusy}
+                    onClick={() => toggleAutoFailover(cfg)}
+                  >
+                    <Workflow size={14} />
+                    {t("gateway.autoFailover")}: {cfg.auto_failover ? "ON" : "OFF"}
+                  </button>
+                </footer>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
   function renderRoutingTab() {
     return (
       <div className="page-stack">
+        {renderLocalRouting()}
         <section className="surface routing-overview">
           <div className="surface-header">
             <div>
@@ -1036,17 +1371,19 @@ export function GatewayPanel() {
           )}
           {notice && <div className="session-notice">{notice}</div>}
           <div className="surface-body provider-list-grid route-list-grid">
-            {routeList.map((route) => {
+            {[...routeList].sort((a, b) => sortTools(normalizeTool(a.tool), normalizeTool(b.tool))).map((route) => {
               const routeProvider = providerList.find((provider) => provider.id === route.provider_id);
               const configured = Boolean(route.configured && routeProvider);
               const busyRoute = busy === `disable-route:${route.tool}`;
+              const supportedModels = routeProvider ? providerSupportedModels(routeProvider) : uniqueValues([route.model || ""]);
+              const supportedProtocols = routeProvider ? providerSupportedProtocols(routeProvider) : protocolLabels([route.api_format || ""]);
               return (
                 <article className={configured ? "route-card enabled" : "route-card"} key={route.tool}>
                   <header>
                     <span className="route-card-title">
                       <Workflow size={17} />
                       <span>
-                        <strong>{toolLabel(route.tool)}</strong>
+                        <strong>{toolLabel(normalizeTool(route.tool))}</strong>
                         <small>{route.tool}</small>
                       </span>
                     </span>
@@ -1061,13 +1398,17 @@ export function GatewayPanel() {
                       <dt>{t("gateway.activeProvider")}</dt>
                       <dd>{routeProvider?.name || route.provider_name || route.provider_id || t("gateway.unrouted")}</dd>
                     </div>
-                    <div>
+                    <div className="provider-fact-wide">
                       <dt>{t("providers.model")}</dt>
-                      <dd>{routeProvider?.model || route.model || "—"}</dd>
+                      <dd className="provider-fact-chips">
+                        <CapabilityBadges items={supportedModels} />
+                      </dd>
                     </div>
-                    <div>
+                    <div className="provider-fact-wide">
                       <dt>{t("gateway.protocol")}</dt>
-                      <dd>{routeProvider ? providerProtocol(routeProvider) : route.api_format || "—"}</dd>
+                      <dd className="provider-fact-chips">
+                        <CapabilityBadges items={supportedProtocols} />
+                      </dd>
                     </div>
                     <div>
                       <dt>{t("gateway.keyStatus")}</dt>

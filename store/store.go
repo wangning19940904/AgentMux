@@ -130,6 +130,19 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	source TEXT,
 	created_at TEXT,
 	updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS proxy_config (
+	tool TEXT PRIMARY KEY,
+	enabled INTEGER DEFAULT 0,
+	auto_failover INTEGER DEFAULT 0,
+	max_retries INTEGER DEFAULT 3,
+	failure_threshold INTEGER DEFAULT 4,
+	cooldown_seconds INTEGER DEFAULT 60
+);
+CREATE TABLE IF NOT EXISTS proxy_live_backup (
+	tool TEXT PRIMARY KEY,
+	original_config TEXT NOT NULL,
+	backed_up_at TEXT NOT NULL
 );`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -141,6 +154,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 		{"category", "TEXT"},
 		{"settings_config", "TEXT"},
 		{"meta", "TEXT"},
+		{"in_failover_queue", "INTEGER DEFAULT 0"},
+		{"sort_index", "INTEGER DEFAULT 0"},
 	} {
 		if err := s.ensureColumn("providers", col.name, col.def); err != nil {
 			return err

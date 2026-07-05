@@ -63,7 +63,24 @@ func (m *Manager) Active(ctx context.Context, tool string) (*core.Provider, erro
 	return m.st.GetProvider(ctx, id)
 }
 
+func providerSupportsTool(p *core.Provider, tool string) bool {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return false
+	}
+	target := liveConfigTool(tool)
+	for _, candidate := range p.Tools {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == tool || candidate == target || liveConfigTool(candidate) == target {
+			return true
+		}
+	}
+	return false
+}
+
 // Switch enables provider id for tool and writes the tool's live config.
+// The previous active provider (if any) is consulted so its leftover keys
+// are cleaned from the live file, mirroring cc-switch's switch_normal.
 func (m *Manager) Switch(ctx context.Context, id, tool string) error {
 	p, err := m.st.GetProvider(ctx, id)
 	if err != nil {
@@ -72,20 +89,43 @@ func (m *Manager) Switch(ctx context.Context, id, tool string) error {
 	if p == nil {
 		return fmt.Errorf("provider %q not found", id)
 	}
-	supported := false
-	for _, t := range p.Tools {
-		if t == tool {
-			supported = true
-			break
-		}
-	}
-	if !supported {
+	if !providerSupportsTool(p, tool) {
 		return fmt.Errorf("provider %q does not support tool %q", id, tool)
 	}
-	if err := WriteLiveConfig(tool, p); err != nil {
+	if err := validateDirectSwitch(p, tool); err != nil {
+		return err
+	}
+	var prev *core.Provider
+	if prevID, ok, err := m.st.ActiveProviderID(ctx, tool); err == nil && ok && prevID != id {
+		prev, _ = m.st.GetProvider(ctx, prevID)
+	}
+	if err := m.writeLive(tool, p, prev); err != nil {
 		return fmt.Errorf("write live config: %w", err)
 	}
 	return m.st.SetActiveProvider(ctx, tool, id)
+}
+
+// validateDirectSwitch rejects live-config writes that would break the tool:
+// protocol-converting combos only work through local routing takeover.
+func validateDirectSwitch(p *core.Provider, tool string) error {
+	format := p.Meta.APIFormat
+	switch liveConfigTool(tool) {
+	case "claudecode", "claude-desktop":
+		if format == "openai_chat" || format == "openai_responses" || format == "gemini_native" {
+			return fmt.Errorf("provider %q speaks %s; enable local routing takeover for %s to use it", p.ID, format, tool)
+		}
+	case "codex":
+		if format == "anthropic" {
+			return fmt.Errorf("provider %q speaks anthropic; codex needs an openai_chat/openai_responses endpoint", p.ID)
+		}
+	}
+	return nil
+}
+
+// writeLive is the live-config write step of a switch; the takeover layer
+// overrides it when the tool is proxied (hot switch keeps live untouched).
+func (m *Manager) writeLive(tool string, p, prev *core.Provider) error {
+	return WriteLiveConfigForSwitch(tool, p, prev)
 }
 
 // Clear removes the active provider route for a tool.
@@ -139,17 +179,4 @@ func (m *Manager) ImportPreset(ctx context.Context, presetID string) (*core.Prov
 		return nil, err
 	}
 	return p, nil
-}
-
-// BuildUpstreams converts a provider chain into proxy upstreams.
-func BuildUpstreams(providers []*core.Provider) []*Upstream {
-	out := make([]*Upstream, 0, len(providers))
-	for _, p := range providers {
-		out = append(out, &Upstream{
-			ProviderID: p.ID,
-			BaseURL:    p.BaseURL,
-			APIKeyEnv:  p.APIKeyEnv,
-		})
-	}
-	return out
 }

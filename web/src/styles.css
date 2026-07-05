@@ -1157,6 +1157,10 @@ textarea:focus {
   min-width: 0;
 }
 
+.provider-facts .provider-fact-wide {
+  grid-column: 1 / -1;
+}
+
 .provider-facts dd,
 .route-detail-grid strong {
   min-width: 0;
@@ -1169,9 +1173,17 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.provider-chip-row {
+.provider-facts dd.provider-fact-chips {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.provider-chip-row,
+.provider-fact-chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
 }
 
@@ -1484,6 +1496,33 @@ textarea:focus {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.provider-advanced summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.provider-advanced textarea {
+  min-height: 64px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.local-routing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.ghost-action.active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  color: var(--accent);
 }
 
 .capability-group {

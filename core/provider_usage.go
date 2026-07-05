@@ -23,26 +23,45 @@ type Provider struct {
 	SettingsConfig map[string]any    `json:"settings_config,omitempty"`
 	Meta           ProviderMeta      `json:"meta,omitempty"`
 	Enabled        bool              `json:"enabled"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	// InFailoverQueue marks this provider as a local-routing failover
+	// candidate; SortIndex orders the queue (cc-switch semantics).
+	InFailoverQueue bool      `json:"in_failover_queue,omitempty"`
+	SortIndex       int       `json:"sort_index,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // ProviderMeta carries tool-specific routing hints without forcing the core
 // provider row to know every downstream config shape.
 type ProviderMeta struct {
-	APIFormat             string               `json:"api_format,omitempty"`          // anthropic, openai_responses, openai_chat
-	CodexWireAPI          string               `json:"codex_wire_api,omitempty"`      // responses, chat
-	ClaudeDesktopMode     string               `json:"claude_desktop_mode,omitempty"` // direct
+	APIFormat           string   `json:"api_format,omitempty"`     // anthropic, openai_responses, openai_chat
+	CodexWireAPI        string   `json:"codex_wire_api,omitempty"` // responses, chat
+	SupportedModels     []string `json:"supported_models,omitempty"`
+	SupportedAPIFormats []string `json:"supported_api_formats,omitempty"`
+	SupportedProtocols  []string `json:"supported_protocols,omitempty"`
+	// ClaudeAuthScheme selects the env credential key written for Claude Code:
+	// "auth_token" (ANTHROPIC_AUTH_TOKEN, cc-switch's third-party default) or
+	// "api_key" (ANTHROPIC_API_KEY, official direct). Empty = auto: official
+	// providers use api_key, everything else auth_token.
+	ClaudeAuthScheme string `json:"claude_auth_scheme,omitempty"`
+	// Claude Code tiered model overrides (ANTHROPIC_DEFAULT_*_MODEL).
+	ClaudeSonnetModel     string               `json:"claude_sonnet_model,omitempty"`
+	ClaudeOpusModel       string               `json:"claude_opus_model,omitempty"`
+	ClaudeHaikuModel      string               `json:"claude_haiku_model,omitempty"`
+	ClaudeDesktopMode     string               `json:"claude_desktop_mode,omitempty"` // direct, proxy
 	ClaudeDesktopModels   []ClaudeDesktopModel `json:"claude_desktop_models,omitempty"`
 	ClaudeDesktopAuthMode string               `json:"claude_desktop_auth_mode,omitempty"` // bearer
 }
 
 // ClaudeDesktopModel is the subset of Claude Desktop's 3P profile model entry
-// AgentNexus needs for direct-mode routing.
+// AgentNexus needs for direct- and proxy-mode routing.
 type ClaudeDesktopModel struct {
 	ID          string `json:"id"`
 	Name        string `json:"name,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+	// UpstreamModel maps this Claude Desktop route id to the real upstream
+	// model when the profile points at the local routing proxy.
+	UpstreamModel string `json:"upstream_model,omitempty"`
 }
 
 // ProviderManager handles provider CRUD, switching and live-config sync.

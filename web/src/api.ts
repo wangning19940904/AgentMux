@@ -40,6 +40,23 @@ export interface Provider {
   settings_config?: Record<string, unknown>;
   meta?: Record<string, unknown>;
   enabled: boolean;
+  in_failover_queue?: boolean;
+  sort_index?: number;
+}
+
+export interface ProxyToolConfig {
+  tool: string;
+  enabled: boolean;
+  auto_failover: boolean;
+  max_retries: number;
+  failure_threshold: number;
+  cooldown_seconds: number;
+}
+
+export interface ProxyStatus {
+  running: boolean;
+  base_url: string;
+  tools: ProxyToolConfig[];
 }
 
 export interface ProviderRoute {
@@ -297,6 +314,8 @@ function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>
         : undefined,
     meta,
     enabled: Boolean(provider.enabled),
+    in_failover_queue: Boolean(provider.in_failover_queue),
+    sort_index: typeof provider.sort_index === "number" ? provider.sort_index : 0,
   };
 }
 
@@ -325,6 +344,17 @@ export const api = {
     post<{ ok: boolean }>("/api/v1/providers/switch", { id, tool }),
   disableRoute: (tool: string) =>
     del<{ ok: boolean }>(`/api/v1/providers/active?tool=${encodeURIComponent(tool)}`),
+  proxyStatus: () => get<ProxyStatus>("/api/v1/proxy/status"),
+  setTakeover: (tool: string, enabled: boolean) =>
+    postChecked<ProxyStatus>("/api/v1/proxy/takeover", { tool, enabled }),
+  setProxyToolConfig: (cfg: Partial<ProxyToolConfig> & { tool: string }) =>
+    postChecked<ProxyStatus>("/api/v1/proxy/config", cfg),
+  setFailoverQueue: (id: string, inQueue: boolean, sortIndex = 0) =>
+    postChecked<{ ok: boolean }>("/api/v1/providers/failover", {
+      id,
+      in_failover_queue: inQueue,
+      sort_index: sortIndex,
+    }),
   claude3pStatus: () => get<Claude3PStatus>("/api/v1/system/claude-3p"),
   setClaude3p: (enabled: boolean, providerID = "") =>
     postChecked<Claude3PStatus>("/api/v1/system/claude-3p", {

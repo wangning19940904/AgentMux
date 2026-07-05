@@ -104,8 +104,12 @@ func serveCmd() *cobra.Command {
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			srv := newServer(cfg, st)
+			srv, providerSvc := newServer(cfg, st)
 			srv.SetSender(eng)
+			if err := providerSvc.RestoreProxyState(ctx); err != nil {
+				logger.Warn("local routing restore failed", "err", err)
+			}
+			defer func() { _ = providerSvc.Proxy().Stop() }()
 			go func() { _ = srv.ListenAndServe(ctx) }()
 
 			return eng.Start(ctx)

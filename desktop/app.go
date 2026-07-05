@@ -39,14 +39,18 @@ func (a *App) startup(ctx context.Context) {
 		log.Error("open store", "err", err)
 		return
 	}
-	pm := provider.NewManager(st)
+	svc := provider.NewService(log, st, cfg.Provider.ProxyAddr)
 	ue := usage.NewEngine(cfg, st, log)
 	reporter := func(ctx context.Context, period string, since time.Time) (any, error) {
 		return ue.Report(ctx, period, since)
 	}
-	srv := server.New(cfg, log, st, pm, reporter)
+	srv := server.New(cfg, log, st, svc, reporter)
+	srv.SetProviderService(svc)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
+	if err := svc.RestoreProxyState(a.ctx); err != nil {
+		log.Warn("local routing restore failed", "err", err)
+	}
 	go func() {
 		if err := srv.ListenAndServe(a.ctx); err != nil {
 			log.Error("serve desktop API", "err", err)
@@ -68,5 +72,6 @@ func (a *App) SwitchProvider(id, tool string) error {
 		return err
 	}
 	defer st.Close()
-	return provider.NewManager(st).Switch(a.ctx, id, tool)
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	return provider.NewService(log, st, "").Switch(a.ctx, id, tool)
 }
