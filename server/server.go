@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/core"
+	sessionstore "github.com/agentnexus/agentnexus/sessions"
 	"github.com/agentnexus/agentnexus/store"
 )
 
@@ -28,6 +29,7 @@ type Server struct {
 	skills   core.SkillManager
 	mcp      core.MCPRegistry
 	guard    core.Guard
+	sessions *sessionstore.Service
 	mux      *http.ServeMux
 	httpSrv  *http.Server
 }
@@ -43,6 +45,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		st:       st,
 		provider: pm,
 		usageFn:  usageFn,
+		sessions: sessionstore.New(),
 		mux:      http.NewServeMux(),
 	}
 	s.routes()
@@ -64,14 +67,30 @@ func (s *Server) SetModules(mem core.MemoryStore, sk core.SkillManager, mcp core
 	s.guard = g
 }
 
+// SetSessions attaches the Claude/Codex session manager. Nil disables routes.
+func (s *Server) SetSessions(svc *sessionstore.Service) { s.sessions = svc }
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
+	s.mux.HandleFunc("GET /api/v1/agent-instances", s.handleAgentInstancesList)
+	s.mux.HandleFunc("POST /api/v1/agent-instances", s.handleAgentInstanceUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/agent-instances", s.handleAgentInstanceDelete)
 	s.mux.HandleFunc("GET /api/v1/providers", s.handleProvidersList)
 	s.mux.HandleFunc("POST /api/v1/providers", s.handleProviderUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/providers", s.handleProviderDelete)
+	s.mux.HandleFunc("GET /api/v1/providers/active", s.handleProviderActiveRoutes)
+	s.mux.HandleFunc("DELETE /api/v1/providers/active", s.handleProviderClearRoute)
 	s.mux.HandleFunc("GET /api/v1/providers/presets", s.handleProviderPresets)
+	s.mux.HandleFunc("POST /api/v1/providers/probe", s.handleProviderProbe)
 	s.mux.HandleFunc("POST /api/v1/providers/switch", s.handleProviderSwitch)
+	s.mux.HandleFunc("GET /api/v1/system/claude-3p", s.handleClaude3PStatus)
+	s.mux.HandleFunc("POST /api/v1/system/claude-3p", s.handleClaude3PToggle)
+	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)
+	s.mux.HandleFunc("GET /api/v1/sessions/messages", s.handleSessionMessages)
+	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
+	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
 	s.registerModuleRoutes()
@@ -100,6 +119,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // withAuth enforces the bridge token on /api/ routes when the bridge is on.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
 		if s.cfg.Bridge.Enabled && len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
 			tok := r.Header.Get("Authorization")
 			if tok != "Bearer "+s.cfg.Bridge.Token {
@@ -147,8 +175,16 @@ func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		return
+	}
 	var p core.Provider
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := normalizeProviderAPIKey(&p); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -159,11 +195,62 @@ func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, &p)
 }
 
+func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+		return
+	}
+	if s.provider == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		return
+	}
+	if err := s.provider.Delete(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	routes, err := s.provider.ActiveRoutes(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, routes)
+}
+
+func (s *Server) handleProviderClearRoute(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		return
+	}
+	tool := r.URL.Query().Get("tool")
+	if tool == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tool"})
+		return
+	}
+	if err := s.provider.Clear(r.Context(), tool); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleProviderPresets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.presets)
 }
 
 func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		return
+	}
 	var req struct {
 		ID   string `json:"id"`
 		Tool string `json:"tool"`

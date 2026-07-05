@@ -3,6 +3,8 @@ package server
 import (
 	"io/fs"
 	"net/http"
+	"strings"
+	"time"
 
 	webdist "github.com/agentnexus/agentnexus/web"
 )
@@ -16,6 +18,14 @@ func (s *Server) registerWeb(mux *http.ServeMux) {
 		return
 	}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if devBase, ok := detectDevWebServer(); ok {
+			http.Redirect(w, r, devBase+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+			return
+		}
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
@@ -23,6 +33,17 @@ func (s *Server) registerWeb(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(placeholderHTML))
 	})
+}
+
+func detectDevWebServer() (string, bool) {
+	const devBase = "http://127.0.0.1:5173"
+	client := http.Client{Timeout: 200 * time.Millisecond}
+	res, err := client.Head(devBase + "/")
+	if err != nil {
+		return "", false
+	}
+	defer res.Body.Close()
+	return devBase, res.StatusCode >= 200 && res.StatusCode < 500
 }
 
 // serveSPA serves static assets from dist and falls back to index.html for

@@ -17,8 +17,10 @@ func TestProviderCRUDAndActive(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	p := &core.Provider{ID: "p1", Name: "P1", BaseURL: "http://x", Tools: []string{"claudecode"},
-		CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	p := &core.Provider{ID: "p1", Name: "P1", Category: "official", BaseURL: "http://x", Tools: []string{"claudecode"},
+		SettingsConfig: map[string]any{"claude_config_dir": "/tmp/claude"},
+		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
+		CreatedAt:      time.Now(), UpdatedAt: time.Now()}
 	if err := st.UpsertProvider(ctx, p); err != nil {
 		t.Fatal(err)
 	}
@@ -29,12 +31,61 @@ func TestProviderCRUDAndActive(t *testing.T) {
 	if len(got.Tools) != 1 || got.Tools[0] != "claudecode" {
 		t.Fatalf("tools = %v", got.Tools)
 	}
+	if got.Category != "official" || got.Meta.APIFormat != "anthropic" || got.SettingsConfig["claude_config_dir"] != "/tmp/claude" {
+		t.Fatalf("provider metadata = %+v", got)
+	}
 	if err := st.SetActiveProvider(ctx, "claudecode", "p1"); err != nil {
 		t.Fatal(err)
 	}
 	id, ok, err := st.ActiveProviderID(ctx, "claudecode")
 	if err != nil || !ok || id != "p1" {
 		t.Fatalf("active = %q,%v,%v", id, ok, err)
+	}
+	routes, err := st.ActiveProviderRoutes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 1 || routes[0].Tool != "claudecode" || routes[0].ProviderID != "p1" || routes[0].APIFormat != "anthropic" {
+		t.Fatalf("routes = %+v", routes)
+	}
+	p2 := &core.Provider{ID: "p2", Name: "P2", BaseURL: "http://y", Tools: []string{"claudecode"},
+		CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := st.UpsertProvider(ctx, p2); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", "p2"); err != nil {
+		t.Fatal(err)
+	}
+	old, err := st.GetProvider(ctx, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Enabled {
+		t.Fatalf("previous provider remained enabled: %+v", old)
+	}
+	if err := st.ClearActiveProvider(ctx, "claudecode"); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err = st.ActiveProviderID(ctx, "claudecode")
+	if err != nil || ok {
+		t.Fatalf("cleared active provider still routed: ok=%v err=%v", ok, err)
+	}
+	cleared, err := st.GetProvider(ctx, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Enabled {
+		t.Fatalf("cleared provider remained enabled: %+v", cleared)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", "p2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteProvider(ctx, "p2"); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err = st.ActiveProviderID(ctx, "claudecode")
+	if err != nil || ok {
+		t.Fatalf("deleted active provider still routed: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -63,5 +114,82 @@ func TestUsageUpsertDedupAndQuery(t *testing.T) {
 	future, _ := st.QueryUsage(ctx, ts.Add(time.Hour))
 	if len(future) != 0 {
 		t.Fatalf("since filter rows = %d, want 0", len(future))
+	}
+}
+
+func TestAgentInstanceCRUD(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	now := time.Now()
+	agent := &core.AgentInstance{
+		ID:           "agent-test",
+		Name:         "Research Codex",
+		RuntimeID:    "codex",
+		WorkDir:      "/tmp/work",
+		ProviderTool: "codex",
+		ProviderID:   "openai",
+		MemoryScope:  "agent:agent-test",
+		Env:          map[string]string{"CODEX_HOME": "/tmp/codex"},
+		ChannelBindings: []core.AgentChannelBinding{{
+			ID:     "channel-1",
+			Type:   "telegram",
+			Name:   "ops",
+			ChatID: "123",
+			Status: "configured",
+		}},
+		Schedules: []core.AgentSchedule{{
+			ID:      "schedule-1",
+			Name:    "morning",
+			Cron:    "0 9 * * *",
+			Prompt:  "summarize",
+			Enabled: true,
+		}},
+		MCPServers: []string{"filesystem"},
+		Skills:     []string{"code-review"},
+		Enabled:    true,
+		Source:     "console",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := st.UpsertAgentInstance(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	items, err := st.ListAgentInstances(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("agents = %d, want 1", len(items))
+	}
+	got, err := st.GetAgentInstance(ctx, "agent-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" {
+		t.Fatalf("agent = %+v", got)
+	}
+	if len(got.ChannelBindings) != 1 || got.ChannelBindings[0].Type != "telegram" {
+		t.Fatalf("channels = %+v", got.ChannelBindings)
+	}
+	if len(got.Schedules) != 1 || got.Schedules[0].Cron != "0 9 * * *" {
+		t.Fatalf("schedules = %+v", got.Schedules)
+	}
+	if len(got.MCPServers) != 1 || got.MCPServers[0] != "filesystem" || len(got.Skills) != 1 {
+		t.Fatalf("tools = mcp:%v skills:%v", got.MCPServers, got.Skills)
+	}
+	if err := st.DeleteAgentInstance(ctx, "agent-test"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetAgentInstance(ctx, "agent-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("deleted agent still present: %+v", got)
 	}
 }

@@ -17,6 +17,7 @@ DIST        := dist
 VERSION     ?= 0.1.0
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
+WAILS       ?= $(HOME)/go/bin/wails
 
 .PHONY: all build web release cross desktop menubar test vet clean tidy
 
@@ -50,7 +51,16 @@ cross: web
 # Wails desktop app. Requires: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 # and a frontend symlink: ln -s ../web desktop/frontend
 desktop: web
-	cd desktop && wails build -tags desktop
+	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
+	cd desktop && $(WAILS) build -tags desktop -skipbindings
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+		macos_dir="desktop/build/bin/agentnexus-desktop.app/Contents/MacOS"; \
+		if [ -d "$$macos_dir" ]; then \
+			cp macos-menubar/AgentNexusMenuBar "$$macos_dir/AgentNexusMenuBar"; \
+			codesign --force --sign - "$$macos_dir/AgentNexusMenuBar"; \
+			codesign --force --deep --sign - "desktop/build/bin/agentnexus-desktop.app"; \
+		fi; \
+	fi
 
 # macOS menu bar app (SwiftUI). macOS only.
 menubar:

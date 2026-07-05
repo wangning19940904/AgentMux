@@ -50,6 +50,9 @@ ln -s ../web desktop/frontend
 make desktop        # builds the native app via the desktop build tag
 ```
 
+On macOS, `make desktop` also builds and bundles the menu bar helper so the
+desktop app can show a status item while it is running.
+
 The desktop shell starts the daemon in-process and renders the same WebUI.
 
 ## Build the macOS menu bar app

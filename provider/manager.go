@@ -49,6 +49,11 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	return m.st.DeleteProvider(ctx, id)
 }
 
+// ActiveRoutes returns every active tool -> provider route.
+func (m *Manager) ActiveRoutes(ctx context.Context) ([]core.ProviderRoute, error) {
+	return m.st.ActiveProviderRoutes(ctx)
+}
+
 // Active returns the enabled provider for a tool.
 func (m *Manager) Active(ctx context.Context, tool string) (*core.Provider, error) {
 	id, ok, err := m.st.ActiveProviderID(ctx, tool)
@@ -83,21 +88,33 @@ func (m *Manager) Switch(ctx context.Context, id, tool string) error {
 	return m.st.SetActiveProvider(ctx, tool, id)
 }
 
+// Clear removes the active provider route for a tool.
+func (m *Manager) Clear(ctx context.Context, tool string) error {
+	if strings.TrimSpace(tool) == "" {
+		return fmt.Errorf("missing tool")
+	}
+	return m.st.ClearActiveProvider(ctx, tool)
+}
+
 // providerJSON is the on-disk JSON shape (also used by presets import).
 type providerJSON struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	BaseURL string            `json:"base_url"`
-	Model   string            `json:"model"`
-	Tools   []string          `json:"tools"`
-	Extra   map[string]string `json:"extra"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Category       string            `json:"category,omitempty"`
+	BaseURL        string            `json:"base_url"`
+	Model          string            `json:"model"`
+	Tools          []string          `json:"tools"`
+	Extra          map[string]string `json:"extra,omitempty"`
+	SettingsConfig map[string]any    `json:"settings_config,omitempty"`
+	Meta           core.ProviderMeta `json:"meta,omitempty"`
 }
 
 // MarshalProvider renders a provider as compact JSON (used by export).
 func MarshalProvider(p *core.Provider) ([]byte, error) {
 	return json.Marshal(providerJSON{
-		ID: p.ID, Name: p.Name, BaseURL: p.BaseURL,
+		ID: p.ID, Name: p.Name, Category: p.Category, BaseURL: p.BaseURL,
 		Model: p.Model, Tools: p.Tools, Extra: p.Extra,
+		SettingsConfig: p.SettingsConfig, Meta: p.Meta,
 	})
 }
 

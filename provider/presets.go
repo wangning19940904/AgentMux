@@ -12,12 +12,18 @@ var presetsRaw []byte
 
 // presetEntry is the on-disk preset shape.
 type presetEntry struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	BaseURL   string   `json:"base_url"`
-	APIKeyEnv string   `json:"api_key_env"`
-	Model     string   `json:"model"`
-	Tools     []string `json:"tools"`
+	ID                    string                    `json:"id"`
+	Name                  string                    `json:"name"`
+	Category              string                    `json:"category"`
+	BaseURL               string                    `json:"base_url"`
+	APIKeyEnv             string                    `json:"api_key_env"`
+	Model                 string                    `json:"model"`
+	Tools                 []string                  `json:"tools"`
+	APIFormat             string                    `json:"api_format"`
+	CodexWireAPI          string                    `json:"codex_wire_api"`
+	ClaudeDesktopMode     string                    `json:"claude_desktop_mode"`
+	ClaudeDesktopModels   []core.ClaudeDesktopModel `json:"claude_desktop_models"`
+	ClaudeDesktopAuthMode string                    `json:"claude_desktop_auth_mode"`
 }
 
 // Presets returns the built-in provider presets as core.Provider templates.
@@ -32,10 +38,18 @@ func Presets() []*core.Provider {
 			ID:        e.ID,
 			Name:      e.Name,
 			Preset:    e.ID,
+			Category:  e.Category,
 			BaseURL:   e.BaseURL,
 			APIKeyEnv: e.APIKeyEnv,
 			Model:     e.Model,
 			Tools:     e.Tools,
+			Meta: core.ProviderMeta{
+				APIFormat:             e.APIFormat,
+				CodexWireAPI:          e.CodexWireAPI,
+				ClaudeDesktopMode:     e.ClaudeDesktopMode,
+				ClaudeDesktopModels:   e.ClaudeDesktopModels,
+				ClaudeDesktopAuthMode: e.ClaudeDesktopAuthMode,
+			},
 		})
 	}
 	return out

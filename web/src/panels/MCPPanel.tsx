@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { api, MCPServer } from "../api";
+import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 const EMPTY: MCPServer = { name: "", transport: "stdio", command: "", enabled: true };
 
 export function MCPPanel() {
+  const { t } = useI18n();
   const servers = useAsync(() => api.mcp(), []);
   const [draft, setDraft] = useState<MCPServer>(EMPTY);
   const [busy, setBusy] = useState(false);
@@ -27,88 +29,102 @@ export function MCPPanel() {
   }
 
   return (
-    <div>
-      <h1>MCP Registry</h1>
-      <p className="muted">AgentNexus MCP Registry — 注册、编排与下发 MCP Server 配置。</p>
+    <div className="page-stack">
+      <p className="subtle-copy">{t("mcp.subtitle")}</p>
 
-      <h2>Register server</h2>
-      <div className="card">
-        <div className="form-row">
-          <input
-            placeholder="name"
-            value={draft.name}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          />
-          <select
-            value={draft.transport}
-            onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
-          >
-            <option value="stdio">stdio</option>
-            <option value="sse">sse</option>
-            <option value="http">http</option>
-          </select>
+      <section className="surface">
+        <div className="surface-header">
+          <h2>{t("mcp.register")}</h2>
         </div>
-        <div className="form-row">
-          <input
-            placeholder={draft.transport === "stdio" ? "command (e.g. npx)" : "url"}
-            value={draft.transport === "stdio" ? draft.command : draft.url}
-            onChange={(e) =>
-              draft.transport === "stdio"
-                ? setDraft({ ...draft, command: e.target.value })
-                : setDraft({ ...draft, url: e.target.value })
-            }
-          />
+        <div className="surface-body">
+          <div className="form-row">
+            <input
+              placeholder={t("mcp.namePlaceholder")}
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+            <select
+              value={draft.transport}
+              onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
+            >
+              <option value="stdio">stdio</option>
+              <option value="sse">sse</option>
+              <option value="http">http</option>
+            </select>
+          </div>
+          <div className="form-row">
+            <input
+              placeholder={draft.transport === "stdio" ? t("mcp.commandPlaceholder") : t("mcp.urlPlaceholder")}
+              value={draft.transport === "stdio" ? draft.command : draft.url}
+              onChange={(e) =>
+                draft.transport === "stdio"
+                  ? setDraft({ ...draft, command: e.target.value })
+                  : setDraft({ ...draft, url: e.target.value })
+              }
+            />
+          </div>
+          <button className="action" disabled={busy} onClick={save}>
+            {t("common.save")}
+          </button>
         </div>
-        <button className="action" disabled={busy} onClick={save}>
-          Save
-        </button>
-      </div>
+      </section>
 
-      <h2>Registered ({servers.data?.length ?? 0})</h2>
-      <div className="card">
-        {servers.error && <div className="error">{servers.error}</div>}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Transport</th>
-              <th>Command / URL</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(servers.data ?? []).map((m) => (
-              <tr key={m.name}>
-                <td>{m.name}</td>
-                <td>
-                  <span className="pill">{m.transport}</span>
-                </td>
-                <td className="muted">{m.command || m.url || "—"}</td>
-                <td>
-                  {m.enabled ? (
-                    <span className="pill on">enabled</span>
-                  ) : (
-                    <span className="pill">disabled</span>
-                  )}
-                </td>
-                <td>
-                  <button className="action" onClick={() => remove(m.name)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {servers.data?.length === 0 && (
+      <section className="surface">
+        <div className="surface-header">
+          <h2>{t("mcp.registered")}</h2>
+          <span className="pill on">{servers.data?.length ?? 0}</span>
+        </div>
+        {servers.error && <div className="surface-body error">{servers.error}</div>}
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={5} className="muted">
-                  No MCP servers registered yet.
-                </td>
+                <th>{t("common.name")}</th>
+                <th>{t("mcp.transport")}</th>
+                <th>{t("mcp.commandUrl")}</th>
+                <th>{t("common.status")}</th>
+                <th></th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {(servers.data ?? []).map((server) => (
+                <tr key={server.name}>
+                  <td>{server.name}</td>
+                  <td>
+                    <span className="pill">{server.transport}</span>
+                  </td>
+                  <td className="muted mono">{server.command || server.url || "—"}</td>
+                  <td>
+                    {server.enabled ? (
+                      <span className="status-badge success">
+                        <span className="status-dot" />
+                        {t("common.enabled")}
+                      </span>
+                    ) : (
+                      <span className="status-badge">
+                        <span className="status-dot" />
+                        {t("common.disabled")}
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <button className="ghost-action" onClick={() => remove(server.name)}>
+                      {t("common.delete")}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {servers.data?.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="empty-state">
+                    {t("mcp.empty")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }

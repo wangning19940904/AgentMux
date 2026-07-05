@@ -51,11 +51,14 @@ CREATE TABLE IF NOT EXISTS providers (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
 	preset TEXT,
+	category TEXT,
 	base_url TEXT,
 	api_key_env TEXT,
 	model TEXT,
 	tools TEXT,
 	extra TEXT,
+	settings_config TEXT,
+	meta TEXT,
 	enabled INTEGER DEFAULT 0,
 	created_at TEXT,
 	updated_at TEXT
@@ -108,8 +111,66 @@ CREATE TABLE IF NOT EXISTS guard_policies (
 	action TEXT,
 	decision TEXT NOT NULL,
 	priority INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS agent_instances (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	runtime_id TEXT NOT NULL,
+	work_dir TEXT,
+	system_prompt TEXT,
+	provider_tool TEXT,
+	provider_id TEXT,
+	memory_scope TEXT,
+	env TEXT,
+	channel_bindings TEXT,
+	schedules TEXT,
+	mcp_servers TEXT,
+	skills TEXT,
+	enabled INTEGER DEFAULT 1,
+	source TEXT,
+	created_at TEXT,
+	updated_at TEXT
 );`
-	_, err := s.db.Exec(schema)
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"category", "TEXT"},
+		{"settings_config", "TEXT"},
+		{"meta", "TEXT"},
+	} {
+		if err := s.ensureColumn("providers", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(table, name, def string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName, colType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &colName, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if colName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + def)
 	return err
 }
 

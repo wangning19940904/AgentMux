@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
+import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 export function MemoryPanel() {
+  const { t, language } = useI18n();
   const [scope, setScope] = useState("");
   const [q, setQ] = useState("");
   const entries = useAsync(() => api.memory(scope, q), [scope, q]);
@@ -28,73 +30,80 @@ export function MemoryPanel() {
   }
 
   return (
-    <div>
-      <h1>Memory</h1>
-      <p className="muted">AgentNexus Memory — 跨 Agent、跨会话的统一记忆层。</p>
+    <div className="page-stack">
+      <p className="subtle-copy">{t("memory.subtitle")}</p>
 
-      <h2>Add entry</h2>
-      <div className="card">
-        <div className="form-row">
-          <input
-            placeholder="scope (global / project:foo / session:id)"
-            value={newScope}
-            onChange={(e) => setNewScope(e.target.value)}
-          />
+      <section className="surface">
+        <div className="surface-header">
+          <h2>{t("memory.add")}</h2>
         </div>
-        <div className="form-row">
-          <textarea
-            placeholder="memory content…"
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            rows={3}
-          />
+        <div className="surface-body">
+          <div className="form-row">
+            <input
+              placeholder={t("memory.scopePlaceholder")}
+              value={newScope}
+              onChange={(e) => setNewScope(e.target.value)}
+            />
+          </div>
+          <div className="form-row">
+            <textarea
+              placeholder={t("memory.contentPlaceholder")}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={3}
+            />
+          </div>
+          <button className="action" disabled={busy} onClick={add}>
+            {t("common.save")}
+          </button>
         </div>
-        <button className="action" disabled={busy} onClick={add}>
-          Save
-        </button>
-      </div>
+      </section>
 
-      <h2>Search</h2>
-      <div className="card">
-        <div className="form-row">
-          <input placeholder="filter scope" value={scope} onChange={(e) => setScope(e.target.value)} />
-          <input placeholder="search text" value={q} onChange={(e) => setQ(e.target.value)} />
+      <section className="surface">
+        <div className="surface-header">
+          <h2>{t("memory.search")}</h2>
+          <div className="control-row">
+            <input placeholder={t("memory.filterScope")} value={scope} onChange={(e) => setScope(e.target.value)} />
+            <input placeholder={t("memory.searchText")} value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
         </div>
-        {entries.error && <div className="error">{entries.error}</div>}
-        <table>
-          <thead>
-            <tr>
-              <th>Scope</th>
-              <th>Content</th>
-              <th>Updated</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(entries.data ?? []).map((e) => (
-              <tr key={e.id}>
-                <td>
-                  <span className="pill">{e.scope}</span>
-                </td>
-                <td>{e.content}</td>
-                <td className="muted">{new Date(e.updated_at).toLocaleString()}</td>
-                <td>
-                  <button className="action" onClick={() => remove(e.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {entries.data?.length === 0 && (
+        {entries.error && <div className="surface-body error">{entries.error}</div>}
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={4} className="muted">
-                  No memory entries yet.
-                </td>
+                <th>{t("memory.scope")}</th>
+                <th>{t("memory.content")}</th>
+                <th>{t("memory.updated")}</th>
+                <th></th>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {(entries.data ?? []).map((entry) => (
+                <tr key={entry.id}>
+                  <td>
+                    <span className="pill">{entry.scope}</span>
+                  </td>
+                  <td>{entry.content}</td>
+                  <td className="muted">{new Date(entry.updated_at).toLocaleString(language === "zh" ? "zh-CN" : "en-US")}</td>
+                  <td>
+                    <button className="ghost-action" onClick={() => remove(entry.id)}>
+                      {t("common.delete")}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {entries.data?.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="empty-state">
+                    {t("memory.empty")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }

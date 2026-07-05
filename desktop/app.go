@@ -1,4 +1,5 @@
 //go:build desktop
+// +build desktop
 
 package main
 
@@ -46,7 +47,12 @@ func (a *App) startup(ctx context.Context) {
 	srv := server.New(cfg, log, st, pm, reporter)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
-	go func() { _ = srv.ListenAndServe(a.ctx) }()
+	go func() {
+		if err := srv.ListenAndServe(a.ctx); err != nil {
+			log.Error("serve desktop API", "err", err)
+		}
+	}()
+	a.startMenuBar(log, cfg.Server.Addr)
 }
 
 func (a *App) shutdown(ctx context.Context) {

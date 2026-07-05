@@ -1,0 +1,142 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/agentnexus/agentnexus/core"
+	providerpkg "github.com/agentnexus/agentnexus/provider"
+)
+
+const claudeDesktopTool = "claude-desktop"
+
+type claude3PToggleRequest struct {
+	Enabled    bool   `json:"enabled"`
+	ProviderID string `json:"provider_id,omitempty"`
+}
+
+func (s *Server) handleClaude3PStatus(w http.ResponseWriter, r *http.Request) {
+	p, _ := s.defaultClaudeDesktopProvider(r.Context())
+	status, err := providerpkg.ClaudeDesktopStatus(p)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	attachClaude3PProvider(&status, p)
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleClaude3PToggle(w http.ResponseWriter, r *http.Request) {
+	var req claude3PToggleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if req.Enabled {
+		p, err := s.claudeDesktopProvider(r.Context(), req.ProviderID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := s.provider.Switch(r.Context(), p.ID, claudeDesktopTool); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		status, err := providerpkg.ClaudeDesktopStatus(p)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		attachClaude3PProvider(&status, p)
+		writeJSON(w, http.StatusOK, status)
+		return
+	}
+
+	p, _ := s.defaultClaudeDesktopProvider(r.Context())
+	status, err := providerpkg.DisableClaudeDesktopConfig(p)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.st != nil {
+		if err := s.st.ClearActiveProvider(r.Context(), claudeDesktopTool); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	attachClaude3PProvider(&status, p)
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) claudeDesktopProvider(ctx context.Context, id string) (*core.Provider, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("provider manager unavailable")
+	}
+	if id != "" {
+		p, err := s.provider.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, fmt.Errorf("provider %q not found", id)
+		}
+		if !providerSupportsTool(p, claudeDesktopTool) {
+			return nil, fmt.Errorf("provider %q does not support %s", id, claudeDesktopTool)
+		}
+		return p, nil
+	}
+	p, err := s.defaultClaudeDesktopProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return nil, fmt.Errorf("no %s provider configured", claudeDesktopTool)
+	}
+	return p, nil
+}
+
+func (s *Server) defaultClaudeDesktopProvider(ctx context.Context) (*core.Provider, error) {
+	if s.provider == nil {
+		return nil, nil
+	}
+	active, err := s.provider.Active(ctx, claudeDesktopTool)
+	if err != nil {
+		return nil, err
+	}
+	if active != nil && providerSupportsTool(active, claudeDesktopTool) {
+		return active, nil
+	}
+	providers, err := s.provider.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if providerSupportsTool(p, claudeDesktopTool) {
+			return p, nil
+		}
+	}
+	return nil, nil
+}
+
+func providerSupportsTool(p *core.Provider, tool string) bool {
+	if p == nil {
+		return false
+	}
+	for _, candidate := range p.Tools {
+		if candidate == tool {
+			return true
+		}
+	}
+	return false
+}
+
+func attachClaude3PProvider(status *providerpkg.ClaudeDesktopConfigStatus, p *core.Provider) {
+	if status == nil || p == nil {
+		return
+	}
+	status.ProviderID = p.ID
+	status.ProviderName = p.Name
+}
