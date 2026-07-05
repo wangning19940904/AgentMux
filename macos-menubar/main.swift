@@ -33,18 +33,33 @@ struct UsageReport: Decodable {
     let period: String
     let totals: UsageTotals
     let by_model: [ModelStat]
+
+    enum CodingKeys: String, CodingKey {
+        case period
+        case totals
+        case by_model
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        period = try container.decode(String.self, forKey: .period)
+        totals = try container.decode(UsageTotals.self, forKey: .totals)
+        by_model = try container.decodeIfPresent([ModelStat].self, forKey: .by_model) ?? []
+    }
 }
 
 // UsageClient fetches the daily report from the daemon.
 final class UsageClient {
     func fetchDaily(completion: @escaping (UsageReport?) -> Void) {
         guard let url = URL(string: "\(daemonBase)/api/v1/usage?period=daily") else {
-            completion(nil); return
+            DispatchQueue.main.async { completion(nil) }
+            return
         }
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data = data,
                   let report = try? JSONDecoder().decode(UsageReport.self, from: data) else {
-                completion(nil); return
+                DispatchQueue.main.async { completion(nil) }
+                return
             }
             DispatchQueue.main.async { completion(report) }
         }.resume()

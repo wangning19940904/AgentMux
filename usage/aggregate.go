@@ -48,7 +48,12 @@ type SourceStat struct {
 
 // Aggregate buckets records by the requested period.
 func Aggregate(period string, recs []core.UsageRecord) *Report {
-	r := &Report{Period: period}
+	r := &Report{
+		Period:   period,
+		Buckets:  []Bucket{},
+		ByModel:  []ModelStat{},
+		BySource: []SourceStat{},
+	}
 	bucketMap := map[string]*Totals{}
 	modelMap := map[string]*ModelStat{}
 	sourceMap := map[string]*SourceStat{}

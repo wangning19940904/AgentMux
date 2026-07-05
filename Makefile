@@ -52,7 +52,7 @@ cross: web
 # and a frontend symlink: ln -s ../web desktop/frontend
 desktop: web
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
-	cd desktop && $(WAILS) build -tags desktop -skipbindings
+	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		macos_dir="desktop/build/bin/agentnexus-desktop.app/Contents/MacOS"; \
 		if [ -d "$$macos_dir" ]; then \

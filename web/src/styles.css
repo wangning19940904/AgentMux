@@ -835,6 +835,17 @@ code {
   justify-content: flex-start;
 }
 
+.claude3p-model-config {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.claude3p-model-config .ghost-action {
+  justify-self: start;
+}
+
 .provider-icon.large {
   width: 34px;
   height: 34px;
@@ -1081,6 +1092,7 @@ textarea:focus {
 }
 
 .provider-card:hover,
+.route-card:hover,
 .route-card.enabled {
   border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
 }
@@ -1188,6 +1200,10 @@ textarea:focus {
   color: var(--text-soft);
 }
 
+.empty-card.compact {
+  min-height: 120px;
+}
+
 .icon-action {
   width: 32px;
   padding: 0;
@@ -1198,6 +1214,54 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 10px;
   min-height: 32px;
+}
+
+.provider-drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  justify-items: end;
+}
+
+.provider-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.28);
+  border: 0;
+  border-radius: 0;
+}
+
+:root[data-theme="dark"] .provider-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.48);
+}
+
+.provider-drawer {
+  position: relative;
+  z-index: 1;
+  width: min(720px, calc(100vw - 28px));
+  max-width: 100%;
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: -18px 0 46px rgba(15, 23, 42, 0.16);
+  scrollbar-gutter: stable;
+}
+
+.provider-drawer .provider-builder-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.provider-drawer .provider-builder-body {
+  padding-bottom: 28px;
 }
 
 .provider-builder {
@@ -1387,21 +1451,6 @@ textarea:focus {
 .provider-form {
   display: grid;
   gap: 16px;
-}
-
-.field-note {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 42px;
-  padding: 10px 12px;
-  color: var(--amber);
-  background: var(--amber-soft);
-  border: 1px solid color-mix(in srgb, var(--amber) 34%, var(--border));
-  border-radius: var(--radius);
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.5;
 }
 
 .probe-row {
@@ -1931,5 +1980,13 @@ textarea:focus {
   .form-actions,
   .table-actions {
     justify-content: flex-start;
+  }
+
+  .provider-drawer {
+    width: 100vw;
+  }
+
+  .provider-drawer .preset-strip {
+    grid-template-columns: 1fr;
   }
 }

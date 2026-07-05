@@ -1,10 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
-import { Power, PowerOff, RefreshCw } from "lucide-react";
+import { Power, PowerOff, RefreshCw, Save } from "lucide-react";
 import { api, Provider } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 const CLAUDE_DESKTOP_TOOL = "claude-desktop";
+
+function claudeDesktopModelList(provider?: Provider) {
+  const models = provider?.meta?.claude_desktop_models;
+  if (!Array.isArray(models)) return "";
+  return models
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const model = item as Record<string, unknown>;
+      const id = model.id;
+      const name = model.name;
+      return typeof id === "string" ? id : typeof name === "string" ? name : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function parseClaudeDesktopModelList(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .map((model) => ({ id: model, name: model, display_name: model }));
+}
 
 export function ProvidersPanel() {
   const { t } = useI18n();
@@ -13,11 +36,17 @@ export function ProvidersPanel() {
   const claude3p = useAsync(() => api.claude3pStatus(), []);
   const [busy, setBusy] = useState<string | null>(null);
   const [selectedClaudeProvider, setSelectedClaudeProvider] = useState("");
+  const [claudeModelMapping, setClaudeModelMapping] = useState(false);
+  const [claudeModelList, setClaudeModelList] = useState("");
   const [notice, setNotice] = useState("");
 
   const claudeProviders = useMemo(
     () => (providers.data ?? []).filter((provider) => provider.tools.includes(CLAUDE_DESKTOP_TOOL)),
     [providers.data]
+  );
+  const selectedClaudeProviderData = useMemo(
+    () => claudeProviders.find((provider) => provider.id === selectedClaudeProvider),
+    [claudeProviders, selectedClaudeProvider]
   );
 
   useEffect(() => {
@@ -32,6 +61,12 @@ export function ProvidersPanel() {
       setSelectedClaudeProvider(claudeProviders[0]?.id ?? "");
     }
   }, [claude3p.data?.provider_id, claudeProviders, selectedClaudeProvider]);
+
+  useEffect(() => {
+    const modelList = claudeDesktopModelList(selectedClaudeProviderData);
+    setClaudeModelMapping(modelList.length > 0);
+    setClaudeModelList(modelList);
+  }, [selectedClaudeProviderData]);
 
   async function importPreset(p: Provider) {
     setBusy(p.id);
@@ -50,6 +85,31 @@ export function ProvidersPanel() {
       await api.switchProvider(p.id, tool);
       claude3p.reload();
       providers.reload();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveClaudeModelMapping() {
+    if (!selectedClaudeProviderData) return;
+    setBusy("claude-models");
+    setNotice("");
+    try {
+      const meta = { ...(selectedClaudeProviderData.meta ?? {}) };
+      if (claudeModelMapping && claudeModelList.trim()) {
+        meta.claude_desktop_models = parseClaudeDesktopModelList(claudeModelList);
+      } else {
+        delete meta.claude_desktop_models;
+      }
+      await api.upsertProvider({ ...selectedClaudeProviderData, meta });
+      if (claude3p.data?.enabled && claude3p.data.provider_id === selectedClaudeProviderData.id) {
+        await api.setClaude3p(true, selectedClaudeProviderData.id);
+      }
+      setNotice(t("providers.modelMappingSaved"));
+      claude3p.reload();
+      providers.reload();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(null);
     }
@@ -76,6 +136,10 @@ export function ProvidersPanel() {
 
   const claudeStatus = claude3p.data;
   const canEnableClaude3p = selectedClaudeProvider !== "" && busy !== "claude3p";
+  const canSaveClaudeModels =
+    Boolean(selectedClaudeProviderData) &&
+    busy !== "claude-models" &&
+    (!claudeModelMapping || Boolean(claudeModelList.trim()));
 
   return (
     <div className="page-stack">
@@ -126,6 +190,42 @@ export function ProvidersPanel() {
                 {claudeProviders.length === 0 && <option value="">{t("providers.noClaude3pProvider")}</option>}
               </select>
             </label>
+            <div className="claude3p-model-config">
+              <label className="switch-row">
+                <span>
+                  <strong>{t("providers.modelMapping")}</strong>
+                  <small>{t("providers.modelMappingHint")}</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={claudeModelMapping}
+                  disabled={!selectedClaudeProviderData || busy === "claude-models"}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setClaudeModelMapping(checked);
+                    if (checked && !claudeModelList.trim()) {
+                      setClaudeModelList(selectedClaudeProviderData?.model || "");
+                    }
+                  }}
+                />
+              </label>
+              {claudeModelMapping && (
+                <label className="field">
+                  <span>{t("providers.modelList")}</span>
+                  <textarea
+                    value={claudeModelList}
+                    onChange={(event) => setClaudeModelList(event.target.value)}
+                    placeholder={"claude-sonnet-4-8\nclaude-opus-4-8"}
+                    rows={3}
+                    disabled={busy === "claude-models"}
+                  />
+                </label>
+              )}
+              <button className="ghost-action" onClick={saveClaudeModelMapping} disabled={!canSaveClaudeModels}>
+                <Save size={15} />
+                {t("providers.saveModelMapping")}
+              </button>
+            </div>
             <div className="table-actions">
               <button className="ghost-action" onClick={claude3p.reload} disabled={busy === "claude3p"}>
                 <RefreshCw size={15} />

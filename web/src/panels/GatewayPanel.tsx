@@ -6,13 +6,11 @@ import {
   Cloud,
   Cpu,
   DatabaseZap,
-  Flame,
   Gem,
   Globe2,
   Layers3,
   Plus,
   PlugZap,
-  Power,
   PowerOff,
   Rocket,
   Save,
@@ -22,7 +20,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { api, Provider, ProviderProbeCheck } from "../api";
+import { api, Provider, ProviderProbeCheck, ProviderRoute } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -64,6 +62,11 @@ type ProviderDraft = {
   enabled: boolean;
 };
 
+type RouteDraft = {
+  tool: string;
+  provider_id: string;
+};
+
 const emptyDraft: ProviderDraft = {
   id: "",
   name: "",
@@ -81,6 +84,11 @@ const emptyDraft: ProviderDraft = {
   model_list: "",
   tools: ["codex"],
   enabled: false,
+};
+
+const emptyRouteDraft: RouteDraft = {
+  tool: "",
+  provider_id: "",
 };
 
 function metaString(provider: Provider, key: string) {
@@ -281,13 +289,14 @@ export function GatewayPanel() {
   const activeRoutes = useAsync(() => api.activeRoutes(), []);
   const [activeTab, setActiveTab] = useState<"providers" | "routing">("providers");
   const [providerFormOpen, setProviderFormOpen] = useState(false);
+  const [routeFormOpen, setRouteFormOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [probeNotice, setProbeNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [probeCapabilities, setProbeCapabilities] = useState<ProbeCapabilities | null>(null);
   const [draft, setDraft] = useState<ProviderDraft>(emptyDraft);
-  const [routeSelection, setRouteSelection] = useState<Record<string, string>>({});
+  const [routeDraft, setRouteDraft] = useState<RouteDraft>(emptyRouteDraft);
 
   const providerList = providers.data ?? [];
   const presetList = presets.data ?? [];
@@ -330,23 +339,21 @@ export function GatewayPanel() {
   }, [agents.data, routeList, tools]);
 
   useEffect(() => {
-    setRouteSelection((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const tool of tools) {
-        const candidates = providerList.filter((provider) => provider.tools.includes(tool));
-        const active = routeByTool.get(tool)?.provider_id;
-        const first = candidates[0]?.id;
-        const value = active || first || "";
-        const currentValid = candidates.some((provider) => provider.id === next[tool]);
-        if (value && (!next[tool] || !currentValid)) {
-          next[tool] = value;
-          changed = true;
-        }
+    if (!providerFormOpen && !routeFormOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setProviderFormOpen(false);
+        setRouteFormOpen(false);
       }
-      return changed ? next : current;
-    });
-  }, [providerList, routeByTool, tools]);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [providerFormOpen, routeFormOpen]);
 
   function reloadProviders() {
     providers.reload();
@@ -365,9 +372,49 @@ export function GatewayPanel() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  function providersForTool(tool: string) {
+    return providerList.filter((provider) => provider.tools.includes(tool));
+  }
+
+  function routeDraftForTool(tool: string, providerID = ""): RouteDraft {
+    const candidates = providersForTool(tool);
+    const compatibleProviderID = candidates.some((provider) => provider.id === providerID) ? providerID : "";
+    return {
+      tool,
+      provider_id: compatibleProviderID || candidates[0]?.id || "",
+    };
+  }
+
+  function openNewRoute() {
+    const firstUnrouted = routeTools.find((tool) => !routeByTool.has(tool));
+    const tool = firstUnrouted || routeTools[0] || tools[0] || "";
+    setNotice("");
+    setRouteDraft(routeDraftForTool(tool));
+    setActiveTab("routing");
+    setProviderFormOpen(false);
+    setRouteFormOpen(true);
+  }
+
+  function editRoute(route: ProviderRoute) {
+    setNotice("");
+    setRouteDraft(routeDraftForTool(route.tool, route.provider_id));
+    setActiveTab("routing");
+    setProviderFormOpen(false);
+    setRouteFormOpen(true);
+  }
+
+  function updateRouteTool(tool: string) {
+    setRouteDraft(routeDraftForTool(tool));
+  }
+
+  function updateRouteProvider(providerID: string) {
+    setRouteDraft((current) => ({ ...current, provider_id: providerID }));
+  }
+
   function openNewProvider() {
     resetProviderDraft();
     setActiveTab("providers");
+    setRouteFormOpen(false);
     setProviderFormOpen(true);
   }
 
@@ -378,6 +425,7 @@ export function GatewayPanel() {
     setProbeCapabilities(null);
     setDraft(providerToDraft(provider));
     setActiveTab("providers");
+    setRouteFormOpen(false);
     setProviderFormOpen(true);
   }
 
@@ -441,6 +489,7 @@ export function GatewayPanel() {
       setNotice(t("gateway.providerSaved"));
       setDraft(providerToDraft(saved));
       reloadProviders();
+      setProviderFormOpen(false);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -466,15 +515,17 @@ export function GatewayPanel() {
     }
   }
 
-  async function switchRoute(tool: string) {
-    const providerID = routeSelection[tool];
-    if (!providerID) return;
-    setBusy(`switch:${tool}`);
+  async function saveRoute() {
+    const tool = routeDraft.tool;
+    const providerID = routeDraft.provider_id;
+    if (!tool || !providerID) return;
+    setBusy(`save-route:${tool}`);
     setNotice("");
     try {
       await api.switchProvider(providerID, tool);
-      setNotice(t("gateway.routeSwitched"));
+      setNotice(t("gateway.routeSaved"));
       reloadProviders();
+      setRouteFormOpen(false);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -482,19 +533,12 @@ export function GatewayPanel() {
     }
   }
 
-  async function setRouteEnabled(tool: string, enabled: boolean) {
-    const providerID = routeSelection[tool] || providerList.find((provider) => provider.tools.includes(tool))?.id || "";
-    if (enabled && !providerID) return;
-    setBusy(`toggle:${tool}`);
+  async function disableRoute(tool: string) {
+    setBusy(`disable-route:${tool}`);
     setNotice("");
     try {
-      if (enabled) {
-        await api.switchProvider(providerID, tool);
-        setNotice(t("gateway.routeEnabled"));
-      } else {
-        await api.disableRoute(tool);
-        setNotice(t("gateway.routeDisabled"));
-      }
+      await api.disableRoute(tool);
+      setNotice(t("gateway.routeDisabled"));
       reloadProviders();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -505,151 +549,171 @@ export function GatewayPanel() {
 
   const canSave = Boolean(draft.name.trim() && draft.base_url.trim() && toolsForDraft(draft).length > 0);
   const canProbe = Boolean(draft.base_url.trim() && (draft.api_key.trim() || draft.api_key_env.trim()));
+  const routeCandidates = providersForTool(routeDraft.tool);
+  const selectedRouteProvider = providerList.find((provider) => provider.id === routeDraft.provider_id);
+  const canSaveRoute = Boolean(
+    routeDraft.tool &&
+      routeDraft.provider_id &&
+      routeCandidates.some((provider) => provider.id === routeDraft.provider_id) &&
+      busy !== `save-route:${routeDraft.tool}`
+  );
   const activeProviderCount = providerList.filter((provider) => provider.enabled).length;
   const configuredKeyCount = providerList.filter((provider) => provider.api_key_env).length;
 
   function renderProviderForm() {
     if (!providerFormOpen) return null;
     return (
-      <section className="surface provider-builder">
-        <div className="provider-builder-head">
-          <div className="provider-form-title">
-            <ProviderMark id={selectedPreset} name={draft.name} size="large" custom={customSelected && !draft.id} />
-            <div>
-              <h2>{t("gateway.addProvider")}</h2>
-              <span className="muted">{t("gateway.addProviderSubtitle")}</span>
+      <div className="provider-drawer-layer">
+        <button
+          className="provider-drawer-backdrop"
+          type="button"
+          aria-label={t("common.close")}
+          onClick={() => setProviderFormOpen(false)}
+        />
+        <aside
+          className="provider-drawer provider-builder"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="provider-drawer-title"
+        >
+          <div className="provider-builder-head">
+            <div className="provider-form-title">
+              <ProviderMark id={selectedPreset} name={draft.name} size="large" custom={customSelected && !draft.id} />
+              <div>
+                <h2 id="provider-drawer-title">{t("gateway.addProvider")}</h2>
+                <span className="muted">{t("gateway.addProviderSubtitle")}</span>
+              </div>
+            </div>
+            <div className="table-actions">
+              <span className="pill">
+                {curatedPresets.length} {t("gateway.curated")}
+              </span>
+              <button
+                className="ghost-action icon-action"
+                onClick={() => setProviderFormOpen(false)}
+                title={t("common.close")}
+              >
+                <X size={15} />
+              </button>
             </div>
           </div>
-          <div className="table-actions">
-            <span className="pill">
-              {curatedPresets.length} {t("gateway.curated")}
-            </span>
-            <button className="ghost-action icon-action" onClick={() => setProviderFormOpen(false)} title={t("common.close")}>
-              <X size={15} />
-            </button>
-          </div>
-        </div>
 
-        <div className="surface-body provider-builder-body">
-          {presets.error && <div className="error">{presets.error}</div>}
-          <div className="preset-strip">
-            <button className={customSelected ? "preset-tile selected" : "preset-tile"} onClick={openNewProvider}>
-              <ProviderMark id="custom" size="large" custom />
-              <strong>{t("gateway.customProvider")}</strong>
-              <span>{t("gateway.customProviderHint")}</span>
-            </button>
-
-            {curatedPresets.map((provider) => (
-              <button
-                className={selectedPreset === provider.id ? "preset-tile selected" : "preset-tile"}
-                key={provider.id}
-                onClick={() => selectPreset(provider)}
-              >
-                <ProviderMark id={provider.id} name={provider.name} size="large" />
-                <strong>{provider.name.replace(" (Official)", "")}</strong>
-                <span>{provider.model || provider.api_key_env || provider.base_url}</span>
+          <div className="surface-body provider-builder-body">
+            {presets.error && <div className="error">{presets.error}</div>}
+            <div className="preset-strip">
+              <button className={customSelected ? "preset-tile selected" : "preset-tile"} onClick={openNewProvider}>
+                <ProviderMark id="custom" size="large" custom />
+                <strong>{t("gateway.customProvider")}</strong>
+                <span>{t("gateway.customProviderHint")}</span>
               </button>
-            ))}
-          </div>
 
-          <div className="provider-form-shell">
-            {notice && <div className="session-notice">{notice}</div>}
-
-            <div className="provider-form">
-              <div className="field-grid">
-                <label className="field">
-                  <span>{t("gateway.providerName")}</span>
-                  <input
-                    value={draft.name}
-                    onChange={(event) => updateDraft("name", event.target.value)}
-                    placeholder={t("gateway.providerNamePlaceholder")}
-                  />
-                </label>
-                <label className="field">
-                  <span>{t("gateway.note")}</span>
-                  <input
-                    value={draft.note}
-                    onChange={(event) => updateDraft("note", event.target.value)}
-                    placeholder={t("gateway.notePlaceholder")}
-                  />
-                </label>
-                <label className="field">
-                  <span>{t("gateway.category")}</span>
-                  <select value={draft.category} onChange={(event) => updateDraft("category", event.target.value)}>
-                    <option value="official">{t("gateway.categoryOfficial")}</option>
-                    <option value="third_party">{t("gateway.categoryThirdParty")}</option>
-                    <option value="custom">{t("gateway.categoryCustom")}</option>
-                  </select>
-                </label>
-                <label className="field wide">
-                  <span>{t("gateway.website")}</span>
-                  <input
-                    value={draft.website}
-                    onChange={(event) => updateDraft("website", event.target.value)}
-                    placeholder="https://example.com"
-                  />
-                </label>
-                <label className="field wide">
-                  <span>{t("gateway.apiKey")}</span>
-                  <input
-                    type="password"
-                    value={draft.api_key}
-                    onChange={(event) => updateDraft("api_key", event.target.value)}
-                    placeholder="sk-..."
-                    autoComplete="new-password"
-                    spellCheck={false}
-                  />
-                </label>
-                <label className="field wide">
-                  <span>{t("gateway.requestUrl")}</span>
-                  <input
-                    value={draft.base_url}
-                    onChange={(event) => updateDraft("base_url", event.target.value)}
-                    placeholder="https://api.openai.com/v1"
-                  />
-                </label>
-                <div className="field-note wide">
-                  <Flame size={15} />
-                  <span>{t("gateway.apiKeySafeNote")}</span>
-                </div>
-                <label className="field">
-                  <span>{t("providers.model")}</span>
-                  {modelOptions.length > 0 ? (
-                    <select value={draft.model} onChange={(event) => updateDraft("model", event.target.value)}>
-                      {draft.model.trim() && !modelOptions.includes(draft.model.trim()) && (
-                        <option value={draft.model}>{draft.model}</option>
-                      )}
-                      {modelOptions.map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={draft.model}
-                      onChange={(event) => updateDraft("model", event.target.value)}
-                      placeholder="gpt-5"
-                    />
-                  )}
-                  {modelOptions.length > 0 && (
-                    <small>{t("gateway.modelOptionsHint").replace("{count}", String(modelOptions.length))}</small>
-                  )}
-                </label>
-              </div>
-
-              <div className="probe-row">
+              {curatedPresets.map((provider) => (
                 <button
-                  className="ghost-action"
-                  disabled={!canProbe || busy === "probe-provider"}
-                  onClick={probeProvider}
-                  type="button"
+                  className={selectedPreset === provider.id ? "preset-tile selected" : "preset-tile"}
+                  key={provider.id}
+                  onClick={() => selectPreset(provider)}
                 >
-                  <PlugZap size={15} />
-                  {t("gateway.testAndFetchModels")}
+                  <ProviderMark id={provider.id} name={provider.name} size="large" />
+                  <strong>{provider.name.replace(" (Official)", "")}</strong>
+                  <span>{provider.model || provider.api_key_env || provider.base_url}</span>
                 </button>
-                {probeNotice && <span className={`probe-message ${probeNotice.kind}`}>{probeNotice.text}</span>}
-              </div>
+              ))}
+            </div>
+
+            <div className="provider-form-shell">
+              {notice && <div className="session-notice">{notice}</div>}
+
+              <div className="provider-form">
+                <div className="field-grid">
+                  <label className="field">
+                    <span>{t("gateway.providerName")}</span>
+                    <input
+                      value={draft.name}
+                      onChange={(event) => updateDraft("name", event.target.value)}
+                      placeholder={t("gateway.providerNamePlaceholder")}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.note")}</span>
+                    <input
+                      value={draft.note}
+                      onChange={(event) => updateDraft("note", event.target.value)}
+                      placeholder={t("gateway.notePlaceholder")}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("gateway.category")}</span>
+                    <select value={draft.category} onChange={(event) => updateDraft("category", event.target.value)}>
+                      <option value="official">{t("gateway.categoryOfficial")}</option>
+                      <option value="third_party">{t("gateway.categoryThirdParty")}</option>
+                      <option value="custom">{t("gateway.categoryCustom")}</option>
+                    </select>
+                  </label>
+                  <label className="field wide">
+                    <span>{t("gateway.website")}</span>
+                    <input
+                      value={draft.website}
+                      onChange={(event) => updateDraft("website", event.target.value)}
+                      placeholder="https://example.com"
+                    />
+                  </label>
+                  <label className="field wide">
+                    <span>{t("gateway.apiKey")}</span>
+                    <input
+                      type="password"
+                      value={draft.api_key}
+                      onChange={(event) => updateDraft("api_key", event.target.value)}
+                      placeholder="sk-..."
+                      autoComplete="new-password"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label className="field wide">
+                    <span>{t("gateway.requestUrl")}</span>
+                    <input
+                      value={draft.base_url}
+                      onChange={(event) => updateDraft("base_url", event.target.value)}
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>{t("providers.model")}</span>
+                    {modelOptions.length > 0 ? (
+                      <select value={draft.model} onChange={(event) => updateDraft("model", event.target.value)}>
+                        {draft.model.trim() && !modelOptions.includes(draft.model.trim()) && (
+                          <option value={draft.model}>{draft.model}</option>
+                        )}
+                        {modelOptions.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={draft.model}
+                        onChange={(event) => updateDraft("model", event.target.value)}
+                        placeholder="gpt-5"
+                      />
+                    )}
+                    {modelOptions.length > 0 && (
+                      <small>{t("gateway.modelOptionsHint").replace("{count}", String(modelOptions.length))}</small>
+                    )}
+                  </label>
+                </div>
+
+                <div className="probe-row">
+                  <button
+                    className="ghost-action"
+                    disabled={!canProbe || busy === "probe-provider"}
+                    onClick={probeProvider}
+                    type="button"
+                  >
+                    <PlugZap size={15} />
+                    {t("gateway.testAndFetchModels")}
+                  </button>
+                  {probeNotice && <span className={`probe-message ${probeNotice.kind}`}>{probeNotice.text}</span>}
+                </div>
 
               {probeCapabilities && (
                 <div className="capability-panel">
@@ -698,40 +762,6 @@ export function GatewayPanel() {
                 </div>
               )}
 
-              <div className="mapping-card">
-                <label className="switch-row">
-                  <span>
-                    <strong>{t("gateway.modelMapping")}</strong>
-                    <small>{t("gateway.modelMappingHint")}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={draft.manual_models}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        manual_models: event.target.checked,
-                        model_list:
-                          event.target.checked && !current.model_list.trim() && modelOptions.length > 0
-                            ? modelOptions.join("\n")
-                            : current.model_list,
-                      }))
-                    }
-                  />
-                </label>
-                {draft.manual_models && (
-                  <label className="field">
-                    <span>{t("gateway.modelList")}</span>
-                    <textarea
-                      value={draft.model_list}
-                      onChange={(event) => updateDraft("model_list", event.target.value)}
-                      placeholder={"claude-sonnet-4-8\nclaude-opus-4-8"}
-                      rows={3}
-                    />
-                  </label>
-                )}
-              </div>
-
               <div className="form-actions">
                 <button className="ghost-action" onClick={() => setProviderFormOpen(false)}>
                   <X size={15} />
@@ -743,9 +773,117 @@ export function GatewayPanel() {
                 </button>
               </div>
             </div>
+            </div>
           </div>
-        </div>
-      </section>
+        </aside>
+      </div>
+    );
+  }
+
+  function renderRouteForm() {
+    if (!routeFormOpen) return null;
+    const currentRoute = routeByTool.get(routeDraft.tool);
+    return (
+      <div className="provider-drawer-layer">
+        <button
+          className="provider-drawer-backdrop"
+          type="button"
+          aria-label={t("common.close")}
+          onClick={() => setRouteFormOpen(false)}
+        />
+        <aside
+          className="provider-drawer route-builder"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="route-drawer-title"
+        >
+          <div className="provider-builder-head">
+            <div className="provider-form-title">
+              <span className="provider-icon large">
+                <Workflow size={18} />
+              </span>
+              <div>
+                <h2 id="route-drawer-title">{currentRoute ? t("gateway.editRoute") : t("gateway.newRoute")}</h2>
+                <span className="muted">{t("gateway.routeDrawerSubtitle")}</span>
+              </div>
+            </div>
+            <button className="ghost-action icon-action" onClick={() => setRouteFormOpen(false)} title={t("common.close")}>
+              <X size={15} />
+            </button>
+          </div>
+
+          <div className="surface-body provider-builder-body">
+            {notice && <div className="session-notice">{notice}</div>}
+            <div className="provider-form">
+              <div className="field-grid">
+                <label className="field">
+                  <span>{t("gateway.tool")}</span>
+                  <select value={routeDraft.tool} onChange={(event) => updateRouteTool(event.target.value)}>
+                    {routeTools.length === 0 && <option value="">{t("gateway.noAgentFrameworks")}</option>}
+                    {routeTools.map((tool) => (
+                      <option key={tool} value={tool}>
+                        {toolLabel(tool)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t("gateway.routeTo")}</span>
+                  <select
+                    value={routeDraft.provider_id}
+                    disabled={routeCandidates.length === 0}
+                    onChange={(event) => updateRouteProvider(event.target.value)}
+                  >
+                    {routeCandidates.length === 0 && <option value="">{t("gateway.noCompatibleProviders")}</option>}
+                    {routeCandidates.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {selectedRouteProvider ? (
+                <div className="route-detail-grid">
+                  <div>
+                    <span>{t("providers.model")}</span>
+                    <strong>{selectedRouteProvider.model || "—"}</strong>
+                  </div>
+                  <div>
+                    <span>{t("gateway.protocol")}</span>
+                    <strong>{providerProtocol(selectedRouteProvider)}</strong>
+                  </div>
+                  <div>
+                    <span>{t("gateway.keyStatus")}</span>
+                    <strong>{selectedRouteProvider.api_key_env || t("gateway.keyMissing")}</strong>
+                  </div>
+                  <div>
+                    <span>{t("providers.baseUrl")}</span>
+                    <strong>{selectedRouteProvider.base_url || "—"}</strong>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-card compact">
+                  <Workflow size={22} />
+                  <strong>{t("gateway.noCompatibleProviders")}</strong>
+                </div>
+              )}
+
+              <div className="form-actions">
+                <button className="ghost-action" onClick={() => setRouteFormOpen(false)}>
+                  <X size={15} />
+                  {t("common.close")}
+                </button>
+                <button className="action" disabled={!canSaveRoute} onClick={saveRoute}>
+                  <Save size={15} />
+                  {t("gateway.saveRoute")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
     );
   }
 
@@ -883,98 +1021,91 @@ export function GatewayPanel() {
               <h2>{t("gateway.routingTab")}</h2>
               <p className="subtle-copy">{t("gateway.routingSubtitle")}</p>
             </div>
-            <span className="pill on">
-              {routeList.length} / {routeTools.length}
-            </span>
+            <div className="table-actions">
+              <span className="pill on">
+                {routeList.length} / {routeTools.length}
+              </span>
+              <button className="action" onClick={openNewRoute} disabled={routeTools.length === 0}>
+                <Plus size={15} />
+                {t("gateway.newRoute")}
+              </button>
+            </div>
           </div>
           {(agents.error || activeRoutes.error) && (
             <div className="surface-body error">{agents.error || activeRoutes.error}</div>
           )}
           {notice && <div className="session-notice">{notice}</div>}
-          <div className="surface-body route-card-list">
-            {routeTools.map((tool) => {
-              const route = routeByTool.get(tool);
-              const candidates = providerList.filter((provider) => provider.tools.includes(tool));
-              const selected = routeSelection[tool] || route?.provider_id || candidates[0]?.id || "";
-              const selectedProvider = providerList.find((provider) => provider.id === selected);
-              const enabled = Boolean(route?.provider_id);
-              const busyRoute = busy === `switch:${tool}` || busy === `toggle:${tool}`;
+          <div className="surface-body provider-list-grid route-list-grid">
+            {routeList.map((route) => {
+              const routeProvider = providerList.find((provider) => provider.id === route.provider_id);
+              const configured = Boolean(route.configured && routeProvider);
+              const busyRoute = busy === `disable-route:${route.tool}`;
               return (
-                <article className={enabled ? "route-card enabled" : "route-card"} key={tool}>
+                <article className={configured ? "route-card enabled" : "route-card"} key={route.tool}>
                   <header>
                     <span className="route-card-title">
                       <Workflow size={17} />
                       <span>
-                        <strong>{toolLabel(tool)}</strong>
-                        <small>{tool}</small>
+                        <strong>{toolLabel(route.tool)}</strong>
+                        <small>{route.tool}</small>
                       </span>
                     </span>
-                    <span className={enabled ? "status-badge success" : "status-badge warning"}>
-                      {enabled ? <CheckCircle2 size={14} /> : <PowerOff size={14} />}
-                      {enabled ? t("common.enabled") : t("common.disabled")}
+                    <span className={configured ? "status-badge success" : "status-badge warning"}>
+                      {configured ? <CheckCircle2 size={14} /> : <PowerOff size={14} />}
+                      {configured ? t("common.enabled") : t("gateway.providerMissing")}
                     </span>
                   </header>
 
-                  <div className="route-control-grid">
-                    <label className="switch-row route-toggle">
-                      <span>
-                        <strong>{t("gateway.enableRouting")}</strong>
-                        <small>{route?.provider_name || selectedProvider?.name || t("gateway.unrouted")}</small>
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        disabled={busyRoute || candidates.length === 0}
-                        onChange={(event) => setRouteEnabled(tool, event.target.checked)}
-                      />
-                    </label>
-
-                    <label className="field">
-                      <span>{t("gateway.routeTo")}</span>
-                      <select
-                        value={selected}
-                        disabled={busyRoute || candidates.length === 0}
-                        onChange={(event) =>
-                          setRouteSelection((current) => ({ ...current, [tool]: event.target.value }))
-                        }
-                      >
-                        {candidates.length === 0 && <option value="">{t("gateway.noCompatibleProviders")}</option>}
-                        {candidates.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="route-detail-grid">
+                  <dl className="provider-facts">
                     <div>
-                      <span>{t("providers.model")}</span>
-                      <strong>{selectedProvider?.model || route?.model || "—"}</strong>
+                      <dt>{t("gateway.activeProvider")}</dt>
+                      <dd>{routeProvider?.name || route.provider_name || route.provider_id || t("gateway.unrouted")}</dd>
                     </div>
                     <div>
-                      <span>{t("gateway.protocol")}</span>
-                      <strong>{selectedProvider ? providerProtocol(selectedProvider) : route?.api_format || "—"}</strong>
+                      <dt>{t("providers.model")}</dt>
+                      <dd>{routeProvider?.model || route.model || "—"}</dd>
                     </div>
                     <div>
-                      <span>{t("gateway.keyStatus")}</span>
-                      <strong>{selectedProvider?.api_key_env || route?.api_key_env || t("gateway.keyMissing")}</strong>
+                      <dt>{t("gateway.protocol")}</dt>
+                      <dd>{routeProvider ? providerProtocol(routeProvider) : route.api_format || "—"}</dd>
                     </div>
-                  </div>
+                    <div>
+                      <dt>{t("gateway.keyStatus")}</dt>
+                      <dd>{routeProvider?.api_key_env || route.api_key_env || t("gateway.keyMissing")}</dd>
+                    </div>
+                  </dl>
 
-                  <footer className="form-actions">
-                    <button className="ghost-action" disabled={!selected || busyRoute} onClick={() => switchRoute(tool)}>
-                      <Power size={15} />
-                      {enabled ? t("gateway.applyRoute") : t("gateway.enableRoute")}
+                  <footer className="provider-card-actions">
+                    <button className="ghost-action" onClick={() => editRoute(route)}>
+                      <Settings2 size={14} />
+                      {t("common.edit")}
+                    </button>
+                    <button
+                      className="ghost-action danger-action"
+                      disabled={busyRoute}
+                      onClick={() => disableRoute(route.tool)}
+                    >
+                      <PowerOff size={14} />
+                      {t("common.disable")}
                     </button>
                   </footer>
                 </article>
               );
             })}
-            {routeTools.length === 0 && <div className="empty-state">{t("gateway.noAgentFrameworks")}</div>}
+            {routeList.length === 0 && (
+              <div className="empty-card">
+                <Workflow size={24} />
+                <strong>{t("gateway.noRoutesConfigured")}</strong>
+                <button className="action" onClick={openNewRoute} disabled={routeTools.length === 0}>
+                  <Plus size={15} />
+                  {t("gateway.newRoute")}
+                </button>
+              </div>
+            )}
           </div>
         </section>
+
+        {renderRouteForm()}
       </div>
     );
   }

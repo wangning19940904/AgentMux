@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,20 @@ func TestAggregateDailyAndModel(t *testing.T) {
 	// By model sorted by cost desc: opus (3.0) before gpt-5 (0.5).
 	if len(r.ByModel) != 2 || r.ByModel[0].Model != "opus" {
 		t.Fatalf("by_model = %+v", r.ByModel)
+	}
+}
+
+func TestAggregateEmptySlicesEncodeAsArrays(t *testing.T) {
+	r := Aggregate("daily", nil)
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(raw)
+	for _, want := range []string{`"buckets":[]`, `"by_model":[]`, `"by_source":[]`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("json = %s, want %s", got, want)
+		}
 	}
 }
 
