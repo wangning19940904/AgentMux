@@ -186,6 +186,45 @@ export interface AgentInstance {
   updated_at?: string;
 }
 
+export interface Channel {
+  id: string;
+  name: string;
+  type: string;
+  agent_id?: string;
+  agent_name?: string;
+  config?: Record<string, string>;
+  enabled: boolean;
+  state?: string;
+  error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Trigger {
+  id: string;
+  name: string;
+  kind: string;
+  agent_id?: string;
+  agent_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  chat_id?: string;
+  cron_expr?: string;
+  prompt?: string;
+  event?: string;
+  action_type?: string;
+  action_target?: string;
+  token?: string;
+  session_mode?: string;
+  enabled: boolean;
+  hook_path?: string;
+  last_run?: string;
+  last_status?: string;
+  last_error?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface MemoryEntry {
   id: string;
   scope: string;
@@ -363,6 +402,18 @@ export const api = {
     }),
   usage: (period: string) =>
     get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
+
+  // AgentNexus Connect: channels & triggers
+  channels: () => get<Channel[] | null>("/api/v1/channels"),
+  upsertChannel: (ch: Partial<Channel>) => postChecked<Channel>("/api/v1/channels", ch),
+  deleteChannel: (id: string) => del<{ ok: boolean }>(`/api/v1/channels?id=${encodeURIComponent(id)}`),
+  restartChannel: (id: string) =>
+    postChecked<{ ok: boolean }>(`/api/v1/channels/restart?id=${encodeURIComponent(id)}`, {}),
+  triggers: () => get<Trigger[] | null>("/api/v1/triggers"),
+  upsertTrigger: (tr: Partial<Trigger>) => postChecked<Trigger>("/api/v1/triggers", tr),
+  deleteTrigger: (id: string) => del<{ ok: boolean }>(`/api/v1/triggers?id=${encodeURIComponent(id)}`),
+  runTrigger: (id: string) =>
+    postChecked<{ ok: boolean }>(`/api/v1/triggers/run?id=${encodeURIComponent(id)}`, {}),
 
   // AgentNexus Memory
   memory: (scope = "", q = "", limit = 50) =>

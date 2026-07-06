@@ -1,7 +1,6 @@
-import { Bot, CalendarClock, Link2, Plus, Save, Trash2, Workflow } from "lucide-react";
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { Bot, Cable, Link2, Plus, Save, Trash2, Workflow, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { AgentChannelBinding, AgentInstance, AgentSchedule, api } from "../api";
+import { AgentInstance, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -27,7 +26,8 @@ export function AgentsPanel() {
   const agents = useAsync(() => api.agentInstances(), []);
   const runtimes = useAsync(() => api.agents(), []);
   const providers = useAsync(() => api.providers(), []);
-  const platforms = useAsync(() => api.platforms(), []);
+  const channels = useAsync(() => api.channels(), []);
+  const triggers = useAsync(() => api.triggers(), []);
   const mcpServers = useAsync(() => api.mcp(), []);
   const skills = useAsync(() => api.skills(), []);
   const [selectedID, setSelectedID] = useState("");
@@ -38,7 +38,8 @@ export function AgentsPanel() {
   const items = agents.data ?? [];
   const runtimeOptions = runtimes.data ?? [];
   const providerOptions = providers.data ?? [];
-  const platformOptions = platforms.data ?? [];
+  const channelItems = channels.data ?? [];
+  const triggerItems = triggers.data ?? [];
   const mcpOptions = mcpServers.data ?? [];
   const skillOptions = skills.data ?? [];
   const selected = items.find((item) => item.id === selectedID);
@@ -73,11 +74,25 @@ export function AgentsPanel() {
   }, [draft.provider_tool, draft.runtime_id, providerOptions]);
 
   const metrics = useMemo(() => {
-    const channelCount = items.reduce((sum, item) => sum + (item.channel_bindings?.length ?? 0), 0);
-    const scheduleCount = items.reduce((sum, item) => sum + (item.schedules?.length ?? 0), 0);
+    const channelCount = channelItems.length;
+    const scheduleCount = triggerItems.length;
     const consoleCount = items.filter((item) => item.source !== "config.toml").length;
     return { channelCount, scheduleCount, consoleCount };
-  }, [items]);
+  }, [items, channelItems, triggerItems]);
+
+  const boundChannels = useMemo(
+    () => channelItems.filter((ch) => ch.agent_id && ch.agent_id === draft.id),
+    [channelItems, draft.id]
+  );
+  const boundTriggers = useMemo(
+    () =>
+      triggerItems.filter(
+        (tr) =>
+          (tr.agent_id && tr.agent_id === draft.id) ||
+          (tr.channel_id && boundChannels.some((ch) => ch.id === tr.channel_id))
+      ),
+    [triggerItems, draft.id, boundChannels]
+  );
 
   function startNew() {
     const runtime = runtimeOptions[0] ?? "codex";
@@ -205,7 +220,7 @@ export function AgentsPanel() {
                 </div>
                 <small className="muted">
                   {item.provider_name || item.provider_id || t("agents.noProvider")} ·{" "}
-                  {item.channel_bindings?.length ?? 0} {t("agents.channelCount")}
+                  {channelItems.filter((ch) => ch.agent_id === item.id).length} {t("agents.channelCount")}
                 </small>
               </button>
             ))}
@@ -320,48 +335,41 @@ export function AgentsPanel() {
               </div>
             </section>
 
-            <SectionList
-              title={t("agents.channelBindings")}
-              icon={<Link2 size={17} />}
-              addLabel={t("agents.addChannel")}
-              disabled={readOnly}
-              onAdd={() => setDraft((current) => ({ ...current, channel_bindings: [...(current.channel_bindings ?? []), newChannel(platformOptions[0] ?? "webhook")] }))}
-            >
-              <div className="agent-mini-list">
-                {(draft.channel_bindings ?? []).map((channel, index) => (
-                  <ChannelEditor
-                    key={channel.id || index}
-                    channel={channel}
-                    platforms={platformOptions}
-                    readOnly={readOnly}
-                    onChange={(next) => replaceChannel(index, next, setDraft)}
-                    onRemove={() => removeChannel(index, setDraft)}
-                  />
-                ))}
-                {(draft.channel_bindings ?? []).length === 0 && <div className="empty-card">{t("agents.noChannels")}</div>}
+            <section className="agent-section">
+              <header>
+                <Link2 size={17} />
+                <h3>{t("nav.connect")}</h3>
+              </header>
+              <p className="subtle-copy">{t("agents.connectMoved")}</p>
+              <div className="agent-picker-grid">
+                <div className="mapping-card">
+                  <strong>
+                    <Cable size={13} /> {t("agents.boundChannels")} ({boundChannels.length})
+                  </strong>
+                  {boundChannels.length === 0 && <span className="muted">{t("connect.noChannels")}</span>}
+                  <div className="provider-chip-row">
+                    {boundChannels.map((ch) => (
+                      <span key={ch.id} className={`status-badge ${ch.state === "running" ? "success" : ""}`}>
+                        {ch.name} · {ch.type}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="mapping-card">
+                  <strong>
+                    <Zap size={13} /> {t("agents.boundTriggers")} ({boundTriggers.length})
+                  </strong>
+                  {boundTriggers.length === 0 && <span className="muted">{t("connect.noTriggers")}</span>}
+                  <div className="provider-chip-row">
+                    {boundTriggers.map((tr) => (
+                      <span key={tr.id} className={`status-badge ${tr.enabled ? "success" : ""}`}>
+                        {tr.name} · {tr.kind}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </SectionList>
-
-            <SectionList
-              title={t("agents.automations")}
-              icon={<CalendarClock size={17} />}
-              addLabel={t("agents.addSchedule")}
-              disabled={readOnly}
-              onAdd={() => setDraft((current) => ({ ...current, schedules: [...(current.schedules ?? []), newSchedule()] }))}
-            >
-              <div className="agent-mini-list">
-                {(draft.schedules ?? []).map((schedule, index) => (
-                  <ScheduleEditor
-                    key={schedule.id || index}
-                    schedule={schedule}
-                    readOnly={readOnly}
-                    onChange={(next) => replaceSchedule(index, next, setDraft)}
-                    onRemove={() => removeSchedule(index, setDraft)}
-                  />
-                ))}
-                {(draft.schedules ?? []).length === 0 && <div className="empty-card">{t("agents.noSchedules")}</div>}
-              </div>
-            </SectionList>
+            </section>
 
             <section className="agent-section">
               <header>
@@ -399,139 +407,6 @@ function Summary({ label, value }: { label: string; value: number }) {
     <div className="summary-stat">
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function SectionList({
-  title,
-  icon,
-  addLabel,
-  disabled,
-  onAdd,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  addLabel: string;
-  disabled?: boolean;
-  onAdd: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className="agent-section">
-      <header>
-        {icon}
-        <h3>{title}</h3>
-        <button className="ghost-action" disabled={disabled} onClick={onAdd}>
-          <Plus size={14} />
-          {addLabel}
-        </button>
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function ChannelEditor({
-  channel,
-  platforms,
-  readOnly,
-  onChange,
-  onRemove,
-}: {
-  channel: AgentChannelBinding;
-  platforms: string[];
-  readOnly: boolean;
-  onChange: (next: AgentChannelBinding) => void;
-  onRemove: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="route-card">
-      <div className="field-grid">
-        <label className="field">
-          <span>{t("agents.channelType")}</span>
-          <select disabled={readOnly} value={channel.type} onChange={(event) => onChange({ ...channel, type: event.target.value })}>
-            {platforms.map((platform) => (
-              <option key={platform} value={platform}>
-                {platform}
-              </option>
-            ))}
-            <option value="webhook">webhook</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>{t("agents.channelName")}</span>
-          <input disabled={readOnly} value={channel.name ?? ""} onChange={(event) => onChange({ ...channel, name: event.target.value })} />
-        </label>
-        <label className="field">
-          <span>{t("agents.chatId")}</span>
-          <input disabled={readOnly} value={channel.chat_id ?? ""} onChange={(event) => onChange({ ...channel, chat_id: event.target.value })} />
-        </label>
-        <label className="field">
-          <span>{t("common.status")}</span>
-          <select disabled={readOnly} value={channel.status ?? "draft"} onChange={(event) => onChange({ ...channel, status: event.target.value })}>
-            <option value="draft">draft</option>
-            <option value="configured">configured</option>
-            <option value="healthy">healthy</option>
-          </select>
-        </label>
-      </div>
-      {!readOnly && (
-        <div className="table-actions">
-          <button className="ghost-action danger-action" onClick={onRemove}>
-            <Trash2 size={14} />
-            {t("common.delete")}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ScheduleEditor({
-  schedule,
-  readOnly,
-  onChange,
-  onRemove,
-}: {
-  schedule: AgentSchedule;
-  readOnly: boolean;
-  onChange: (next: AgentSchedule) => void;
-  onRemove: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="route-card">
-      <div className="field-grid">
-        <label className="field">
-          <span>{t("agents.scheduleName")}</span>
-          <input disabled={readOnly} value={schedule.name} onChange={(event) => onChange({ ...schedule, name: event.target.value })} />
-        </label>
-        <label className="field">
-          <span>{t("agents.cron")}</span>
-          <input disabled={readOnly} value={schedule.cron} onChange={(event) => onChange({ ...schedule, cron: event.target.value })} />
-        </label>
-        <label className="field wide">
-          <span>{t("agents.prompt")}</span>
-          <textarea disabled={readOnly} rows={2} value={schedule.prompt} onChange={(event) => onChange({ ...schedule, prompt: event.target.value })} />
-        </label>
-      </div>
-      {!readOnly && (
-        <div className="table-actions">
-          <label className="switch-row">
-            <span>
-              <strong>{t("common.enabled")}</strong>
-            </span>
-            <input type="checkbox" checked={schedule.enabled} onChange={(event) => onChange({ ...schedule, enabled: event.target.checked })} />
-          </label>
-          <button className="ghost-action danger-action" onClick={onRemove}>
-            <Trash2 size={14} />
-            {t("common.delete")}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -583,42 +458,4 @@ function copyAgent(agent: AgentInstance): AgentInstance {
     mcp_servers: [...(agent.mcp_servers ?? [])],
     skills: [...(agent.skills ?? [])],
   };
-}
-
-function newChannel(type: string): AgentChannelBinding {
-  return { id: `channel-${Date.now()}`, type, name: type, status: "draft" };
-}
-
-function newSchedule(): AgentSchedule {
-  return { id: `schedule-${Date.now()}`, name: "daily check", cron: "0 9 * * *", prompt: "", enabled: true };
-}
-
-function replaceChannel(index: number, next: AgentChannelBinding, setDraft: Dispatch<SetStateAction<AgentInstance>>) {
-  setDraft((current) => {
-    const items = [...(current.channel_bindings ?? [])];
-    items[index] = next;
-    return { ...current, channel_bindings: items };
-  });
-}
-
-function removeChannel(index: number, setDraft: Dispatch<SetStateAction<AgentInstance>>) {
-  setDraft((current) => ({
-    ...current,
-    channel_bindings: (current.channel_bindings ?? []).filter((_, itemIndex) => itemIndex !== index),
-  }));
-}
-
-function replaceSchedule(index: number, next: AgentSchedule, setDraft: Dispatch<SetStateAction<AgentInstance>>) {
-  setDraft((current) => {
-    const items = [...(current.schedules ?? [])];
-    items[index] = next;
-    return { ...current, schedules: items };
-  });
-}
-
-function removeSchedule(index: number, setDraft: Dispatch<SetStateAction<AgentInstance>>) {
-  setDraft((current) => ({
-    ...current,
-    schedules: (current.schedules ?? []).filter((_, itemIndex) => itemIndex !== index),
-  }));
 }

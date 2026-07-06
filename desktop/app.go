@@ -48,6 +48,21 @@ func (a *App) startup(ctx context.Context) {
 	srv.SetProviderService(svc)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
+	if eng, err := server.BuildEngine(log, cfg); err != nil {
+		log.Error("build engine", "err", err)
+	} else {
+		connectSvc := core.NewConnectService(log, eng, st)
+		srv.SetSender(eng)
+		srv.SetConnect(connectSvc)
+		go func() {
+			if err := eng.Start(a.ctx); err != nil {
+				log.Error("engine stopped", "err", err)
+			}
+		}()
+		if err := connectSvc.Start(a.ctx); err != nil {
+			log.Warn("connect runtime start failed", "err", err)
+		}
+	}
 	if err := svc.RestoreProxyState(a.ctx); err != nil {
 		log.Warn("local routing restore failed", "err", err)
 	}

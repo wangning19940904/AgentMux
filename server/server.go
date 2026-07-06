@@ -26,6 +26,7 @@ type Server struct {
 	proxySvc *providerpkg.Service
 	usageFn  UsageReporter
 	sender   core.Sender
+	connect  *core.ConnectService
 	presets  any
 	memory   core.MemoryStore
 	skills   core.SkillManager
@@ -108,6 +109,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
+	s.mux.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
+	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/channels", s.handleChannelDelete)
+	s.mux.HandleFunc("POST /api/v1/channels/restart", s.handleChannelRestart)
+	s.mux.HandleFunc("GET /api/v1/triggers", s.handleTriggersList)
+	s.mux.HandleFunc("POST /api/v1/triggers", s.handleTriggerUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/triggers", s.handleTriggerDelete)
+	s.mux.HandleFunc("POST /api/v1/triggers/run", s.handleTriggerRun)
+	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
 	s.registerModuleRoutes()
 	s.registerWeb(s.mux)
 }

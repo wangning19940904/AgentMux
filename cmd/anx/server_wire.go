@@ -37,3 +37,17 @@ func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.S
 	)
 	return srv, svc
 }
+
+// attachRuntime builds the Engine plus the channels & triggers runtime and
+// wires both onto the server. Shared by `anx serve` and `anx web` so
+// console-managed channels and cron triggers run in either mode.
+func attachRuntime(cfg *config.Config, st *store.Store, srv *server.Server) (*core.Engine, *core.ConnectService, error) {
+	eng, err := server.BuildEngine(logger, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	connectSvc := core.NewConnectService(logger, eng, st)
+	srv.SetSender(eng)
+	srv.SetConnect(connectSvc)
+	return eng, connectSvc, nil
+}

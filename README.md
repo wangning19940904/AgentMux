@@ -21,8 +21,9 @@ CLI 名称:`agent-nexus`(短别名 `anx`)。
 | 权限审批 | **AgentNexus Guard** | `guard/` |
 | Web 控制台 | **AgentNexus Console** | `web/` + `server/` |
 
-- **Connect** — 从消息平台(Feishu/Lark、Telegram、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话。
+- **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调。
 - **Router** — 支持 Claude Code、Codex、Cursor、Gemini、Qoder、OpenCode、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移。
+- **渠道 & 触发** — 渠道是绑定 Agent 的实时 IM 连接(飞书/Telegram/钉钉/Slack/Discord/Webhook),控制台可增删改与启停/重启并显示运行状态;触发统一承载三类自动化:定时任务(robfig/cron,标准 5 段表达式)、入站 Webhook(`POST /hook/{id}`,自带 token 鉴权)、生命周期事件回调(`message.received`/`cron.triggered`/`error` 等 → Shell 或 HTTP)。定时/Webhook 触发把 Prompt 发给绑定 Agent 并将结果推回渠道会话,支持 `reuse`/`new_per_run` 会话模式。
 - **Ledger** — 读取 Claude/Codex/Cursor/Gemini 的本地会话日志,基于 LiteLLM 价格数据计费,按天/周/月/会话/5 小时块出账,并能通过 SSH 采集远程机器用量。
 - **Memory** — 跨 Agent 与跨会话的统一记忆层(检索、写入、共享上下文)。
 - **Skills** — 统一发现、安装与管理 Agent Skills。
@@ -106,6 +107,16 @@ POST /api/v1/mcp                      # 注册/更新 MCP server
 DELETE /api/v1/mcp?name=             # 删除 MCP server
 GET  /api/v1/guard/policies          # Guard 策略列表
 POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
+
+GET  /api/v1/channels                # 渠道列表(含运行状态)
+POST /api/v1/channels                # 新建/更新渠道 {name,type,agent_id,config,enabled}
+DELETE /api/v1/channels?id=          # 删除渠道
+POST /api/v1/channels/restart?id=    # 重启渠道连接
+GET  /api/v1/triggers                # 触发列表(含 last_run/last_status)
+POST /api/v1/triggers                # 新建/更新触发(校验 cron 表达式/kind)
+DELETE /api/v1/triggers?id=          # 删除触发
+POST /api/v1/triggers/run?id=        # 立即执行一次触发
+POST /hook/{id}                      # 入站 Webhook 触发端点(token 鉴权,payload 附加到 prompt)
 ```
 
 ## 构建

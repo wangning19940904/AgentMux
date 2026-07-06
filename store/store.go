@@ -143,6 +143,37 @@ CREATE TABLE IF NOT EXISTS proxy_live_backup (
 	tool TEXT PRIMARY KEY,
 	original_config TEXT NOT NULL,
 	backed_up_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS channels (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	type TEXT NOT NULL,
+	agent_id TEXT,
+	config TEXT,
+	enabled INTEGER DEFAULT 0,
+	created_at TEXT,
+	updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS triggers (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	agent_id TEXT,
+	channel_id TEXT,
+	chat_id TEXT,
+	cron_expr TEXT,
+	prompt TEXT,
+	event TEXT,
+	action_type TEXT,
+	action_target TEXT,
+	token TEXT,
+	session_mode TEXT,
+	enabled INTEGER DEFAULT 0,
+	last_run TEXT,
+	last_status TEXT,
+	last_error TEXT,
+	created_at TEXT,
+	updated_at TEXT
 );`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -161,7 +192,7 @@ CREATE TABLE IF NOT EXISTS proxy_live_backup (
 			return err
 		}
 	}
-	return nil
+	return s.migrateAgentBindings()
 }
 
 func (s *Store) ensureColumn(table, name, def string) error {

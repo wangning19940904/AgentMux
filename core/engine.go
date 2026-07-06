@@ -18,13 +18,21 @@ type projectRuntime struct {
 	sessions map[string]AgentSession // chatID -> session
 }
 
+// EventSink receives every lifecycle event the Engine emits, in addition to
+// the config.toml HookRunner. The connect runtime uses it to fire
+// store-managed event triggers.
+type EventSink func(event HookEvent, data map[string]string)
+
 // Engine is the central orchestrator. It wires platforms to agents and routes
-// inbound messages to agent sessions, streaming responses back.
+// inbound messages to agent sessions, streaming responses back. Besides
+// config.toml projects it hosts dynamically attached console-managed channels.
 type Engine struct {
 	log      *slog.Logger
 	hooks    *HookRunner
+	sink     EventSink
 	mu       sync.RWMutex
 	projects map[string]*projectRuntime
+	channels map[string]*channelRuntime
 	inbound  chan *Message
 }
 
@@ -37,7 +45,31 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		log:      log,
 		hooks:    hooks,
 		projects: map[string]*projectRuntime{},
+		channels: map[string]*channelRuntime{},
 		inbound:  make(chan *Message, 256),
+	}
+}
+
+// SetEventSink attaches the unified event callback. Must be called before
+// Start.
+func (e *Engine) SetEventSink(sink EventSink) { e.sink = sink }
+
+// emit dispatches a lifecycle event to config.toml hooks and the event sink.
+// It copies data per consumer so the caller's map is never mutated and async
+// sinks cannot observe a later event's fields (both share nothing).
+func (e *Engine) emit(ctx context.Context, event HookEvent, data map[string]string) {
+	payload := make(map[string]string, len(data)+1)
+	for k, v := range data {
+		payload[k] = v
+	}
+	payload["event"] = string(event)
+	e.hooks.Fire(ctx, event, payload)
+	if e.sink != nil {
+		sinkCopy := make(map[string]string, len(payload))
+		for k, v := range payload {
+			sinkCopy[k] = v
+		}
+		e.sink(event, sinkCopy)
 	}
 }
 
@@ -81,9 +113,38 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 }
 
-// handle routes a single inbound message to its project's agent session.
+// eventData builds the hook/event payload for a message.
+func eventData(msg *Message) map[string]string {
+	return map[string]string{
+		"text":       msg.Text,
+		"platform":   msg.Platform,
+		"project":    msg.Project,
+		"channel_id": msg.ChannelID,
+		"chat_id":    msg.ChatID,
+		"user_id":    msg.UserID,
+		"user_name":  msg.UserName,
+		"origin":     msg.Origin,
+	}
+}
+
+func withError(data map[string]string, err error) map[string]string {
+	out := map[string]string{}
+	for k, v := range data {
+		out[k] = v
+	}
+	out["error"] = errString(err)
+	return out
+}
+
+// handle routes a single inbound message to its runtime's agent session.
 func (e *Engine) handle(ctx context.Context, msg *Message) {
-	e.hooks.Fire(ctx, HookMessageReceived, map[string]string{"text": msg.Text})
+	data := eventData(msg)
+	e.emit(ctx, HookMessageReceived, data)
+
+	if msg.ChannelID != "" {
+		e.handleChannelMessage(ctx, msg, data)
+		return
+	}
 
 	e.mu.RLock()
 	pr := e.projects[msg.Project]
@@ -93,32 +154,58 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
-	sess, err := pr.session(ctx, msg.ChatID)
+	sess, created, err := pr.session(ctx, msg.ChatID)
 	if err != nil {
 		e.log.Error("start session", "err", err)
+		e.emit(ctx, HookError, withError(data, err))
 		e.replyAll(ctx, pr, msg, "failed to start agent session: "+err.Error())
 		return
 	}
-
-	events, err := sess.Send(ctx, msg.Text)
-	if err != nil {
-		e.log.Error("send to session", "err", err)
-		e.replyAll(ctx, pr, msg, "failed: "+err.Error())
-		return
+	if created {
+		e.emit(ctx, HookSessionStarted, data)
 	}
 
+	_, _ = e.streamTurn(ctx, sess, msg.Text, func(text string) {
+		e.replyAll(ctx, pr, msg, text)
+	}, data)
+	e.emit(ctx, HookMessageSent, data)
+}
+
+// streamTurn submits text to a session and forwards output through reply
+// (when non-nil). It returns the last answer text and the first error event.
+func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string, reply func(string), data map[string]string) (string, error) {
+	events, err := sess.Send(ctx, text)
+	if err != nil {
+		e.log.Error("send to session", "err", err)
+		e.emit(ctx, HookError, withError(data, err))
+		if reply != nil {
+			reply("failed: " + err.Error())
+		}
+		return "", err
+	}
+
+	var lastText string
+	var firstErr error
 	for ev := range events {
 		switch ev.Type {
 		case EventFinal, EventOutput:
 			if ev.Text != "" && ev.Text != "NO_REPLY" {
-				e.replyAll(ctx, pr, msg, ev.Text)
+				lastText = ev.Text
+				if reply != nil {
+					reply(ev.Text)
+				}
 			}
 		case EventError:
-			e.hooks.Fire(ctx, HookError, map[string]string{"error": errString(ev.Err)})
-			e.replyAll(ctx, pr, msg, "error: "+errString(ev.Err))
+			e.emit(ctx, HookError, withError(data, ev.Err))
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s", errString(ev.Err))
+			}
+			if reply != nil {
+				reply("error: " + errString(ev.Err))
+			}
 		}
 	}
-	e.hooks.Fire(ctx, HookMessageSent, nil)
+	return lastText, firstErr
 }
 
 func (e *Engine) replyAll(ctx context.Context, pr *projectRuntime, msg *Message, text string) {
@@ -132,27 +219,35 @@ func (e *Engine) replyAll(ctx context.Context, pr *projectRuntime, msg *Message,
 	}
 }
 
-func (pr *projectRuntime) session(ctx context.Context, chatID string) (AgentSession, error) {
+func (pr *projectRuntime) session(ctx context.Context, chatID string) (AgentSession, bool, error) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	if s, ok := pr.sessions[chatID]; ok {
-		return s, nil
+		return s, false, nil
 	}
 	if pr.agent == nil {
-		return nil, fmt.Errorf("project %q has no agent", pr.name)
+		return nil, false, fmt.Errorf("project %q has no agent", pr.name)
 	}
 	s, err := pr.agent.StartSession(ctx, pr.workDir)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	pr.sessions[chatID] = s
-	return s, nil
+	return s, true, nil
 }
 
 func (e *Engine) shutdown() error {
+	e.mu.Lock()
+	channels := e.channels
+	e.channels = map[string]*channelRuntime{}
+	e.mu.Unlock()
+	ctx := context.Background()
+	for _, rt := range channels {
+		rt.close(ctx)
+	}
+
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	ctx := context.Background()
 	for _, pr := range e.projects {
 		pr.mu.Lock()
 		for _, s := range pr.sessions {

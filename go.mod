@@ -4,6 +4,10 @@ go 1.25
 
 require (
 	github.com/BurntSushi/toml v1.4.0
+	github.com/bwmarrin/discordgo v0.29.0
+	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
+	github.com/robfig/cron/v3 v3.0.1
+	github.com/slack-go/slack v0.16.0
 	github.com/spf13/cobra v1.8.1
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.33.0

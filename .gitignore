@@ -10,6 +10,10 @@ desktop/frontend
 web/node_modules/
 web/dist/
 
+# Local third-party reference checkouts
+/external/cc-connect/
+/external/cc-switch/
+
 # Local data / databases
 *.db
 *.db-wal

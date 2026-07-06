@@ -20,7 +20,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { api, Provider, ProviderProbeCheck, ProviderRoute } from "../api";
+import { api, Provider, ProviderProbeCheck, ProviderRoute, ProxyToolConfig } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -222,6 +222,15 @@ function routeToolsForCapability(tool: string) {
   const normalized = normalizeTool(tool);
   if (normalized === "codex") return ["codex", "codex-app"];
   return normalized ? [normalized] : [];
+}
+
+function localRoutingTool(tool: string) {
+  const normalized = normalizeTool(tool);
+  return normalized === "codex-app" ? "codex" : normalized;
+}
+
+function supportsLocalRouting(tool: string) {
+  return ["claudecode", "claude-desktop", "codex"].includes(localRoutingTool(tool));
 }
 
 function providerSupportsRouteTool(provider: Provider, tool: string) {
@@ -456,6 +465,12 @@ export function GatewayPanel() {
     routeList.forEach((route) => next.set(normalizeTool(route.tool), route));
     return next;
   }, [routeList]);
+
+  const proxyConfigByTool = useMemo(() => {
+    const next = new Map<string, ProxyToolConfig>();
+    (proxyStatus.data?.tools ?? []).forEach((cfg) => next.set(localRoutingTool(cfg.tool), cfg));
+    return next;
+  }, [proxyStatus.data]);
 
   const tools = useMemo(() => {
     const names = new Set<string>(DEFAULT_ROUTE_TOOLS);
@@ -728,6 +743,11 @@ export function GatewayPanel() {
     setBusy(`disable-route:${tool}`);
     setNotice("");
     try {
+      const localTool = localRoutingTool(tool);
+      const localCfg = proxyConfigByTool.get(localTool);
+      if (supportsLocalRouting(tool) && localCfg?.enabled) {
+        await api.setTakeover(localTool, false);
+      }
       await api.disableRoute(tool);
       setNotice(t("gateway.routeDisabled"));
       reloadProviders();
@@ -1283,73 +1303,10 @@ export function GatewayPanel() {
     );
   }
 
-  function renderLocalRouting() {
-    const status = proxyStatus.data;
-    const toolConfigs = status?.tools ?? [];
-    return (
-      <section className="surface local-routing">
-        <div className="surface-header">
-          <div>
-            <h2>{t("gateway.localRouting")}</h2>
-            <p className="subtle-copy">{t("gateway.localRoutingSubtitle")}</p>
-          </div>
-          <div className="table-actions">
-            <span className={status?.running ? "status-badge success" : "status-badge"}>
-              <span className="status-dot" />
-              {status?.running ? t("gateway.proxyRunning") : t("gateway.proxyStopped")}
-            </span>
-            {status?.running && <span className="pill mono">{status.base_url}</span>}
-          </div>
-        </div>
-        {proxyStatus.error && <div className="surface-body error">{proxyStatus.error}</div>}
-        <div className="surface-body local-routing-grid">
-          {toolConfigs.map((cfg) => {
-            const takeoverBusy = busy === `takeover:${cfg.tool}`;
-            const failoverBusy = busy === `auto-failover:${cfg.tool}`;
-            return (
-              <article className={cfg.enabled ? "route-card enabled" : "route-card"} key={cfg.tool}>
-                <header>
-                  <span className="route-card-title">
-                    <Workflow size={17} />
-                    <span>
-                      <strong>{toolLabel(cfg.tool)}</strong>
-                      <small>{cfg.tool}</small>
-                    </span>
-                  </span>
-                  <span className={cfg.enabled ? "status-badge success" : "status-badge"}>
-                    {cfg.enabled ? t("gateway.takeoverOn") : t("gateway.takeoverOff")}
-                  </span>
-                </header>
-                <footer className="provider-card-actions">
-                  <button
-                    className={cfg.enabled ? "ghost-action danger-action" : "ghost-action"}
-                    disabled={takeoverBusy}
-                    onClick={() => toggleTakeover(cfg.tool, !cfg.enabled)}
-                  >
-                    <PlugZap size={14} />
-                    {cfg.enabled ? t("gateway.disableTakeover") : t("gateway.enableTakeover")}
-                  </button>
-                  <button
-                    className={cfg.auto_failover ? "ghost-action active" : "ghost-action"}
-                    disabled={failoverBusy}
-                    onClick={() => toggleAutoFailover(cfg)}
-                  >
-                    <Workflow size={14} />
-                    {t("gateway.autoFailover")}: {cfg.auto_failover ? "ON" : "OFF"}
-                  </button>
-                </footer>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-    );
-  }
-
   function renderRoutingTab() {
+    const status = proxyStatus.data;
     return (
       <div className="page-stack">
-        {renderLocalRouting()}
         <section className="surface routing-overview">
           <div className="surface-header">
             <div>
@@ -1357,6 +1314,10 @@ export function GatewayPanel() {
               <p className="subtle-copy">{t("gateway.routingSubtitle")}</p>
             </div>
             <div className="table-actions">
+              <span className={status?.running ? "status-badge success" : "status-badge"}>
+                <span className="status-dot" />
+                {status?.running ? t("gateway.proxyRunning") : t("gateway.proxyStopped")}
+              </span>
               <span className="pill on">
                 {routeList.length} / {routeTools.length}
               </span>
@@ -1366,15 +1327,19 @@ export function GatewayPanel() {
               </button>
             </div>
           </div>
-          {(agents.error || activeRoutes.error) && (
-            <div className="surface-body error">{agents.error || activeRoutes.error}</div>
+          {(agents.error || activeRoutes.error || proxyStatus.error) && (
+            <div className="surface-body error">{agents.error || activeRoutes.error || proxyStatus.error}</div>
           )}
           {notice && <div className="session-notice">{notice}</div>}
           <div className="surface-body provider-list-grid route-list-grid">
             {[...routeList].sort((a, b) => sortTools(normalizeTool(a.tool), normalizeTool(b.tool))).map((route) => {
+              const localTool = localRoutingTool(route.tool);
+              const localCfg = supportsLocalRouting(route.tool) ? proxyConfigByTool.get(localTool) : undefined;
               const routeProvider = providerList.find((provider) => provider.id === route.provider_id);
               const configured = Boolean(route.configured && routeProvider);
               const busyRoute = busy === `disable-route:${route.tool}`;
+              const takeoverBusy = busy === `takeover:${localTool}`;
+              const failoverBusy = busy === `auto-failover:${localTool}`;
               const supportedModels = routeProvider ? providerSupportedModels(routeProvider) : uniqueValues([route.model || ""]);
               const supportedProtocols = routeProvider ? providerSupportedProtocols(routeProvider) : protocolLabels([route.api_format || ""]);
               return (
@@ -1415,6 +1380,34 @@ export function GatewayPanel() {
                       <dd>{routeProvider?.api_key_env || route.api_key_env || t("gateway.keyMissing")}</dd>
                     </div>
                   </dl>
+
+                  {localCfg && (
+                    <div className="route-local-controls">
+                      <div className="route-local-status">
+                        <span>{t("gateway.localRouting")}</span>
+                        <strong>{localCfg.enabled ? t("gateway.takeoverOn") : t("gateway.takeoverOff")}</strong>
+                        {localCfg.enabled && status?.running && <small className="mono">{status.base_url}</small>}
+                      </div>
+                      <div className="route-local-actions">
+                        <button
+                          className={localCfg.enabled ? "ghost-action danger-action" : "ghost-action"}
+                          disabled={takeoverBusy || !configured}
+                          onClick={() => toggleTakeover(localTool, !localCfg.enabled)}
+                        >
+                          <PlugZap size={14} />
+                          {localCfg.enabled ? t("gateway.disableTakeover") : t("gateway.enableTakeover")}
+                        </button>
+                        <button
+                          className={localCfg.auto_failover ? "ghost-action active" : "ghost-action"}
+                          disabled={failoverBusy || !configured}
+                          onClick={() => toggleAutoFailover(localCfg)}
+                        >
+                          <Workflow size={14} />
+                          {t("gateway.autoFailover")}: {localCfg.auto_failover ? "ON" : "OFF"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   <footer className="provider-card-actions">
                     <button className="ghost-action" onClick={() => editRoute(route)}>

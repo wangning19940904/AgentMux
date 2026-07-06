@@ -1179,6 +1179,53 @@ textarea:focus {
   white-space: normal;
 }
 
+.route-local-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 11px 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 72%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.route-local-status {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.route-local-status span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.route-local-status strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.route-local-status small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-local-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .provider-chip-row,
 .provider-fact-chips {
   display: flex;
@@ -1514,12 +1561,6 @@ textarea:focus {
   resize: vertical;
 }
 
-.local-routing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-}
-
 .ghost-action.active {
   border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
   color: var(--accent);
@@ -1822,6 +1863,54 @@ textarea:focus {
   border-bottom: 1px solid color-mix(in srgb, var(--green) 22%, var(--border));
 }
 
+/* Channels & Triggers panel */
+.connect-page .route-card {
+  display: grid;
+  gap: 12px;
+}
+
+.connect-page .editor-card {
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+}
+
+.connect-page .agent-list-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.connect-page .agent-list-main small {
+  display: block;
+  color: var(--muted);
+}
+
+.connect-page .trigger-prompt {
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.hook-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hook-endpoint code {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  word-break: break-all;
+}
+
 .session-notice.error {
   color: var(--red);
   background: var(--red-soft);
@@ -2010,12 +2099,14 @@ textarea:focus {
 
   .provider-card header,
   .route-card header,
+  .route-local-controls,
   .provider-builder-head {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .provider-card-actions,
+  .route-local-actions,
   .form-actions,
   .table-actions {
     justify-content: flex-start;

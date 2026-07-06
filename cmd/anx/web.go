@@ -25,11 +25,19 @@ func webCmd() *cobra.Command {
 			defer cancel()
 
 			srv, providerSvc := newServer(cfg, st)
+			eng, connectSvc, err := attachRuntime(cfg, st, srv)
+			if err != nil {
+				return err
+			}
 			if err := providerSvc.RestoreProxyState(ctx); err != nil {
 				logger.Warn("local routing restore failed", "err", err)
 			}
 			defer func() { _ = providerSvc.Proxy().Stop() }()
 			go func() { _ = srv.ListenAndServe(ctx) }()
+			go func() { _ = eng.Start(ctx) }()
+			if err := connectSvc.Start(ctx); err != nil {
+				logger.Warn("connect runtime start failed", "err", err)
+			}
 
 			url := "http://" + cfg.Server.Addr
 			if !noOpen {

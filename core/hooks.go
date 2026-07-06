@@ -3,6 +3,8 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os/exec"
@@ -13,14 +15,24 @@ import (
 type HookEvent string
 
 const (
-	HookMessageReceived HookEvent = "message.received"
-	HookMessageSent     HookEvent = "message.sent"
-	HookSessionStarted  HookEvent = "session.started"
-	HookSessionEnded    HookEvent = "session.ended"
-	HookCronTriggered   HookEvent = "cron.triggered"
-	HookPermission      HookEvent = "permission.requested"
-	HookError           HookEvent = "error"
+	HookMessageReceived  HookEvent = "message.received"
+	HookMessageSent      HookEvent = "message.sent"
+	HookSessionStarted   HookEvent = "session.started"
+	HookSessionEnded     HookEvent = "session.ended"
+	HookCronTriggered    HookEvent = "cron.triggered"
+	HookWebhookTriggered HookEvent = "webhook.triggered"
+	HookPermission       HookEvent = "permission.requested"
+	HookError            HookEvent = "error"
 )
+
+// HookEvents lists all lifecycle events, for UIs that offer a picker.
+func HookEvents() []HookEvent {
+	return []HookEvent{
+		HookMessageReceived, HookMessageSent, HookSessionStarted,
+		HookSessionEnded, HookCronTriggered, HookWebhookTriggered,
+		HookPermission, HookError,
+	}
+}
 
 // Hook is a single configured lifecycle reaction.
 type Hook struct {
@@ -59,39 +71,49 @@ func (r *HookRunner) Fire(ctx context.Context, event HookEvent, data map[string]
 }
 
 func (r *HookRunner) run(ctx context.Context, h Hook, data map[string]string) {
+	if err := RunHookAction(ctx, h.Type, h.Command, h.URL, data); err != nil {
+		r.log.Error("hook failed", "event", h.Event, "type", h.Type, "err", err)
+	}
+}
+
+// RunHookAction executes one hook-style action: a shell command with HOOK_*
+// env vars, or an HTTP POST with a JSON body. Shared by config.toml hooks and
+// store-managed event triggers.
+func RunHookAction(ctx context.Context, typ, command, url string, data map[string]string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	switch h.Type {
-	case "shell":
-		cmd := exec.CommandContext(ctx, "sh", "-c", h.Command)
+	switch typ {
+	case ActionShell:
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
 		cmd.Env = hookEnv(data)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			r.log.Error("hook shell failed", "event", h.Event, "err", err, "out", string(out))
+			return fmt.Errorf("shell: %w (output: %s)", err, string(out))
 		}
-	case "http":
-		var body bytes.Buffer
-		body.WriteString("{")
-		first := true
-		for k, v := range data {
-			if !first {
-				body.WriteString(",")
-			}
-			body.WriteString(`"` + k + `":"` + v + `"`)
-			first = false
-		}
-		body.WriteString("}")
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URL, &body)
+		return nil
+	case ActionHTTP:
+		body, err := json.Marshal(data)
 		if err != nil {
-			r.log.Error("hook http build", "err", err)
-			return
+			return fmt.Errorf("http body: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("http build: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if ev, ok := data["event"]; ok {
+			req.Header.Set("X-Hook-Event", ev)
+		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			r.log.Error("hook http failed", "event", h.Event, "err", err)
-			return
+			return fmt.Errorf("http post: %w", err)
 		}
 		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return fmt.Errorf("http post: %s", resp.Status)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown hook action type %q", typ)
 	}
 }
 

@@ -22,7 +22,20 @@ type Message struct {
 	// Platform/Project routing context.
 	Platform string
 	Project  string
+	// ChannelID routes the message to a console-managed channel runtime
+	// instead of a config.toml project. Stamped by the Engine's channel relay.
+	ChannelID string
+	// Origin records what produced the message: channel, cron, webhook or api.
+	Origin string
 }
+
+// Message origins.
+const (
+	OriginChannel = "channel"
+	OriginCron    = "cron"
+	OriginWebhook = "webhook"
+	OriginAPI     = "api"
+)
 
 // Event is something an AgentSession emits while processing a turn: streamed
 // output, a tool call, a permission request, or the final answer.
@@ -48,9 +61,9 @@ const (
 
 // TurnUsage carries token accounting for a single agent turn.
 type TurnUsage struct {
-	Model          string
-	InputTokens    int64
-	OutputTokens   int64
+	Model            string
+	InputTokens      int64
+	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
 }

@@ -25,7 +25,19 @@ system_prompt = "You are a helpful coding assistant."
   app_id = "${FEISHU_APP_ID}"
   app_secret = "${FEISHU_APP_SECRET}"
 
-# ---- Lifecycle hooks ----
+  # Other supported platform types (config.toml projects or the console's
+  # Channels & Triggers panel):
+  #   type = "telegram"  -> token
+  #   type = "dingtalk"  -> client_id, client_secret[, robot_code]
+  #   type = "slack"     -> bot_token (xoxb-), app_token (xapp-)
+  #   type = "discord"   -> token (enable Message Content Intent)
+  #   type = "webhook"   -> listen, outbound_url
+  # Channels created in the console are stored in SQLite and attached at
+  # runtime; cron / inbound-webhook / event triggers are managed there too.
+
+# ---- Lifecycle hooks (config.toml side; the console offers event triggers) ----
+# Events: message.received, message.sent, session.started, session.ended,
+#         cron.triggered, webhook.triggered, permission.requested, error
 # [[hooks]]
 # event = "error"
 # type = "shell"
