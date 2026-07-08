@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -99,6 +100,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/providers/switch", s.handleProviderSwitch)
 	s.mux.HandleFunc("POST /api/v1/providers/failover", s.handleProviderFailover)
 	s.mux.HandleFunc("GET /api/v1/proxy/status", s.handleProxyStatus)
+	s.mux.HandleFunc("GET /api/v1/proxy/traces", s.handleProxyTraces)
 	s.mux.HandleFunc("POST /api/v1/proxy/takeover", s.handleProxyTakeover)
 	s.mux.HandleFunc("POST /api/v1/proxy/config", s.handleProxyConfigUpdate)
 	s.mux.HandleFunc("GET /api/v1/system/claude-3p", s.handleClaude3PStatus)
@@ -113,6 +115,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/channels", s.handleChannelDelete)
 	s.mux.HandleFunc("POST /api/v1/channels/restart", s.handleChannelRestart)
+	s.mux.HandleFunc("POST /api/v1/setup/feishu/begin", s.handleFeishuSetupBegin)
+	s.mux.HandleFunc("POST /api/v1/setup/feishu/poll", s.handleFeishuSetupPoll)
 	s.mux.HandleFunc("GET /api/v1/triggers", s.handleTriggersList)
 	s.mux.HandleFunc("POST /api/v1/triggers", s.handleTriggerUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/triggers", s.handleTriggerDelete)
@@ -196,6 +200,9 @@ func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	for _, p := range ps {
+		annotateProviderAPIKey(p)
+	}
 	writeJSON(w, http.StatusOK, ps)
 }
 
@@ -209,7 +216,7 @@ func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := normalizeProviderAPIKey(&p); err != nil {
+	if err := normalizeProviderAPIKeyForSave(&p); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -217,6 +224,7 @@ func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	annotateProviderAPIKey(&p)
 	writeJSON(w, http.StatusOK, &p)
 }
 
@@ -246,6 +254,9 @@ func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	for i := range routes {
+		annotateProviderRouteAPIKey(&routes[i])
 	}
 	writeJSON(w, http.StatusOK, routes)
 }
@@ -277,14 +288,29 @@ func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID   string `json:"id"`
-		Tool string `json:"tool"`
+		ID            string            `json:"id"`
+		Tool          string            `json:"tool"`
+		Meta          core.ProviderMeta `json:"meta"`
+		LocalTakeover *bool             `json:"local_takeover,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := s.provider.Switch(r.Context(), req.ID, req.Tool); err != nil {
+	route := core.ProviderRoute{
+		Tool:       req.Tool,
+		ProviderID: req.ID,
+		Meta:       req.Meta,
+	}
+	var err error
+	if req.LocalTakeover != nil && s.proxySvc != nil {
+		err = s.proxySvc.SwitchRouteWithLocalTakeover(r.Context(), route, *req.LocalTakeover)
+	} else if req.LocalTakeover != nil && *req.LocalTakeover {
+		err = fmt.Errorf("local routing unavailable")
+	} else {
+		err = s.provider.SwitchRoute(r.Context(), route)
+	}
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

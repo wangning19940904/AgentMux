@@ -46,6 +46,15 @@ func (m *Manager) Upsert(ctx context.Context, p *core.Provider) error {
 
 // Delete removes a provider.
 func (m *Manager) Delete(ctx context.Context, id string) error {
+	p, err := m.st.GetProvider(ctx, id)
+	if err != nil {
+		return err
+	}
+	if p != nil {
+		if err := DeleteProviderAPIKey(p.APIKeyEnv); err != nil {
+			return err
+		}
+	}
 	return m.st.DeleteProvider(ctx, id)
 }
 
@@ -63,25 +72,18 @@ func (m *Manager) Active(ctx context.Context, tool string) (*core.Provider, erro
 	return m.st.GetProvider(ctx, id)
 }
 
-func providerSupportsTool(p *core.Provider, tool string) bool {
-	tool = strings.TrimSpace(tool)
-	if tool == "" {
-		return false
-	}
-	target := liveConfigTool(tool)
-	for _, candidate := range p.Tools {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == tool || candidate == target || liveConfigTool(candidate) == target {
-			return true
-		}
-	}
-	return false
-}
-
 // Switch enables provider id for tool and writes the tool's live config.
 // The previous active provider (if any) is consulted so its leftover keys
 // are cleaned from the live file, mirroring cc-switch's switch_normal.
 func (m *Manager) Switch(ctx context.Context, id, tool string) error {
+	return m.switchProvider(ctx, id, tool, core.ProviderMeta{}, false)
+}
+
+func (m *Manager) SwitchRoute(ctx context.Context, route core.ProviderRoute) error {
+	return m.switchProvider(ctx, route.ProviderID, route.Tool, route.Meta, true)
+}
+
+func (m *Manager) switchProvider(ctx context.Context, id, tool string, routeMeta core.ProviderMeta, writeRouteMeta bool) error {
 	p, err := m.st.GetProvider(ctx, id)
 	if err != nil {
 		return err
@@ -89,18 +91,19 @@ func (m *Manager) Switch(ctx context.Context, id, tool string) error {
 	if p == nil {
 		return fmt.Errorf("provider %q not found", id)
 	}
-	if !providerSupportsTool(p, tool) {
-		return fmt.Errorf("provider %q does not support tool %q", id, tool)
-	}
-	if err := validateDirectSwitch(p, tool); err != nil {
+	effective := core.ProviderWithRouteMeta(p, routeMeta)
+	if err := validateDirectSwitch(effective, tool); err != nil {
 		return err
 	}
 	var prev *core.Provider
 	if prevID, ok, err := m.st.ActiveProviderID(ctx, tool); err == nil && ok && prevID != id {
 		prev, _ = m.st.GetProvider(ctx, prevID)
 	}
-	if err := m.writeLive(tool, p, prev); err != nil {
+	if err := m.writeLive(tool, effective, prev); err != nil {
 		return fmt.Errorf("write live config: %w", err)
+	}
+	if writeRouteMeta {
+		return m.st.SetActiveProviderRoute(ctx, core.ProviderRoute{Tool: tool, ProviderID: id, Meta: routeMeta})
 	}
 	return m.st.SetActiveProvider(ctx, tool, id)
 }
@@ -143,7 +146,6 @@ type providerJSON struct {
 	Category       string            `json:"category,omitempty"`
 	BaseURL        string            `json:"base_url"`
 	Model          string            `json:"model"`
-	Tools          []string          `json:"tools"`
 	Extra          map[string]string `json:"extra,omitempty"`
 	SettingsConfig map[string]any    `json:"settings_config,omitempty"`
 	Meta           core.ProviderMeta `json:"meta,omitempty"`
@@ -153,20 +155,9 @@ type providerJSON struct {
 func MarshalProvider(p *core.Provider) ([]byte, error) {
 	return json.Marshal(providerJSON{
 		ID: p.ID, Name: p.Name, Category: p.Category, BaseURL: p.BaseURL,
-		Model: p.Model, Tools: p.Tools, Extra: p.Extra,
+		Model: p.Model, Extra: p.Extra,
 		SettingsConfig: p.SettingsConfig, Meta: p.Meta,
 	})
-}
-
-// JoinTools serializes a tools slice for storage.
-func JoinTools(tools []string) string { return strings.Join(tools, ",") }
-
-// SplitTools parses a stored tools string.
-func SplitTools(s string) []string {
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, ",")
 }
 
 // ImportPreset creates a provider from a built-in preset id.

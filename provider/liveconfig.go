@@ -89,17 +89,36 @@ func claudeAuthScheme(p *core.Provider) string {
 }
 
 // providerAPIKey resolves the real credential: the APIKeyEnv environment
-// variable first, then the transient write-only APIKey field.
+// variable first, then the OS secret backend, then the transient write-only
+// APIKey field.
 func providerAPIKey(p *core.Provider) string {
 	if p == nil {
 		return ""
 	}
 	if p.APIKeyEnv != "" {
-		if v := os.Getenv(p.APIKeyEnv); v != "" {
+		if v, err := providerAPIKeyFromEnvOrSecret(p.APIKeyEnv); err == nil && v != "" {
 			return v
 		}
 	}
 	return strings.TrimSpace(p.APIKey)
+}
+
+func providerAPIKeyIssue(p *core.Provider) string {
+	if p == nil || strings.TrimSpace(p.APIKey) != "" {
+		return ""
+	}
+	apiKeyEnv := strings.TrimSpace(p.APIKeyEnv)
+	if apiKeyEnv == "" {
+		return ""
+	}
+	ok, err := EnsureProviderAPIKeyEnv(apiKeyEnv)
+	if err != nil {
+		return err.Error()
+	}
+	if !ok || os.Getenv(apiKeyEnv) == "" {
+		return fmt.Sprintf("environment variable %s is empty or not set", apiKeyEnv)
+	}
+	return ""
 }
 
 // providerEnvSnippet returns the extra env passthrough map from

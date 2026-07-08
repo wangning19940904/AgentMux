@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/agentnexus/agentnexus/config"
@@ -91,6 +92,105 @@ func TestChannelUpsertValidationAndSecretRoundTrip(t *testing.T) {
 	if stored.Config["token"] != "tg-secret" || stored.Config["note"] != "updated" {
 		t.Fatalf("stored after round-trip = %+v", stored.Config)
 	}
+}
+
+func TestPlatformsIncludeLarkAlias(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/platforms", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("platforms: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var platforms []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &platforms); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(platforms, "feishu") || !containsString(platforms, "lark") {
+		t.Fatalf("platforms = %+v, want feishu and lark", platforms)
+	}
+}
+
+func TestFeishuSetupBeginAndPollLarkSwitch(t *testing.T) {
+	s, _ := newTestServer(t)
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/feishu/oauth/v1/app/registration" {
+			switch r.FormValue("action") {
+			case "init":
+				calls = append(calls, "feishu:init")
+				_, _ = w.Write([]byte(`{"supported_auth_methods":["client_secret"]}`))
+			case "begin":
+				calls = append(calls, "feishu:begin")
+				_, _ = w.Write([]byte(`{"device_code":"dev-1","verification_uri_complete":"https://example.test/qr","interval":1,"expire_in":600}`))
+			case "poll":
+				calls = append(calls, "feishu:poll")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"authorization_pending","user_info":{"tenant_brand":"lark"}}`))
+			default:
+				t.Fatalf("unexpected feishu action %q", r.FormValue("action"))
+			}
+			return
+		}
+		if r.URL.Path == "/lark/oauth/v1/app/registration" {
+			calls = append(calls, "lark:"+r.FormValue("action"))
+			_, _ = w.Write([]byte(`{"client_id":"cli_lark","client_secret":"sec_lark","user_info":{"tenant_brand":"lark","open_id":"ou_1"}}`))
+			return
+		}
+		t.Fatalf("unexpected path %s", r.URL.Path)
+	}))
+	defer upstream.Close()
+
+	oldFeishu, oldLark := feishuAccountsBaseURL, larkAccountsBaseURL
+	feishuAccountsBaseURL = upstream.URL + "/feishu"
+	larkAccountsBaseURL = upstream.URL + "/lark"
+	defer func() {
+		feishuAccountsBaseURL = oldFeishu
+		larkAccountsBaseURL = oldLark
+	}()
+
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/setup/feishu/begin", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("begin: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var begin struct {
+		DeviceCode string `json:"device_code"`
+		QRURL      string `json:"qr_url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &begin); err != nil {
+		t.Fatal(err)
+	}
+	if begin.DeviceCode != "dev-1" || begin.QRURL == "" {
+		t.Fatalf("begin = %+v", begin)
+	}
+
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/setup/feishu/poll", map[string]string{"device_code": "dev-1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("poll: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var poll struct {
+		Status      string `json:"status"`
+		AppID       string `json:"app_id"`
+		AppSecret   string `json:"app_secret"`
+		Platform    string `json:"platform"`
+		OwnerOpenID string `json:"owner_open_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &poll); err != nil {
+		t.Fatal(err)
+	}
+	if poll.Status != "completed" || poll.Platform != "lark" || poll.AppID != "cli_lark" || poll.AppSecret != "sec_lark" || poll.OwnerOpenID != "ou_1" {
+		t.Fatalf("poll = %+v", poll)
+	}
+	if got := strings.Join(calls, ","); got != "feishu:init,feishu:begin,feishu:poll,lark:poll" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTriggerValidation(t *testing.T) {

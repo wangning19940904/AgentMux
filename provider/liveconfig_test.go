@@ -321,7 +321,6 @@ func TestSwitchCodexAppRouteUsesCodexProviderConfig(t *testing.T) {
 		BaseURL:   "https://open.bigmodel.cn/api/paas/v4",
 		APIKeyEnv: "ZHIPU_API_KEY",
 		Model:     "glm-4.6",
-		Tools:     []string{"codex"},
 		SettingsConfig: map[string]any{
 			"codex_home": codexDir,
 		},

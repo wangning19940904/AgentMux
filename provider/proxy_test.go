@@ -46,6 +46,18 @@ func postJSON(t *testing.T, url string, body map[string]any) (*http.Response, []
 	return resp, data
 }
 
+func latestTrace(t *testing.T, st *store.Store, tool string) core.ProxyTrace {
+	t.Helper()
+	traces, err := st.QueryProxyTraces(context.Background(), tool, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(traces))
+	}
+	return traces[0]
+}
+
 func TestProxyAnthropicPassthroughInjectsAuth(t *testing.T) {
 	ctx := context.Background()
 	var gotAuth, gotAPIKey, gotPath, gotModel string
@@ -65,13 +77,17 @@ func TestProxyAnthropicPassthroughInjectsAuth(t *testing.T) {
 	t.Setenv("TEST_RELAY_KEY", "sk-real")
 	p := &core.Provider{
 		ID: "relay", Name: "Relay", BaseURL: upstream.URL,
-		APIKeyEnv: "TEST_RELAY_KEY", Tools: []string{"claudecode"},
-		Meta: core.ProviderMeta{APIFormat: "anthropic", ClaudeSonnetModel: "relay-sonnet"},
+		APIKeyEnv: "TEST_RELAY_KEY",
+		Meta:      core.ProviderMeta{APIFormat: "anthropic"},
 	}
 	if err := st.UpsertProvider(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetActiveProvider(ctx, "claudecode", p.ID); err != nil {
+	if err := st.SetActiveProviderRoute(ctx, core.ProviderRoute{
+		Tool:       "claudecode",
+		ProviderID: p.ID,
+		Meta:       core.ProviderMeta{ClaudeSonnetModel: "relay-sonnet"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	resp, data := postJSON(t, proxy.BaseURL()+"/v1/messages", map[string]any{
@@ -91,6 +107,50 @@ func TestProxyAnthropicPassthroughInjectsAuth(t *testing.T) {
 	if gotModel != "relay-sonnet" {
 		t.Fatalf("model = %q", gotModel)
 	}
+	trace := latestTrace(t, st, "claudecode")
+	if !trace.Success || trace.ProviderID != "relay" || trace.ClientModel != "claude-sonnet-4-8" || trace.UpstreamModel != "relay-sonnet" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if trace.ClientProtocol != "anthropic" || trace.UpstreamProtocol != "anthropic" {
+		t.Fatalf("trace protocols = %+v", trace)
+	}
+}
+
+func TestProxyReportsMissingProviderAPIKeyEnv(t *testing.T) {
+	ctx := context.Background()
+	hitUpstream := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitUpstream = true
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	proxy, st := newTestProxy(t)
+	p := &core.Provider{
+		ID: "relay", Name: "Relay", BaseURL: upstream.URL,
+		APIKeyEnv: "MISSING_PROXY_KEY",
+		Meta:      core.ProviderMeta{APIFormat: "anthropic"},
+	}
+	if err := st.UpsertProvider(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data := postJSON(t, proxy.BaseURL()+"/v1/messages", map[string]any{
+		"model": "claude-sonnet-4-8", "max_tokens": 10,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "environment variable MISSING_PROXY_KEY is empty or not set") {
+		t.Fatalf("missing env error not surfaced: %s", data)
+	}
+	if hitUpstream {
+		t.Fatal("proxy should not call upstream without the configured key")
+	}
 }
 
 func TestProxyFailoverAndHotSwitch(t *testing.T) {
@@ -108,11 +168,11 @@ func TestProxyFailoverAndHotSwitch(t *testing.T) {
 	proxy, st := newTestProxy(t)
 	primary := &core.Provider{
 		ID: "primary", Name: "Primary", BaseURL: bad.URL,
-		Tools: []string{"claudecode"}, Meta: core.ProviderMeta{APIFormat: "anthropic"},
+		Meta: core.ProviderMeta{APIFormat: "anthropic"},
 	}
 	backup := &core.Provider{
 		ID: "backup", Name: "Backup", BaseURL: good.URL,
-		Tools: []string{"claudecode"}, Meta: core.ProviderMeta{APIFormat: "anthropic"},
+		Meta:            core.ProviderMeta{APIFormat: "anthropic"},
 		InFailoverQueue: true, SortIndex: 1,
 	}
 	for _, p := range []*core.Provider{primary, backup} {
@@ -169,7 +229,7 @@ func TestProxyOpenAIChatConversion(t *testing.T) {
 	t.Setenv("GLM_KEY", "sk-glm")
 	p := &core.Provider{
 		ID: "glm", Name: "GLM", BaseURL: upstream.URL + "/v1",
-		APIKeyEnv: "GLM_KEY", Model: "glm-4.6", Tools: []string{"claudecode"},
+		APIKeyEnv: "GLM_KEY", Model: "glm-4.6",
 		Meta: core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := st.UpsertProvider(ctx, p); err != nil {
@@ -220,6 +280,13 @@ func TestProxyOpenAIChatConversion(t *testing.T) {
 	if usage["input_tokens"].(float64) != 12 || usage["output_tokens"].(float64) != 34 {
 		t.Fatalf("usage = %#v", usage)
 	}
+	trace := latestTrace(t, st, "claudecode")
+	if !trace.Success || trace.ClientProtocol != "anthropic" || trace.UpstreamProtocol != "openai_chat" {
+		t.Fatalf("trace protocols = %+v", trace)
+	}
+	if trace.ClientModel != "claude-sonnet-4-8" || trace.UpstreamModel != "glm-4.6" || trace.ProviderID != "glm" {
+		t.Fatalf("trace models = %+v", trace)
+	}
 }
 
 func TestProxyOpenAIChatStreamConversion(t *testing.T) {
@@ -241,8 +308,8 @@ func TestProxyOpenAIChatStreamConversion(t *testing.T) {
 	proxy, st := newTestProxy(t)
 	p := &core.Provider{
 		ID: "glm-stream", Name: "GLM", BaseURL: upstream.URL,
-		Model: "glm-4.6", Tools: []string{"claudecode"},
-		Meta: core.ProviderMeta{APIFormat: "openai_chat"},
+		Model: "glm-4.6",
+		Meta:  core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := st.UpsertProvider(ctx, p); err != nil {
 		t.Fatal(err)
@@ -289,11 +356,10 @@ func TestProxyClaudeDesktopGateway(t *testing.T) {
 	proxy, st := newTestProxy(t)
 	p := &core.Provider{
 		ID: "cd-provider", Name: "Desktop Provider", BaseURL: upstream.URL,
-		Tools: []string{"claude-desktop"},
 		Meta: core.ProviderMeta{
 			APIFormat: "anthropic",
 			ClaudeDesktopModels: []core.ClaudeDesktopModel{
-				{ID: "claude-sonnet-4-8", DisplayName: "Sonnet", UpstreamModel: "upstream-sonnet"},
+				{ID: "ark/60b-0614c", DisplayName: "ark/60b-0614c"},
 			},
 		},
 	}
@@ -309,7 +375,7 @@ func TestProxyClaudeDesktopGateway(t *testing.T) {
 	}
 
 	// Missing token -> 401.
-	resp, _ := postJSON(t, proxy.BaseURL()+"/claude-desktop/v1/messages", map[string]any{"model": "claude-sonnet-4-8"})
+	resp, _ := postJSON(t, proxy.BaseURL()+"/claude-desktop/v1/messages", map[string]any{"model": "claude-sonnet-5"})
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", resp.StatusCode)
 	}
@@ -328,11 +394,17 @@ func TestProxyClaudeDesktopGateway(t *testing.T) {
 	}
 
 	// Known route maps to the upstream model.
-	if resp := do("claude-sonnet-4-8"); resp.StatusCode != http.StatusOK {
+	if resp := do("claude-sonnet-5"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("routed status = %d", resp.StatusCode)
 	}
-	if gotModel != "upstream-sonnet" {
+	if gotModel != "ark/60b-0614c" {
 		t.Fatalf("upstream model = %q", gotModel)
+	}
+	if resp := do("ark/60b-0614c"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("legacy raw route status = %d", resp.StatusCode)
+	}
+	if gotModel != "ark/60b-0614c" {
+		t.Fatalf("legacy upstream model = %q", gotModel)
 	}
 	// Unknown route is a hard error (no silent default).
 	if resp := do("claude-nonexistent-9"); resp.StatusCode != http.StatusBadRequest {
@@ -348,12 +420,15 @@ func TestProxyClaudeDesktopGateway(t *testing.T) {
 	}
 	defer modelsResp.Body.Close()
 	modelsRaw, _ := io.ReadAll(modelsResp.Body)
-	if !strings.Contains(string(modelsRaw), "claude-sonnet-4-8") {
+	if !strings.Contains(string(modelsRaw), "claude-sonnet-5") || !strings.Contains(string(modelsRaw), "ark/60b-0614c") {
 		t.Fatalf("models = %s", modelsRaw)
+	}
+	if strings.Contains(string(modelsRaw), `"id":"ark/60b-0614c"`) {
+		t.Fatalf("raw upstream id leaked into model list: %s", modelsRaw)
 	}
 }
 
-func TestProxyCodexPassthroughChecksWireAPI(t *testing.T) {
+func TestProxyCodexChatPassthrough(t *testing.T) {
 	ctx := context.Background()
 	var gotPath, gotAuth string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -368,8 +443,8 @@ func TestProxyCodexPassthroughChecksWireAPI(t *testing.T) {
 	t.Setenv("CODEX_RELAY_KEY", "sk-codex")
 	p := &core.Provider{
 		ID: "codex-relay", Name: "Codex Relay", BaseURL: upstream.URL + "/v1",
-		APIKeyEnv: "CODEX_RELAY_KEY", Tools: []string{"codex"},
-		Meta: core.ProviderMeta{CodexWireAPI: "chat", APIFormat: "openai_chat"},
+		APIKeyEnv: "CODEX_RELAY_KEY",
+		Meta:      core.ProviderMeta{CodexWireAPI: "chat", APIFormat: "openai_chat"},
 	}
 	if err := st.UpsertProvider(ctx, p); err != nil {
 		t.Fatal(err)
@@ -377,6 +452,7 @@ func TestProxyCodexPassthroughChecksWireAPI(t *testing.T) {
 	if err := st.SetActiveProvider(ctx, "codex", p.ID); err != nil {
 		t.Fatal(err)
 	}
+	// Same-protocol (openai_chat client -> openai_chat upstream) passes through.
 	resp, data := postJSON(t, proxy.BaseURL()+"/v1/chat/completions", map[string]any{
 		"model": "glm-4.6", "messages": []any{},
 	})
@@ -386,9 +462,124 @@ func TestProxyCodexPassthroughChecksWireAPI(t *testing.T) {
 	if gotPath != "/v1/chat/completions" || gotAuth != "Bearer sk-codex" {
 		t.Fatalf("path = %q auth = %q", gotPath, gotAuth)
 	}
-	// A responses call cannot be served by a chat-only provider.
-	resp, data = postJSON(t, proxy.BaseURL()+"/v1/responses", map[string]any{"model": "glm-4.6"})
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Fatalf("responses status = %d body=%s", resp.StatusCode, data)
+}
+
+func TestProxyGeminiUpstreamServesClaudeClient(t *testing.T) {
+	ctx := context.Background()
+	var gotPath, gotKey string
+	var gotBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("x-goog-api-key")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"candidates":[{"content":{"role":"model","parts":[{"text":"你好"}]},"finishReason":"STOP"}],
+			"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":22}
+		}`))
+	}))
+	defer upstream.Close()
+
+	proxy, st := newTestProxy(t)
+	t.Setenv("GEMINI_KEY", "sk-gemini")
+	p := &core.Provider{
+		ID: "gemini-up", Name: "Gemini", BaseURL: upstream.URL,
+		APIKeyEnv: "GEMINI_KEY", Model: "gemini-2.5-pro",
+		Meta: core.ProviderMeta{APIFormat: "gemini"},
+	}
+	if err := st.UpsertProvider(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A Claude Code (Anthropic) client is served by a Gemini upstream.
+	resp, data := postJSON(t, proxy.BaseURL()+"/v1/messages", map[string]any{
+		"model": "claude-sonnet-4-8", "max_tokens": 50,
+		"system":   "be nice",
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotKey != "sk-gemini" {
+		t.Fatalf("gemini key header = %q", gotKey)
+	}
+	if !strings.Contains(gotPath, "gemini-2.5-pro:generateContent") {
+		t.Fatalf("upstream path = %q", gotPath)
+	}
+	if gotBody["systemInstruction"] == nil {
+		t.Fatalf("system not forwarded: %#v", gotBody)
+	}
+	var anthropic map[string]any
+	if err := json.Unmarshal(data, &anthropic); err != nil {
+		t.Fatal(err)
+	}
+	if anthropic["type"] != "message" {
+		t.Fatalf("anthropic response = %s", data)
+	}
+	usage := anthropic["usage"].(map[string]any)
+	if usage["input_tokens"].(float64) != 11 || usage["output_tokens"].(float64) != 22 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	trace := latestTrace(t, st, "claudecode")
+	if !trace.Success || trace.ClientProtocol != "anthropic" || trace.UpstreamProtocol != "gemini" {
+		t.Fatalf("trace protocols = %+v", trace)
+	}
+	if trace.ClientModel != "claude-sonnet-4-8" || trace.UpstreamModel != "gemini-2.5-pro" || trace.ProviderID != "gemini-up" {
+		t.Fatalf("trace models = %+v", trace)
+	}
+}
+
+func TestProxyGeminiCLIEntryToOpenAIUpstream(t *testing.T) {
+	ctx := context.Background()
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-3","model":"glm-4.6",
+			"choices":[{"message":{"role":"assistant","content":"hi there"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":4,"completion_tokens":6}
+		}`))
+	}))
+	defer upstream.Close()
+
+	proxy, st := newTestProxy(t)
+	t.Setenv("GLM_KEY2", "sk-glm2")
+	p := &core.Provider{
+		ID: "glm-for-gemini", Name: "GLM", BaseURL: upstream.URL + "/v1",
+		APIKeyEnv: "GLM_KEY2", Model: "glm-4.6",
+		Meta: core.ProviderMeta{APIFormat: "openai_chat"},
+	}
+	if err := st.UpsertProvider(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "gemini", p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Gemini CLI client -> OpenAI chat upstream, translated both ways.
+	resp, data := postJSON(t, proxy.BaseURL()+"/v1beta/models/gemini-2.5-pro:generateContent", map[string]any{
+		"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hey"}}}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("upstream path = %q", gotPath)
+	}
+	var gemini map[string]any
+	if err := json.Unmarshal(data, &gemini); err != nil {
+		t.Fatal(err)
+	}
+	candidates, ok := gemini["candidates"].([]any)
+	if !ok || len(candidates) == 0 {
+		t.Fatalf("gemini response = %s", data)
+	}
+	parts := candidates[0].(map[string]any)["content"].(map[string]any)["parts"].([]any)
+	if parts[0].(map[string]any)["text"] != "hi there" {
+		t.Fatalf("gemini parts = %#v", parts)
 	}
 }

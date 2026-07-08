@@ -4,9 +4,19 @@ import (
 	"fmt"
 	"text/tabwriter"
 
+	"github.com/agentnexus/agentnexus/core"
 	"github.com/agentnexus/agentnexus/provider"
 	"github.com/spf13/cobra"
 )
+
+// providerProtocol reports the upstream wire protocol a provider speaks,
+// defaulting to anthropic when unset (matches the proxy's fallback).
+func providerProtocol(p *core.Provider) string {
+	if p.Meta.APIFormat != "" {
+		return p.Meta.APIFormat
+	}
+	return "anthropic"
+}
 
 func providerCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -26,9 +36,9 @@ func providerPresetsCmd() *cobra.Command {
 		Short: "List built-in provider presets",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tTOOLS\tBASE_URL")
+			fmt.Fprintln(tw, "ID\tNAME\tPROTOCOL\tBASE_URL")
 			for _, p := range provider.Presets() {
-				fmt.Fprintf(tw, "%s\t%s\t%v\t%s\n", p.ID, p.Name, p.Tools, p.BaseURL)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID, p.Name, providerProtocol(p), p.BaseURL)
 			}
 			return tw.Flush()
 		},
@@ -73,9 +83,9 @@ func providerListCmd() *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tNAME\tTOOLS\tENABLED")
+			fmt.Fprintln(tw, "ID\tNAME\tPROTOCOL\tENABLED")
 			for _, p := range ps {
-				fmt.Fprintf(tw, "%s\t%s\t%v\t%v\n", p.ID, p.Name, p.Tools, p.Enabled)
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%v\n", p.ID, p.Name, providerProtocol(p), p.Enabled)
 			}
 			return tw.Flush()
 		},

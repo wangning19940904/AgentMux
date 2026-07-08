@@ -4,7 +4,29 @@ import { api, Provider } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
-const CLAUDE_DESKTOP_TOOL = "claude-desktop";
+// providerProtocol reports the upstream wire protocol a provider speaks. With
+// the unified translation layer a provider only declares its own protocol; the
+// proxy adapts it to whatever tool routes to it.
+function providerProtocol(provider: Provider): string {
+  const format = provider.meta?.api_format;
+  return typeof format === "string" && format ? format : "anthropic";
+}
+
+// defaultToolForProvider picks the natural tool entry for a provider's protocol
+// so the one-click switch button has a sensible target. Any tool can still be
+// routed to any provider via the routing UI.
+function defaultToolForProvider(provider: Provider): string {
+  switch (providerProtocol(provider)) {
+    case "openai_chat":
+    case "openai_responses":
+      return "codex";
+    case "gemini":
+    case "gemini_native":
+      return "gemini";
+    default:
+      return "claudecode";
+  }
+}
 
 function claudeDesktopModelList(provider?: Provider) {
   const models = provider?.meta?.claude_desktop_models;
@@ -40,10 +62,8 @@ export function ProvidersPanel() {
   const [claudeModelList, setClaudeModelList] = useState("");
   const [notice, setNotice] = useState("");
 
-  const claudeProviders = useMemo(
-    () => (providers.data ?? []).filter((provider) => provider.tools.includes(CLAUDE_DESKTOP_TOOL)),
-    [providers.data]
-  );
+  // Any provider can back Claude Desktop now that the proxy converts protocols.
+  const claudeProviders = useMemo(() => providers.data ?? [], [providers.data]);
   const selectedClaudeProviderData = useMemo(
     () => claudeProviders.find((provider) => provider.id === selectedClaudeProvider),
     [claudeProviders, selectedClaudeProvider]
@@ -79,7 +99,7 @@ export function ProvidersPanel() {
   }
 
   async function switchTo(p: Provider) {
-    const tool = p.tools[0];
+    const tool = defaultToolForProvider(p);
     setBusy(p.id);
     try {
       await api.switchProvider(p.id, tool);
@@ -215,7 +235,7 @@ export function ProvidersPanel() {
                   <textarea
                     value={claudeModelList}
                     onChange={(event) => setClaudeModelList(event.target.value)}
-                    placeholder={"claude-sonnet-4-8\nclaude-opus-4-8"}
+                    placeholder={"claude-sonnet-5\nclaude-opus-4-8"}
                     rows={3}
                     disabled={busy === "claude-models"}
                   />
@@ -260,7 +280,7 @@ export function ProvidersPanel() {
             <thead>
               <tr>
                 <th>{t("common.name")}</th>
-                <th>{t("providers.tools")}</th>
+                <th>{t("providers.protocol")}</th>
                 <th>{t("providers.model")}</th>
                 <th>{t("common.status")}</th>
                 <th></th>
@@ -276,11 +296,7 @@ export function ProvidersPanel() {
                     </span>
                   </td>
                   <td>
-                    {p.tools.map((tool) => (
-                      <span className="pill" key={tool}>
-                        {tool}
-                      </span>
-                    ))}
+                    <span className="pill">{providerProtocol(p)}</span>
                   </td>
                   <td className="muted">{p.model || "—"}</td>
                   <td>
@@ -325,7 +341,7 @@ export function ProvidersPanel() {
             <thead>
               <tr>
                 <th>{t("common.name")}</th>
-                <th>{t("providers.tools")}</th>
+                <th>{t("providers.protocol")}</th>
                 <th>{t("providers.baseUrl")}</th>
                 <th></th>
               </tr>
@@ -340,11 +356,7 @@ export function ProvidersPanel() {
                     </span>
                   </td>
                   <td>
-                    {p.tools.map((tool) => (
-                      <span className="pill" key={tool}>
-                        {tool}
-                      </span>
-                    ))}
+                    <span className="pill">{providerProtocol(p)}</span>
                   </td>
                   <td className="muted mono">{p.base_url}</td>
                   <td>

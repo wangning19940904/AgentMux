@@ -144,7 +144,7 @@ POST /hook/{id}                      # 入站 Webhook 触发端点(token 鉴权,
 ## 安全说明
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
-- Provider API key 通过 **环境变量名**(`api_key_env`)引用,绝不明文落库;live-config writer 在切换时从环境读取实际值。
+- Provider API key 在 SQLite 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
 - SSH 采集器为本地工具便利使用 `InsecureIgnoreHostKey`;在不可信网络中使用前请固定 host key。
 
 ## License

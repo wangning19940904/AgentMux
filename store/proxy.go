@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"strconv"
 	"time"
+
+	"github.com/agentnexus/agentnexus/core"
 )
 
 // ProxyToolConfig is the per-tool local-routing row (cc-switch proxy_config).
@@ -123,6 +126,90 @@ func (s *Store) GetLiveBackup(ctx context.Context, tool string) (string, bool, e
 func (s *Store) DeleteLiveBackup(ctx context.Context, tool string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM proxy_live_backup WHERE tool=?`, tool)
 	return err
+}
+
+// InsertProxyTrace stores one local-routing request trace.
+func (s *Store) InsertProxyTrace(ctx context.Context, trace core.ProxyTrace) error {
+	if trace.ID == "" {
+		trace.ID = newProxyTraceID()
+	}
+	if trace.Timestamp.IsZero() {
+		trace.Timestamp = time.Now().UTC()
+	}
+	success := 0
+	if trace.Success {
+		success = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_traces
+		(id,timestamp,tool,provider_id,provider_name,client_protocol,upstream_protocol,
+		 client_model,upstream_model,status_code,success,error,session_id,project_dir)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		trace.ID, trace.Timestamp.Format(time.RFC3339Nano), trace.Tool, trace.ProviderID,
+		trace.ProviderName, trace.ClientProtocol, trace.UpstreamProtocol, trace.ClientModel,
+		trace.UpstreamModel, trace.StatusCode, success, trace.Error, trace.SessionID, trace.ProjectDir)
+	return err
+}
+
+// QueryProxyTraces returns recent local-routing traces, optionally filtered.
+func (s *Store) QueryProxyTraces(ctx context.Context, tool, sessionID string, limit int) ([]core.ProxyTrace, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := `SELECT id,timestamp,tool,provider_id,provider_name,client_protocol,upstream_protocol,
+		client_model,upstream_model,status_code,success,error,session_id,project_dir
+		FROM proxy_traces`
+	args := []any{}
+	where := []string{}
+	if tool != "" {
+		where = append(where, "tool=?")
+		args = append(args, tool)
+	}
+	if sessionID != "" {
+		where = append(where, "session_id=?")
+		args = append(args, sessionID)
+	}
+	for i, clause := range where {
+		if i == 0 {
+			q += " WHERE "
+		} else {
+			q += " AND "
+		}
+		q += clause
+	}
+	q += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.ProxyTrace
+	for rows.Next() {
+		var trace core.ProxyTrace
+		var ts string
+		var success int
+		if err := rows.Scan(&trace.ID, &ts, &trace.Tool, &trace.ProviderID, &trace.ProviderName,
+			&trace.ClientProtocol, &trace.UpstreamProtocol, &trace.ClientModel, &trace.UpstreamModel,
+			&trace.StatusCode, &success, &trace.Error, &trace.SessionID, &trace.ProjectDir); err != nil {
+			return nil, err
+		}
+		trace.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		trace.Success = success != 0
+		out = append(out, trace)
+	}
+	return out, rows.Err()
+}
+
+func newProxyTraceID() string {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err == nil {
+		return "ptrace-" + hex.EncodeToString(buf)
+	}
+	return "ptrace-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 const gatewayTokenKey = "claude_desktop_gateway_token"

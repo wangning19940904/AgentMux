@@ -83,9 +83,6 @@ func (s *Server) claudeDesktopProvider(ctx context.Context, id string) (*core.Pr
 		if p == nil {
 			return nil, fmt.Errorf("provider %q not found", id)
 		}
-		if !providerSupportsTool(p, claudeDesktopTool) {
-			return nil, fmt.Errorf("provider %q does not support %s", id, claudeDesktopTool)
-		}
 		return p, nil
 	}
 	p, err := s.defaultClaudeDesktopProvider(ctx)
@@ -106,31 +103,19 @@ func (s *Server) defaultClaudeDesktopProvider(ctx context.Context) (*core.Provid
 	if err != nil {
 		return nil, err
 	}
-	if active != nil && providerSupportsTool(active, claudeDesktopTool) {
+	if active != nil {
 		return active, nil
 	}
+	// No explicit claude-desktop route: fall back to any provider that can
+	// serve an Anthropic client (native anthropic or proxy-convertible).
 	providers, err := s.provider.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range providers {
-		if providerSupportsTool(p, claudeDesktopTool) {
-			return p, nil
-		}
+		return p, nil
 	}
 	return nil, nil
-}
-
-func providerSupportsTool(p *core.Provider, tool string) bool {
-	if p == nil {
-		return false
-	}
-	for _, candidate := range p.Tools {
-		if candidate == tool {
-			return true
-		}
-	}
-	return false
 }
 
 func attachClaude3PProvider(status *providerpkg.ClaudeDesktopConfigStatus, p *core.Provider) {

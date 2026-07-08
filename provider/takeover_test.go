@@ -35,14 +35,13 @@ func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
 	p := &core.Provider{
 		ID: "relay", Name: "Relay", Category: "third_party",
 		BaseURL: "https://relay.example.com", APIKeyEnv: "RELAY_KEY_TK",
-		Model: "relay-model", Tools: []string{"claudecode"},
+		Model:          "relay-model",
 		SettingsConfig: map[string]any{"claude_config_dir": claudeDir},
 		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
 	}
 	other := &core.Provider{
 		ID: "relay2", Name: "Relay 2", Category: "third_party",
 		BaseURL: "https://relay2.example.com", APIKeyEnv: "RELAY_KEY_TK",
-		Tools:          []string{"claudecode"},
 		SettingsConfig: map[string]any{"claude_config_dir": claudeDir},
 		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
 	}
@@ -109,6 +108,42 @@ func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
 	}
 }
 
+func TestTakeoverClaudeCodeUsesAPIKeyWhenPrimaryAPIKeyExists(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "config.json"), []byte(`{"primaryApiKey":"set"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc, st := newTestService(t)
+	p := &core.Provider{
+		ID: "relay", Name: "Relay", Category: "third_party",
+		BaseURL: "https://relay.example.com", APIKeyEnv: "RELAY_KEY_TK",
+		SettingsConfig: map[string]any{"claude_config_dir": claudeDir},
+		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
+	}
+	if err := svc.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.EnableTakeover(ctx, "claudecode"); err != nil {
+		t.Fatal(err)
+	}
+	env := envOf(t, readJSON(t, filepath.Join(claudeDir, "settings.json")))
+	if env["ANTHROPIC_API_KEY"] != ProxyManagedToken {
+		t.Fatalf("api key = %v", env["ANTHROPIC_API_KEY"])
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatalf("auth token should be absent to avoid Claude auth conflicts: %v", env)
+	}
+}
+
 func TestTakeoverCodexRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	codexDir := filepath.Join(t.TempDir(), "codex-home")
@@ -123,7 +158,7 @@ func TestTakeoverCodexRoundtrip(t *testing.T) {
 	p := &core.Provider{
 		ID: "codex-relay", Name: "Codex Relay", Category: "third_party",
 		BaseURL: "https://relay.example/v1", APIKeyEnv: "CODEX_TK_KEY",
-		Model: "some-model", Tools: []string{"codex", "codex-app"},
+		Model:          "some-model",
 		SettingsConfig: map[string]any{"codex_home": codexDir},
 		Meta:           core.ProviderMeta{CodexWireAPI: "chat", APIFormat: "openai_chat"},
 	}
@@ -175,7 +210,7 @@ func TestTakeoverClaudeDesktopProxyProfile(t *testing.T) {
 	svc, st := newTestService(t)
 	p := &core.Provider{
 		ID: "cd-relay", Name: "Desktop Relay", Category: "third_party",
-		BaseURL: "https://relay.example.com", Tools: []string{"claude-desktop"},
+		BaseURL:        "https://relay.example.com",
 		SettingsConfig: map[string]any{"claude_desktop_dir": profileRoot},
 		Meta: core.ProviderMeta{
 			APIFormat:         "anthropic",
@@ -218,13 +253,68 @@ func TestTakeoverClaudeDesktopProxyProfile(t *testing.T) {
 	}
 }
 
+func TestSwitchRouteClaudeDesktopProxyAutoEnablesTakeover(t *testing.T) {
+	ctx := context.Background()
+	profileRoot := filepath.Join(t.TempDir(), "Claude-3p")
+	svc, st := newTestService(t)
+	p := &core.Provider{
+		ID: "relay", Name: "Relay", Category: "third_party",
+		BaseURL:        "https://relay.example.com",
+		SettingsConfig: map[string]any{"claude_desktop_dir": profileRoot},
+		Meta: core.ProviderMeta{
+			APIFormat: "anthropic",
+			ClaudeDesktopModels: []core.ClaudeDesktopModel{
+				{ID: "ark/60b-0614c", Name: "ark/60b-0614c", DisplayName: "ark/60b-0614c"},
+			},
+		},
+	}
+	if err := svc.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SwitchRoute(ctx, core.ProviderRoute{
+		Tool:       "claude-desktop",
+		ProviderID: p.ID,
+		Meta:       core.ProviderMeta{ClaudeDesktopMode: "proxy"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := st.GetProxyToolConfig(ctx, "claude-desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("claude-desktop takeover should be enabled")
+	}
+	if !svc.Proxy().Running() {
+		t.Fatal("proxy should be running")
+	}
+	route, ok, err := st.ActiveProviderRoute(ctx, "claude-desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.ProviderID != p.ID || route.Meta.ClaudeDesktopMode != "proxy" {
+		t.Fatalf("route = %#v ok=%v", route, ok)
+	}
+	profile := readJSON(t, filepath.Join(profileRoot, "configLibrary", claudeDesktopProfileID+".json"))
+	if profile["inferenceGatewayBaseUrl"] != svc.Proxy().BaseURL()+"/claude-desktop" {
+		t.Fatalf("gateway url = %v", profile["inferenceGatewayBaseUrl"])
+	}
+	raw, _ := json.Marshal(profile["inferenceModels"])
+	if !strings.Contains(string(raw), "claude-sonnet-5") || !strings.Contains(string(raw), "ark/60b-0614c") {
+		t.Fatalf("models = %s", raw)
+	}
+	if strings.Contains(string(raw), `"id":"ark/60b-0614c"`) {
+		t.Fatalf("raw upstream id leaked into profile route id: %s", raw)
+	}
+}
+
 func TestDirectSwitchRejectsConvertingFormats(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestService(t)
 	p := &core.Provider{
 		ID: "or", Name: "OpenRouter", Category: "third_party",
-		BaseURL: "https://openrouter.ai/api/v1", Tools: []string{"claudecode", "codex"},
-		Meta: core.ProviderMeta{APIFormat: "openai_chat"},
+		BaseURL: "https://openrouter.ai/api/v1",
+		Meta:    core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := svc.Upsert(ctx, p); err != nil {
 		t.Fatal(err)
@@ -232,5 +322,48 @@ func TestDirectSwitchRejectsConvertingFormats(t *testing.T) {
 	err := svc.Switch(ctx, p.ID, "claudecode")
 	if err == nil || !strings.Contains(err.Error(), "local routing") {
 		t.Fatalf("expected local-routing hint, got %v", err)
+	}
+}
+
+func TestSwitchRouteWithLocalTakeoverAllowsConvertingFormats(t *testing.T) {
+	ctx := context.Background()
+	claudeDir := filepath.Join(t.TempDir(), ".claude")
+	svc, st := newTestService(t)
+	p := &core.Provider{
+		ID: "or", Name: "OpenRouter", Category: "third_party",
+		BaseURL:        "https://openrouter.ai/api/v1",
+		SettingsConfig: map[string]any{"claude_config_dir": claudeDir},
+		Meta:           core.ProviderMeta{APIFormat: "openai_chat"},
+	}
+	if err := svc.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SwitchRouteWithLocalTakeover(ctx, core.ProviderRoute{
+		Tool:       "claudecode",
+		ProviderID: p.ID,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := st.GetProxyToolConfig(ctx, "claudecode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Enabled {
+		t.Fatal("claudecode takeover should be enabled")
+	}
+	route, ok, err := st.ActiveProviderRoute(ctx, "claudecode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.ProviderID != p.ID {
+		t.Fatalf("route = %#v ok=%v", route, ok)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	env := envOf(t, readJSON(t, settingsPath))
+	if env["ANTHROPIC_BASE_URL"] != svc.Proxy().BaseURL() {
+		t.Fatalf("base url = %v want %v", env["ANTHROPIC_BASE_URL"], svc.Proxy().BaseURL())
+	}
+	if env["ANTHROPIC_AUTH_TOKEN"] != ProxyManagedToken {
+		t.Fatalf("token = %v", env["ANTHROPIC_AUTH_TOKEN"])
 	}
 }

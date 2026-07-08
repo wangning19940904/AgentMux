@@ -34,8 +34,9 @@ export interface Provider {
   base_url: string;
   api_key_env?: string;
   api_key?: string;
+  api_key_available?: boolean;
+  api_key_issue?: string;
   model?: string;
-  tools: string[];
   extra?: Record<string, string>;
   settings_config?: Record<string, unknown>;
   meta?: Record<string, unknown>;
@@ -59,14 +60,34 @@ export interface ProxyStatus {
   tools: ProxyToolConfig[];
 }
 
+export interface ProxyTrace {
+  id: string;
+  timestamp: string;
+  tool: string;
+  provider_id: string;
+  provider_name?: string;
+  client_protocol: string;
+  upstream_protocol: string;
+  client_model?: string;
+  upstream_model?: string;
+  status_code?: number;
+  success: boolean;
+  error?: string;
+  session_id?: string;
+  project_dir?: string;
+}
+
 export interface ProviderRoute {
   tool: string;
   provider_id: string;
   provider_name?: string;
   base_url?: string;
   api_key_env?: string;
+  api_key_available?: boolean;
+  api_key_issue?: string;
   model?: string;
   api_format?: string;
+  meta?: Record<string, unknown>;
   configured: boolean;
 }
 
@@ -200,6 +221,24 @@ export interface Channel {
   updated_at?: string;
 }
 
+export interface FeishuSetupBeginResponse {
+  device_code: string;
+  qr_url: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface FeishuSetupPollResponse {
+  status: "pending" | "completed" | "denied" | "expired" | "error";
+  base_url?: string;
+  app_id?: string;
+  app_secret?: string;
+  platform?: "feishu" | "lark";
+  owner_open_id?: string;
+  slow_down?: boolean;
+  error?: string;
+}
+
 export interface Trigger {
   id: string;
   name: string;
@@ -324,9 +363,6 @@ async function del<T>(path: string): Promise<T> {
 }
 
 function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
-  const tools = Array.isArray(provider.tools)
-    ? provider.tools.filter((tool): tool is string => typeof tool === "string" && tool.trim().length > 0)
-    : [];
   const extra =
     provider.extra && typeof provider.extra === "object" && !Array.isArray(provider.extra)
       ? (provider.extra as Record<string, string>)
@@ -344,8 +380,9 @@ function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>
     base_url: typeof provider.base_url === "string" ? provider.base_url : "",
     api_key_env: typeof provider.api_key_env === "string" ? provider.api_key_env : "",
     api_key: typeof provider.api_key === "string" ? provider.api_key : "",
+    api_key_available: Boolean(provider.api_key_available),
+    api_key_issue: typeof provider.api_key_issue === "string" ? provider.api_key_issue : "",
     model: typeof provider.model === "string" ? provider.model : "",
-    tools,
     extra,
     settings_config:
       provider.settings_config && typeof provider.settings_config === "object" && !Array.isArray(provider.settings_config)
@@ -379,11 +416,15 @@ export const api = {
   upsertProvider: (p: Provider) => post<Provider>("/api/v1/providers", p),
   probeProvider: (p: Provider) => postChecked<ProviderProbeResult>("/api/v1/providers/probe", p),
   deleteProvider: (id: string) => del<{ ok: boolean }>(`/api/v1/providers?id=${encodeURIComponent(id)}`),
-  switchProvider: (id: string, tool: string) =>
-    post<{ ok: boolean }>("/api/v1/providers/switch", { id, tool }),
+  switchProvider: (id: string, tool: string, meta?: Record<string, unknown>, localTakeover?: boolean) =>
+    post<{ ok: boolean }>("/api/v1/providers/switch", { id, tool, meta, local_takeover: localTakeover }),
   disableRoute: (tool: string) =>
     del<{ ok: boolean }>(`/api/v1/providers/active?tool=${encodeURIComponent(tool)}`),
   proxyStatus: () => get<ProxyStatus>("/api/v1/proxy/status"),
+  proxyTraces: ({ tool = "", sessionID = "", limit = 100 }: { tool?: string; sessionID?: string; limit?: number } = {}) =>
+    get<ProxyTrace[] | null>(
+      `/api/v1/proxy/traces?tool=${encodeURIComponent(tool)}&session_id=${encodeURIComponent(sessionID)}&limit=${limit}`
+    ),
   setTakeover: (tool: string, enabled: boolean) =>
     postChecked<ProxyStatus>("/api/v1/proxy/takeover", { tool, enabled }),
   setProxyToolConfig: (cfg: Partial<ProxyToolConfig> & { tool: string }) =>
@@ -409,6 +450,9 @@ export const api = {
   deleteChannel: (id: string) => del<{ ok: boolean }>(`/api/v1/channels?id=${encodeURIComponent(id)}`),
   restartChannel: (id: string) =>
     postChecked<{ ok: boolean }>(`/api/v1/channels/restart?id=${encodeURIComponent(id)}`, {}),
+  beginFeishuSetup: () => postChecked<FeishuSetupBeginResponse>("/api/v1/setup/feishu/begin", {}),
+  pollFeishuSetup: (deviceCode: string, baseUrl = "") =>
+    postChecked<FeishuSetupPollResponse>("/api/v1/setup/feishu/poll", { device_code: deviceCode, base_url: baseUrl }),
   triggers: () => get<Trigger[] | null>("/api/v1/triggers"),
   upsertTrigger: (tr: Partial<Trigger>) => postChecked<Trigger>("/api/v1/triggers", tr),
   deleteTrigger: (id: string) => del<{ ok: boolean }>(`/api/v1/triggers?id=${encodeURIComponent(id)}`),

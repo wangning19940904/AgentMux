@@ -6,7 +6,6 @@
 package provider
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -197,6 +196,11 @@ func (s *ProxyServer) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCodex(w, r, "/models")
 	})
+	// Gemini CLI (generateContent / streamGenerateContent). The model rides in
+	// the path (/v1beta/models/<model>:generateContent); the wildcard captures
+	// it and the handler infers stream mode from the method suffix.
+	mux.HandleFunc("POST /v1beta/models/{model}", s.handleGemini)
+	mux.HandleFunc("POST /v1/models/{model}", s.handleGemini)
 }
 
 func (s *ProxyServer) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -226,12 +230,12 @@ func (s *ProxyServer) providerChain(ctx context.Context, tool string) ([]*core.P
 		}
 	}
 	for _, key := range activeRouteKeys(canonical) {
-		id, ok, err := s.st.ActiveProviderID(ctx, key)
+		route, ok, err := s.st.ActiveProviderRoute(ctx, key)
 		if err != nil || !ok {
 			continue
 		}
-		if p, err := s.st.GetProvider(ctx, id); err == nil {
-			appendProvider(p)
+		if p, err := s.st.GetProvider(ctx, route.ProviderID); err == nil {
+			appendProvider(core.ProviderWithRouteMeta(p, route.Meta))
 		}
 		break
 	}
@@ -240,7 +244,7 @@ func (s *ProxyServer) providerChain(ctx context.Context, tool string) ([]*core.P
 		if err == nil {
 			var queue []*core.Provider
 			for _, p := range all {
-				if p.InFailoverQueue && providerSupportsTool(p, canonical) {
+				if p.InFailoverQueue {
 					queue = append(queue, p)
 				}
 			}
@@ -304,134 +308,16 @@ func (s *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON body")
 		return
 	}
-	chain, cfg := s.providerChain(r.Context(), tool)
-	if len(chain) == 0 {
-		writeAnthropicError(w, http.StatusBadGateway, "api_error", "no provider routed for "+tool)
-		return
-	}
-	var lastErr error
-	now := time.Now()
-	for i, p := range chain {
-		br := s.breakerFor(p.ID)
-		if len(chain) > 1 && !br.available(now) {
-			continue
-		}
-		reqBody := cloneJSONMap(parsed)
-		if mapModel != nil {
-			if err := mapModel(p, reqBody); err != nil {
-				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
-				return
-			}
-		} else if model := stringValue(reqBody["model"]); model != "" {
-			reqBody["model"] = mapClaudeTierModel(model, p)
-		}
-		ok, retryable, err := s.forwardAnthropic(w, r, p, reqBody)
-		if ok {
-			br.recordSuccess()
-			if i > 0 && cfg.AutoFailover {
-				s.hotSwitchAfterFailover(r.Context(), tool, p)
-			}
-			return
-		}
-		lastErr = err
-		if br.recordFailure(int32(cfg.FailureThreshold), time.Duration(cfg.CooldownSeconds)*time.Second) {
-			s.log.Warn("circuit opened", "provider", p.ID, "cooldown_s", cfg.CooldownSeconds)
-		}
-		if !retryable {
-			return
-		}
-	}
-	msg := "all providers failed"
-	if lastErr != nil {
-		msg += ": " + lastErr.Error()
-	}
-	writeAnthropicError(w, http.StatusBadGateway, "api_error", msg)
-}
-
-// forwardAnthropic sends one Anthropic-format client request to provider p,
-// converting to the provider's API format when needed. Returns ok=true when
-// the response has been written to w; retryable=false means the response was
-// already streamed (or is a client error) so failover must stop.
-func (s *ProxyServer) forwardAnthropic(w http.ResponseWriter, r *http.Request, p *core.Provider, body map[string]any) (ok, retryable bool, err error) {
-	format := p.Meta.APIFormat
-	if format == "" {
-		format = "anthropic"
-	}
-	stream, _ := body["stream"].(bool)
-	switch format {
-	case "anthropic":
-		payload, _ := json.Marshal(body)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, joinURL(p.BaseURL, "/v1/messages"), bytes.NewReader(payload))
-		if err != nil {
-			return false, true, err
-		}
-		copyProxyHeaders(req.Header, r.Header)
-		req.Header.Set("Content-Type", "application/json")
-		if req.Header.Get("anthropic-version") == "" {
-			req.Header.Set("anthropic-version", "2023-06-01")
-		}
-		key := providerAPIKey(p)
-		if key != "" {
-			req.Header.Set("x-api-key", key)
-			req.Header.Set("Authorization", "Bearer "+key)
-		}
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return false, true, err
-		}
-		defer resp.Body.Close()
-		if isFailoverStatus(resp.StatusCode) {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return false, true, fmt.Errorf("%s: upstream %d: %s", p.ID, resp.StatusCode, truncate(string(b), 300))
-		}
-		relayResponse(w, resp)
-		return true, false, nil
-	case "openai_chat":
-		chatBody, err := anthropicToChatRequest(body, upstreamModelFor(p, stringValue(body["model"])))
-		if err != nil {
-			return false, true, err
-		}
-		payload, _ := json.Marshal(chatBody)
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, joinURL(p.BaseURL, "/chat/completions"), bytes.NewReader(payload))
-		if err != nil {
-			return false, true, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if key := providerAPIKey(p); key != "" {
-			req.Header.Set("Authorization", "Bearer "+key)
-		}
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return false, true, err
-		}
-		defer resp.Body.Close()
-		if isFailoverStatus(resp.StatusCode) || resp.StatusCode >= 400 {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return false, isFailoverStatus(resp.StatusCode), fmt.Errorf("%s: upstream %d: %s", p.ID, resp.StatusCode, truncate(string(b), 300))
-		}
-		requestModel := stringValue(body["model"])
-		if stream {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.WriteHeader(http.StatusOK)
-			if err := chatStreamToAnthropicSSE(resp.Body, w, requestModel); err != nil {
-				s.log.Warn("stream conversion aborted", "provider", p.ID, "err", err)
-			}
-			return true, false, nil
-		}
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return false, false, err
-		}
-		var chatResp map[string]any
-		if err := json.Unmarshal(raw, &chatResp); err != nil {
-			return false, true, fmt.Errorf("%s: invalid upstream JSON", p.ID)
-		}
-		writeProxyJSON(w, http.StatusOK, chatToAnthropicResponse(chatResp, requestModel))
-		return true, false, nil
-	default:
-		return false, true, fmt.Errorf("provider %s api_format %q not supported for anthropic clients", p.ID, format)
-	}
+	stream, _ := parsed["stream"].(bool)
+	s.forwardChain(w, r, parsed, forwardOpts{
+		tool:        tool,
+		clientProto: protoAnthropic,
+		stream:      stream,
+		mapModel:    mapModel,
+		writeErr: func(w http.ResponseWriter, code int, message string) {
+			writeAnthropicError(w, code, "api_error", message)
+		},
+	})
 }
 
 // upstreamModelFor picks the upstream model for converted requests: tier
@@ -491,15 +377,15 @@ func (s *ProxyServer) authClaudeDesktop(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *ProxyServer) activeClaudeDesktopProvider(ctx context.Context) *core.Provider {
-	id, ok, err := s.st.ActiveProviderID(ctx, "claude-desktop")
+	route, ok, err := s.st.ActiveProviderRoute(ctx, "claude-desktop")
 	if err != nil || !ok {
 		return nil
 	}
-	p, err := s.st.GetProvider(ctx, id)
+	p, err := s.st.GetProvider(ctx, route.ProviderID)
 	if err != nil {
 		return nil
 	}
-	return p
+	return core.ProviderWithRouteMeta(p, route.Meta)
 }
 
 func (s *ProxyServer) handleClaudeDesktopModels(w http.ResponseWriter, r *http.Request) {
@@ -567,8 +453,14 @@ func mapClaudeDesktopRequestModel(p *core.Provider, body map[string]any) error {
 			return nil
 		}
 	}
-	// Role-keyword fallback (sonnet/opus/haiku), mirroring cc-switch.
-	for _, role := range []string{"sonnet", "opus", "haiku"} {
+	for _, route := range routes {
+		if route.UpstreamModel != "" && strings.EqualFold(strings.TrimSpace(route.UpstreamModel), normalized) {
+			body["model"] = route.UpstreamModel
+			return nil
+		}
+	}
+	// Role-keyword fallback (sonnet/opus/haiku/fable), mirroring cc-switch.
+	for _, role := range []string{"opus", "haiku", "fable", "sonnet"} {
 		if !strings.Contains(normalized, role) {
 			continue
 		}
@@ -586,78 +478,98 @@ func mapClaudeDesktopRequestModel(p *core.Provider, body map[string]any) error {
 
 // ---- Codex path ----
 
-// handleCodex proxies OpenAI-format traffic (Codex CLI + Desktop). Same-format
-// passthrough only: the endpoint the client calls must match the provider's
-// wire API (the takeover writer keeps them in sync).
+// handleCodex serves OpenAI-format traffic (Codex CLI + Desktop). Chat and
+// Responses requests now translate through the IR hub, so an upstream speaking
+// a different protocol (Anthropic, Gemini, or the other OpenAI wire) can serve
+// the request. /models stays a same-protocol passthrough.
 func (s *ProxyServer) handleCodex(w http.ResponseWriter, r *http.Request, endpoint string) {
+	if endpoint == "/models" {
+		s.codexModelsPassthrough(w, r)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 200<<20))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
-	chain, cfg := s.providerChain(r.Context(), "codex")
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	clientProto := protoOpenAIChat
+	if endpoint == "/responses" {
+		clientProto = protoResponses
+	}
+	stream, _ := parsed["stream"].(bool)
+	s.forwardChain(w, r, parsed, forwardOpts{
+		tool:        "codex",
+		clientProto: clientProto,
+		stream:      stream,
+		writeErr:    writeOpenAIError,
+	})
+}
+
+// codexModelsPassthrough relays a GET /models to the active codex provider
+// verbatim (no body to translate).
+func (s *ProxyServer) codexModelsPassthrough(w http.ResponseWriter, r *http.Request) {
+	chain, _ := s.providerChain(r.Context(), "codex")
 	if len(chain) == 0 {
 		writeOpenAIError(w, http.StatusBadGateway, "no provider routed for codex")
 		return
 	}
-	var lastErr error
-	now := time.Now()
-	for i, p := range chain {
-		br := s.breakerFor(p.ID)
-		if len(chain) > 1 && !br.available(now) {
-			continue
-		}
-		wire := codexWireAPI(p)
-		if endpoint == "/chat/completions" && wire != "chat" {
-			lastErr = fmt.Errorf("provider %s wire_api %s cannot serve %s", p.ID, wire, endpoint)
-			continue
-		}
-		if endpoint == "/responses" && wire != "responses" {
-			lastErr = fmt.Errorf("provider %s wire_api %s cannot serve %s", p.ID, wire, endpoint)
-			continue
-		}
-		req, err := http.NewRequestWithContext(r.Context(), r.Method, joinURL(p.BaseURL, endpoint), bytes.NewReader(body))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		copyProxyHeaders(req.Header, r.Header)
-		if len(body) > 0 {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		if key := providerAPIKey(p); key != "" {
-			req.Header.Set("Authorization", "Bearer "+key)
-		}
-		resp, err := s.client.Do(req)
-		if err != nil {
-			lastErr = err
-			if br.recordFailure(int32(cfg.FailureThreshold), time.Duration(cfg.CooldownSeconds)*time.Second) {
-				s.log.Warn("circuit opened", "provider", p.ID, "cooldown_s", cfg.CooldownSeconds)
-			}
-			continue
-		}
-		if isFailoverStatus(resp.StatusCode) {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			resp.Body.Close()
-			lastErr = fmt.Errorf("%s: upstream %d: %s", p.ID, resp.StatusCode, truncate(string(b), 300))
-			if br.recordFailure(int32(cfg.FailureThreshold), time.Duration(cfg.CooldownSeconds)*time.Second) {
-				s.log.Warn("circuit opened", "provider", p.ID, "cooldown_s", cfg.CooldownSeconds)
-			}
-			continue
-		}
-		br.recordSuccess()
-		if i > 0 && cfg.AutoFailover {
-			s.hotSwitchAfterFailover(r.Context(), "codex", p)
-		}
-		relayResponse(w, resp)
-		resp.Body.Close()
+	p := chain[0]
+	if issue := providerAPIKeyIssue(p); issue != "" {
+		writeOpenAIError(w, http.StatusBadGateway, fmt.Sprintf("%s: %s", p.ID, issue))
 		return
 	}
-	msg := "all providers failed"
-	if lastErr != nil {
-		msg += ": " + lastErr.Error()
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, joinURL(p.BaseURL, "/models"), nil)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, err.Error())
+		return
 	}
-	writeOpenAIError(w, http.StatusBadGateway, msg)
+	copyProxyHeaders(req.Header, r.Header)
+	if key := providerAPIKey(p); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	relayResponse(w, resp)
+}
+
+// ---- Gemini CLI path ----
+
+// handleGemini serves Gemini CLI generateContent traffic. The model and stream
+// mode ride in the path (…/models/<model>:generateContent); the body is
+// translated through the IR hub so any upstream protocol can serve it.
+func (s *ProxyServer) handleGemini(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 200<<20))
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// Path segment is "<model>:generateContent" or "<model>:streamGenerateContent".
+	seg := r.PathValue("model")
+	model, method, _ := strings.Cut(seg, ":")
+	if model != "" {
+		parsed["model"] = model
+	}
+	stream := strings.Contains(strings.ToLower(method), "stream")
+	s.forwardChain(w, r, parsed, forwardOpts{
+		tool:        "gemini",
+		clientProto: protoGemini,
+		stream:      stream,
+		writeErr:    writeOpenAIError,
+	})
 }
 
 // ---- shared helpers ----

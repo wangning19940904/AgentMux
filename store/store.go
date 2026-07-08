@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS providers (
 );
 CREATE TABLE IF NOT EXISTS active_provider (
 	tool TEXT PRIMARY KEY,
-	provider_id TEXT
+	provider_id TEXT,
+	meta TEXT
 );
 CREATE TABLE IF NOT EXISTS usage_records (
 	source TEXT,
@@ -144,6 +145,25 @@ CREATE TABLE IF NOT EXISTS proxy_live_backup (
 	original_config TEXT NOT NULL,
 	backed_up_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS proxy_traces (
+	id TEXT PRIMARY KEY,
+	timestamp TEXT NOT NULL,
+	tool TEXT,
+	provider_id TEXT,
+	provider_name TEXT,
+	client_protocol TEXT,
+	upstream_protocol TEXT,
+	client_model TEXT,
+	upstream_model TEXT,
+	status_code INTEGER,
+	success INTEGER DEFAULT 0,
+	error TEXT,
+	session_id TEXT,
+	project_dir TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_traces_time ON proxy_traces(timestamp);
+CREATE INDEX IF NOT EXISTS idx_proxy_traces_tool_time ON proxy_traces(tool,timestamp);
+CREATE INDEX IF NOT EXISTS idx_proxy_traces_session_time ON proxy_traces(session_id,timestamp);
 CREATE TABLE IF NOT EXISTS channels (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -191,6 +211,9 @@ CREATE TABLE IF NOT EXISTS triggers (
 		if err := s.ensureColumn("providers", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
+		return err
 	}
 	return s.migrateAgentBindings()
 }

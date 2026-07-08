@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Clipboard, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
-import { AgentSession, api } from "../api";
+import { AgentSession, ProxyTrace, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -48,6 +48,20 @@ export function SessionsPanel() {
     [filtered, selectedID]
   );
   const messages = useAsync(() => (selected ? api.sessionMessages(selected) : Promise.resolve([])), [selected?.session_id, selected?.source_path, selected?.surface]);
+  const traceTool = selected ? routeToolForSession(selected) : "";
+  const sessionTraces = useAsync(
+    () => (selected && traceTool ? api.proxyTraces({ tool: traceTool, sessionID: selected.session_id, limit: 20 }) : Promise.resolve([])),
+    [traceTool, selected?.session_id]
+  );
+  const recentTraces = useAsync(
+    () => (selected && traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }) : Promise.resolve([])),
+    [traceTool, selected?.session_id]
+  );
+  const selectedTraces = sessionTraces.data ?? [];
+  const fallbackTraces = recentTraces.data ?? [];
+  const routeTraces = selectedTraces.length > 0 ? selectedTraces : fallbackTraces;
+  const routeTraceFallback = !sessionTraces.loading && selectedTraces.length === 0 && fallbackTraces.length > 0;
+  const routeTraceLoading = sessionTraces.loading || (!sessionTraces.loading && selectedTraces.length === 0 && recentTraces.loading);
 
   useEffect(() => {
     if (selected) setSelectedID(keyOf(selected));
@@ -177,6 +191,15 @@ export function SessionsPanel() {
                   <span>{selected.message_count}{selected.messages_partial ? "+" : ""} {t("sessions.messages")}</span>
                 </div>
 
+                <RouteTracePanel
+                  error={sessionTraces.error || recentTraces.error}
+                  fallback={routeTraceFallback}
+                  language={language}
+                  loading={routeTraceLoading}
+                  traces={routeTraces}
+                  t={t}
+                />
+
                 <div className="transcript">
                   {messages.error && <div className="error">{messages.error}</div>}
                   {(messages.data ?? []).map((message, index) => (
@@ -204,6 +227,83 @@ export function SessionsPanel() {
 
 function keyOf(session: AgentSession) {
   return `${session.provider_id}:${session.surface}:${session.session_id}:${session.source_path ?? ""}`;
+}
+
+function routeToolForSession(session: AgentSession) {
+  if (session.provider_id === "claude" || session.provider_id === "claudecode") return "claudecode";
+  if (session.provider_id === "codex") return "codex";
+  return session.provider_id;
+}
+
+function RouteTracePanel({
+  error,
+  fallback,
+  language,
+  loading,
+  traces,
+  t,
+}: {
+  error: string | null;
+  fallback: boolean;
+  language: string;
+  loading: boolean;
+  traces: ProxyTrace[];
+  t: (key: string) => string;
+}) {
+  return (
+    <section className="route-trace-panel">
+      <div className="route-trace-head">
+        <strong>{t("sessions.routeTrace")}</strong>
+        {fallback && <span className="muted">{t("sessions.routeTraceFallback")}</span>}
+      </div>
+      {error && <div className="error">{error}</div>}
+      {loading && <div className="muted">{t("common.loading")}</div>}
+      {!error && !loading && traces.length === 0 && <div className="empty-state compact">{t("sessions.noRouteTrace")}</div>}
+      {!loading && traces.length > 0 && (
+        <div className="route-trace-list">
+          {traces.map((trace) => (
+            <article className="route-trace-item" key={trace.id}>
+              <div>
+                <strong>
+                  {toolLabel(trace.tool)} -&gt; {trace.provider_name || trace.provider_id || "-"}
+                </strong>
+                <span className="mono">
+                  {trace.client_model || "-"} -&gt; {trace.upstream_model || "-"}
+                </span>
+              </div>
+              <div>
+                <span className={trace.success ? "status-badge success" : "status-badge warning"}>
+                  <span className="status-dot" />
+                  {trace.success ? t("common.healthy") : t("common.degraded")}
+                </span>
+                <span className="muted">
+                  {protocolLabel(trace.client_protocol)} -&gt; {protocolLabel(trace.upstream_protocol)}
+                </span>
+                <time>{formatDate(trace.timestamp, language)}</time>
+              </div>
+              {trace.error && <small className="error">{trace.error}</small>}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function toolLabel(tool: string) {
+  if (tool === "claudecode") return "Claude Code CLI";
+  if (tool === "claude-desktop") return "Claude Desktop";
+  if (tool === "codex") return "Codex CLI";
+  if (tool === "gemini") return "Gemini CLI";
+  return tool || "-";
+}
+
+function protocolLabel(protocol: string) {
+  if (protocol === "anthropic") return "Anthropic";
+  if (protocol === "openai_chat") return "OpenAI Chat";
+  if (protocol === "openai_responses") return "OpenAI Responses";
+  if (protocol === "gemini") return "Gemini";
+  return protocol || "-";
 }
 
 function formatDate(value: string | undefined, language: string) {

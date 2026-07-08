@@ -43,7 +43,7 @@ type AgentInstance struct {
 	MCPServers      []string              `json:"mcp_servers,omitempty"`
 	Skills          []string              `json:"skills,omitempty"`
 	Enabled         bool                  `json:"enabled"`
-	Source          string                `json:"source,omitempty"` // console, config.toml
+	Source          string                `json:"source,omitempty"` // manual, console, config.toml
 	CreatedAt       time.Time             `json:"created_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
 }

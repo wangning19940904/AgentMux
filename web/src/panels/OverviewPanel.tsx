@@ -31,10 +31,10 @@ const SAMPLE_USAGE: UsageReport = {
 };
 
 const SAMPLE_PROVIDERS: Provider[] = [
-  { id: "openai", name: "OpenAI", base_url: "", model: "gpt-4o", tools: ["codex"], enabled: true },
-  { id: "anthropic", name: "Anthropic", base_url: "", model: "claude-3.5", tools: ["claude"], enabled: true },
-  { id: "google", name: "Google", base_url: "", model: "gemini-1.5", tools: ["gemini"], enabled: true },
-  { id: "perplexity", name: "Perplexity", base_url: "", model: "sonar", tools: ["search"], enabled: false },
+  { id: "openai", name: "OpenAI", base_url: "", model: "gpt-4o", meta: { api_format: "openai_chat" }, enabled: true },
+  { id: "anthropic", name: "Anthropic", base_url: "", model: "claude-3.5", meta: { api_format: "anthropic" }, enabled: true },
+  { id: "google", name: "Google", base_url: "", model: "gemini-1.5", meta: { api_format: "gemini" }, enabled: true },
+  { id: "perplexity", name: "Perplexity", base_url: "", model: "sonar", meta: { api_format: "openai_chat" }, enabled: false },
 ];
 
 const SAMPLE_POLICIES: GuardPolicy[] = [
@@ -143,7 +143,7 @@ export function OverviewPanel() {
                 {providerRows.slice(0, 7).map((provider, index) => (
                   <tr key={`${provider.id}-${index}`}>
                     <td className="route-name">{routeName(provider, index)}</td>
-                    <td>{provider.tools[0] || "agent"}</td>
+                    <td>{(typeof provider.meta?.api_format === "string" && provider.meta.api_format) || "anthropic"}</td>
                     <td>{provider.name}</td>
                     <td>{412 - index * 37}</td>
                     <td>{245 + index * 73} ms</td>

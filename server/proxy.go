@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/agentnexus/agentnexus/store"
 )
@@ -21,6 +22,25 @@ func (s *Server) handleProxyStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleProxyTraces(w http.ResponseWriter, r *http.Request) {
+	if s.st == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	traces, err := s.st.QueryProxyTraces(
+		r.Context(),
+		r.URL.Query().Get("tool"),
+		r.URL.Query().Get("session_id"),
+		limit,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, traces)
 }
 
 func (s *Server) handleProxyTakeover(w http.ResponseWriter, r *http.Request) {

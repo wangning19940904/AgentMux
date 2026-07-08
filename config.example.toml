@@ -27,6 +27,7 @@ system_prompt = "You are a helpful coding assistant."
 
   # Other supported platform types (config.toml projects or the console's
   # Channels & Triggers panel):
+  #   type = "lark"      -> app_id, app_secret (Lark international domain)
   #   type = "telegram"  -> token
   #   type = "dingtalk"  -> client_id, client_secret[, robot_code]
   #   type = "slack"     -> bot_token (xoxb-), app_token (xapp-)

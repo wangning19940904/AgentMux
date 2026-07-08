@@ -17,7 +17,7 @@ func TestProviderCRUDAndActive(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	p := &core.Provider{ID: "p1", Name: "P1", Category: "official", BaseURL: "http://x", Tools: []string{"claudecode"},
+	p := &core.Provider{ID: "p1", Name: "P1", Category: "official", BaseURL: "http://x",
 		SettingsConfig: map[string]any{"claude_config_dir": "/tmp/claude"},
 		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
 		CreatedAt:      time.Now(), UpdatedAt: time.Now()}
@@ -27,9 +27,6 @@ func TestProviderCRUDAndActive(t *testing.T) {
 	got, err := st.GetProvider(ctx, "p1")
 	if err != nil || got == nil || got.Name != "P1" {
 		t.Fatalf("get = %+v, %v", got, err)
-	}
-	if len(got.Tools) != 1 || got.Tools[0] != "claudecode" {
-		t.Fatalf("tools = %v", got.Tools)
 	}
 	if got.Category != "official" || got.Meta.APIFormat != "anthropic" || got.SettingsConfig["claude_config_dir"] != "/tmp/claude" {
 		t.Fatalf("provider metadata = %+v", got)
@@ -48,7 +45,27 @@ func TestProviderCRUDAndActive(t *testing.T) {
 	if len(routes) != 1 || routes[0].Tool != "claudecode" || routes[0].ProviderID != "p1" || routes[0].APIFormat != "anthropic" {
 		t.Fatalf("routes = %+v", routes)
 	}
-	p2 := &core.Provider{ID: "p2", Name: "P2", BaseURL: "http://y", Tools: []string{"claudecode"},
+	if routes[0].Meta.ClaudeAuthScheme != "" {
+		t.Fatalf("unexpected route meta = %+v", routes[0].Meta)
+	}
+	if err := st.SetActiveProviderRoute(ctx, core.ProviderRoute{
+		Tool:       "claudecode",
+		ProviderID: "p1",
+		Meta: core.ProviderMeta{
+			ClaudeAuthScheme:  "api_key",
+			ClaudeSonnetModel: "relay-sonnet",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	route, ok, err := st.ActiveProviderRoute(ctx, "claudecode")
+	if err != nil || !ok {
+		t.Fatalf("active route = %+v,%v,%v", route, ok, err)
+	}
+	if route.Meta.ClaudeAuthScheme != "api_key" || route.Meta.ClaudeSonnetModel != "relay-sonnet" {
+		t.Fatalf("route meta = %+v", route.Meta)
+	}
+	p2 := &core.Provider{ID: "p2", Name: "P2", BaseURL: "http://y",
 		CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	if err := st.UpsertProvider(ctx, p2); err != nil {
 		t.Fatal(err)
@@ -114,6 +131,42 @@ func TestUsageUpsertDedupAndQuery(t *testing.T) {
 	future, _ := st.QueryUsage(ctx, ts.Add(time.Hour))
 	if len(future) != 0 {
 		t.Fatalf("since filter rows = %d, want 0", len(future))
+	}
+}
+
+func TestProxyTraceInsertAndQuery(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	base := time.Date(2026, 7, 6, 8, 0, 0, 0, time.UTC)
+	traces := []core.ProxyTrace{
+		{ID: "t1", Timestamp: base, Tool: "claudecode", ProviderID: "relay", ClientProtocol: "anthropic", UpstreamProtocol: "anthropic", ClientModel: "claude-sonnet-4-8", UpstreamModel: "relay-sonnet", Success: true, SessionID: "s1"},
+		{ID: "t2", Timestamp: base.Add(time.Minute), Tool: "codex", ProviderID: "openai", ClientProtocol: "openai_chat", UpstreamProtocol: "openai_chat", ClientModel: "gpt-5", UpstreamModel: "gpt-5", Success: true, SessionID: "s2"},
+		{ID: "t3", Timestamp: base.Add(2 * time.Minute), Tool: "claudecode", ProviderID: "relay", ClientProtocol: "anthropic", UpstreamProtocol: "gemini", ClientModel: "claude-haiku-4-5", UpstreamModel: "gemini-2.5-pro", StatusCode: 200, Success: true, SessionID: "s1"},
+	}
+	for _, trace := range traces {
+		if err := st.InsertProxyTrace(ctx, trace); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := st.QueryProxyTraces(ctx, "claudecode", "s1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "t3" || got[0].UpstreamModel != "gemini-2.5-pro" {
+		t.Fatalf("filtered traces = %+v", got)
+	}
+	recent, err := st.QueryProxyTraces(ctx, "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 || recent[0].ID != "t3" || recent[1].ID != "t2" {
+		t.Fatalf("recent traces = %+v", recent)
 	}
 }
 

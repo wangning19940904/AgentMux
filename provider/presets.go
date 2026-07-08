@@ -18,7 +18,6 @@ type presetEntry struct {
 	BaseURL               string                    `json:"base_url"`
 	APIKeyEnv             string                    `json:"api_key_env"`
 	Model                 string                    `json:"model"`
-	Tools                 []string                  `json:"tools"`
 	APIFormat             string                    `json:"api_format"`
 	CodexWireAPI          string                    `json:"codex_wire_api"`
 	ClaudeAuthScheme      string                    `json:"claude_auth_scheme"`
@@ -46,7 +45,6 @@ func Presets() []*core.Provider {
 			BaseURL:   e.BaseURL,
 			APIKeyEnv: e.APIKeyEnv,
 			Model:     e.Model,
-			Tools:     e.Tools,
 			Meta: core.ProviderMeta{
 				APIFormat:             e.APIFormat,
 				CodexWireAPI:          e.CodexWireAPI,

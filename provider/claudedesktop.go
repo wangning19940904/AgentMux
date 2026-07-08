@@ -16,6 +16,13 @@ const claudeDesktopProfileID = "00000000-0000-4000-8000-000000157210"
 const claudeDesktopProfileName = "AgentNexus"
 const claudeDesktopConfigFile = "claude_desktop_config.json"
 
+var claudeDesktopDefaultProxyRoutes = []string{
+	"claude-sonnet-5",
+	"claude-opus-4-8",
+	"claude-haiku-4-5",
+	"claude-fable-5",
+}
+
 // ClaudeDesktopConfigStatus is the read model for the Claude-3p local profile.
 type ClaudeDesktopConfigStatus struct {
 	Enabled           bool   `json:"enabled"`
@@ -177,9 +184,88 @@ func claudeDesktopDirectProfile(p *core.Provider) (map[string]any, error) {
 func claudeDesktopRouteModels(p *core.Provider) []core.ClaudeDesktopModel {
 	models := p.Meta.ClaudeDesktopModels
 	if len(models) == 0 && p.Model != "" {
-		models = []core.ClaudeDesktopModel{{ID: "claude-sonnet-4-8", Name: "claude-sonnet-4-8", DisplayName: p.Model, UpstreamModel: p.Model}}
+		models = []core.ClaudeDesktopModel{{ID: claudeDesktopDefaultProxyRoutes[0], Name: claudeDesktopDefaultProxyRoutes[0], DisplayName: p.Model, UpstreamModel: p.Model}}
 	}
-	return models
+	return repairClaudeDesktopProxyModels(models)
+}
+
+func repairClaudeDesktopProxyModels(models []core.ClaudeDesktopModel) []core.ClaudeDesktopModel {
+	reserved := map[string]bool{}
+	for _, model := range models {
+		id := claudeDesktopModelID(model)
+		if isClaudeDesktopDirectModel(id) {
+			reserved[id] = true
+		}
+	}
+
+	out := make([]core.ClaudeDesktopModel, 0, len(models))
+	seen := map[string]bool{}
+	for _, model := range models {
+		originalID := claudeDesktopModelID(model)
+		upstream := strings.TrimSpace(model.UpstreamModel)
+		if upstream == "" {
+			upstream = originalID
+		}
+		if originalID == "" && upstream == "" {
+			continue
+		}
+
+		routeID := originalID
+		if !isClaudeDesktopDirectModel(routeID) {
+			routeID = nextClaudeDesktopSafeRouteID(out, reserved)
+		}
+		if routeID == "" || seen[routeID] {
+			continue
+		}
+		seen[routeID] = true
+
+		display := strings.TrimSpace(model.DisplayName)
+		if display == "" {
+			display = originalID
+		}
+		if display == "" {
+			display = upstream
+		}
+
+		out = append(out, core.ClaudeDesktopModel{
+			ID:            routeID,
+			Name:          routeID,
+			DisplayName:   display,
+			UpstreamModel: upstream,
+		})
+	}
+	return out
+}
+
+func nextClaudeDesktopSafeRouteID(existing []core.ClaudeDesktopModel, reserved map[string]bool) string {
+	for _, routeID := range claudeDesktopDefaultProxyRoutes {
+		if !reserved[routeID] && !claudeDesktopRouteExists(existing, routeID) {
+			return routeID
+		}
+	}
+	for i := 2; ; i++ {
+		routeID := fmt.Sprintf("%s-r%d", claudeDesktopDefaultProxyRoutes[0], i)
+		if !reserved[routeID] && !claudeDesktopRouteExists(existing, routeID) {
+			return routeID
+		}
+	}
+}
+
+func claudeDesktopRouteExists(models []core.ClaudeDesktopModel, routeID string) bool {
+	for _, model := range models {
+		if model.ID == routeID {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeDesktopModelID(model core.ClaudeDesktopModel) string {
+	id := strings.TrimSpace(model.ID)
+	if id == "" {
+		id = strings.TrimSpace(model.Name)
+	}
+	return id
 }
 
 // claudeDesktopGatewayProfile mirrors cc-switch's build_gateway_profile.
@@ -306,7 +392,22 @@ func DisableClaudeDesktopConfig(p *core.Provider) (ClaudeDesktopConfigStatus, er
 
 func isClaudeDesktopDirectModel(model string) bool {
 	model = strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(model, "claude-") || strings.HasPrefix(model, "anthropic/claude-")
+	if strings.Contains(model, "[1m]") {
+		return false
+	}
+	tail, ok := strings.CutPrefix(model, "anthropic/claude-")
+	if !ok {
+		tail, ok = strings.CutPrefix(model, "claude-")
+	}
+	if !ok {
+		return false
+	}
+	for _, prefix := range []string{"sonnet-", "opus-", "haiku-", "fable-"} {
+		if rest, ok := strings.CutPrefix(tail, prefix); ok && rest != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func claudeDesktopModelsJSON(models []core.ClaudeDesktopModel) []map[string]string {

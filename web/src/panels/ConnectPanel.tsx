@@ -1,28 +1,36 @@
 import {
   CalendarClock,
   Cable,
+  CheckCircle2,
   Copy,
+  Loader2,
   Pencil,
   Play,
   Plus,
   RefreshCw,
   Save,
+  Smartphone,
   Trash2,
   Webhook,
+  XCircle,
   Zap,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { Channel, Trigger, api } from "../api";
+import { QRCodeSVG } from "qrcode.react";
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { Channel, FeishuSetupPollResponse, Trigger, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 // Config fields rendered per channel type (secret-ish values round-trip as
 // "<redacted>"; the server restores originals when unchanged).
+const FEISHU_FIELDS = [
+  { key: "app_id", labelKey: "connect.cfgAppId" },
+  { key: "app_secret", labelKey: "connect.cfgAppSecret", secret: true },
+];
+
 const CHANNEL_FIELDS: Record<string, { key: string; labelKey: string; secret?: boolean }[]> = {
-  feishu: [
-    { key: "app_id", labelKey: "connect.cfgAppId" },
-    { key: "app_secret", labelKey: "connect.cfgAppSecret", secret: true },
-  ],
+  feishu: FEISHU_FIELDS,
+  lark: FEISHU_FIELDS,
   telegram: [{ key: "token", labelKey: "connect.cfgBotToken", secret: true }],
   dingtalk: [
     { key: "client_id", labelKey: "connect.cfgClientId" },
@@ -39,6 +47,8 @@ const CHANNEL_FIELDS: Record<string, { key: string; labelKey: string; secret?: b
     { key: "outbound_url", labelKey: "connect.cfgOutboundUrl" },
   ],
 };
+
+type FeishuSetupPhase = "idle" | "loading" | "scanning" | "saving" | "completed" | "expired" | "denied" | "error";
 
 const EVENT_OPTIONS = [
   "message.received",
@@ -158,7 +168,7 @@ export function ConnectPanel() {
               className="action"
               onClick={() => {
                 setTriggerDraft(null);
-                setChannelDraft({ ...EMPTY_CHANNEL, type: platformOptions[0] ?? "feishu", config: {} });
+                setChannelDraft({ ...EMPTY_CHANNEL, type: preferredDefaultPlatform(platformOptions), config: {} });
               }}
             >
               <Plus size={16} />
@@ -174,6 +184,7 @@ export function ConnectPanel() {
                 agents={agentOptions.map((a) => ({ id: a.id, name: a.name }))}
                 busy={busy === "save-channel"}
                 onSave={() => channelDraft && saveChannel(channelDraft)}
+                onAutoSave={(draft) => saveChannel(draft)}
                 onCancel={() => setChannelDraft(null)}
               />
             )}
@@ -349,21 +360,119 @@ function ChannelEditor({
   agents,
   busy,
   onSave,
+  onAutoSave,
   onCancel,
 }: {
   draft: Partial<Channel>;
-  setDraft: (next: Partial<Channel> | null) => void;
+  setDraft: Dispatch<SetStateAction<Partial<Channel> | null>>;
   platforms: string[];
   agents: { id: string; name: string }[];
   busy: boolean;
   onSave: () => void;
+  onAutoSave: (draft: Partial<Channel>) => Promise<void>;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
   const fields = CHANNEL_FIELDS[draft.type ?? ""] ?? [];
-  const update = (patch: Partial<Channel>) => setDraft({ ...draft, ...patch });
+  const isFeishuLike = draft.type === "feishu" || draft.type === "lark";
+  const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
+  const draftRef = useRef<Partial<Channel>>(draft);
+  const [setup, setSetup] = useState<{ phase: FeishuSetupPhase; qrUrl: string; error: string }>({
+    phase: "idle",
+    qrUrl: "",
+    error: "",
+  });
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    return () => {
+      setupRef.current.cancelled = true;
+    };
+  }, []);
+
+  const update = (patch: Partial<Channel>) =>
+    setDraft((current) => ({ ...((current ?? draft) as Partial<Channel>), ...patch }));
   const updateConfig = (key: string, value: string) =>
-    update({ config: { ...(draft.config ?? {}), [key]: value } });
+    setDraft((current) => {
+      const base = (current ?? draft) as Partial<Channel>;
+      return { ...base, config: { ...(base.config ?? {}), [key]: value } };
+    });
+
+  async function startFeishuSetup() {
+    setupRef.current.cancelled = false;
+    setupRef.current.polling = false;
+    setSetup({ phase: "loading", qrUrl: "", error: "" });
+    try {
+      const res = await api.beginFeishuSetup();
+      setupRef.current = {
+        deviceCode: res.device_code,
+        baseUrl: "",
+        interval: res.interval || 5,
+        cancelled: false,
+        polling: false,
+      };
+      setSetup({ phase: "scanning", qrUrl: res.qr_url, error: "" });
+      void pollFeishuSetup();
+    } catch (err) {
+      setSetup({ phase: "error", qrUrl: "", error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function pollFeishuSetup() {
+    if (setupRef.current.polling) return;
+    setupRef.current.polling = true;
+    try {
+      while (!setupRef.current.cancelled) {
+        const res = await api.pollFeishuSetup(setupRef.current.deviceCode, setupRef.current.baseUrl);
+        if (setupRef.current.cancelled) return;
+        if (res.base_url) setupRef.current.baseUrl = res.base_url;
+        if (res.slow_down) setupRef.current.interval += 5;
+        switch (res.status) {
+          case "completed":
+            setSetup((current) => ({ ...current, phase: "saving", error: "" }));
+            {
+              const nextDraft = completeFeishuDraft((draftRef.current ?? draft) as Partial<Channel>, res);
+              draftRef.current = nextDraft;
+              setDraft(nextDraft);
+              await onAutoSave(nextDraft);
+            }
+            if (!setupRef.current.cancelled) {
+              setSetup((current) => ({ ...current, phase: "completed", error: "" }));
+            }
+            return;
+          case "denied":
+            setSetup((current) => ({ ...current, phase: "denied", error: "" }));
+            return;
+          case "expired":
+            setSetup((current) => ({ ...current, phase: "expired", error: "" }));
+            return;
+          case "error":
+            setSetup((current) => ({ ...current, phase: "error", error: res.error ?? t("connect.scanError") }));
+            return;
+        }
+        await sleep((setupRef.current.interval || 5) * 1000);
+      }
+    } catch (err) {
+      if (!setupRef.current.cancelled) {
+        setSetup((current) => ({
+          ...current,
+          phase: "error",
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      }
+    } finally {
+      setupRef.current.polling = false;
+    }
+  }
+
+  function resetSetup() {
+    setupRef.current.cancelled = true;
+    setupRef.current.polling = false;
+    setSetup({ phase: "idle", qrUrl: "", error: "" });
+  }
 
   return (
     <div className="route-card editor-card">
@@ -374,10 +483,16 @@ function ChannelEditor({
         </label>
         <label className="field">
           <span>{t("connect.channelType")}</span>
-          <select value={draft.type ?? ""} onChange={(e) => update({ type: e.target.value, config: draft.id ? draft.config : {} })}>
+          <select
+            value={draft.type ?? ""}
+            onChange={(e) => {
+              resetSetup();
+              update({ type: e.target.value, config: draft.id ? draft.config : {} });
+            }}
+          >
             {platforms.map((p) => (
               <option key={p} value={p}>
-                {p}
+                {platformLabel(p)}
               </option>
             ))}
           </select>
@@ -405,6 +520,16 @@ function ChannelEditor({
           </label>
         ))}
       </div>
+      {isFeishuLike && (
+        <FeishuSetupBox
+          phase={setup.phase}
+          qrUrl={setup.qrUrl}
+          error={setup.error}
+          platform={draft.type ?? "feishu"}
+          onStart={startFeishuSetup}
+          onReset={resetSetup}
+        />
+      )}
       <div className="table-actions">
         <label className="switch-row">
           <span>
@@ -422,6 +547,110 @@ function ChannelEditor({
       </div>
     </div>
   );
+}
+
+function FeishuSetupBox({
+  phase,
+  qrUrl,
+  error,
+  platform,
+  onStart,
+  onReset,
+}: {
+  phase: FeishuSetupPhase;
+  qrUrl: string;
+  error: string;
+  platform: string;
+  onStart: () => void;
+  onReset: () => void;
+}) {
+  const { t } = useI18n();
+  const label = platformLabel(platform);
+
+  if (phase === "idle") {
+    return (
+      <div className="qr-setup">
+        <span className="provider-icon">
+          <Smartphone size={15} />
+        </span>
+        <strong>{label}</strong>
+        <button className="ghost-action" onClick={onStart}>
+          <Smartphone size={14} />
+          {t("connect.scanSetup")}
+        </button>
+      </div>
+    );
+  }
+
+  const message =
+    phase === "loading"
+      ? t("connect.scanGenerating")
+      : phase === "scanning"
+        ? t("connect.scanWaiting")
+        : phase === "saving"
+          ? t("connect.scanSaving")
+          : phase === "completed"
+            ? t("connect.scanCompleted")
+            : phase === "expired"
+              ? t("connect.scanExpired")
+              : phase === "denied"
+                ? t("connect.scanDenied")
+                : error || t("connect.scanError");
+
+  return (
+    <div className={`qr-setup ${phase === "error" || phase === "denied" ? "error" : ""}`}>
+      {phase === "loading" || phase === "saving" ? <Loader2 className="spin" size={16} /> : null}
+      {phase === "completed" ? <CheckCircle2 size={16} /> : null}
+      {phase === "expired" || phase === "denied" || phase === "error" ? <XCircle size={16} /> : null}
+      {(phase === "scanning" || phase === "saving") && qrUrl && (
+        <span className="qr-frame">
+          <QRCodeSVG value={qrUrl} size={148} level="M" />
+        </span>
+      )}
+      <span>{message}</span>
+      {(phase === "expired" || phase === "denied" || phase === "error" || phase === "completed") && (
+        <button className="ghost-action" onClick={phase === "completed" ? onReset : onStart}>
+          <RefreshCw size={14} />
+          {phase === "completed" ? t("connect.scanAgain") : t("connect.retryScan")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function preferredDefaultPlatform(platforms: string[]) {
+  if (platforms.includes("feishu")) return "feishu";
+  return platforms[0] ?? "feishu";
+}
+
+function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollResponse): Partial<Channel> {
+  const platform = res.platform ?? draft.type ?? "feishu";
+  return {
+    ...draft,
+    name: (draft.name ?? "").trim() || `${platformLabel(platform)} Bot`,
+    type: platform,
+    enabled: draft.enabled ?? true,
+    config: {
+      ...(draft.config ?? {}),
+      app_id: res.app_id ?? "",
+      app_secret: res.app_secret ?? "",
+    },
+  };
+}
+
+function platformLabel(platform: string) {
+  switch (platform) {
+    case "feishu":
+      return "Feishu";
+    case "lark":
+      return "Lark";
+    default:
+      return platform;
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function kindBadge(kind: string, t: (key: string) => string) {

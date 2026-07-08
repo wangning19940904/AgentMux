@@ -118,13 +118,40 @@ func writeClaudeTakeoverConfig(home string, p *core.Provider, proxyBaseURL strin
 	if env == nil {
 		env = map[string]any{}
 	}
+	authKey := claudeTakeoverAuthKey(home, p, env)
 	for _, k := range managedClaudeEnvKeys {
 		delete(env, k)
 	}
 	env["ANTHROPIC_BASE_URL"] = proxyBaseURL
-	env["ANTHROPIC_AUTH_TOKEN"] = ProxyManagedToken
+	env[authKey] = ProxyManagedToken
 	existing["env"] = env
 	return writeJSONObject(path, existing)
+}
+
+func claudeTakeoverAuthKey(home string, p *core.Provider, env map[string]any) string {
+	switch p.Meta.ClaudeAuthScheme {
+	case "api_key":
+		return "ANTHROPIC_API_KEY"
+	case "auth_token":
+		return "ANTHROPIC_AUTH_TOKEN"
+	}
+	if envHasValue(env, "ANTHROPIC_API_KEY") || claudePrimaryAPIKeyConfigured(home, p) {
+		return "ANTHROPIC_API_KEY"
+	}
+	return "ANTHROPIC_AUTH_TOKEN"
+}
+
+func envHasValue(env map[string]any, key string) bool {
+	if env == nil {
+		return false
+	}
+	return strings.TrimSpace(stringValue(env[key])) != ""
+}
+
+func claudePrimaryAPIKeyConfigured(home string, p *core.Provider) bool {
+	path := filepath.Join(claudeConfigDir(home, p), "config.json")
+	config := readJSONObject(path)
+	return strings.TrimSpace(stringValue(config["primaryApiKey"])) != ""
 }
 
 // writeCodexTakeoverConfig rewrites ~/.codex/config.toml so the agentnexus
@@ -185,6 +212,84 @@ func (s *Service) Proxy() *ProxyServer { return s.proxy }
 // flip the DB route (hot switch, live config keeps pointing at the proxy);
 // everything else writes live config as usual.
 func (s *Service) Switch(ctx context.Context, id, tool string) error {
+	return s.switchRoute(ctx, core.ProviderRoute{Tool: tool, ProviderID: id}, false)
+}
+
+func (s *Service) SwitchRoute(ctx context.Context, route core.ProviderRoute) error {
+	return s.switchRoute(ctx, route, true)
+}
+
+// SwitchRouteWithLocalTakeover applies a route with an explicit local-routing
+// choice. When takeover is requested, the route is stored first so protocol
+// converting providers do not have to pass direct live-config validation.
+func (s *Service) SwitchRouteWithLocalTakeover(ctx context.Context, route core.ProviderRoute, enabled bool) error {
+	canonical := liveConfigTool(route.Tool)
+	if !takeoverTools[canonical] {
+		return s.SwitchRoute(ctx, route)
+	}
+	if enabled {
+		return s.switchRouteWithTakeover(ctx, route)
+	}
+	p, err := s.st.GetProvider(ctx, route.ProviderID)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("provider %q not found", route.ProviderID)
+	}
+	if err := validateDirectSwitch(core.ProviderWithRouteMeta(p, route.Meta), route.Tool); err != nil {
+		return err
+	}
+	cfg, err := s.st.GetProxyToolConfig(ctx, canonical)
+	if err != nil {
+		return err
+	}
+	if cfg.Enabled {
+		if err := s.DisableTakeover(ctx, canonical); err != nil {
+			return err
+		}
+	}
+	return s.Manager.SwitchRoute(ctx, route)
+}
+
+func (s *Service) switchRouteWithTakeover(ctx context.Context, route core.ProviderRoute) error {
+	id, tool := route.ProviderID, route.Tool
+	canonical := liveConfigTool(tool)
+	if !takeoverTools[canonical] {
+		return s.Manager.SwitchRoute(ctx, route)
+	}
+	p, err := s.st.GetProvider(ctx, id)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("provider %q not found", id)
+	}
+	effective := core.ProviderWithRouteMeta(p, route.Meta)
+	cfg, err := s.st.GetProxyToolConfig(ctx, canonical)
+	if err != nil {
+		return err
+	}
+	if cfg.Enabled {
+		if canonical == "claude-desktop" {
+			token, err := s.st.GetOrCreateGatewayToken(ctx)
+			if err != nil {
+				return err
+			}
+			if err := WriteClaudeDesktopProxyProfile(effective, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
+				return err
+			}
+		}
+		return s.st.SetActiveProviderRoute(ctx, route)
+	}
+	if err := s.st.SetActiveProviderRoute(ctx, route); err != nil {
+		return err
+	}
+	return s.EnableTakeover(ctx, canonical)
+}
+
+func (s *Service) switchRoute(ctx context.Context, route core.ProviderRoute, writeRouteMeta bool) error {
+	id, tool := route.ProviderID, route.Tool
 	canonical := liveConfigTool(tool)
 	cfg, err := s.st.GetProxyToolConfig(ctx, canonical)
 	if err == nil && cfg.Enabled && takeoverTools[canonical] {
@@ -195,9 +300,7 @@ func (s *Service) Switch(ctx context.Context, id, tool string) error {
 		if p == nil {
 			return fmt.Errorf("provider %q not found", id)
 		}
-		if !providerSupportsTool(p, tool) {
-			return fmt.Errorf("provider %q does not support tool %q", id, tool)
-		}
+		effective := core.ProviderWithRouteMeta(p, route.Meta)
 		if canonical == "claude-desktop" {
 			// The Desktop profile lists per-provider model routes, so a hot
 			// switch still rewrites the profile (gateway URL/token stable).
@@ -205,11 +308,23 @@ func (s *Service) Switch(ctx context.Context, id, tool string) error {
 			if err != nil {
 				return err
 			}
-			if err := WriteClaudeDesktopProxyProfile(p, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
+			if err := WriteClaudeDesktopProxyProfile(effective, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
 				return err
 			}
 		}
+		if writeRouteMeta {
+			return s.st.SetActiveProviderRoute(ctx, route)
+		}
 		return s.st.SetActiveProvider(ctx, tool, id)
+	}
+	if writeRouteMeta && canonical == "claude-desktop" && route.Meta.ClaudeDesktopMode == "proxy" {
+		if err := s.st.SetActiveProviderRoute(ctx, route); err != nil {
+			return err
+		}
+		return s.EnableTakeover(ctx, canonical)
+	}
+	if writeRouteMeta {
+		return s.Manager.SwitchRoute(ctx, route)
 	}
 	return s.Manager.Switch(ctx, id, tool)
 }
@@ -418,19 +533,19 @@ func (s *Service) SetFailoverQueue(ctx context.Context, id string, inQueue bool,
 
 func (s *Service) activeProviderFor(ctx context.Context, canonical string) (*core.Provider, error) {
 	for _, key := range activeRouteKeys(canonical) {
-		id, ok, err := s.st.ActiveProviderID(ctx, key)
+		route, ok, err := s.st.ActiveProviderRoute(ctx, key)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		p, err := s.st.GetProvider(ctx, id)
+		p, err := s.st.GetProvider(ctx, route.ProviderID)
 		if err != nil {
 			return nil, err
 		}
 		if p != nil {
-			return p, nil
+			return core.ProviderWithRouteMeta(p, route.Meta), nil
 		}
 	}
 	return nil, nil

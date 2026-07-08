@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/agentnexus/agentnexus/core"
+	providerpkg "github.com/agentnexus/agentnexus/provider"
 )
 
 const providerAPIKeyEnvPrefix = "AGENTNEXUS_PROVIDER_"
@@ -14,6 +15,14 @@ const providerAPIKeyEnvPrefix = "AGENTNEXUS_PROVIDER_"
 var providerAPIKeyEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func normalizeProviderAPIKey(p *core.Provider) error {
+	return normalizeProviderAPIKeyWithPersistence(p, false)
+}
+
+func normalizeProviderAPIKeyForSave(p *core.Provider) error {
+	return normalizeProviderAPIKeyWithPersistence(p, true)
+}
+
+func normalizeProviderAPIKeyWithPersistence(p *core.Provider, persist bool) error {
 	if p == nil {
 		return nil
 	}
@@ -27,16 +36,51 @@ func normalizeProviderAPIKey(p *core.Provider) error {
 	}
 	if apiKey == "" {
 		p.APIKeyEnv = apiKeyEnv
+		if apiKeyEnv != "" {
+			_, _ = providerpkg.EnsureProviderAPIKeyEnv(apiKeyEnv)
+		}
 		return nil
 	}
 	if apiKeyEnv == "" || !providerAPIKeyEnvNameRe.MatchString(apiKeyEnv) {
 		apiKeyEnv = providerAPIKeyEnvName(p)
 	}
-	if err := os.Setenv(apiKeyEnv, apiKey); err != nil {
+	if persist {
+		if err := providerpkg.SaveProviderAPIKey(apiKeyEnv, apiKey); err != nil {
+			return err
+		}
+	} else if err := os.Setenv(apiKeyEnv, apiKey); err != nil {
 		return fmt.Errorf("inject API key env: %w", err)
 	}
 	p.APIKeyEnv = apiKeyEnv
 	return nil
+}
+
+func annotateProviderAPIKey(p *core.Provider) {
+	if p == nil {
+		return
+	}
+	p.APIKeyAvailable, p.APIKeyIssue = providerAPIKeyAvailability(p.APIKeyEnv)
+}
+
+func annotateProviderRouteAPIKey(route *core.ProviderRoute) {
+	if route == nil {
+		return
+	}
+	route.APIKeyAvailable, route.APIKeyIssue = providerAPIKeyAvailability(route.APIKeyEnv)
+}
+
+func providerAPIKeyAvailability(apiKeyEnv string) (bool, string) {
+	apiKeyEnv = strings.TrimSpace(apiKeyEnv)
+	if apiKeyEnv == "" {
+		return false, "API key environment variable is not configured"
+	}
+	if _, err := providerpkg.EnsureProviderAPIKeyEnv(apiKeyEnv); err != nil {
+		return false, err.Error()
+	}
+	if os.Getenv(apiKeyEnv) == "" {
+		return false, fmt.Sprintf("environment variable %s is empty or not set", apiKeyEnv)
+	}
+	return true, ""
 }
 
 func providerAPIKeyEnvName(p *core.Provider) string {

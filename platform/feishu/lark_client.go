@@ -16,6 +16,8 @@ import (
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
 // and an API client for outbound messages.
 type larkClient struct {
+	platform  string
+	domain    string
 	appID     string
 	appSecret string
 	api       *lark.Client
@@ -23,11 +25,13 @@ type larkClient struct {
 	cancel    context.CancelFunc
 }
 
-func newLarkClient(appID, appSecret string) (clientAPI, error) {
+func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error) {
 	return &larkClient{
+		platform:  platform,
+		domain:    domain,
 		appID:     appID,
 		appSecret: appSecret,
-		api:       lark.NewClient(appID, appSecret),
+		api:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(domain)),
 	}, nil
 }
 
@@ -52,13 +56,13 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				ChatID:   chatID,
 				UserID:   userID,
 				Text:     text,
-				Platform: "feishu",
+				Platform: c.platform,
 				Project:  project,
 			}
 			return nil
 		})
 
-	c.ws = larkws.NewClient(c.appID, c.appSecret, larkws.WithEventHandler(handler))
+	c.ws = larkws.NewClient(c.appID, c.appSecret, larkws.WithDomain(c.domain), larkws.WithEventHandler(handler))
 	wsCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	// Start blocks; run until context cancelled.
@@ -87,7 +91,7 @@ func (c *larkClient) SendText(ctx context.Context, chatID, text string) error {
 		return err
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu send failed: %s", resp.Msg)
+		return fmt.Errorf("%s send failed: %s", c.platform, resp.Msg)
 	}
 	return nil
 }

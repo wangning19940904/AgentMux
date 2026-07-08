@@ -141,8 +141,15 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	if a.MemoryScope == "" {
 		a.MemoryScope = "agent:" + a.ID
 	}
-	if a.Source == "" || a.Source == "config.toml" {
-		a.Source = "console"
+	if a.Source == "config.toml" {
+		a.Source = "manual"
+	}
+	if a.Source == "" {
+		if newRecord {
+			a.Source = "manual"
+		} else {
+			a.Source = "console"
+		}
 	}
 	if newRecord && len(a.ChannelBindings) == 0 {
 		a.ChannelBindings = []core.AgentChannelBinding{}
