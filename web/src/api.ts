@@ -6,7 +6,13 @@ const DESKTOP_API_BASE = "http://127.0.0.1:8765";
 
 declare global {
   interface Window {
-    go?: unknown;
+    go?: {
+      main?: {
+        App?: {
+          SelectDirectory?: (defaultDirectory?: string) => Promise<string>;
+        };
+      };
+    };
   }
 }
 
@@ -213,6 +219,10 @@ export interface Channel {
   type: string;
   agent_id?: string;
   agent_name?: string;
+  bot_name?: string;
+  bot_avatar_url?: string;
+  bot_avatar_proxy_url?: string;
+  bot_open_id?: string;
   config?: Record<string, string>;
   enabled: boolean;
   state?: string;
@@ -301,6 +311,47 @@ export interface GuardPolicy {
   priority: number;
 }
 
+export interface FrameworkSpec {
+  kind: string;
+  display: string;
+  kind_type: "cli" | "sdk";
+  language?: string;
+  packages?: string[];
+  bin?: string;
+  env_required?: string[];
+  supported: boolean;
+  note?: string;
+}
+
+export interface Framework {
+  spec: FrameworkSpec;
+  installed: boolean;
+  version?: string;
+  detail?: string;
+  registered: boolean;
+}
+
+export interface FrameworkPrereqs {
+  node: boolean;
+  node_path?: string;
+  npm: boolean;
+  npm_path?: string;
+}
+
+export interface FrameworksResponse {
+  prereqs: FrameworkPrereqs;
+  frameworks: Framework[];
+}
+
+export interface FrameworkInstallResult {
+  kind: string;
+  ok: boolean;
+  command?: string;
+  log?: string;
+  version?: string;
+  error?: string;
+}
+
 export interface AgentSession {
   provider_id: string;
   surface: string;
@@ -360,6 +411,15 @@ async function del<T>(path: string): Promise<T> {
   const res = await fetch(apiPath(path), { method: "DELETE" });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+async function selectSystemDirectory(defaultDirectory = ""): Promise<{ path: string }> {
+  const picker = window.go?.main?.App?.SelectDirectory;
+  if (!picker) {
+    throw new Error("desktop directory picker unavailable");
+  }
+  const path = await picker(defaultDirectory);
+  return { path };
 }
 
 function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
@@ -441,6 +501,14 @@ export const api = {
       enabled,
       provider_id: providerID,
     }),
+  selectDirectory: (defaultDirectory = "") => selectSystemDirectory(defaultDirectory),
+  ensureDirectory: (path: string) =>
+    postChecked<{ path: string }>("/api/v1/system/directories", { path }),
+
+  // AgentNexus Frameworks: detect & install agent frameworks
+  frameworks: () => get<FrameworksResponse>("/api/v1/frameworks"),
+  installFramework: (kind: string) =>
+    postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind }),
   usage: (period: string) =>
     get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
 

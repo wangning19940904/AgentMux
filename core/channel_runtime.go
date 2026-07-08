@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const channelMessageDedupTTL = 10 * time.Minute
+
 // channelRuntime holds one live console-managed channel: the platform
 // connection, the bound agent and its per-chat sessions.
 type channelRuntime struct {
@@ -18,6 +20,7 @@ type channelRuntime struct {
 
 	mu       sync.Mutex
 	sessions map[string]AgentSession // chatID -> session
+	seen     map[string]time.Time
 	state    string
 	errMsg   string
 	started  time.Time
@@ -59,6 +62,37 @@ func (rt *channelRuntime) session(ctx context.Context, chatID string) (AgentSess
 	return s, true, nil
 }
 
+// duplicateMessage marks an inbound platform message as seen and reports
+// whether this channel already processed it recently.
+func (rt *channelRuntime) duplicateMessage(msg *Message) bool {
+	if msg == nil || msg.ID == "" {
+		return false
+	}
+	key := msg.Platform + ":" + msg.ChatID + ":" + msg.ID
+	now := time.Now()
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.seen == nil {
+		rt.seen = map[string]time.Time{}
+	}
+	if ts, ok := rt.seen[key]; ok && now.Sub(ts) < channelMessageDedupTTL {
+		return true
+	}
+	if len(rt.seen) > 2048 {
+		for k, ts := range rt.seen {
+			if now.Sub(ts) >= channelMessageDedupTTL {
+				delete(rt.seen, k)
+			}
+		}
+		if len(rt.seen) > 2048 {
+			rt.seen = map[string]time.Time{}
+		}
+	}
+	rt.seen[key] = now
+	return false
+}
+
 // close stops the platform connection and all sessions.
 func (rt *channelRuntime) close(ctx context.Context) {
 	if rt.cancel != nil {
@@ -95,6 +129,7 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		agent:    agent,
 		workDir:  workDir,
 		sessions: map[string]AgentSession{},
+		seen:     map[string]time.Time{},
 		state:    ChannelStateRunning,
 		started:  time.Now(),
 	}
@@ -204,6 +239,11 @@ func (e *Engine) channelRuntime(id string) *channelRuntime {
 	return e.channels[id]
 }
 
+func (e *Engine) duplicateChannelMessage(msg *Message) bool {
+	rt := e.channelRuntime(msg.ChannelID)
+	return rt != nil && rt.duplicateMessage(msg)
+}
+
 // handleChannelMessage routes an inbound message from an attached channel to
 // the bound agent and streams responses back through the channel's platform.
 func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data map[string]string) {
@@ -224,6 +264,14 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	}
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
+	}
+
+	// Prefer an in-place streaming reply (e.g. Feishu interactive card) when the
+	// platform supports it; otherwise fall back to one message per event.
+	if sr, ok := rt.platform.(StreamReplier); ok {
+		e.streamTurnCard(ctx, sr, sess, msg, data)
+		e.emit(ctx, HookMessageSent, data)
+		return
 	}
 
 	_, _ = e.streamTurn(ctx, sess, msg.Text, func(text string) {

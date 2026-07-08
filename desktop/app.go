@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/core"
@@ -17,8 +20,9 @@ import (
 	"github.com/agentnexus/agentnexus/store"
 	"github.com/agentnexus/agentnexus/usage"
 	"log/slog"
-	"os"
 	"time"
+
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	_ "github.com/agentnexus/agentnexus/agent"
 	_ "github.com/agentnexus/agentnexus/platform"
@@ -89,4 +93,50 @@ func (a *App) SwitchProvider(id, tool string) error {
 	defer st.Close()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return provider.NewService(log, st, "").Switch(a.ctx, id, tool)
+}
+
+// SelectDirectory opens the native system directory picker for desktop users.
+func (a *App) SelectDirectory(defaultDirectory string) (string, error) {
+	return wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title:                      "Select work directory",
+		DefaultDirectory:           existingDirectoryForDialog(defaultDirectory),
+		CanCreateDirectories:       true,
+		ResolvesAliases:            true,
+		TreatPackagesAsDirectories: true,
+	})
+}
+
+func existingDirectoryForDialog(raw string) string {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~") {
+		if path == "~" || strings.HasPrefix(path, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				if path == "~" {
+					path = home
+				} else {
+					path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+				}
+			}
+		}
+	}
+	if abs, err := filepath.Abs(os.ExpandEnv(path)); err == nil {
+		path = abs
+	}
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			if info.IsDir() {
+				return path
+			}
+			return filepath.Dir(path)
+		}
+		parent := filepath.Dir(path)
+		if parent == path || parent == "." {
+			return ""
+		}
+		path = parent
+	}
 }

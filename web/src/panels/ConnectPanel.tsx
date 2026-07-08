@@ -309,18 +309,21 @@ function ChannelCard({
 }) {
   const { t } = useI18n();
   const badge = stateBadge(channel.state, channel.enabled, t);
+  const displayName = channel.bot_name || channel.name;
+  const subtitle = [
+    channel.bot_name && channel.name !== channel.bot_name ? channel.name : "",
+    channel.type,
+    channel.agent_name || t("connect.noAgent"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div className="route-card">
       <div className="agent-list-main">
-        <span className="provider-icon">
-          <Cable size={14} />
-        </span>
-        <span>
-          <strong>{channel.name}</strong>
-          <small>
-            {channel.type}
-            {channel.agent_name ? ` · ${channel.agent_name}` : ` · ${t("connect.noAgent")}`}
-          </small>
+        <ChannelAvatar channel={channel} />
+        <span className="channel-card-copy">
+          <strong title={displayName}>{displayName}</strong>
+          <small title={subtitle}>{subtitle}</small>
         </span>
         <span className={`status-badge ${badge.className}`}>
           <span className="status-dot" />
@@ -350,6 +353,24 @@ function ChannelCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function ChannelAvatar({ channel }: { channel: Channel }) {
+  const [failed, setFailed] = useState(false);
+  const avatarURL = channel.bot_avatar_proxy_url || channel.bot_avatar_url;
+  useEffect(() => setFailed(false), [avatarURL]);
+  if (avatarURL && !failed) {
+    return (
+      <span className="channel-avatar" aria-hidden="true">
+        <img src={avatarURL} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+      </span>
+    );
+  }
+  return (
+    <span className="channel-avatar fallback" aria-hidden="true">
+      <Cable size={17} />
+    </span>
   );
 }
 

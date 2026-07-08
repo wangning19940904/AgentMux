@@ -678,6 +678,7 @@ function CapabilityBadges({ items }: { items: string[] }) {
 export function GatewayPanel() {
   const { t } = useI18n();
   const agents = useAsync(() => api.agents(), []);
+  const frameworks = useAsync(() => api.frameworks(), []);
   const providers = useAsync(() => api.providers(), []);
   const presets = useAsync(() => api.presets(), []);
   const activeRoutes = useAsync(() => api.activeRoutes(), []);
@@ -739,6 +740,16 @@ export function GatewayPanel() {
     tools.forEach((tool) => names.add(tool));
     return Array.from(names).sort(sortTools);
   }, [agents.data, routeList, tools]);
+
+  // uninstalledTools maps a route tool to true when its backing framework is in
+  // the catalog but not installed, so it can be shown disabled in the selector.
+  const uninstalledTools = useMemo(() => {
+    const set = new Set<string>();
+    (frameworks.data?.frameworks ?? []).forEach((fw) => {
+      if (!fw.installed) set.add(normalizeTool(fw.spec.kind));
+    });
+    return set;
+  }, [frameworks.data]);
 
   useEffect(() => {
     if (!providerFormOpen && !routeFormOpen) return;
@@ -1422,11 +1433,15 @@ export function GatewayPanel() {
                   <span>{t("gateway.tool")}</span>
                   <select value={routeDraft.tool} onChange={(event) => updateRouteTool(event.target.value)}>
                     {routeTools.length === 0 && <option value="">{t("gateway.noAgentFrameworks")}</option>}
-                    {routeTools.map((tool) => (
-                      <option key={tool} value={tool}>
-                        {toolLabel(tool)}
-                      </option>
-                    ))}
+                    {routeTools.map((tool) => {
+                      const notInstalled = uninstalledTools.has(normalizeTool(tool));
+                      return (
+                        <option key={tool} value={tool} disabled={notInstalled}>
+                          {toolLabel(tool)}
+                          {notInstalled ? ` (${t("gateway.frameworkNotInstalled")})` : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
                 <label className="field">

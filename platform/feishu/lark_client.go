@@ -38,10 +38,20 @@ func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error)
 func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
 	handler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
+			if event == nil || event.Event == nil || event.Event.Message == nil {
+				return nil
+			}
 			msg := event.Event.Message
+			if msg.MessageType == nil || msg.Content == nil {
+				return nil
+			}
 			text := extractText(*msg.MessageType, *msg.Content)
 			if text == "" {
 				return nil
+			}
+			messageID := ""
+			if msg.MessageId != nil {
+				messageID = *msg.MessageId
 			}
 			chatID := ""
 			if msg.ChatId != nil {
@@ -53,6 +63,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
 			inbound <- &core.Message{
+				ID:       messageID,
 				ChatID:   chatID,
 				UserID:   userID,
 				Text:     text,
@@ -96,11 +107,100 @@ func (c *larkClient) SendText(ctx context.Context, chatID, text string) error {
 	return nil
 }
 
+func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, failed bool) (string, error) {
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType("chat_id").
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(chatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(buildCard(text, done, failed)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send card failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send card: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error {
+	req := larkim.NewPatchMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewPatchMessageReqBodyBuilder().
+			Content(buildCard(text, done, failed)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Patch(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("%s update card failed: %s", c.platform, resp.Msg)
+	}
+	return nil
+}
+
 func (c *larkClient) Close() error {
 	if c.cancel != nil {
 		c.cancel()
 	}
 	return nil
+}
+
+// buildCard renders text into a Feishu interactive card JSON payload. While a
+// turn is streaming (done=false) a subtle "typing" note is appended; the final
+// update drops it, and failures switch the header to a red error style.
+func buildCard(text string, done, failed bool) string {
+	if text == "" {
+		text = " "
+	}
+	elements := []map[string]any{
+		{
+			"tag":     "markdown",
+			"content": text,
+		},
+	}
+	if !done {
+		elements = append(elements, map[string]any{
+			"tag": "note",
+			"elements": []map[string]any{
+				{"tag": "plain_text", "content": "正在输入…"},
+			},
+		})
+	}
+
+	template := "blue"
+	title := "AgentNexus"
+	if done {
+		template = "green"
+	}
+	if failed {
+		template = "red"
+		title = "AgentNexus · 出错"
+	}
+
+	card := map[string]any{
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"template": template,
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": title,
+			},
+		},
+		"elements": elements,
+	}
+	b, err := json.Marshal(card)
+	if err != nil {
+		return `{"config":{"wide_screen_mode":true},"elements":[{"tag":"markdown","content":" "}]}`
+	}
+	return string(b)
 }
 
 // extractText pulls plain text out of a Feishu message content payload.

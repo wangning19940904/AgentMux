@@ -2,6 +2,7 @@ import { Component, useEffect, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Activity,
+  Blocks,
   BookOpen,
   Bot,
   Boxes,
@@ -29,6 +30,7 @@ import { ProvidersPanel } from "./panels/ProvidersPanel";
 import { UsagePanel } from "./panels/UsagePanel";
 import { AgentsPanel } from "./panels/AgentsPanel";
 import { ConnectPanel } from "./panels/ConnectPanel";
+import { FrameworksPanel } from "./panels/FrameworksPanel";
 import { GatewayPanel } from "./panels/GatewayPanel";
 import { OverviewPanel } from "./panels/OverviewPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
@@ -42,6 +44,7 @@ type Tab =
   | "overview"
   | "agents"
   | "connect"
+  | "frameworks"
   | "usage"
   | "providers"
   | "gateway"
@@ -55,6 +58,7 @@ const TABS: { id: Tab; labelKey: string; icon: typeof LayoutGrid }[] = [
   { id: "overview", labelKey: "nav.overview", icon: LayoutGrid },
   { id: "agents", labelKey: "nav.agents", icon: Bot },
   { id: "connect", labelKey: "nav.connect", icon: Cable },
+  { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
   { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
   { id: "usage", labelKey: "nav.usage", icon: Gauge },
   { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
@@ -240,6 +244,7 @@ function Shell({
             {tab === "overview" && <OverviewPanel />}
             {tab === "agents" && <AgentsPanel />}
             {tab === "connect" && <ConnectPanel />}
+            {tab === "frameworks" && <FrameworksPanel />}
             {tab === "usage" && <UsagePanel />}
             {tab === "sessions" && <SessionsPanel />}
             {tab === "providers" && <ProvidersPanel />}

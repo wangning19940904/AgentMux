@@ -83,6 +83,30 @@ type Platform interface {
 	Stop(ctx context.Context) error
 }
 
+// StreamReplier is an optional capability a Platform can implement to render a
+// single agent turn as one live, in-place updating message (e.g. a Feishu
+// interactive card) instead of posting a new message per streamed event. The
+// Engine prefers this path when available and falls back to Reply otherwise.
+type StreamReplier interface {
+	// BeginReply opens a streaming reply for the turn originated by msg and
+	// returns a handle used to push incremental updates. done reports, on the
+	// final update, whether the turn ended in error so the renderer can style
+	// the message accordingly.
+	BeginReply(ctx context.Context, msg *Message) (ReplyStream, error)
+}
+
+// ReplyStream is a live, in-place updating reply produced by a StreamReplier.
+// Update may be called repeatedly with the full accumulated text so far; the
+// implementation is responsible for rendering it. Close finalizes the message.
+type ReplyStream interface {
+	// Update renders text as the current content of the streaming message.
+	// done marks this as the terminal update (turn finished); failed styles it
+	// as an error when true.
+	Update(ctx context.Context, text string, done, failed bool) error
+	// Close releases any resources held by the stream.
+	Close(ctx context.Context) error
+}
+
 // Agent is an AI coding agent adapter (Claude Code, Codex, ...). It knows how
 // to spawn and manage agent sessions.
 type Agent interface {

@@ -138,6 +138,11 @@ func withError(data map[string]string, err error) map[string]string {
 
 // handle routes a single inbound message to its runtime's agent session.
 func (e *Engine) handle(ctx context.Context, msg *Message) {
+	if msg.ChannelID != "" && e.duplicateChannelMessage(msg) {
+		e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
+		return
+	}
+
 	data := eventData(msg)
 	e.emit(ctx, HookMessageReceived, data)
 
@@ -184,15 +189,24 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 		return "", err
 	}
 
+	return e.consumeTurn(ctx, events, reply, data)
+}
+
+// consumeTurn drains a session event channel, forwarding textual output through
+// reply (deduplicated) and surfacing errors. It returns the last answer text
+// and the first error event.
+func (e *Engine) consumeTurn(ctx context.Context, events <-chan *Event, reply func(string), data map[string]string) (string, error) {
 	var lastText string
+	var lastReply string
 	var firstErr error
 	for ev := range events {
 		switch ev.Type {
 		case EventFinal, EventOutput:
 			if ev.Text != "" && ev.Text != "NO_REPLY" {
 				lastText = ev.Text
-				if reply != nil {
+				if reply != nil && ev.Text != lastReply {
 					reply(ev.Text)
+					lastReply = ev.Text
 				}
 			}
 		case EventError:
@@ -206,6 +220,81 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 		}
 	}
 	return lastText, firstErr
+}
+
+// streamTurnCard drives a single turn onto a StreamReplier, rendering the whole
+// answer as one in-place updating message (a Feishu card). It updates the same
+// message as the agent streams output and marks it done/failed at the end. On
+// any streaming setup failure it degrades to a single final update.
+func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess AgentSession, msg *Message, data map[string]string) {
+	events, err := sess.Send(ctx, msg.Text)
+	if err != nil {
+		e.log.Error("send to session", "err", err)
+		e.emit(ctx, HookError, withError(data, err))
+		e.emitCardOnce(ctx, sr, msg, "failed: "+err.Error(), true)
+		return
+	}
+
+	stream, err := sr.BeginReply(ctx, msg)
+	if err != nil {
+		e.log.Error("begin streaming reply", "err", err)
+		// Degrade to per-event replies using the platform's Reply (the
+		// StreamReplier is always also a Platform).
+		var reply func(string)
+		if p, ok := sr.(Platform); ok {
+			reply = func(text string) {
+				if rerr := p.Reply(ctx, msg, text); rerr != nil {
+					e.log.Error("channel reply", "err", rerr)
+				}
+			}
+		}
+		e.consumeTurn(ctx, events, reply, data)
+		return
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	var lastText, rendered string
+	var failed bool
+	for ev := range events {
+		switch ev.Type {
+		case EventFinal, EventOutput:
+			if ev.Text == "" || ev.Text == "NO_REPLY" {
+				continue
+			}
+			lastText = ev.Text
+			if ev.Text != rendered {
+				if err := stream.Update(ctx, ev.Text, false, false); err != nil {
+					e.log.Error("stream update", "err", err)
+				}
+				rendered = ev.Text
+			}
+		case EventError:
+			e.emit(ctx, HookError, withError(data, ev.Err))
+			failed = true
+			lastText = "error: " + errString(ev.Err)
+		}
+	}
+
+	if lastText == "" {
+		lastText = "(no reply)"
+	}
+	if err := stream.Update(ctx, lastText, true, failed); err != nil {
+		e.log.Error("stream finalize", "err", err)
+	}
+}
+
+// emitCardOnce sends a single terminal streaming message, used when the turn
+// fails before any events could be produced.
+func (e *Engine) emitCardOnce(ctx context.Context, sr StreamReplier, msg *Message, text string, failed bool) {
+	stream, err := sr.BeginReply(ctx, msg)
+	if err != nil {
+		e.log.Error("begin streaming reply", "err", err)
+		return
+	}
+	defer func() { _ = stream.Close(ctx) }()
+	if err := stream.Update(ctx, text, true, failed); err != nil {
+		e.log.Error("stream finalize", "err", err)
+	}
 }
 
 func (e *Engine) replyAll(ctx context.Context, pr *projectRuntime, msg *Message, text string) {

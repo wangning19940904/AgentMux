@@ -1,6 +1,6 @@
-import { Bot, Cable, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
+import { Bot, Cable, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { AgentInstance, api } from "../api";
+import { api, type AgentInstance, type Channel, type ProviderRoute, type Trigger } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -28,18 +28,22 @@ export function AgentsPanel() {
   const agents = useAsync(() => api.agentInstances(), []);
   const runtimes = useAsync(() => api.agents(), []);
   const providers = useAsync(() => api.providers(), []);
+  const activeRoutes = useAsync(() => api.activeRoutes(), []);
   const channels = useAsync(() => api.channels(), []);
   const triggers = useAsync(() => api.triggers(), []);
   const mcpServers = useAsync(() => api.mcp(), []);
   const skills = useAsync(() => api.skills(), []);
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<AgentInstance | null>(null);
+  const [selectedChannelIDs, setSelectedChannelIDs] = useState<string[]>([]);
+  const [selectedTriggerIDs, setSelectedTriggerIDs] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
 
   const items = agents.data ?? [];
   const runtimeOptions = runtimes.data ?? [];
   const providerOptions = providers.data ?? [];
+  const activeRouteItems = activeRoutes.data ?? [];
   const channelItems = channels.data ?? [];
   const triggerItems = triggers.data ?? [];
   const mcpOptions = mcpServers.data ?? [];
@@ -74,35 +78,27 @@ export function AgentsPanel() {
     return { channelCount, consoleCount, manualCount, scheduleCount };
   }, [items, channelItems, triggerItems]);
 
-  const boundChannels = useMemo(
-    () => channelItems.filter((ch) => ch.agent_id && ch.agent_id === draft.id),
-    [channelItems, draft.id]
-  );
-  const boundTriggers = useMemo(
-    () =>
-      triggerItems.filter(
-        (tr) =>
-          (tr.agent_id && tr.agent_id === draft.id) ||
-          (tr.channel_id && boundChannels.some((ch) => ch.id === tr.channel_id))
-      ),
-    [triggerItems, draft.id, boundChannels]
-  );
-
   function startNew() {
     setDrawerMode("create");
     setDrawerDraft(newAgent(runtimeOptions));
+    setSelectedChannelIDs([]);
+    setSelectedTriggerIDs([]);
     setNotice("");
   }
 
   function editAgent(agent: AgentInstance) {
     setDrawerMode("edit");
     setDrawerDraft(copyAgent(agent));
+    setSelectedChannelIDs(channelItems.filter((channel) => channel.agent_id === agent.id).map((channel) => channel.id));
+    setSelectedTriggerIDs(triggerItems.filter((trigger) => trigger.agent_id === agent.id).map((trigger) => trigger.id));
     setNotice("");
   }
 
   function closeDrawer() {
     setDrawerMode(null);
     setDrawerDraft(null);
+    setSelectedChannelIDs([]);
+    setSelectedTriggerIDs([]);
     setBusy("");
     setNotice("");
   }
@@ -130,10 +126,16 @@ export function AgentsPanel() {
         provider_tool: drawerDraft.provider_tool || drawerDraft.runtime_id,
         memory_scope: drawerDraft.memory_scope || `agent:${drawerDraft.id || "new"}`,
       });
-      setDrawerMode("edit");
-      setDrawerDraft(copyAgent(saved));
-      setNotice(t("agents.saved"));
+      await syncAgentConnectBindings(saved.id, selectedChannelIDs, selectedTriggerIDs, channelItems, triggerItems);
       await agents.reload();
+      await activeRoutes.reload();
+      await channels.reload();
+      await triggers.reload();
+      setDrawerMode(null);
+      setDrawerDraft(null);
+      setSelectedChannelIDs([]);
+      setSelectedTriggerIDs([]);
+      setNotice(t("agents.saved"));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -199,19 +201,24 @@ export function AgentsPanel() {
               {notice && <div className={`session-notice${noticeClass}`}>{notice}</div>}
               {readOnly && <div className="session-notice">{t("agents.readOnlyNotice")}</div>}
               <AgentForm
-                boundChannels={boundChannels}
-                boundTriggers={boundTriggers}
                 canSave={canSave}
+                activeRoutes={activeRouteItems}
+                channelOptions={channelItems}
                 compatibleProviders={compatibleProviders}
                 draft={draft}
                 mcpOptions={mcpOptions.map((server) => server.name)}
                 readOnly={readOnly}
                 runtimeOptions={runtimeOptions}
+                selectedChannelIDs={selectedChannelIDs}
+                selectedTriggerIDs={selectedTriggerIDs}
                 skillOptions={skillOptions.map((skill) => skill.name)}
+                triggerOptions={triggerItems}
                 busy={busy}
                 drawerMode={drawerMode}
                 onDelete={remove}
                 onSave={save}
+                onToggleChannel={(id) => setSelectedChannelIDs((current) => toggleID(current, id))}
+                onToggleTrigger={(id) => setSelectedTriggerIDs((current) => toggleID(current, id))}
                 onUpdate={update}
                 t={t}
               />
@@ -255,7 +262,7 @@ export function AgentsPanel() {
                   </span>
                   <span>
                     <strong>{item.name}</strong>
-                    <small>{item.runtime_id || t("agents.noRuntime")}</small>
+                    <small>{item.runtime_id ? runtimeLabel(item.runtime_id) : t("agents.noRuntime")}</small>
                   </span>
                 </div>
                 <div className="agent-list-meta">
@@ -264,7 +271,7 @@ export function AgentsPanel() {
                     {item.enabled ? t("common.enabled") : t("common.disabled")}
                   </span>
                   <span className={`source-badge ${agentSourceClass(item)}`}>{t(agentSourceLabelKey(item))}</span>
-                  <span className="pill">{item.provider_name || item.provider_id || t("agents.noProvider")}</span>
+                  <span className="pill">{agentProviderSummary(item, activeRouteItems, t)}</span>
                   <span className="pill">
                     {channelCount} {t("agents.channelCount")}
                   </span>
@@ -300,38 +307,90 @@ export function AgentsPanel() {
 }
 
 function AgentForm({
-  boundChannels,
-  boundTriggers,
   busy,
   canSave,
+  activeRoutes,
+  channelOptions,
   compatibleProviders,
   draft,
   drawerMode,
   mcpOptions,
   onDelete,
   onSave,
+  onToggleChannel,
+  onToggleTrigger,
   onUpdate,
   readOnly,
   runtimeOptions,
+  selectedChannelIDs,
+  selectedTriggerIDs,
   skillOptions,
+  triggerOptions,
   t,
 }: {
-  boundChannels: { id: string; name: string; type: string; state?: string }[];
-  boundTriggers: { id: string; name: string; kind: string; enabled: boolean }[];
   busy: string;
   canSave: boolean;
+  activeRoutes: ProviderRoute[];
+  channelOptions: Channel[];
   compatibleProviders: { id: string; name: string }[];
   draft: AgentInstance;
   drawerMode: DrawerMode | null;
   mcpOptions: string[];
   onDelete: () => void;
   onSave: () => void;
+  onToggleChannel: (id: string) => void;
+  onToggleTrigger: (id: string) => void;
   onUpdate: <K extends keyof AgentInstance>(key: K, value: AgentInstance[K]) => void;
   readOnly: boolean;
   runtimeOptions: string[];
+  selectedChannelIDs: string[];
+  selectedTriggerIDs: string[];
   skillOptions: string[];
+  triggerOptions: Trigger[];
   t: (key: string) => string;
 }) {
+  const [directoryBusy, setDirectoryBusy] = useState("");
+  const [directoryNotice, setDirectoryNotice] = useState("");
+  const selectedRouteTool = draft.provider_tool || draft.runtime_id;
+  const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
+  const activeRouteProvider = activeRoute?.provider_name || activeRoute?.provider_id || "";
+  const overrideProvider = compatibleProviders.find((provider) => provider.id === draft.provider_id);
+  const providerStatus = draft.provider_id
+    ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
+    : activeRouteProvider
+      ? `${t("agents.activeRouteProvider")} ${runtimeLabel(selectedRouteTool)} -> ${activeRouteProvider}`
+      : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}`;
+
+  async function selectWorkDir() {
+    setDirectoryBusy("select");
+    setDirectoryNotice("");
+    try {
+      const selected = await api.selectDirectory(draft.work_dir ?? "");
+      if (selected.path) {
+        onUpdate("work_dir", selected.path);
+        setDirectoryNotice(t("agents.workDirSelected"));
+      }
+    } catch (err) {
+      setDirectoryNotice(workDirErrorMessage(err, t));
+    } finally {
+      setDirectoryBusy("");
+    }
+  }
+
+  async function createWorkDir() {
+    setDirectoryBusy("create");
+    setDirectoryNotice("");
+    try {
+      const created = await api.ensureDirectory(draft.work_dir ?? "");
+      onUpdate("work_dir", created.path);
+      setDirectoryNotice(t("agents.workDirCreated"));
+    } catch (err) {
+      setDirectoryNotice(workDirErrorMessage(err, t));
+    } finally {
+      setDirectoryBusy("");
+    }
+  }
+
   return (
     <>
       <section className="agent-section">
@@ -349,14 +408,37 @@ function AgentForm({
             <select disabled={readOnly} value={draft.runtime_id} onChange={(event) => onUpdate("runtime_id", event.target.value)}>
               {runtimeOptions.map((runtime) => (
                 <option key={runtime} value={runtime}>
-                  {runtime}
+                  {runtimeLabel(runtime)}
                 </option>
               ))}
             </select>
           </label>
           <label className="field">
             <span>{t("agents.workDir")}</span>
-            <input disabled={readOnly} value={draft.work_dir ?? ""} onChange={(event) => onUpdate("work_dir", event.target.value)} />
+            <div className="directory-input-row">
+              <input disabled={readOnly} value={draft.work_dir ?? ""} onChange={(event) => onUpdate("work_dir", event.target.value)} />
+              <button
+                className="ghost-action icon-action"
+                disabled={readOnly || directoryBusy === "select"}
+                onClick={selectWorkDir}
+                title={t("agents.selectWorkDir")}
+                type="button"
+                aria-label={t("agents.selectWorkDir")}
+              >
+                <FolderOpen size={15} />
+              </button>
+              <button
+                className="ghost-action icon-action"
+                disabled={readOnly || directoryBusy === "create"}
+                onClick={createWorkDir}
+                title={t("agents.createWorkDir")}
+                type="button"
+                aria-label={t("agents.createWorkDir")}
+              >
+                <FolderPlus size={15} />
+              </button>
+            </div>
+            {directoryNotice && <small className="directory-notice">{directoryNotice}</small>}
           </label>
           <label className="field">
             <span>{t("agents.memoryScope")}</span>
@@ -393,22 +475,23 @@ function AgentForm({
             >
               {runtimeOptions.map((runtime) => (
                 <option key={runtime} value={runtime}>
-                  {runtime}
+                  {runtimeLabel(runtime)}
                 </option>
               ))}
-              <option value="claude-desktop">claude-desktop</option>
+              <option value="claude-desktop">{runtimeLabel("claude-desktop")}</option>
             </select>
           </label>
           <label className="field">
-            <span>{t("agents.defaultProvider")}</span>
+            <span>{t("agents.providerOverride")}</span>
             <select disabled={readOnly} value={draft.provider_id ?? ""} onChange={(event) => onUpdate("provider_id", event.target.value)}>
-              <option value="">{t("agents.noProvider")}</option>
+              <option value="">{t("agents.followActiveRoute")}</option>
               {compatibleProviders.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
                 </option>
               ))}
             </select>
+            <small>{providerStatus}</small>
           </label>
         </div>
       </section>
@@ -418,31 +501,49 @@ function AgentForm({
           <Link2 size={17} />
           <h3>{t("nav.connect")}</h3>
         </header>
-        <p className="subtle-copy">{t("agents.connectMoved")}</p>
+        <p className="subtle-copy">{t("agents.connectBindingHelp")}</p>
         <div className="agent-picker-grid">
           <div className="mapping-card">
             <strong>
-              <Cable size={13} /> {t("agents.boundChannels")} ({boundChannels.length})
+              <Cable size={13} /> {t("agents.boundChannels")} ({selectedChannelIDs.length})
             </strong>
-            {boundChannels.length === 0 && <span className="muted">{t("connect.noChannels")}</span>}
+            {channelOptions.length === 0 && <span className="muted">{t("connect.noChannels")}</span>}
             <div className="provider-chip-row">
-              {boundChannels.map((ch) => (
-                <span key={ch.id} className={`status-badge ${ch.state === "running" ? "success" : ""}`}>
-                  {ch.name} · {ch.type}
-                </span>
+              {channelOptions.map((channel) => (
+                <button
+                  key={channel.id}
+                  className={`status-badge ${selectedChannelIDs.includes(channel.id) ? "success" : ""}`}
+                  disabled={readOnly}
+                  onClick={() => onToggleChannel(channel.id)}
+                  type="button"
+                >
+                  {channel.name} · {channel.type}
+                  {(channel.agent_name || channel.agent_id) && !selectedChannelIDs.includes(channel.id)
+                    ? ` · ${channel.agent_name || channel.agent_id}`
+                    : ""}
+                </button>
               ))}
             </div>
           </div>
           <div className="mapping-card">
             <strong>
-              <Zap size={13} /> {t("agents.boundTriggers")} ({boundTriggers.length})
+              <Zap size={13} /> {t("agents.boundTriggers")} ({selectedTriggerIDs.length})
             </strong>
-            {boundTriggers.length === 0 && <span className="muted">{t("connect.noTriggers")}</span>}
+            {triggerOptions.length === 0 && <span className="muted">{t("connect.noTriggers")}</span>}
             <div className="provider-chip-row">
-              {boundTriggers.map((tr) => (
-                <span key={tr.id} className={`status-badge ${tr.enabled ? "success" : ""}`}>
-                  {tr.name} · {tr.kind}
-                </span>
+              {triggerOptions.map((trigger) => (
+                <button
+                  key={trigger.id}
+                  className={`status-badge ${selectedTriggerIDs.includes(trigger.id) ? "success" : ""}`}
+                  disabled={readOnly}
+                  onClick={() => onToggleTrigger(trigger.id)}
+                  type="button"
+                >
+                  {trigger.name} · {trigger.kind}
+                  {(trigger.agent_name || trigger.agent_id) && !selectedTriggerIDs.includes(trigger.id)
+                    ? ` · ${trigger.agent_name || trigger.agent_id}`
+                    : ""}
+                </button>
               ))}
             </div>
           </div>
@@ -535,6 +636,36 @@ function Picker({
   );
 }
 
+async function syncAgentConnectBindings(
+  agentID: string,
+  selectedChannelIDs: string[],
+  selectedTriggerIDs: string[],
+  channels: Channel[],
+  triggers: Trigger[]
+) {
+  const selectedChannels = new Set(selectedChannelIDs);
+  const selectedTriggers = new Set(selectedTriggerIDs);
+  const channelUpdates = channels
+    .map((channel) => {
+      const currentAgentID = channel.agent_id ?? "";
+      const nextAgentID = selectedChannels.has(channel.id) ? agentID : currentAgentID === agentID ? "" : currentAgentID;
+      return nextAgentID === currentAgentID ? null : api.upsertChannel({ ...channel, agent_id: nextAgentID });
+    })
+    .filter((update): update is Promise<Channel> => Boolean(update));
+  const triggerUpdates = triggers
+    .map((trigger) => {
+      const currentAgentID = trigger.agent_id ?? "";
+      const nextAgentID = selectedTriggers.has(trigger.id) ? agentID : currentAgentID === agentID ? "" : currentAgentID;
+      return nextAgentID === currentAgentID ? null : api.upsertTrigger({ ...trigger, agent_id: nextAgentID });
+    })
+    .filter((update): update is Promise<Trigger> => Boolean(update));
+  await Promise.all([...channelUpdates, ...triggerUpdates]);
+}
+
+function toggleID(items: string[], id: string): string[] {
+  return items.includes(id) ? items.filter((item) => item !== id) : [...items, id];
+}
+
 function newAgent(runtimeOptions: string[]): AgentInstance {
   const runtime = runtimeOptions[0] ?? "codex";
   return copyAgent({
@@ -544,6 +675,52 @@ function newAgent(runtimeOptions: string[]): AgentInstance {
     memory_scope: "agent:new",
     source: "manual",
   });
+}
+
+function runtimeLabel(runtime: string): string {
+  switch (runtime) {
+    case "claudecode":
+      return "Claude Code CLI";
+    case "codex":
+      return "Codex CLI";
+    case "cursor":
+      return "Cursor Agent CLI";
+    case "gemini":
+      return "Gemini CLI";
+    case "iflow":
+      return "iFlow CLI";
+    case "kimi":
+      return "Kimi CLI";
+    case "opencode":
+      return "OpenCode CLI";
+    case "qoder":
+      return "Qoder CLI";
+    case "claude-desktop":
+      return "Claude Desktop";
+    case "codex-app":
+      return "Codex Desktop";
+    default:
+      return runtime;
+  }
+}
+
+function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRoute | undefined {
+  return routes.find((route) => route.tool === tool);
+}
+
+function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
+  if (agent.provider_name || agent.provider_id) return `${t("agents.providerOverrideShort")}: ${agent.provider_name || agent.provider_id}`;
+  const route = activeRouteForTool(activeRoutes, agent.provider_tool || agent.runtime_id);
+  const provider = route?.provider_name || route?.provider_id;
+  return provider ? `${t("agents.followRouteShort")}: ${provider}` : t("agents.followRouteShort");
+}
+
+function workDirErrorMessage(err: unknown, t: (key: string) => string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("desktop directory picker unavailable")) return t("agents.workDirPickerUnavailable");
+  if (message.includes("directory path is required")) return t("agents.workDirRequired");
+  if (message.includes("path is not a directory")) return t("agents.workDirNotDirectory");
+  return message;
 }
 
 function isConfigManaged(agent: AgentInstance): boolean {

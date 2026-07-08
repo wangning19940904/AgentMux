@@ -46,11 +46,15 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 		var last string
+		var sawFinal bool
 		for sc.Scan() {
 			line := sc.Bytes()
 			if ev := s.agent.spec.Mapper(line); ev != nil {
 				if ev.Text != "" {
 					last = ev.Text
+				}
+				if ev.Type == core.EventFinal {
+					sawFinal = true
 				}
 				out <- ev
 			}
@@ -59,7 +63,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 			out <- &core.Event{Type: core.EventError, Err: err}
 			return
 		}
-		if s.agent.spec.FinalFromLast {
+		if s.agent.spec.FinalFromLast && !sawFinal {
 			out <- &core.Event{Type: core.EventFinal, Text: last, Final: true}
 		}
 	}()
@@ -67,7 +71,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 }
 
 func (s *session) RespondPermission(ctx context.Context, allow bool) error { return nil }
-func (s *session) Close(ctx context.Context) error                          { return nil }
+func (s *session) Close(ctx context.Context) error                         { return nil }
 
 func buildEnv(extra map[string]string) []string {
 	env := os.Environ()

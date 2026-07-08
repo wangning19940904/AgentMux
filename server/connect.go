@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,9 +22,13 @@ func (s *Server) SetConnect(svc *core.ConnectService) { s.connect = svc }
 // apiChannel is a channel plus live status and display enrichment.
 type apiChannel struct {
 	core.Channel
-	AgentName string `json:"agent_name,omitempty"`
-	State     string `json:"state,omitempty"`
-	Error     string `json:"error,omitempty"`
+	AgentName         string `json:"agent_name,omitempty"`
+	BotName           string `json:"bot_name,omitempty"`
+	BotAvatarURL      string `json:"bot_avatar_url,omitempty"`
+	BotAvatarProxyURL string `json:"bot_avatar_proxy_url,omitempty"`
+	BotOpenID         string `json:"bot_open_id,omitempty"`
+	State             string `json:"state,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 // apiTrigger is a trigger plus display enrichment.
@@ -52,8 +58,17 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 	agentNames := s.agentNames(r.Context())
 	out := make([]apiChannel, 0, len(channels))
 	for _, ch := range channels {
+		botInfo := s.lookupChannelBotInfo(r.Context(), ch)
 		ch.Config = redactStringMap(ch.Config)
 		item := apiChannel{Channel: ch, AgentName: agentNames[ch.AgentID]}
+		if botInfo != nil {
+			item.BotName = botInfo.Name
+			item.BotAvatarURL = botInfo.AvatarURL
+			if botInfo.AvatarURL != "" {
+				item.BotAvatarProxyURL = channelAvatarProxyURL(r, ch.ID)
+			}
+			item.BotOpenID = botInfo.OpenID
+		}
 		if st, ok := statuses[ch.ID]; ok {
 			item.State = st.State
 			item.Error = st.Error
@@ -63,6 +78,170 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func channelAvatarProxyURL(r *http.Request, channelID string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := r.Host
+	if host == "" {
+		host = "127.0.0.1:8765"
+	}
+	return scheme + "://" + host + "/channel-avatar?id=" + url.QueryEscape(channelID)
+}
+
+func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
+	if s.st == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	ch, err := s.st.GetChannel(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ch == nil {
+		http.NotFound(w, r)
+		return
+	}
+	info := s.lookupChannelBotInfo(r.Context(), *ch)
+	if info == nil || info.AvatarURL == "" {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.AvatarURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		http.Error(w, fmt.Sprintf("avatar request failed: HTTP %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 4<<20))
+}
+
+type channelBotInfo struct {
+	Name      string
+	AvatarURL string
+	OpenID    string
+}
+
+var channelBotOpenAPIBase = map[string]string{
+	"feishu": "https://open.feishu.cn",
+	"lark":   "https://open.larksuite.com",
+}
+
+func (s *Server) lookupChannelBotInfo(ctx context.Context, ch core.Channel) *channelBotInfo {
+	if ch.Type != "feishu" && ch.Type != "lark" {
+		return nil
+	}
+	appID := strings.TrimSpace(ch.Config["app_id"])
+	appSecret := strings.TrimSpace(ch.Config["app_secret"])
+	if appID == "" || appSecret == "" || appSecret == "<redacted>" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	info, err := fetchChannelBotInfo(ctx, &http.Client{Timeout: 3 * time.Second}, ch.Type, appID, appSecret)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("lookup channel bot info", "channel", ch.Name, "type", ch.Type, "err", err)
+		}
+		return nil
+	}
+	return info
+}
+
+func fetchChannelBotInfo(ctx context.Context, client *http.Client, platform, appID, appSecret string) (*channelBotInfo, error) {
+	base := strings.TrimRight(channelBotOpenAPIBase[platform], "/")
+	if base == "" {
+		return nil, fmt.Errorf("unsupported bot info platform %q", platform)
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/open-apis/auth/v3/app_access_token/internal", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("token request failed: HTTP %d", resp.StatusCode)
+	}
+	var tokenResp struct {
+		Code           int    `json:"code"`
+		Msg            string `json:"msg"`
+		AppAccessToken string `json:"app_access_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
+		return nil, err
+	}
+	if tokenResp.Code != 0 {
+		return nil, fmt.Errorf("token request failed: %s", tokenResp.Msg)
+	}
+	if tokenResp.AppAccessToken == "" {
+		return nil, fmt.Errorf("token request returned empty token")
+	}
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/open-apis/bot/v3/info", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.AppAccessToken)
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("bot info request failed: HTTP %d", resp.StatusCode)
+	}
+	var infoResp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Bot  struct {
+			AppName   string `json:"app_name"`
+			AvatarURL string `json:"avatar_url"`
+			OpenID    string `json:"open_id"`
+		} `json:"bot"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&infoResp); err != nil {
+		return nil, err
+	}
+	if infoResp.Code != 0 {
+		return nil, fmt.Errorf("bot info request failed: %s", infoResp.Msg)
+	}
+	return &channelBotInfo{
+		Name:      strings.TrimSpace(infoResp.Bot.AppName),
+		AvatarURL: strings.TrimSpace(infoResp.Bot.AvatarURL),
+		OpenID:    strings.TrimSpace(infoResp.Bot.OpenID),
+	}, nil
 }
 
 func (s *Server) handleChannelUpsert(w http.ResponseWriter, r *http.Request) {

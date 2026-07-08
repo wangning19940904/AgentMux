@@ -28,14 +28,14 @@ type MCPFactory func(cfg map[string]any) (MCPRegistry, error)
 type GuardFactory func(cfg map[string]any) (Guard, error)
 
 var (
-	regMu       sync.RWMutex
-	platforms   = map[string]PlatformFactory{}
-	agents      = map[string]AgentFactory{}
-	collectors  = map[string]CollectorFactory{}
-	memories    = map[string]MemoryFactory{}
-	skillMgrs   = map[string]SkillFactory{}
-	mcpRegs     = map[string]MCPFactory{}
-	guards      = map[string]GuardFactory{}
+	regMu      sync.RWMutex
+	platforms  = map[string]PlatformFactory{}
+	agents     = map[string]AgentFactory{}
+	collectors = map[string]CollectorFactory{}
+	memories   = map[string]MemoryFactory{}
+	skillMgrs  = map[string]SkillFactory{}
+	mcpRegs    = map[string]MCPFactory{}
+	guards     = map[string]GuardFactory{}
 )
 
 // RegisterPlatform registers a platform factory under name. Called from
@@ -191,6 +191,14 @@ func RegisteredPlatforms() []string { return sortedKeys(platforms) }
 
 // RegisteredAgents returns the sorted names of registered agents.
 func RegisteredAgents() []string { return sortedKeysA(agents) }
+
+// HasAgent reports whether an agent factory is registered under name.
+func HasAgent(name string) bool {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	_, ok := agents[name]
+	return ok
+}
 
 // RegisteredCollectors returns the sorted names of registered collectors.
 func RegisteredCollectors() []string { return sortedKeysC(collectors) }

@@ -78,6 +78,38 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 	return p.client.SendText(ctx, chatID, text)
 }
 
+// BeginReply opens a streaming interactive-card reply for the chat that
+// originated msg. It implements core.StreamReplier so the engine renders a
+// whole agent turn as one in-place updating card.
+func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.ReplyStream, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("%s: client not started", p.name)
+	}
+	return &cardStream{client: p.client, chatID: msg.ChatID}, nil
+}
+
+// cardStream is a live Feishu card: the first Update posts the card, later
+// Updates patch it in place.
+type cardStream struct {
+	client    clientAPI
+	chatID    string
+	messageID string
+}
+
+func (s *cardStream) Update(ctx context.Context, text string, done, failed bool) error {
+	if s.messageID == "" {
+		id, err := s.client.SendCard(ctx, s.chatID, text, done, failed)
+		if err != nil {
+			return err
+		}
+		s.messageID = id
+		return nil
+	}
+	return s.client.UpdateCard(ctx, s.messageID, text, done, failed)
+}
+
+func (s *cardStream) Close(ctx context.Context) error { return nil }
+
 // Stop closes the connection.
 func (p *Platform) Stop(ctx context.Context) error {
 	if p.client == nil {

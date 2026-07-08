@@ -109,6 +109,74 @@ func TestPlatformsIncludeLarkAlias(t *testing.T) {
 	}
 }
 
+func TestChannelsListIncludesFeishuBotInfo(t *testing.T) {
+	s, _ := newTestServer(t)
+	oldBase := channelBotOpenAPIBase["feishu"]
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open-apis/auth/v3/app_access_token/internal":
+			if r.Method != http.MethodPost {
+				t.Fatalf("token method = %s", r.Method)
+			}
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["app_id"] != "cli_test" || body["app_secret"] != "secret" {
+				t.Fatalf("token body = %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","app_access_token":"app-token"}`))
+		case "/open-apis/bot/v3/info":
+			if got := r.Header.Get("Authorization"); got != "Bearer app-token" {
+				t.Fatalf("auth header = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"msg":"ok","bot":{"app_name":"Wang Bot","avatar_url":"` + upstream.URL + `/avatar.png","open_id":"ou_1"}}`))
+		case "/avatar.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	channelBotOpenAPIBase["feishu"] = upstream.URL
+	t.Cleanup(func() { channelBotOpenAPIBase["feishu"] = oldBase })
+
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/channels", core.Channel{
+		Name: "Feishu Bot", Type: "feishu",
+		Config:  map[string]string{"app_id": "cli_test", "app_secret": "secret"},
+		Enabled: true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s, http.MethodGet, "/api/v1/channels", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var listed []apiChannel
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed = %+v", listed)
+	}
+	if listed[0].BotName != "Wang Bot" || listed[0].BotAvatarURL != upstream.URL+"/avatar.png" || listed[0].BotOpenID != "ou_1" {
+		t.Fatalf("bot info = %+v", listed[0])
+	}
+	if !strings.Contains(listed[0].BotAvatarProxyURL, "/channel-avatar?id="+listed[0].ID) {
+		t.Fatalf("avatar proxy = %q", listed[0].BotAvatarProxyURL)
+	}
+	if listed[0].Config["app_secret"] != "<redacted>" {
+		t.Fatalf("config = %+v", listed[0].Config)
+	}
+	rec = doJSON(t, s, http.MethodGet, "/channel-avatar?id="+listed[0].ID, nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "png" {
+		t.Fatalf("avatar proxy: code = %d body = %q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestFeishuSetupBeginAndPollLarkSwitch(t *testing.T) {
 	s, _ := newTestServer(t)
 	var calls []string

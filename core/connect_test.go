@@ -78,6 +78,23 @@ func (s *fakeSession) Send(ctx context.Context, text string) (<-chan *Event, err
 func (s *fakeSession) RespondPermission(ctx context.Context, allow bool) error { return nil }
 func (s *fakeSession) Close(ctx context.Context) error                         { return nil }
 
+type scriptedSession struct {
+	id     string
+	events []*Event
+}
+
+func (s *scriptedSession) ID() string { return s.id }
+func (s *scriptedSession) Send(ctx context.Context, text string) (<-chan *Event, error) {
+	out := make(chan *Event, len(s.events))
+	for _, ev := range s.events {
+		out <- ev
+	}
+	close(out)
+	return out, nil
+}
+func (s *scriptedSession) RespondPermission(ctx context.Context, allow bool) error { return nil }
+func (s *scriptedSession) Close(ctx context.Context) error                         { return nil }
+
 type fakeAgent struct {
 	mu       sync.Mutex
 	sessions int
@@ -216,6 +233,152 @@ func TestChannelMessageRouting(t *testing.T) {
 	eng.DetachChannel("c1")
 	if got := eng.ChannelStatuses(); len(got) != 0 {
 		t.Fatalf("after detach: %+v", got)
+	}
+}
+
+func TestChannelMessageDeduplicatesMessageID(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake")
+	restore := stubPlatformFactory(t, "fake-dedup", plat)
+	defer restore()
+
+	agent := &fakeAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-dedup", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-9", UserID: "u1", Text: "hello", Platform: "fake"})
+	waitFor(t, "first reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1
+	})
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-9", UserID: "u1", Text: "hello", Platform: "fake"})
+	time.Sleep(150 * time.Millisecond)
+	plat.mu.Lock()
+	replies := len(plat.replies)
+	plat.mu.Unlock()
+	if replies != 1 {
+		t.Fatalf("duplicate reply count = %d, want 1", replies)
+	}
+
+	plat.push(&Message{ID: "m2", ChatID: "chat-9", UserID: "u1", Text: "hello", Platform: "fake"})
+	waitFor(t, "second unique reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 2
+	})
+	agent.mu.Lock()
+	turns := append([]string(nil), agent.turns...)
+	agent.mu.Unlock()
+	if len(turns) != 2 {
+		t.Fatalf("turns = %+v, want two unique message turns", turns)
+	}
+}
+
+func TestStreamTurnSkipsDuplicateOutputAndFinal(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	sess := &scriptedSession{
+		id: "scripted",
+		events: []*Event{
+			{Type: EventOutput, Text: "same answer"},
+			{Type: EventFinal, Text: "same answer", Final: true},
+		},
+	}
+	var replies []string
+	result, err := eng.streamTurn(context.Background(), sess, "hello", func(text string) {
+		replies = append(replies, text)
+	}, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "same answer" {
+		t.Fatalf("result = %q", result)
+	}
+	if len(replies) != 1 || replies[0] != "same answer" {
+		t.Fatalf("replies = %+v, want one deduplicated reply", replies)
+	}
+}
+
+// streamingPlatform is a fakePlatform that also implements StreamReplier, so
+// the engine should render channel turns as one in-place updating message.
+type streamingPlatform struct {
+	*fakePlatform
+	mu        sync.Mutex
+	updates   []string
+	doneText  string
+	doneCalls int
+	beginErr  error
+}
+
+func newStreamingPlatform(name string) *streamingPlatform {
+	return &streamingPlatform{fakePlatform: newFakePlatform(name)}
+}
+
+func (p *streamingPlatform) BeginReply(ctx context.Context, msg *Message) (ReplyStream, error) {
+	if p.beginErr != nil {
+		return nil, p.beginErr
+	}
+	return &fakeReplyStream{parent: p}, nil
+}
+
+type fakeReplyStream struct{ parent *streamingPlatform }
+
+func (s *fakeReplyStream) Update(ctx context.Context, text string, done, failed bool) error {
+	s.parent.mu.Lock()
+	defer s.parent.mu.Unlock()
+	s.parent.updates = append(s.parent.updates, text)
+	if done {
+		s.parent.doneText = text
+		s.parent.doneCalls++
+	}
+	return nil
+}
+func (s *fakeReplyStream) Close(ctx context.Context) error { return nil }
+
+func TestChannelMessagePrefersStreamingCard(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("fake")
+	restore := stubPlatformFactory(t, "fake-stream", plat)
+	defer restore()
+
+	agent := &fakeAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-stream", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ChatID: "chat-1", Text: "hello", Platform: "fake"})
+
+	waitFor(t, "streaming finalize", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return plat.doneCalls == 1
+	})
+
+	plat.mu.Lock()
+	doneText := plat.doneText
+	plat.mu.Unlock()
+	if doneText != "echo: hello" {
+		t.Fatalf("final card text = %q, want %q", doneText, "echo: hello")
+	}
+
+	// The streaming path must not post plain-text replies.
+	plat.fakePlatform.mu.Lock()
+	replies := len(plat.fakePlatform.replies)
+	plat.fakePlatform.mu.Unlock()
+	if replies != 0 {
+		t.Fatalf("plain replies = %d, want 0 (streaming path)", replies)
 	}
 }
 

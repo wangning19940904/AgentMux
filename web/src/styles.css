@@ -1889,6 +1889,23 @@ textarea:focus {
   font-weight: 500;
 }
 
+.directory-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.directory-input-row .icon-action {
+  width: 36px;
+  height: 36px;
+}
+
+.directory-notice {
+  overflow-wrap: anywhere;
+}
+
 .field small {
   color: var(--muted);
   font-size: 11px;
@@ -2334,12 +2351,42 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .connect-page .agent-list-main small {
   display: block;
   color: var(--muted);
+}
+
+.connect-page .channel-avatar {
+  display: grid;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  width: 44px;
+  height: 44px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  border-radius: 8px;
+}
+
+.connect-page .channel-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.connect-page .channel-avatar.fallback {
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--bg));
+}
+
+.connect-page .channel-card-copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 3px;
+  min-width: 0;
 }
 
 .connect-page .trigger-prompt {
@@ -2672,4 +2719,87 @@ textarea:focus {
   .provider-drawer .preset-strip {
     grid-template-columns: 1fr;
   }
+}
+
+.framework-prereqs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.framework-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.framework-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.framework-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.framework-card.installed {
+  border-color: var(--accent);
+}
+
+.framework-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.framework-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.framework-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.framework-env {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.framework-card-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+}
+
+.framework-cli-hint {
+  font-size: 12px;
+  margin: 0;
+}
+
+.framework-log {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: var(--bg-subtle);
+  padding: 12px;
+  border-radius: 8px;
+  margin: 0;
 }
