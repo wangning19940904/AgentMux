@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -51,6 +52,53 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 	items := []core.AgentInstance{a}
 	s.enrichAgentProviders(r.Context(), items)
 	writeJSON(w, http.StatusOK, &items[0])
+}
+
+func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Request) {
+	if s.workspace == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace initializer unavailable"})
+		return
+	}
+	var opts core.WorkspaceInitOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	opts.AgentID = strings.TrimSpace(opts.AgentID)
+	opts.RuntimeID = strings.TrimSpace(opts.RuntimeID)
+	opts.WorkDir = strings.TrimSpace(opts.WorkDir)
+	if opts.AgentID == "" {
+		opts.AgentID = strings.TrimSpace(r.URL.Query().Get("id"))
+	}
+	if opts.AgentID != "" {
+		inst, ok, err := s.findAgentInstance(r.Context(), opts.AgentID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+			return
+		}
+		if opts.RuntimeID == "" {
+			opts.RuntimeID = inst.RuntimeID
+		}
+		if opts.WorkDir == "" {
+			opts.WorkDir = inst.WorkDir
+		}
+		if len(opts.Skills) == 0 {
+			opts.Skills = append([]string(nil), inst.Skills...)
+		}
+		if len(opts.MCPServers) == 0 {
+			opts.MCPServers = append([]string(nil), inst.MCPServers...)
+		}
+	}
+	res, err := s.workspace.InitializeWorkspace(r.Context(), opts)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +148,19 @@ func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, erro
 		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 	})
 	return items, nil
+}
+
+func (s *Server) findAgentInstance(ctx context.Context, id string) (core.AgentInstance, bool, error) {
+	items, err := s.agentInstances(ctx)
+	if err != nil {
+		return core.AgentInstance{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return core.AgentInstance{}, false, nil
 }
 
 func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstance) error {

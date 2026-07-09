@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,11 +14,13 @@ const channelMessageDedupTTL = 10 * time.Minute
 // channelRuntime holds one live console-managed channel: the platform
 // connection, the bound agent and its per-chat sessions.
 type channelRuntime struct {
-	channel  Channel
-	platform Platform
-	agent    Agent
-	workDir  string
-	cancel   context.CancelFunc
+	owner     *Engine
+	channel   Channel
+	platform  Platform
+	agent     Agent
+	workDir   string
+	workspace WorkspaceInitOptions
+	cancel    context.CancelFunc
 
 	mu       sync.Mutex
 	sessions map[string]AgentSession // chatID -> session
@@ -54,7 +58,11 @@ func (rt *channelRuntime) session(ctx context.Context, chatID string) (AgentSess
 	if rt.agent == nil {
 		return nil, false, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
 	}
-	s, err := rt.agent.StartSession(ctx, rt.workDir)
+	workDir, err := rt.prepareWorkspace(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	s, err := rt.agent.StartSession(ctx, workDir)
 	if err != nil {
 		return nil, false, err
 	}
@@ -93,6 +101,23 @@ func (rt *channelRuntime) duplicateMessage(msg *Message) bool {
 	return false
 }
 
+func (rt *channelRuntime) acceptsMessage(msg *Message) bool {
+	if rt == nil || msg == nil {
+		return false
+	}
+	if !isFeishuLikeChannel(rt.channel.Type) {
+		return true
+	}
+	switch channelReplyScope(rt.channel) {
+	case ReplyScopeAll:
+		return true
+	case ReplyScopeMentionsOnly:
+		return msg.MentionedBot
+	default:
+		return msg.ChatType == "p2p" || msg.MentionedBot
+	}
+}
+
 // close stops the platform connection and all sessions.
 func (rt *channelRuntime) close(ctx context.Context) {
 	if rt.cancel != nil {
@@ -121,17 +146,29 @@ func (rt *channelRuntime) close(ctx context.Context) {
 // targets); inbound messages then fail with a descriptive reply. Errors from
 // CreatePlatform are recorded as an error-state runtime so the console can
 // surface them.
-func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, workDir string) error {
+func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, workDir string, workspace ...WorkspaceInitOptions) error {
 	e.DetachChannel(ch.ID)
+	opts := WorkspaceInitOptions{AgentID: ch.AgentID, WorkDir: workDir}
+	if len(workspace) > 0 {
+		opts = workspace[0]
+		if opts.AgentID == "" {
+			opts.AgentID = ch.AgentID
+		}
+		if opts.WorkDir == "" {
+			opts.WorkDir = workDir
+		}
+	}
 
 	rt := &channelRuntime{
-		channel:  ch,
-		agent:    agent,
-		workDir:  workDir,
-		sessions: map[string]AgentSession{},
-		seen:     map[string]time.Time{},
-		state:    ChannelStateRunning,
-		started:  time.Now(),
+		owner:     e,
+		channel:   ch,
+		agent:     agent,
+		workDir:   workDir,
+		workspace: opts,
+		sessions:  map[string]AgentSession{},
+		seen:      map[string]time.Time{},
+		state:     ChannelStateRunning,
+		started:   time.Now(),
 	}
 
 	cfg := make(map[string]any, len(ch.Config)+1)
@@ -253,6 +290,9 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		return
 	}
 
+	reactionID := e.addChannelAckReaction(ctx, rt, msg)
+	defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
+
 	sess, created, err := rt.session(ctx, msg.ChatID)
 	if err != nil {
 		e.log.Error("start channel session", "channel", rt.channel.Name, "err", err)
@@ -266,10 +306,20 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.emit(ctx, HookSessionStarted, data)
 	}
 
-	// Prefer an in-place streaming reply (e.g. Feishu interactive card) when the
-	// platform supports it; otherwise fall back to one message per event.
-	if sr, ok := rt.platform.(StreamReplier); ok {
-		e.streamTurnCard(ctx, sr, sess, msg, data)
+	mode, ok := channelReplyMode(rt.channel)
+	if !ok {
+		e.log.Warn("unknown channel reply mode, falling back to stream_message", "channel", rt.channel.Name, "mode", rt.channel.Config[ChannelConfigReplyMode])
+	}
+	if mode == ReplyModeStreamCard {
+		if sr, ok := rt.platform.(StreamReplier); ok {
+			e.streamTurnCard(ctx, sr, sess, msg, data)
+			e.emit(ctx, HookMessageSent, data)
+			return
+		}
+		e.log.Warn("channel reply mode stream_card not supported, falling back to stream_message", "channel", rt.channel.Name, "type", rt.channel.Type)
+	}
+	if mr, ok := rt.platform.(StreamMessageReplier); ok {
+		e.streamTurnMessage(ctx, mr, sess, msg, data)
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
@@ -280,4 +330,93 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		}
 	}, data)
 	e.emit(ctx, HookMessageSent, data)
+}
+
+func (e *Engine) addChannelAckReaction(ctx context.Context, rt *channelRuntime, msg *Message) string {
+	if rt == nil || msg == nil || msg.ID == "" || !channelAckReactionEnabled(rt.channel) {
+		return ""
+	}
+	reacter, ok := rt.platform.(MessageReactioner)
+	if !ok {
+		return ""
+	}
+	emoji := chooseAckReactionEmoji(rt.channel)
+	if emoji == "" {
+		return ""
+	}
+	reactionID, err := reacter.AddReaction(ctx, msg, emoji)
+	if err != nil {
+		e.log.Warn("add channel ack reaction", "channel", rt.channel.Name, "message_id", msg.ID, "emoji", emoji, "err", err)
+		return ""
+	}
+	return reactionID
+}
+
+func (e *Engine) deleteChannelAckReaction(ctx context.Context, rt *channelRuntime, msg *Message, reactionID string) {
+	if reactionID == "" || rt == nil || msg == nil {
+		return
+	}
+	reacter, ok := rt.platform.(MessageReactioner)
+	if !ok {
+		return
+	}
+	if err := reacter.DeleteReaction(ctx, msg, reactionID); err != nil {
+		e.log.Warn("delete channel ack reaction", "channel", rt.channel.Name, "message_id", msg.ID, "reaction_id", reactionID, "err", err)
+	}
+}
+
+func isFeishuLikeChannel(typ string) bool {
+	return typ == "feishu" || typ == "lark"
+}
+
+func channelReplyScope(ch Channel) string {
+	switch strings.TrimSpace(ch.Config[ChannelConfigReplyScope]) {
+	case ReplyScopeAll:
+		return ReplyScopeAll
+	case ReplyScopeMentionsOnly:
+		return ReplyScopeMentionsOnly
+	default:
+		return ReplyScopeDMAndMentions
+	}
+}
+
+func channelReplyMode(ch Channel) (string, bool) {
+	switch strings.TrimSpace(ch.Config[ChannelConfigReplyMode]) {
+	case "", ReplyModeStreamMessage:
+		return ReplyModeStreamMessage, true
+	case ReplyModeStreamCard:
+		return ReplyModeStreamCard, true
+	default:
+		return ReplyModeStreamMessage, false
+	}
+}
+
+func channelAckReactionEnabled(ch Channel) bool {
+	if !isFeishuLikeChannel(ch.Type) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(ch.Config[ChannelConfigAckReaction])) {
+	case "", "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func chooseAckReactionEmoji(ch Channel) string {
+	raw := strings.TrimSpace(ch.Config[ChannelConfigAckReactionEmojis])
+	if raw == "" {
+		raw = DefaultAckReactionEmojis
+	}
+	parts := strings.Split(raw, ",")
+	emojis := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if emoji := strings.TrimSpace(part); emoji != "" {
+			emojis = append(emojis, emoji)
+		}
+	}
+	if len(emojis) == 0 {
+		return ""
+	}
+	return emojis[rand.Intn(len(emojis))]
 }

@@ -18,6 +18,7 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, FeishuSetupPollResponse, Trigger, api } from "../api";
+import { ChannelAvatar } from "../ChannelAvatar";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -26,6 +27,24 @@ import { useAsync } from "../useAsync";
 const FEISHU_FIELDS = [
   { key: "app_id", labelKey: "connect.cfgAppId" },
   { key: "app_secret", labelKey: "connect.cfgAppSecret", secret: true },
+];
+
+const FEISHU_DEFAULTS = {
+  reply_scope: "dm_and_mentions",
+  reply_mode: "stream_message",
+  ack_reaction_enabled: "true",
+  ack_reaction_emojis: "OK,THUMBSUP,MUSCLE,THANKS",
+};
+
+const FEISHU_REPLY_SCOPES = [
+  { value: "dm_and_mentions", labelKey: "connect.replyScopeDmMentions" },
+  { value: "all", labelKey: "connect.replyScopeAll" },
+  { value: "mentions_only", labelKey: "connect.replyScopeMentionsOnly" },
+];
+
+const FEISHU_REPLY_MODES = [
+  { value: "stream_message", labelKey: "connect.replyModeStreamMessage" },
+  { value: "stream_card", labelKey: "connect.replyModeStreamCard" },
 ];
 
 const CHANNEL_FIELDS: Record<string, { key: string; labelKey: string; secret?: boolean }[]> = {
@@ -168,7 +187,8 @@ export function ConnectPanel() {
               className="action"
               onClick={() => {
                 setTriggerDraft(null);
-                setChannelDraft({ ...EMPTY_CHANNEL, type: preferredDefaultPlatform(platformOptions), config: {} });
+                const type = preferredDefaultPlatform(platformOptions);
+                setChannelDraft({ ...EMPTY_CHANNEL, type, config: defaultChannelConfig(type) });
               }}
             >
               <Plus size={16} />
@@ -356,24 +376,6 @@ function ChannelCard({
   );
 }
 
-function ChannelAvatar({ channel }: { channel: Channel }) {
-  const [failed, setFailed] = useState(false);
-  const avatarURL = channel.bot_avatar_proxy_url || channel.bot_avatar_url;
-  useEffect(() => setFailed(false), [avatarURL]);
-  if (avatarURL && !failed) {
-    return (
-      <span className="channel-avatar" aria-hidden="true">
-        <img src={avatarURL} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
-      </span>
-    );
-  }
-  return (
-    <span className="channel-avatar fallback" aria-hidden="true">
-      <Cable size={17} />
-    </span>
-  );
-}
-
 function ChannelEditor({
   draft,
   setDraft,
@@ -508,7 +510,7 @@ function ChannelEditor({
             value={draft.type ?? ""}
             onChange={(e) => {
               resetSetup();
-              update({ type: e.target.value, config: draft.id ? draft.config : {} });
+              update({ type: e.target.value, config: draft.id ? draft.config : defaultChannelConfig(e.target.value) });
             }}
           >
             {platforms.map((p) => (
@@ -542,14 +544,17 @@ function ChannelEditor({
         ))}
       </div>
       {isFeishuLike && (
-        <FeishuSetupBox
-          phase={setup.phase}
-          qrUrl={setup.qrUrl}
-          error={setup.error}
-          platform={draft.type ?? "feishu"}
-          onStart={startFeishuSetup}
-          onReset={resetSetup}
-        />
+        <>
+          <FeishuSetupBox
+            phase={setup.phase}
+            qrUrl={setup.qrUrl}
+            error={setup.error}
+            platform={draft.type ?? "feishu"}
+            onStart={startFeishuSetup}
+            onReset={resetSetup}
+          />
+          <FeishuChannelOptions draft={draft} updateConfig={updateConfig} />
+        </>
       )}
       <div className="table-actions">
         <label className="switch-row">
@@ -565,6 +570,70 @@ function ChannelEditor({
           <Save size={15} />
           {t("common.save")}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function FeishuChannelOptions({
+  draft,
+  updateConfig,
+}: {
+  draft: Partial<Channel>;
+  updateConfig: (key: string, value: string) => void;
+}) {
+  const { t } = useI18n();
+  const config = draft.config ?? {};
+  const replyMode = configValue(config, "reply_mode", FEISHU_DEFAULTS.reply_mode);
+  const ackEnabled = configValue(config, "ack_reaction_enabled", FEISHU_DEFAULTS.ack_reaction_enabled) !== "false";
+
+  return (
+    <div className="channel-options">
+      <div className="field-grid">
+        <label className="field">
+          <span>{t("connect.replyScope")}</span>
+          <select
+            value={configValue(config, "reply_scope", FEISHU_DEFAULTS.reply_scope)}
+            onChange={(e) => updateConfig("reply_scope", e.target.value)}
+          >
+            {FEISHU_REPLY_SCOPES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("connect.replyMode")}</span>
+          <select value={replyMode} onChange={(e) => updateConfig("reply_mode", e.target.value)}>
+            {FEISHU_REPLY_MODES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </option>
+            ))}
+            <option value="lark_cli" disabled>
+              {t("connect.replyModeLarkCli")}
+            </option>
+          </select>
+        </label>
+        <label className="switch-row channel-option-toggle">
+          <span>
+            <strong>{t("connect.ackReaction")}</strong>
+            <small>{t("connect.ackReactionHint")}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={ackEnabled}
+            onChange={(e) => updateConfig("ack_reaction_enabled", e.target.checked ? "true" : "false")}
+          />
+        </label>
+        <label className="field">
+          <span>{t("connect.ackReactionEmojis")}</span>
+          <input
+            value={configValue(config, "ack_reaction_emojis", FEISHU_DEFAULTS.ack_reaction_emojis)}
+            onChange={(e) => updateConfig("ack_reaction_emojis", e.target.value)}
+          />
+        </label>
       </div>
     </div>
   );
@@ -644,6 +713,15 @@ function preferredDefaultPlatform(platforms: string[]) {
   return platforms[0] ?? "feishu";
 }
 
+function defaultChannelConfig(type: string) {
+  return type === "feishu" || type === "lark" ? { ...FEISHU_DEFAULTS } : {};
+}
+
+function configValue(config: Record<string, string>, key: string, fallback: string) {
+  const value = config[key];
+  return value === undefined || value === "" ? fallback : value;
+}
+
 function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollResponse): Partial<Channel> {
   const platform = res.platform ?? draft.type ?? "feishu";
   return {
@@ -652,6 +730,7 @@ function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollRespon
     type: platform,
     enabled: draft.enabled ?? true,
     config: {
+      ...defaultChannelConfig(platform),
       ...(draft.config ?? {}),
       app_id: res.app_id ?? "",
       app_secret: res.app_secret ?? "",

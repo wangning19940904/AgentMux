@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Sun,
   TerminalSquare,
+  Wrench,
   Workflow,
 } from "lucide-react";
 import { ProvidersPanel } from "./panels/ProvidersPanel";
@@ -36,6 +37,7 @@ import { OverviewPanel } from "./panels/OverviewPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
 import { SkillsPanel } from "./panels/SkillsPanel";
 import { MCPPanel } from "./panels/MCPPanel";
+import { ToolsPanel } from "./panels/ToolsPanel";
 import { GuardPanel } from "./panels/GuardPanel";
 import { SessionsPanel } from "./panels/SessionsPanel";
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
@@ -44,6 +46,7 @@ type Tab =
   | "overview"
   | "agents"
   | "connect"
+  | "tools"
   | "frameworks"
   | "usage"
   | "providers"
@@ -58,6 +61,7 @@ const TABS: { id: Tab; labelKey: string; icon: typeof LayoutGrid }[] = [
   { id: "overview", labelKey: "nav.overview", icon: LayoutGrid },
   { id: "agents", labelKey: "nav.agents", icon: Bot },
   { id: "connect", labelKey: "nav.connect", icon: Cable },
+  { id: "tools", labelKey: "nav.tools", icon: Wrench },
   { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
   { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
   { id: "usage", labelKey: "nav.usage", icon: Gauge },
@@ -244,6 +248,7 @@ function Shell({
             {tab === "overview" && <OverviewPanel />}
             {tab === "agents" && <AgentsPanel />}
             {tab === "connect" && <ConnectPanel />}
+            {tab === "tools" && <ToolsPanel />}
             {tab === "frameworks" && <FrameworksPanel />}
             {tab === "usage" && <UsagePanel />}
             {tab === "sessions" && <SessionsPanel />}

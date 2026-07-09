@@ -19,6 +19,7 @@ import (
 	"github.com/agentnexus/agentnexus/skills"
 	"github.com/agentnexus/agentnexus/store"
 	"github.com/agentnexus/agentnexus/usage"
+	"github.com/agentnexus/agentnexus/workspace"
 	"log/slog"
 	"time"
 
@@ -48,11 +49,13 @@ func (a *App) startup(ctx context.Context) {
 	reporter := func(ctx context.Context, period string, since time.Time) (any, error) {
 		return ue.Report(ctx, period, since)
 	}
+	initializer := workspace.New()
 	srv := server.New(cfg, log, st, svc, reporter)
 	srv.SetProviderService(svc)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
-	if eng, err := server.BuildEngine(log, cfg); err != nil {
+	srv.SetWorkspaceInitializer(initializer)
+	if eng, err := server.BuildEngine(log, cfg, initializer); err != nil {
 		log.Error("build engine", "err", err)
 	} else {
 		connectSvc := core.NewConnectService(log, eng, st)

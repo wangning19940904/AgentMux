@@ -2002,6 +2002,62 @@ textarea:focus {
   border-radius: var(--radius);
 }
 
+.agent-channel-options {
+  align-items: stretch;
+}
+
+.agent-channel-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: min(100%, 220px);
+  max-width: 100%;
+  min-height: 46px;
+  padding: 5px 10px 5px 6px;
+  color: var(--text);
+  text-align: left;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.agent-channel-option.selected {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: color-mix(in srgb, var(--green) 24%, var(--border));
+}
+
+.agent-channel-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.agent-channel-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-channel-copy strong,
+.agent-channel-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-channel-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.agent-channel-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 .switch-row {
   display: flex;
   align-items: center;
@@ -2359,7 +2415,7 @@ textarea:focus {
   color: var(--muted);
 }
 
-.connect-page .channel-avatar {
+.channel-avatar {
   display: grid;
   flex: 0 0 44px;
   place-items: center;
@@ -2372,21 +2428,41 @@ textarea:focus {
   border-radius: 8px;
 }
 
-.connect-page .channel-avatar img {
+.channel-avatar-small {
+  flex-basis: 34px;
+  width: 34px;
+  height: 34px;
+}
+
+.channel-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.connect-page .channel-avatar.fallback {
+.channel-avatar.fallback {
   background: color-mix(in srgb, var(--accent-soft) 72%, var(--bg));
 }
 
-.connect-page .channel-card-copy {
+.channel-card-copy {
   display: grid;
   flex: 1 1 auto;
   gap: 3px;
   min-width: 0;
+}
+
+.channel-options {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.channel-option-toggle {
+  align-self: stretch;
+  min-height: 36px;
 }
 
 .connect-page .trigger-prompt {
@@ -2802,4 +2878,136 @@ textarea:focus {
   padding: 12px;
   border-radius: 8px;
   margin: 0;
+}
+
+.tools-page .surface-header {
+  align-items: flex-start;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.tool-card {
+  display: grid;
+  gap: 12px;
+  min-height: 174px;
+  padding: 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tool-card-head > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tool-card-head strong,
+.tool-card-head small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card p {
+  min-height: 42px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tool-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.tools-search {
+  display: flex;
+  align-items: center;
+  width: min(320px, 100%);
+  height: 38px;
+  padding: 0 11px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tools-search input {
+  min-width: 0;
+  height: 100%;
+  padding: 0 0 0 8px;
+  background: transparent;
+  border: 0;
+}
+
+.tools-two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.tools-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tools-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 9px 10px;
+  color: var(--text);
+  text-align: left;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tools-list-row.static {
+  cursor: default;
+}
+
+.tools-list-row > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tools-list-row strong,
+.tools-list-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools-list-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  .tools-two-column {
+    grid-template-columns: 1fr;
+  }
 }

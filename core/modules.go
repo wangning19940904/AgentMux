@@ -61,6 +61,31 @@ type SkillManager interface {
 	SetEnabled(ctx context.Context, name string, enabled bool) error
 }
 
+// WorkspaceInitOptions describes the agent workspace that must be prepared
+// before a local agent runtime starts.
+type WorkspaceInitOptions struct {
+	AgentID    string   `json:"agent_id,omitempty"`
+	RuntimeID  string   `json:"runtime_id,omitempty"`
+	WorkDir    string   `json:"work_dir,omitempty"`
+	Skills     []string `json:"skills,omitempty"`
+	MCPServers []string `json:"mcp_servers,omitempty"`
+}
+
+// WorkspaceInitResult reports what the initializer created or warned about.
+type WorkspaceInitResult struct {
+	WorkDir   string   `json:"work_dir"`
+	Created   []string `json:"created,omitempty"`
+	Updated   []string `json:"updated,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	RuntimeID string   `json:"runtime_id,omitempty"`
+	AgentID   string   `json:"agent_id,omitempty"`
+}
+
+// WorkspaceInitializer prepares a work directory for one agent run.
+type WorkspaceInitializer interface {
+	InitializeWorkspace(ctx context.Context, opts WorkspaceInitOptions) (*WorkspaceInitResult, error)
+}
+
 // MCPServer is a registered Model Context Protocol server definition
 // (AgentNexus MCP Registry) that can be distributed to agents/tools.
 type MCPServer struct {

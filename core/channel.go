@@ -36,6 +36,32 @@ const (
 	ChannelStateStopped = "stopped"
 )
 
+// Feishu/Lark channel config keys.
+const (
+	ChannelConfigReplyScope        = "reply_scope"
+	ChannelConfigReplyMode         = "reply_mode"
+	ChannelConfigAckReaction       = "ack_reaction_enabled"
+	ChannelConfigAckReactionEmojis = "ack_reaction_emojis"
+)
+
+// Channel reply scopes.
+const (
+	ReplyScopeDMAndMentions = "dm_and_mentions"
+	ReplyScopeAll           = "all"
+	ReplyScopeMentionsOnly  = "mentions_only"
+)
+
+// Channel reply modes.
+const (
+	ReplyModeStreamMessage = "stream_message"
+	ReplyModeStreamCard    = "stream_card"
+)
+
+const (
+	DefaultAckReactionEnabled = "true"
+	DefaultAckReactionEmojis  = "OK,THUMBSUP,MUSCLE,THANKS"
+)
+
 // Trigger kinds. A trigger is the unified automation entry: cron schedules,
 // inbound webhooks and engine lifecycle events all flow through it
 // (cc-connect's CronJob + WebhookServer + hooks, unified).

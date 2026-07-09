@@ -9,10 +9,12 @@ import (
 
 // projectRuntime holds the live platform/agent instances for one project.
 type projectRuntime struct {
+	owner     *Engine
 	name      string
 	agent     Agent
 	platforms []Platform
 	workDir   string
+	workspace WorkspaceInitOptions
 
 	mu       sync.Mutex
 	sessions map[string]AgentSession // chatID -> session
@@ -27,13 +29,14 @@ type EventSink func(event HookEvent, data map[string]string)
 // inbound messages to agent sessions, streaming responses back. Besides
 // config.toml projects it hosts dynamically attached console-managed channels.
 type Engine struct {
-	log      *slog.Logger
-	hooks    *HookRunner
-	sink     EventSink
-	mu       sync.RWMutex
-	projects map[string]*projectRuntime
-	channels map[string]*channelRuntime
-	inbound  chan *Message
+	log       *slog.Logger
+	hooks     *HookRunner
+	sink      EventSink
+	mu        sync.RWMutex
+	projects  map[string]*projectRuntime
+	channels  map[string]*channelRuntime
+	inbound   chan *Message
+	workspace WorkspaceInitializer
 }
 
 // NewEngine constructs an Engine.
@@ -53,6 +56,11 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 // SetEventSink attaches the unified event callback. Must be called before
 // Start.
 func (e *Engine) SetEventSink(sink EventSink) { e.sink = sink }
+
+// SetWorkspaceInitializer attaches the pre-run workspace initializer.
+func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
+	e.workspace = initializer
+}
 
 // emit dispatches a lifecycle event to config.toml hooks and the event sink.
 // It copies data per consumer so the caller's map is never mutated and async
@@ -74,14 +82,23 @@ func (e *Engine) emit(ctx context.Context, event HookEvent, data map[string]stri
 }
 
 // AddProject registers a project's agent and platforms with the engine.
-func (e *Engine) AddProject(name, workDir string, agent Agent, platforms []Platform) {
+func (e *Engine) AddProject(name, workDir string, agent Agent, platforms []Platform, workspace ...WorkspaceInitOptions) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	opts := WorkspaceInitOptions{WorkDir: workDir}
+	if len(workspace) > 0 {
+		opts = workspace[0]
+		if opts.WorkDir == "" {
+			opts.WorkDir = workDir
+		}
+	}
 	e.projects[name] = &projectRuntime{
+		owner:     e,
 		name:      name,
 		agent:     agent,
 		platforms: platforms,
 		workDir:   workDir,
+		workspace: opts,
 		sessions:  map[string]AgentSession{},
 	}
 }
@@ -116,14 +133,17 @@ func (e *Engine) Start(ctx context.Context) error {
 // eventData builds the hook/event payload for a message.
 func eventData(msg *Message) map[string]string {
 	return map[string]string{
-		"text":       msg.Text,
-		"platform":   msg.Platform,
-		"project":    msg.Project,
-		"channel_id": msg.ChannelID,
-		"chat_id":    msg.ChatID,
-		"user_id":    msg.UserID,
-		"user_name":  msg.UserName,
-		"origin":     msg.Origin,
+		"text":          msg.Text,
+		"platform":      msg.Platform,
+		"project":       msg.Project,
+		"channel_id":    msg.ChannelID,
+		"chat_id":       msg.ChatID,
+		"chat_type":     msg.ChatType,
+		"user_id":       msg.UserID,
+		"user_name":     msg.UserName,
+		"mentioned_bot": fmt.Sprintf("%t", msg.MentionedBot),
+		"mention_all":   fmt.Sprintf("%t", msg.MentionAll),
+		"origin":        msg.Origin,
 	}
 }
 
@@ -138,9 +158,24 @@ func withError(data map[string]string, err error) map[string]string {
 
 // handle routes a single inbound message to its runtime's agent session.
 func (e *Engine) handle(ctx context.Context, msg *Message) {
-	if msg.ChannelID != "" && e.duplicateChannelMessage(msg) {
-		e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
-		return
+	if msg.ChannelID != "" {
+		rt := e.channelRuntime(msg.ChannelID)
+		if rt == nil {
+			e.log.Warn("no runtime for channel message", "channel_id", msg.ChannelID)
+			return
+		}
+		if rt.duplicateMessage(msg) {
+			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
+			return
+		}
+		if !rt.acceptsMessage(msg) {
+			e.log.Info("channel message ignored by reply scope",
+				"channel_id", msg.ChannelID,
+				"platform", msg.Platform,
+				"chat_type", msg.ChatType,
+				"mentioned_bot", msg.MentionedBot)
+			return
+		}
 	}
 
 	data := eventData(msg)
@@ -222,6 +257,36 @@ func (e *Engine) consumeTurn(ctx context.Context, events <-chan *Event, reply fu
 	return lastText, firstErr
 }
 
+// streamTurnMessage drives a single turn onto a StreamMessageReplier,
+// rendering the whole answer as one in-place updating plain-text message.
+func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier, sess AgentSession, msg *Message, data map[string]string) {
+	events, err := sess.Send(ctx, msg.Text)
+	if err != nil {
+		e.log.Error("send to session", "err", err)
+		e.emit(ctx, HookError, withError(data, err))
+		e.emitMessageStreamOnce(ctx, mr, msg, "failed: "+err.Error(), true)
+		return
+	}
+
+	stream, err := mr.BeginMessageReply(ctx, msg)
+	if err != nil {
+		e.log.Error("begin streaming message reply", "err", err)
+		var reply func(string)
+		if p, ok := mr.(Platform); ok {
+			reply = func(text string) {
+				if rerr := p.Reply(ctx, msg, text); rerr != nil {
+					e.log.Error("channel reply", "err", rerr)
+				}
+			}
+		}
+		e.consumeTurn(ctx, events, reply, data)
+		return
+	}
+	defer func() { _ = stream.Close(ctx) }()
+
+	e.driveReplyStream(ctx, stream, events, data)
+}
+
 // streamTurnCard drives a single turn onto a StreamReplier, rendering the whole
 // answer as one in-place updating message (a Feishu card). It updates the same
 // message as the agent streams output and marks it done/failed at the end. On
@@ -253,6 +318,10 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
+	e.driveReplyStream(ctx, stream, events, data)
+}
+
+func (e *Engine) driveReplyStream(ctx context.Context, stream ReplyStream, events <-chan *Event, data map[string]string) {
 	var lastText, rendered string
 	var failed bool
 	for ev := range events {
@@ -279,6 +348,18 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 		lastText = "(no reply)"
 	}
 	if err := stream.Update(ctx, lastText, true, failed); err != nil {
+		e.log.Error("stream finalize", "err", err)
+	}
+}
+
+func (e *Engine) emitMessageStreamOnce(ctx context.Context, mr StreamMessageReplier, msg *Message, text string, failed bool) {
+	stream, err := mr.BeginMessageReply(ctx, msg)
+	if err != nil {
+		e.log.Error("begin streaming message reply", "err", err)
+		return
+	}
+	defer func() { _ = stream.Close(ctx) }()
+	if err := stream.Update(ctx, text, true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
 	}
 }
@@ -317,7 +398,11 @@ func (pr *projectRuntime) session(ctx context.Context, chatID string) (AgentSess
 	if pr.agent == nil {
 		return nil, false, fmt.Errorf("project %q has no agent", pr.name)
 	}
-	s, err := pr.agent.StartSession(ctx, pr.workDir)
+	workDir, err := pr.owner.initializeWorkspace(ctx, pr.workspace, pr.workDir)
+	if err != nil {
+		return nil, false, err
+	}
+	s, err := pr.agent.StartSession(ctx, workDir)
 	if err != nil {
 		return nil, false, err
 	}

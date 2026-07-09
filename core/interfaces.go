@@ -14,11 +14,16 @@ import (
 type Message struct {
 	ID        string
 	ChatID    string
+	ChatType  string
 	UserID    string
 	UserName  string
 	Text      string
 	Images    [][]byte
 	Timestamp time.Time
+	// Mention metadata is populated by platforms that can distinguish group
+	// messages and bot mentions, such as Feishu/Lark.
+	MentionedBot bool
+	MentionAll   bool
 	// Platform/Project routing context.
 	Platform string
 	Project  string
@@ -105,6 +110,19 @@ type ReplyStream interface {
 	Update(ctx context.Context, text string, done, failed bool) error
 	// Close releases any resources held by the stream.
 	Close(ctx context.Context) error
+}
+
+// StreamMessageReplier is an optional Platform capability for rendering a
+// whole agent turn as one in-place updating plain-text message.
+type StreamMessageReplier interface {
+	BeginMessageReply(ctx context.Context, msg *Message) (ReplyStream, error)
+}
+
+// MessageReactioner is an optional Platform capability for marking an inbound
+// message while work is in progress and removing that mark when finished.
+type MessageReactioner interface {
+	AddReaction(ctx context.Context, msg *Message, emojiType string) (reactionID string, err error)
+	DeleteReaction(ctx context.Context, msg *Message, reactionID string) error
 }
 
 // Agent is an AI coding agent adapter (Claude Code, Codex, ...). It knows how

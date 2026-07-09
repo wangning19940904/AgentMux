@@ -10,7 +10,7 @@ import (
 // BuildEngine constructs the Engine with config.toml hooks and projects.
 // Shared by `anx serve`, `anx web` and the desktop shell so the channel &
 // trigger runtime behaves identically everywhere.
-func BuildEngine(log *slog.Logger, cfg *config.Config) (*core.Engine, error) {
+func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.WorkspaceInitializer) (*core.Engine, error) {
 	var hookList []core.Hook
 	for _, h := range cfg.Hooks {
 		hookList = append(hookList, core.Hook{
@@ -20,6 +20,9 @@ func BuildEngine(log *slog.Logger, cfg *config.Config) (*core.Engine, error) {
 	}
 	hooks := core.NewHookRunner(log, hookList)
 	eng := core.NewEngine(log, hooks)
+	if len(initializer) > 0 {
+		eng.SetWorkspaceInitializer(initializer[0])
+	}
 
 	for _, p := range cfg.Projects {
 		ag, err := core.CreateAgent(p.Agent, map[string]any{
@@ -37,7 +40,11 @@ func BuildEngine(log *slog.Logger, cfg *config.Config) (*core.Engine, error) {
 			}
 			plats = append(plats, plat)
 		}
-		eng.AddProject(p.Name, p.WorkDir, ag, plats)
+		eng.AddProject(p.Name, p.WorkDir, ag, plats, core.WorkspaceInitOptions{
+			AgentID:   "config:" + p.Name,
+			RuntimeID: p.Agent,
+			WorkDir:   p.WorkDir,
+		})
 	}
 	return eng, nil
 }

@@ -352,6 +352,60 @@ export interface FrameworkInstallResult {
   error?: string;
 }
 
+export interface CLIManagedTool {
+  spec: {
+    id: string;
+    name: string;
+    bin: string;
+    package: string;
+    registry?: string;
+    note?: string;
+  };
+  installed: boolean;
+  path?: string;
+  version?: string;
+  detail?: string;
+}
+
+export interface CLIInstallResult {
+  id: string;
+  action: "install" | "update";
+  ok: boolean;
+  command?: string;
+  log?: string;
+  version?: string;
+  error?: string;
+}
+
+export interface MarketplaceSkill {
+  name: string;
+  description: string;
+  category?: string;
+  source: string;
+  repo: string;
+  path: string;
+  url?: string;
+  trusted: boolean;
+  installed: boolean;
+}
+
+export interface WorkspaceInitResult {
+  work_dir: string;
+  created?: string[];
+  updated?: string[];
+  warnings?: string[];
+  runtime_id?: string;
+  agent_id?: string;
+}
+
+export interface ToolsResponse {
+  cli: CLIManagedTool[];
+  frameworks: Framework[];
+  skills: Skill[];
+  mcp: MCPServer[];
+  marketplace: MarketplaceSkill[];
+}
+
 export interface AgentSession {
   provider_id: string;
   surface: string;
@@ -468,8 +522,13 @@ export const api = {
   agentInstances: () => get<AgentInstance[] | null>("/api/v1/agent-instances"),
   upsertAgentInstance: (agent: Partial<AgentInstance>) =>
     postChecked<AgentInstance>("/api/v1/agent-instances", agent),
+  initializeAgentWorkspace: (payload: { id?: string } | Partial<AgentInstance>) =>
+    postChecked<WorkspaceInitResult>("/api/v1/agent-instances/initialize", payload),
   deleteAgentInstance: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/agent-instances?id=${encodeURIComponent(id)}`),
+  tools: () => get<ToolsResponse>("/api/v1/tools"),
+  installCLI: (id: string, action: "install" | "update") =>
+    postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
   providers: () => getProviders("/api/v1/providers"),
   activeRoutes: () => get<ProviderRoute[] | null>("/api/v1/providers/active"),
   presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],
@@ -537,6 +596,12 @@ export const api = {
 
   // AgentNexus Skills
   skills: () => get<Skill[] | null>("/api/v1/skills"),
+  skillMarketplace: (q = "", source = "", category = "") =>
+    get<MarketplaceSkill[] | null>(
+      `/api/v1/skills/marketplace?q=${encodeURIComponent(q)}&source=${encodeURIComponent(source)}&category=${encodeURIComponent(category)}`
+    ),
+  installSkill: (skill: Pick<MarketplaceSkill, "repo" | "path" | "name">) =>
+    postChecked<Skill>("/api/v1/skills/install", skill),
   toggleSkill: (name: string, enabled: boolean) =>
     post<{ ok: boolean }>("/api/v1/skills/toggle", { name, enabled }),
 

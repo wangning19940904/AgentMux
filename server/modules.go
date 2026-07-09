@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/agentnexus/agentnexus/core"
+	skillpkg "github.com/agentnexus/agentnexus/skills"
 )
 
 // registerModuleRoutes wires the Memory, Skills, MCP Registry and Guard
@@ -18,6 +20,8 @@ func (s *Server) registerModuleRoutes() {
 	s.mux.HandleFunc("DELETE /api/v1/memory", s.handleMemoryDelete)
 
 	s.mux.HandleFunc("GET /api/v1/skills", s.handleSkillsList)
+	s.mux.HandleFunc("GET /api/v1/skills/marketplace", s.handleSkillsMarketplace)
+	s.mux.HandleFunc("POST /api/v1/skills/install", s.handleSkillInstall)
 	s.mux.HandleFunc("POST /api/v1/skills/toggle", s.handleSkillToggle)
 
 	s.mux.HandleFunc("GET /api/v1/mcp", s.handleMCPList)
@@ -31,13 +35,13 @@ func (s *Server) registerModuleRoutes() {
 // handleModules reports which control-plane modules are registered/active.
 func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"connect":  core.RegisteredPlatforms(),
-		"router":   core.RegisteredAgents(),
-		"ledger":   core.RegisteredCollectors(),
-		"memory":   core.RegisteredMemories(),
-		"skills":   core.RegisteredSkillManagers(),
-		"mcp":      core.RegisteredMCPRegistries(),
-		"guard":    core.RegisteredGuards(),
+		"connect": core.RegisteredPlatforms(),
+		"router":  core.RegisteredAgents(),
+		"ledger":  core.RegisteredCollectors(),
+		"memory":  core.RegisteredMemories(),
+		"skills":  core.RegisteredSkillManagers(),
+		"mcp":     core.RegisteredMCPRegistries(),
+		"guard":   core.RegisteredGuards(),
 		"active": map[string]bool{
 			"memory": s.memory != nil,
 			"skills": s.skills != nil,
@@ -100,6 +104,44 @@ func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.skills.List(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+type marketplaceSkillManager interface {
+	Marketplace(ctx context.Context, query, source, category string) ([]skillpkg.MarketplaceSkill, error)
+	InstallMarketplace(ctx context.Context, req skillpkg.InstallRequest) (*core.Skill, error)
+}
+
+func (s *Server) handleSkillsMarketplace(w http.ResponseWriter, r *http.Request) {
+	mgr, ok := s.skills.(marketplaceSkillManager)
+	if !ok || mgr == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	res, err := mgr.Marketplace(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("source"), r.URL.Query().Get("category"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleSkillInstall(w http.ResponseWriter, r *http.Request) {
+	mgr, ok := s.skills.(marketplaceSkillManager)
+	if !ok || mgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "skills marketplace not enabled"})
+		return
+	}
+	var req skillpkg.InstallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	res, err := mgr.InstallMarketplace(r.Context(), req)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

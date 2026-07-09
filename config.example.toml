@@ -24,6 +24,12 @@ system_prompt = "You are a helpful coding assistant."
   type = "feishu"
   app_id = "${FEISHU_APP_ID}"
   app_secret = "${FEISHU_APP_SECRET}"
+  # reply_scope: dm_and_mentions (default), all, mentions_only
+  reply_scope = "dm_and_mentions"
+  # reply_mode: stream_message (default), stream_card
+  reply_mode = "stream_message"
+  ack_reaction_enabled = "true"
+  ack_reaction_emojis = "OK,THUMBSUP,MUSCLE,THANKS"
 
   # Other supported platform types (config.toml projects or the console's
   # Channels & Triggers panel):

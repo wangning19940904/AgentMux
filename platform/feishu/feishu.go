@@ -67,7 +67,8 @@ func (p *Platform) Reply(ctx context.Context, msg *core.Message, text string) er
 	if p.client == nil {
 		return fmt.Errorf("%s: client not started", p.name)
 	}
-	return p.client.SendText(ctx, msg.ChatID, text)
+	_, err := p.client.SendText(ctx, msg.ChatID, text)
+	return err
 }
 
 // Send delivers an unsolicited message to a chat.
@@ -75,7 +76,17 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 	if p.client == nil {
 		return fmt.Errorf("%s: client not started", p.name)
 	}
-	return p.client.SendText(ctx, chatID, text)
+	_, err := p.client.SendText(ctx, chatID, text)
+	return err
+}
+
+// BeginMessageReply opens a streaming plain-text reply for the chat that
+// originated msg. The first Update posts a text message; later Updates edit it.
+func (p *Platform) BeginMessageReply(ctx context.Context, msg *core.Message) (core.ReplyStream, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("%s: client not started", p.name)
+	}
+	return &textStream{client: p.client, chatID: msg.ChatID}, nil
 }
 
 // BeginReply opens a streaming interactive-card reply for the chat that
@@ -87,6 +98,44 @@ func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.Repl
 	}
 	return &cardStream{client: p.client, chatID: msg.ChatID}, nil
 }
+
+// AddReaction marks the inbound message while the agent is working.
+func (p *Platform) AddReaction(ctx context.Context, msg *core.Message, emojiType string) (string, error) {
+	if p.client == nil {
+		return "", fmt.Errorf("%s: client not started", p.name)
+	}
+	return p.client.AddReaction(ctx, msg.ID, emojiType)
+}
+
+// DeleteReaction removes a mark previously added by AddReaction.
+func (p *Platform) DeleteReaction(ctx context.Context, msg *core.Message, reactionID string) error {
+	if p.client == nil {
+		return fmt.Errorf("%s: client not started", p.name)
+	}
+	return p.client.DeleteReaction(ctx, msg.ID, reactionID)
+}
+
+// textStream is a live Feishu text message: the first Update posts the
+// message, later Updates edit it in place.
+type textStream struct {
+	client    clientAPI
+	chatID    string
+	messageID string
+}
+
+func (s *textStream) Update(ctx context.Context, text string, done, failed bool) error {
+	if s.messageID == "" {
+		id, err := s.client.SendText(ctx, s.chatID, text)
+		if err != nil {
+			return err
+		}
+		s.messageID = id
+		return nil
+	}
+	return s.client.UpdateText(ctx, s.messageID, text)
+}
+
+func (s *textStream) Close(ctx context.Context) error { return nil }
 
 // cardStream is a live Feishu card: the first Update posts the card, later
 // Updates patch it in place.

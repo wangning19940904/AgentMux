@@ -93,8 +93,8 @@ func (c *ConnectService) ReloadChannels(ctx context.Context) error {
 	}
 	runCtx := c.baseCtx()
 	for _, ch := range desired {
-		agent, workDir := c.resolveAgent(ctx, ch.AgentID)
-		if err := c.eng.AttachChannel(runCtx, ch, agent, workDir); err != nil {
+		agent, workDir, workspace := c.resolveAgent(ctx, ch.AgentID)
+		if err := c.eng.AttachChannel(runCtx, ch, agent, workDir, workspace); err != nil {
 			c.log.Error("attach channel", "channel", ch.Name, "type", ch.Type, "err", err)
 		}
 	}
@@ -124,8 +124,8 @@ func (c *ConnectService) RestartChannel(ctx context.Context, id string) error {
 	if !ch.Enabled {
 		return nil
 	}
-	agent, workDir := c.resolveAgent(ctx, ch.AgentID)
-	return c.eng.AttachChannel(c.baseCtx(), *ch, agent, workDir)
+	agent, workDir, workspace := c.resolveAgent(ctx, ch.AgentID)
+	return c.eng.AttachChannel(c.baseCtx(), *ch, agent, workDir, workspace)
 }
 
 // ChannelStatuses reports the live state of attached channels.
@@ -171,8 +171,8 @@ func (c *ConnectService) runTrigger(ctx context.Context, id, input string, manua
 	_ = c.store.UpdateTriggerRun(context.Background(), tr.ID, start, "running", "")
 	runCtx, cancel := context.WithTimeout(ctx, DefaultTriggerTimeout)
 	defer cancel()
-	fallbackAgent, fallbackWorkDir := c.resolveAgent(runCtx, tr.AgentID)
-	_, err = c.eng.ExecuteTrigger(runCtx, *tr, fallbackAgent, fallbackWorkDir, input)
+	fallbackAgent, fallbackWorkDir, workspace := c.resolveAgent(runCtx, tr.AgentID)
+	_, err = c.eng.ExecuteTrigger(runCtx, *tr, fallbackAgent, fallbackWorkDir, input, workspace)
 	c.recordRun(tr, start, err)
 }
 
@@ -231,14 +231,21 @@ func (c *ConnectService) processEvent(event HookEvent, data map[string]string) {
 
 // resolveAgent builds an Agent runtime for a stored agent instance id.
 // Returns (nil, "") when the id is empty or the instance cannot be resolved.
-func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agent, string) {
+func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agent, string, WorkspaceInitOptions) {
 	if agentID == "" {
-		return nil, ""
+		return nil, "", WorkspaceInitOptions{}
 	}
 	inst, err := c.store.GetAgentInstance(ctx, agentID)
 	if err != nil || inst == nil {
 		c.log.Warn("agent instance not found", "agent_id", agentID, "err", err)
-		return nil, ""
+		return nil, "", WorkspaceInitOptions{}
+	}
+	workspace := WorkspaceInitOptions{
+		AgentID:    inst.ID,
+		RuntimeID:  inst.RuntimeID,
+		WorkDir:    inst.WorkDir,
+		Skills:     append([]string(nil), inst.Skills...),
+		MCPServers: append([]string(nil), inst.MCPServers...),
 	}
 	cfg := map[string]any{
 		"work_dir":      inst.WorkDir,
@@ -250,7 +257,7 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	agent, err := CreateAgent(inst.RuntimeID, cfg)
 	if err != nil {
 		c.log.Error("create agent runtime", "runtime", inst.RuntimeID, "err", err)
-		return nil, ""
+		return nil, "", workspace
 	}
-	return agent, inst.WorkDir
+	return agent, inst.WorkDir, workspace
 }

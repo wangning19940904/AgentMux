@@ -13,6 +13,7 @@ import (
 	"github.com/agentnexus/agentnexus/skills"
 	"github.com/agentnexus/agentnexus/store"
 	"github.com/agentnexus/agentnexus/usage"
+	"github.com/agentnexus/agentnexus/workspace"
 
 	"github.com/agentnexus/agentnexus/core"
 )
@@ -35,6 +36,7 @@ func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.S
 		mcp.New(st),
 		guard.New(st, core.GuardAsk),
 	)
+	srv.SetWorkspaceInitializer(workspace.New())
 	return srv, svc
 }
 
@@ -42,10 +44,12 @@ func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.S
 // wires both onto the server. Shared by `anx serve` and `anx web` so
 // console-managed channels and cron triggers run in either mode.
 func attachRuntime(cfg *config.Config, st *store.Store, srv *server.Server) (*core.Engine, *core.ConnectService, error) {
-	eng, err := server.BuildEngine(logger, cfg)
+	initializer := workspace.New()
+	eng, err := server.BuildEngine(logger, cfg, initializer)
 	if err != nil {
 		return nil, nil, err
 	}
+	srv.SetWorkspaceInitializer(initializer)
 	connectSvc := core.NewConnectService(logger, eng, st)
 	srv.SetSender(eng)
 	srv.SetConnect(connectSvc)

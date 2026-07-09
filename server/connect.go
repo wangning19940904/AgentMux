@@ -483,6 +483,9 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 	ch.Name = strings.TrimSpace(ch.Name)
 	ch.Type = strings.TrimSpace(ch.Type)
 	ch.AgentID = strings.TrimSpace(ch.AgentID)
+	if ch.Config == nil {
+		ch.Config = map[string]string{}
+	}
 	if ch.Name == "" {
 		return fmt.Errorf("channel name is required")
 	}
@@ -510,11 +513,72 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 			}
 		}
 	}
+	if err := normalizeChannelConfig(ch); err != nil {
+		return err
+	}
 	if ch.CreatedAt.IsZero() {
 		ch.CreatedAt = now
 	}
 	ch.UpdatedAt = now
 	return nil
+}
+
+func normalizeChannelConfig(ch *core.Channel) error {
+	if ch.Type != "feishu" && ch.Type != "lark" {
+		return nil
+	}
+	scope := strings.TrimSpace(ch.Config[core.ChannelConfigReplyScope])
+	if scope == "" {
+		scope = core.ReplyScopeDMAndMentions
+	}
+	switch scope {
+	case core.ReplyScopeDMAndMentions, core.ReplyScopeAll, core.ReplyScopeMentionsOnly:
+		ch.Config[core.ChannelConfigReplyScope] = scope
+	default:
+		return fmt.Errorf("invalid reply_scope %q (want dm_and_mentions, all or mentions_only)", scope)
+	}
+
+	mode := strings.TrimSpace(ch.Config[core.ChannelConfigReplyMode])
+	if mode == "" {
+		mode = core.ReplyModeStreamMessage
+	}
+	switch mode {
+	case core.ReplyModeStreamMessage, core.ReplyModeStreamCard:
+		ch.Config[core.ChannelConfigReplyMode] = mode
+	default:
+		return fmt.Errorf("invalid reply_mode %q (want stream_message or stream_card)", mode)
+	}
+
+	ack := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigAckReaction]))
+	if ack == "" {
+		ack = core.DefaultAckReactionEnabled
+	}
+	switch ack {
+	case "true", "1", "yes", "on":
+		ch.Config[core.ChannelConfigAckReaction] = "true"
+	case "false", "0", "no", "off":
+		ch.Config[core.ChannelConfigAckReaction] = "false"
+	default:
+		return fmt.Errorf("invalid ack_reaction_enabled %q (want true or false)", ack)
+	}
+
+	emojis := cleanCommaList(ch.Config[core.ChannelConfigAckReactionEmojis])
+	if emojis == "" {
+		emojis = core.DefaultAckReactionEmojis
+	}
+	ch.Config[core.ChannelConfigAckReactionEmojis] = emojis
+	return nil
+}
+
+func cleanCommaList(raw string) string {
+	parts := strings.Split(raw, ",")
+	cleaned := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if item := strings.TrimSpace(part); item != "" {
+			cleaned = append(cleaned, item)
+		}
+	}
+	return strings.Join(cleaned, ",")
 }
 
 func (s *Server) normalizeTrigger(ctx context.Context, tr *core.Trigger) error {

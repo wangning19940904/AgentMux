@@ -94,6 +94,82 @@ func TestChannelUpsertValidationAndSecretRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/channels", core.Channel{
+		Name: "Feishu", Type: "feishu",
+		Config: map[string]string{
+			"app_id":                            "cli_test",
+			"app_secret":                        "secret",
+			core.ChannelConfigAckReaction:       "yes",
+			core.ChannelConfigAckReactionEmojis: " OK, THANKS, ",
+		},
+		Enabled: false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var saved core.Channel
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Config["app_secret"] != "<redacted>" {
+		t.Fatalf("saved secret = %q", saved.Config["app_secret"])
+	}
+	want := map[string]string{
+		core.ChannelConfigReplyScope:        core.ReplyScopeDMAndMentions,
+		core.ChannelConfigReplyMode:         core.ReplyModeStreamMessage,
+		core.ChannelConfigAckReaction:       "true",
+		core.ChannelConfigAckReactionEmojis: "OK,THANKS",
+	}
+	for k, v := range want {
+		if saved.Config[k] != v {
+			t.Fatalf("saved config[%s] = %q, want %q; config=%+v", k, saved.Config[k], v, saved.Config)
+		}
+	}
+
+	stored, err := st.GetChannel(ctx, saved.ID)
+	if err != nil || stored == nil {
+		t.Fatal(err)
+	}
+	if stored.Config["app_secret"] != "secret" {
+		t.Fatalf("stored secret = %q", stored.Config["app_secret"])
+	}
+	for k, v := range want {
+		if stored.Config[k] != v {
+			t.Fatalf("stored config[%s] = %q, want %q; config=%+v", k, stored.Config[k], v, stored.Config)
+		}
+	}
+
+	saved.Config["app_secret"] = "<redacted>"
+	saved.Config[core.ChannelConfigReplyMode] = core.ReplyModeStreamCard
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", saved)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("round-trip: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	stored, err = st.GetChannel(ctx, saved.ID)
+	if err != nil || stored == nil {
+		t.Fatal(err)
+	}
+	if stored.Config["app_secret"] != "secret" || stored.Config[core.ChannelConfigReplyMode] != core.ReplyModeStreamCard {
+		t.Fatalf("stored after round-trip = %+v", stored.Config)
+	}
+
+	invalids := []core.Channel{
+		{Name: "bad scope", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyScope: "direct"}},
+		{Name: "bad mode", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyMode: "lark_cli"}},
+		{Name: "bad ack", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigAckReaction: "sometimes"}},
+	}
+	for _, ch := range invalids {
+		rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", ch)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: code = %d body = %s", ch.Name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestPlatformsIncludeLarkAlias(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodGet, "/api/v1/platforms", nil)

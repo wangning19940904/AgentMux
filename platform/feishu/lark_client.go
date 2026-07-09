@@ -1,10 +1,14 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/agentnexus/agentnexus/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -23,6 +27,7 @@ type larkClient struct {
 	api       *lark.Client
 	ws        *larkws.Client
 	cancel    context.CancelFunc
+	botOpenID string
 }
 
 func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error) {
@@ -36,6 +41,7 @@ func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error)
 }
 
 func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
+	botOpenID := c.loadBotOpenID(ctx)
 	handler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
 			if event == nil || event.Event == nil || event.Event.Message == nil {
@@ -57,18 +63,26 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			if msg.ChatId != nil {
 				chatID = *msg.ChatId
 			}
+			chatType := ""
+			if msg.ChatType != nil {
+				chatType = *msg.ChatType
+			}
 			userID := ""
 			if event.Event.Sender != nil && event.Event.Sender.SenderId != nil &&
 				event.Event.Sender.SenderId.OpenId != nil {
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
+			mentionedBot, mentionAll := mentionState(msg, botOpenID, text)
 			inbound <- &core.Message{
-				ID:       messageID,
-				ChatID:   chatID,
-				UserID:   userID,
-				Text:     text,
-				Platform: c.platform,
-				Project:  project,
+				ID:           messageID,
+				ChatID:       chatID,
+				ChatType:     chatType,
+				UserID:       userID,
+				Text:         text,
+				MentionedBot: mentionedBot,
+				MentionAll:   mentionAll,
+				Platform:     c.platform,
+				Project:      project,
 			}
 			return nil
 		})
@@ -87,7 +101,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 	}
 }
 
-func (c *larkClient) SendText(ctx context.Context, chatID, text string) error {
+func (c *larkClient) SendText(ctx context.Context, chatID, text string) (string, error) {
 	content, _ := json.Marshal(map[string]string{"text": text})
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType("chat_id").
@@ -99,10 +113,32 @@ func (c *larkClient) SendText(ctx context.Context, chatID, text string) error {
 		Build()
 	resp, err := c.api.Im.Message.Create(ctx, req)
 	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send text: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) UpdateText(ctx context.Context, messageID, text string) error {
+	content, _ := json.Marshal(map[string]string{"text": text})
+	req := larkim.NewUpdateMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewUpdateMessageReqBodyBuilder().
+			MsgType(larkim.MsgTypeText).
+			Content(string(content)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Update(ctx, req)
+	if err != nil {
 		return err
 	}
 	if !resp.Success() {
-		return fmt.Errorf("%s send failed: %s", c.platform, resp.Msg)
+		return fmt.Errorf("%s update text failed: %s", c.platform, resp.Msg)
 	}
 	return nil
 }
@@ -142,6 +178,41 @@ func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, don
 	}
 	if !resp.Success() {
 		return fmt.Errorf("%s update card failed: %s", c.platform, resp.Msg)
+	}
+	return nil
+}
+
+func (c *larkClient) AddReaction(ctx context.Context, messageID, emojiType string) (string, error) {
+	req := larkim.NewCreateMessageReactionReqBuilder().
+		MessageId(messageID).
+		Body(&larkim.CreateMessageReactionReqBody{
+			ReactionType: larkim.NewEmojiBuilder().EmojiType(emojiType).Build(),
+		}).
+		Build()
+	resp, err := c.api.Im.MessageReaction.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s add reaction failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.ReactionId == nil {
+		return "", fmt.Errorf("%s add reaction: missing reaction id", c.platform)
+	}
+	return *resp.Data.ReactionId, nil
+}
+
+func (c *larkClient) DeleteReaction(ctx context.Context, messageID, reactionID string) error {
+	req := larkim.NewDeleteMessageReactionReqBuilder().
+		MessageId(messageID).
+		ReactionId(reactionID).
+		Build()
+	resp, err := c.api.Im.MessageReaction.Delete(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("%s delete reaction failed: %s", c.platform, resp.Msg)
 	}
 	return nil
 }
@@ -215,4 +286,111 @@ func extractText(msgType, content string) string {
 		return ""
 	}
 	return strings.TrimSpace(c.Text)
+}
+
+func (c *larkClient) loadBotOpenID(ctx context.Context) string {
+	if c.botOpenID != "" {
+		return c.botOpenID
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	openID, err := fetchBotOpenID(reqCtx, c.domain, c.appID, c.appSecret)
+	if err == nil {
+		c.botOpenID = openID
+	}
+	return c.botOpenID
+}
+
+func fetchBotOpenID(ctx context.Context, domain, appID, appSecret string) (string, error) {
+	base := strings.TrimRight(domain, "/")
+	payload, _ := json.Marshal(map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/open-apis/auth/v3/app_access_token/internal", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("token request failed: HTTP %d", resp.StatusCode)
+	}
+	var tokenResp struct {
+		Code           int    `json:"code"`
+		Msg            string `json:"msg"`
+		AppAccessToken string `json:"app_access_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
+		return "", err
+	}
+	if tokenResp.Code != 0 {
+		return "", fmt.Errorf("token request failed: %s", tokenResp.Msg)
+	}
+	if tokenResp.AppAccessToken == "" {
+		return "", fmt.Errorf("token request returned empty token")
+	}
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/open-apis/bot/v3/info", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.AppAccessToken)
+	resp, err = client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("bot info request failed: HTTP %d", resp.StatusCode)
+	}
+	var infoResp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Bot  struct {
+			OpenID string `json:"open_id"`
+		} `json:"bot"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&infoResp); err != nil {
+		return "", err
+	}
+	if infoResp.Code != 0 {
+		return "", fmt.Errorf("bot info request failed: %s", infoResp.Msg)
+	}
+	if infoResp.Bot.OpenID == "" {
+		return "", fmt.Errorf("bot info returned empty open_id")
+	}
+	return infoResp.Bot.OpenID, nil
+}
+
+func mentionState(msg *larkim.EventMessage, botOpenID, text string) (bool, bool) {
+	var mentionedBot bool
+	var mentionAll bool
+	if strings.Contains(text, "@_all") || strings.Contains(text, "@all") {
+		mentionAll = true
+	}
+	for _, mention := range msg.Mentions {
+		if mention == nil {
+			continue
+		}
+		if mention.Key != nil && (*mention.Key == "@_all" || *mention.Key == "@all") {
+			mentionAll = true
+		}
+		if mention.Id != nil && botOpenID != "" {
+			if (mention.Id.OpenId != nil && *mention.Id.OpenId == botOpenID) ||
+				(mention.Id.UserId != nil && *mention.Id.UserId == botOpenID) ||
+				(mention.Id.UnionId != nil && *mention.Id.UnionId == botOpenID) {
+				mentionedBot = true
+			}
+		}
+		if botOpenID == "" && mention.MentionedType != nil && strings.EqualFold(*mention.MentionedType, "app") {
+			mentionedBot = true
+		}
+	}
+	return mentionedBot, mentionAll
 }

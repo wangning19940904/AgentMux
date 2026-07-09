@@ -16,7 +16,7 @@ const DefaultTriggerTimeout = 30 * time.Minute
 // webhook payload) to the bound agent and pushes the final answer to the
 // bound channel chat. fallbackAgent/fallbackWorkDir are used when the trigger
 // has no attached channel or the channel has no agent bound.
-func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent Agent, fallbackWorkDir, input string) (string, error) {
+func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent Agent, fallbackWorkDir, input string, workspace ...WorkspaceInitOptions) (string, error) {
 	data := map[string]string{
 		"trigger_id": tr.ID,
 		"trigger":    tr.Name,
@@ -56,8 +56,22 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	}
 
 	agent, workDir := fallbackAgent, fallbackWorkDir
+	opts := WorkspaceInitOptions{AgentID: tr.AgentID, WorkDir: fallbackWorkDir}
+	if len(workspace) > 0 {
+		opts = workspace[0]
+		if opts.AgentID == "" {
+			opts.AgentID = tr.AgentID
+		}
+		if opts.WorkDir == "" {
+			opts.WorkDir = fallbackWorkDir
+		}
+	}
 	if rt != nil && rt.agent != nil {
 		agent, workDir = rt.agent, rt.workDir
+		opts = rt.workspace
+		if opts.WorkDir == "" {
+			opts.WorkDir = workDir
+		}
 	}
 	if agent == nil {
 		return "", fmt.Errorf("trigger %q has no agent to run (bind an agent or a channel with an agent)", tr.Name)
@@ -71,6 +85,10 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	if reuse {
 		sess, _, err = rt.session(ctx, tr.ChatID)
 	} else {
+		workDir, err = e.initializeWorkspace(ctx, opts, workDir)
+		if err != nil {
+			return "", fmt.Errorf("start session: %w", err)
+		}
 		sess, err = agent.StartSession(ctx, workDir)
 		if err == nil {
 			defer func() { _ = sess.Close(context.Background()) }()

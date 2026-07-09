@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -310,11 +311,18 @@ func TestStreamTurnSkipsDuplicateOutputAndFinal(t *testing.T) {
 // the engine should render channel turns as one in-place updating message.
 type streamingPlatform struct {
 	*fakePlatform
-	mu        sync.Mutex
-	updates   []string
-	doneText  string
-	doneCalls int
-	beginErr  error
+	mu               sync.Mutex
+	cardUpdates      []string
+	cardDoneText     string
+	cardDoneCalls    int
+	messageUpdates   []string
+	messageDoneText  string
+	messageDoneCalls int
+	beginErr         error
+	reactionErr      error
+	deleteErr        error
+	addedReactions   []string
+	deletedReactions []string
 }
 
 func newStreamingPlatform(name string) *streamingPlatform {
@@ -325,18 +333,56 @@ func (p *streamingPlatform) BeginReply(ctx context.Context, msg *Message) (Reply
 	if p.beginErr != nil {
 		return nil, p.beginErr
 	}
-	return &fakeReplyStream{parent: p}, nil
+	return &fakeReplyStream{parent: p, kind: "card"}, nil
 }
 
-type fakeReplyStream struct{ parent *streamingPlatform }
+func (p *streamingPlatform) BeginMessageReply(ctx context.Context, msg *Message) (ReplyStream, error) {
+	if p.beginErr != nil {
+		return nil, p.beginErr
+	}
+	return &fakeReplyStream{parent: p, kind: "message"}, nil
+}
+
+func (p *streamingPlatform) AddReaction(ctx context.Context, msg *Message, emojiType string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reactionErr != nil {
+		return "", p.reactionErr
+	}
+	p.addedReactions = append(p.addedReactions, emojiType)
+	return fmt.Sprintf("reaction-%d", len(p.addedReactions)), nil
+}
+
+func (p *streamingPlatform) DeleteReaction(ctx context.Context, msg *Message, reactionID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deleteErr != nil {
+		return p.deleteErr
+	}
+	p.deletedReactions = append(p.deletedReactions, reactionID)
+	return nil
+}
+
+type fakeReplyStream struct {
+	parent *streamingPlatform
+	kind   string
+}
 
 func (s *fakeReplyStream) Update(ctx context.Context, text string, done, failed bool) error {
 	s.parent.mu.Lock()
 	defer s.parent.mu.Unlock()
-	s.parent.updates = append(s.parent.updates, text)
+	if s.kind == "message" {
+		s.parent.messageUpdates = append(s.parent.messageUpdates, text)
+		if done {
+			s.parent.messageDoneText = text
+			s.parent.messageDoneCalls++
+		}
+		return nil
+	}
+	s.parent.cardUpdates = append(s.parent.cardUpdates, text)
 	if done {
-		s.parent.doneText = text
-		s.parent.doneCalls++
+		s.parent.cardDoneText = text
+		s.parent.cardDoneCalls++
 	}
 	return nil
 }
@@ -353,7 +399,10 @@ func TestChannelMessagePrefersStreamingCard(t *testing.T) {
 	defer restore()
 
 	agent := &fakeAgent{}
-	ch := Channel{ID: "c1", Name: "ops", Type: "fake-stream", Enabled: true, UpdatedAt: time.Now()}
+	ch := Channel{
+		ID: "c1", Name: "ops", Type: "fake-stream", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{ChannelConfigReplyMode: ReplyModeStreamCard},
+	}
 	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -363,11 +412,11 @@ func TestChannelMessagePrefersStreamingCard(t *testing.T) {
 	waitFor(t, "streaming finalize", func() bool {
 		plat.mu.Lock()
 		defer plat.mu.Unlock()
-		return plat.doneCalls == 1
+		return plat.cardDoneCalls == 1
 	})
 
 	plat.mu.Lock()
-	doneText := plat.doneText
+	doneText := plat.cardDoneText
 	plat.mu.Unlock()
 	if doneText != "echo: hello" {
 		t.Fatalf("final card text = %q, want %q", doneText, "echo: hello")
@@ -380,6 +429,193 @@ func TestChannelMessagePrefersStreamingCard(t *testing.T) {
 	if replies != 0 {
 		t.Fatalf("plain replies = %d, want 0 (streaming path)", replies)
 	}
+}
+
+func TestChannelMessageDefaultsToStreamingMessage(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("fake")
+	restore := stubPlatformFactory(t, "fake-message-stream", plat)
+	defer restore()
+
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-message-stream", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, &fakeAgent{}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ChatID: "chat-1", Text: "hello", Platform: "fake"})
+
+	waitFor(t, "message stream finalize", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return plat.messageDoneCalls == 1
+	})
+
+	plat.mu.Lock()
+	messageDoneText := plat.messageDoneText
+	cardDoneCalls := plat.cardDoneCalls
+	plat.mu.Unlock()
+	if messageDoneText != "echo: hello" {
+		t.Fatalf("final message text = %q, want %q", messageDoneText, "echo: hello")
+	}
+	if cardDoneCalls != 0 {
+		t.Fatalf("card stream calls = %d, want 0", cardDoneCalls)
+	}
+}
+
+func TestFeishuLikeChannelReplyScopeFiltersMessages(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("fake")
+	restore := stubPlatformFactory(t, "feishu", plat)
+	defer restore()
+
+	agent := &fakeAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "feishu", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", ChatType: "group", Text: "group", Platform: "fake"})
+	time.Sleep(150 * time.Millisecond)
+	if got := currentMessageDoneCalls(plat); got != 0 {
+		t.Fatalf("group without mention replies = %d, want 0", got)
+	}
+
+	plat.push(&Message{ID: "m2", ChatID: "chat-2", ChatType: "p2p", Text: "dm", Platform: "fake"})
+	waitFor(t, "dm accepted", func() bool { return currentMessageDoneCalls(plat) == 1 })
+
+	plat.push(&Message{ID: "m3", ChatID: "chat-3", ChatType: "topic_group", Text: "topic", MentionedBot: true, Platform: "fake"})
+	waitFor(t, "topic mention accepted", func() bool { return currentMessageDoneCalls(plat) == 2 })
+
+	eng.DetachChannel("c1")
+
+	platAll := newStreamingPlatform("fake")
+	restoreAll := stubPlatformFactory(t, "lark", platAll)
+	defer restoreAll()
+	chAll := Channel{
+		ID: "c2", Name: "all", Type: "lark", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{ChannelConfigReplyScope: ReplyScopeAll},
+	}
+	if err := eng.AttachChannel(ctx, chAll, &fakeAgent{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	platAll.push(&Message{ID: "m4", ChatID: "chat-4", ChatType: "group", Text: "all", Platform: "fake"})
+	waitFor(t, "all scope accepted", func() bool { return currentMessageDoneCalls(platAll) == 1 })
+	eng.DetachChannel("c2")
+
+	platMentions := newStreamingPlatform("fake")
+	restoreMentions := stubPlatformFactory(t, "feishu", platMentions)
+	defer restoreMentions()
+	chMentions := Channel{
+		ID: "c3", Name: "mentions", Type: "feishu", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{ChannelConfigReplyScope: ReplyScopeMentionsOnly},
+	}
+	if err := eng.AttachChannel(ctx, chMentions, &fakeAgent{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	platMentions.push(&Message{ID: "m5", ChatID: "chat-5", ChatType: "p2p", Text: "dm", Platform: "fake"})
+	time.Sleep(150 * time.Millisecond)
+	if got := currentMessageDoneCalls(platMentions); got != 0 {
+		t.Fatalf("mentions_only dm replies = %d, want 0", got)
+	}
+	platMentions.push(&Message{ID: "m6", ChatID: "chat-6", ChatType: "group", Text: "mention", MentionedBot: true, Platform: "fake"})
+	waitFor(t, "mentions_only accepted", func() bool { return currentMessageDoneCalls(platMentions) == 1 })
+}
+
+func TestFeishuLikeChannelAckReactionLifecycle(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("fake")
+	restore := stubPlatformFactory(t, "feishu", plat)
+	defer restore()
+
+	ch := Channel{
+		ID: "c1", Name: "ops", Type: "feishu", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{
+			ChannelConfigReplyScope:        ReplyScopeAll,
+			ChannelConfigReplyMode:         ReplyModeStreamMessage,
+			ChannelConfigAckReactionEmojis: "OK",
+		},
+	}
+	if err := eng.AttachChannel(ctx, ch, &fakeAgent{}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", ChatType: "group", Text: "hello", Platform: "fake"})
+	waitFor(t, "reaction deleted", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.deletedReactions) == 1
+	})
+
+	plat.mu.Lock()
+	added := append([]string(nil), plat.addedReactions...)
+	deleted := append([]string(nil), plat.deletedReactions...)
+	messageDoneText := plat.messageDoneText
+	plat.mu.Unlock()
+	if len(added) != 1 || added[0] != "OK" {
+		t.Fatalf("added reactions = %+v, want [OK]", added)
+	}
+	if len(deleted) != 1 || deleted[0] != "reaction-1" {
+		t.Fatalf("deleted reactions = %+v, want [reaction-1]", deleted)
+	}
+	if messageDoneText != "echo: hello" {
+		t.Fatalf("final message text = %q", messageDoneText)
+	}
+}
+
+func TestFeishuLikeChannelAckReactionErrorDoesNotBlockReply(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("fake")
+	plat.reactionErr = errors.New("reaction denied")
+	restore := stubPlatformFactory(t, "feishu", plat)
+	defer restore()
+
+	ch := Channel{
+		ID: "c1", Name: "ops", Type: "feishu", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{
+			ChannelConfigReplyScope:        ReplyScopeAll,
+			ChannelConfigAckReactionEmojis: "OK",
+		},
+	}
+	if err := eng.AttachChannel(ctx, ch, &fakeAgent{}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", ChatType: "group", Text: "hello", Platform: "fake"})
+	waitFor(t, "reply despite reaction error", func() bool { return currentMessageDoneCalls(plat) == 1 })
+
+	plat.mu.Lock()
+	added := len(plat.addedReactions)
+	deleted := len(plat.deletedReactions)
+	messageDoneText := plat.messageDoneText
+	plat.mu.Unlock()
+	if added != 0 || deleted != 0 {
+		t.Fatalf("reaction lifecycle = added %d deleted %d, want no stored reaction", added, deleted)
+	}
+	if messageDoneText != "echo: hello" {
+		t.Fatalf("final message text = %q", messageDoneText)
+	}
+}
+
+func currentMessageDoneCalls(p *streamingPlatform) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.messageDoneCalls
 }
 
 func TestExecuteTriggerPushesToChannel(t *testing.T) {
@@ -519,10 +755,17 @@ func TestEventTriggerDispatch(t *testing.T) {
 // returns a cleanup that unregisters it.
 func stubPlatformFactory(t *testing.T, name string, p Platform) func() {
 	t.Helper()
-	RegisterPlatform(name, func(cfg map[string]any) (Platform, error) { return p, nil })
+	regMu.Lock()
+	old, hadOld := platforms[name]
+	platforms[name] = func(cfg map[string]any) (Platform, error) { return p, nil }
+	regMu.Unlock()
 	return func() {
 		regMu.Lock()
-		delete(platforms, name)
+		if hadOld {
+			platforms[name] = old
+		} else {
+			delete(platforms, name)
+		}
 		regMu.Unlock()
 	}
 }

@@ -1,6 +1,7 @@
 import { Bot, Cable, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type AgentInstance, type Channel, type ProviderRoute, type Trigger } from "../api";
+import { ChannelAvatar } from "../ChannelAvatar";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -508,21 +509,34 @@ function AgentForm({
               <Cable size={13} /> {t("agents.boundChannels")} ({selectedChannelIDs.length})
             </strong>
             {channelOptions.length === 0 && <span className="muted">{t("connect.noChannels")}</span>}
-            <div className="provider-chip-row">
-              {channelOptions.map((channel) => (
-                <button
-                  key={channel.id}
-                  className={`status-badge ${selectedChannelIDs.includes(channel.id) ? "success" : ""}`}
-                  disabled={readOnly}
-                  onClick={() => onToggleChannel(channel.id)}
-                  type="button"
-                >
-                  {channel.name} · {channel.type}
-                  {(channel.agent_name || channel.agent_id) && !selectedChannelIDs.includes(channel.id)
-                    ? ` · ${channel.agent_name || channel.agent_id}`
-                    : ""}
-                </button>
-              ))}
+            <div className="provider-chip-row agent-channel-options">
+              {channelOptions.map((channel) => {
+                const selected = selectedChannelIDs.includes(channel.id);
+                const displayName = channel.bot_name || channel.name;
+                const subtitle = [
+                  channel.bot_name && channel.name !== channel.bot_name ? channel.name : "",
+                  channel.type,
+                  (channel.agent_name || channel.agent_id) && !selected ? channel.agent_name || channel.agent_id : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <button
+                    key={channel.id}
+                    className={`agent-channel-option ${selected ? "selected" : ""}`}
+                    disabled={readOnly}
+                    onClick={() => onToggleChannel(channel.id)}
+                    title={subtitle ? `${displayName} · ${subtitle}` : displayName}
+                    type="button"
+                  >
+                    <ChannelAvatar channel={channel} size="small" />
+                    <span className="agent-channel-copy">
+                      <strong>{displayName}</strong>
+                      {subtitle && <small>{subtitle}</small>}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="mapping-card">

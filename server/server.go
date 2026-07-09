@@ -20,22 +20,23 @@ import (
 
 // Server is the management/bridge HTTP server.
 type Server struct {
-	cfg      *config.Config
-	log      *slog.Logger
-	st       *store.Store
-	provider core.ProviderManager
-	proxySvc *providerpkg.Service
-	usageFn  UsageReporter
-	sender   core.Sender
-	connect  *core.ConnectService
-	presets  any
-	memory   core.MemoryStore
-	skills   core.SkillManager
-	mcp      core.MCPRegistry
-	guard    core.Guard
-	sessions *sessionstore.Service
-	mux      *http.ServeMux
-	httpSrv  *http.Server
+	cfg       *config.Config
+	log       *slog.Logger
+	st        *store.Store
+	provider  core.ProviderManager
+	proxySvc  *providerpkg.Service
+	usageFn   UsageReporter
+	sender    core.Sender
+	connect   *core.ConnectService
+	presets   any
+	memory    core.MemoryStore
+	skills    core.SkillManager
+	mcp       core.MCPRegistry
+	guard     core.Guard
+	workspace core.WorkspaceInitializer
+	sessions  *sessionstore.Service
+	mux       *http.ServeMux
+	httpSrv   *http.Server
 }
 
 // UsageReporter produces an aggregated usage report for the API.
@@ -71,6 +72,11 @@ func (s *Server) SetModules(mem core.MemoryStore, sk core.SkillManager, mcp core
 	s.guard = g
 }
 
+// SetWorkspaceInitializer attaches the manual and runtime workspace initializer.
+func (s *Server) SetWorkspaceInitializer(initializer core.WorkspaceInitializer) {
+	s.workspace = initializer
+}
+
 // SetSessions attaches the Claude/Codex session manager. Nil disables routes.
 func (s *Server) SetSessions(svc *sessionstore.Service) { s.sessions = svc }
 
@@ -89,7 +95,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
 	s.mux.HandleFunc("GET /api/v1/agent-instances", s.handleAgentInstancesList)
 	s.mux.HandleFunc("POST /api/v1/agent-instances", s.handleAgentInstanceUpsert)
+	s.mux.HandleFunc("POST /api/v1/agent-instances/initialize", s.handleAgentInstanceInitialize)
 	s.mux.HandleFunc("DELETE /api/v1/agent-instances", s.handleAgentInstanceDelete)
+	s.mux.HandleFunc("GET /api/v1/tools", s.handleTools)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/install", s.handleCLIInstall)
 	s.mux.HandleFunc("GET /api/v1/providers", s.handleProvidersList)
 	s.mux.HandleFunc("POST /api/v1/providers", s.handleProviderUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/providers", s.handleProviderDelete)
