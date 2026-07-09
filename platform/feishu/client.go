@@ -22,6 +22,18 @@ type clientAPI interface {
 	SendCard(ctx context.Context, chatID, text string, done, failed bool) (messageID string, err error)
 	// UpdateCard replaces the content of a previously sent card message.
 	UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error
+	// BeginStreamCard creates a CardKit streaming card entity and sends it to
+	// the chat, returning the card entity ID used for subsequent streaming
+	// text updates. This is the native "typewriter" streaming path; it
+	// requires the cardkit:card:write permission.
+	BeginStreamCard(ctx context.Context, chatID string) (cardID string, err error)
+	// StreamCardText pushes the full accumulated text to the card's streaming
+	// text element. sequence must strictly increase across calls on the same
+	// card. Feishu computes the delta server-side and renders it as typing.
+	StreamCardText(ctx context.Context, cardID, text string, sequence int) error
+	// FinishStreamCard finalizes a streaming card: it writes the terminal text,
+	// styles the header for done/failed, and closes streaming mode.
+	FinishStreamCard(ctx context.Context, cardID, text string, sequence int, failed bool) error
 	// AddReaction marks a message with one emoji and returns the reaction ID.
 	AddReaction(ctx context.Context, messageID, emojiType string) (reactionID string, err error)
 	// DeleteReaction removes a reaction previously added by this client.

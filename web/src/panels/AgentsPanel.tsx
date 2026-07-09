@@ -1,6 +1,6 @@
 import { Bot, Cable, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type AgentInstance, type Channel, type ProviderRoute, type Trigger } from "../api";
+import { api, type AgentInstance, type Channel, type Provider, type ProviderRoute, type Trigger } from "../api";
 import { ChannelAvatar } from "../ChannelAvatar";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -15,6 +15,7 @@ const EMPTY_AGENT: AgentInstance = {
   system_prompt: "",
   provider_tool: "",
   provider_id: "",
+  default_model: "",
   memory_scope: "",
   channel_bindings: [],
   schedules: [],
@@ -107,11 +108,13 @@ export function AgentsPanel() {
   function update<K extends keyof AgentInstance>(key: K, value: AgentInstance[K]) {
     setDrawerDraft((current) => {
       if (!current) return current;
+      const routeChanged = key === "runtime_id" || key === "provider_tool" || key === "provider_id";
       return {
         ...current,
         [key]: value,
         provider_tool: key === "runtime_id" ? String(value) : current.provider_tool,
         provider_id: key === "runtime_id" ? "" : current.provider_id,
+        default_model: routeChanged ? "" : current.default_model,
       };
     });
   }
@@ -273,6 +276,7 @@ export function AgentsPanel() {
                   </span>
                   <span className={`source-badge ${agentSourceClass(item)}`}>{t(agentSourceLabelKey(item))}</span>
                   <span className="pill">{agentProviderSummary(item, activeRouteItems, t)}</span>
+                  {item.default_model && <span className="pill">{item.default_model}</span>}
                   <span className="pill">
                     {channelCount} {t("agents.channelCount")}
                   </span>
@@ -333,7 +337,7 @@ function AgentForm({
   canSave: boolean;
   activeRoutes: ProviderRoute[];
   channelOptions: Channel[];
-  compatibleProviders: { id: string; name: string }[];
+  compatibleProviders: Provider[];
   draft: AgentInstance;
   drawerMode: DrawerMode | null;
   mcpOptions: string[];
@@ -356,11 +360,27 @@ function AgentForm({
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.provider_name || activeRoute?.provider_id || "";
   const overrideProvider = compatibleProviders.find((provider) => provider.id === draft.provider_id);
+  const routeProvider = compatibleProviders.find((provider) => provider.id === activeRoute?.provider_id);
+  const modelProvider = overrideProvider ?? routeProvider;
+  const modelOptions = providerModelOptions(modelProvider);
   const providerStatus = draft.provider_id
     ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
     : activeRouteProvider
       ? `${t("agents.activeRouteProvider")} ${runtimeLabel(selectedRouteTool)} -> ${activeRouteProvider}`
       : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}`;
+  const defaultModelStatus =
+    modelOptions.length > 0
+      ? t("agents.defaultModelHelp")
+      : modelProvider
+        ? t("agents.defaultModelUnavailable")
+        : t("agents.defaultModelNoProvider");
+
+  useEffect(() => {
+    if (readOnly || !draft.default_model) return;
+    if (modelOptions.length === 0 || !modelOptions.includes(draft.default_model)) {
+      onUpdate("default_model", "");
+    }
+  }, [draft.default_model, modelOptions.join("\u0000"), onUpdate, readOnly]);
 
   async function selectWorkDir() {
     setDirectoryBusy("select");
@@ -493,6 +513,22 @@ function AgentForm({
               ))}
             </select>
             <small>{providerStatus}</small>
+          </label>
+          <label className="field">
+            <span>{t("agents.defaultModel")}</span>
+            <select
+              disabled={readOnly || modelOptions.length === 0}
+              value={draft.default_model ?? ""}
+              onChange={(event) => onUpdate("default_model", event.target.value)}
+            >
+              <option value="">{t("agents.defaultModelPlaceholder")}</option>
+              {modelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+            <small>{defaultModelStatus}</small>
           </label>
         </div>
       </section>
@@ -719,7 +755,8 @@ function runtimeLabel(runtime: string): string {
 }
 
 function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRoute | undefined {
-  return routes.find((route) => route.tool === tool);
+  const normalized = normalizeTool(tool);
+  return routes.find((route) => route.tool === tool || normalizeTool(route.tool) === normalized);
 }
 
 function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
@@ -727,6 +764,44 @@ function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[
   const route = activeRouteForTool(activeRoutes, agent.provider_tool || agent.runtime_id);
   const provider = route?.provider_name || route?.provider_id;
   return provider ? `${t("agents.followRouteShort")}: ${provider}` : t("agents.followRouteShort");
+}
+
+function normalizeTool(tool: string): string {
+  switch (tool.trim()) {
+    case "claude":
+    case "claudecode":
+    case "claudecode-cli":
+    case "claude-code-cli":
+      return "claudecode";
+    case "claude-desktop":
+    case "claudecode-desktop":
+    case "claude-code-desktop":
+      return "claude-desktop";
+    case "codex":
+    case "codex-cli":
+    case "codex-app":
+    case "codex-desktop":
+    case "codex-app-server":
+      return "codex";
+    default:
+      return tool.trim();
+  }
+}
+
+function providerModelOptions(provider: Provider | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (model: unknown) => {
+    if (typeof model !== "string") return;
+    const trimmed = model.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push(trimmed);
+  };
+  add(provider?.model);
+  const supported = provider?.meta?.supported_models;
+  if (Array.isArray(supported)) supported.forEach(add);
+  return out;
 }
 
 function workDirErrorMessage(err: unknown, t: (key: string) => string): string {

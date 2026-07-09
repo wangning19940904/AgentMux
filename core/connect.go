@@ -251,6 +251,12 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		"work_dir":      inst.WorkDir,
 		"system_prompt": inst.SystemPrompt,
 	}
+	if inst.DefaultModel != "" {
+		cfg["model"] = inst.DefaultModel
+	}
+	if models := c.agentModelOptions(ctx, inst); len(models) > 0 {
+		cfg["supported_models"] = models
+	}
 	if len(inst.Env) > 0 {
 		cfg["env"] = inst.Env
 	}
@@ -260,4 +266,41 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		return nil, "", workspace
 	}
 	return agent, inst.WorkDir, workspace
+}
+
+func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInstance) []string {
+	if c.store == nil || inst == nil {
+		return nil
+	}
+	var p *Provider
+	var err error
+	if inst.ProviderID != "" {
+		p, err = c.store.GetProvider(ctx, inst.ProviderID)
+		if err != nil {
+			c.log.Warn("load agent provider", "agent_id", inst.ID, "provider_id", inst.ProviderID, "err", err)
+			return nil
+		}
+		return ProviderModelOptions(p)
+	}
+	tool := inst.ProviderTool
+	if tool == "" {
+		tool = inst.RuntimeID
+	}
+	routes, err := c.store.ActiveProviderRoutes(ctx)
+	if err != nil {
+		c.log.Warn("load active provider routes", "agent_id", inst.ID, "err", err)
+		return nil
+	}
+	want := NormalizeProviderTool(tool)
+	for _, route := range routes {
+		if route.Tool == tool || NormalizeProviderTool(route.Tool) == want {
+			p, err = c.store.GetProvider(ctx, route.ProviderID)
+			if err != nil {
+				c.log.Warn("load active provider", "agent_id", inst.ID, "provider_id", route.ProviderID, "err", err)
+				return nil
+			}
+			return ProviderModelOptions(p)
+		}
+	}
+	return nil
 }

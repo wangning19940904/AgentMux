@@ -81,9 +81,10 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	// fresh one (cc-connect session_mode semantics).
 	reuse := tr.SessionMode != SessionModeNewPerRun && rt != nil && rt.agent != nil && tr.ChatID != ""
 	var sess AgentSession
+	var conv *Conversation
 	var err error
 	if reuse {
-		sess, _, err = rt.session(ctx, tr.ChatID)
+		sess, conv, _, err = rt.session(ctx, tr.ChatID, "")
 	} else {
 		workDir, err = e.initializeWorkspace(ctx, opts, workDir)
 		if err != nil {
@@ -99,6 +100,9 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	}
 
 	result, err := e.streamTurn(ctx, sess, prompt, nil, data)
+	if reuse {
+		e.persistConversationTurn(ctx, conv, sess)
+	}
 	if err != nil {
 		return result, err
 	}

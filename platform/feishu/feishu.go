@@ -137,15 +137,50 @@ func (s *textStream) Update(ctx context.Context, text string, done, failed bool)
 
 func (s *textStream) Close(ctx context.Context) error { return nil }
 
-// cardStream is a live Feishu card: the first Update posts the card, later
-// Updates patch it in place.
+// cardStream is a live Feishu card. It prefers the native CardKit streaming
+// path (a card entity whose text element is updated with a real typewriter
+// effect); if creating that entity fails (e.g. missing cardkit:card:write
+// permission) it degrades to the legacy path of posting a card message and
+// patching it in place.
 type cardStream struct {
-	client    clientAPI
-	chatID    string
+	client clientAPI
+	chatID string
+
+	// native streaming path state
+	cardID   string
+	sequence int
+	fellBack bool
+
+	// legacy patch path state
 	messageID string
 }
 
 func (s *cardStream) Update(ctx context.Context, text string, done, failed bool) error {
+	if !s.fellBack && s.cardID == "" {
+		// First update: try to open a native streaming card.
+		id, err := s.client.BeginStreamCard(ctx, s.chatID)
+		if err != nil {
+			s.fellBack = true
+		} else {
+			s.cardID = id
+		}
+	}
+
+	if s.cardID != "" {
+		return s.updateNative(ctx, text, done, failed)
+	}
+	return s.updateLegacy(ctx, text, done, failed)
+}
+
+func (s *cardStream) updateNative(ctx context.Context, text string, done, failed bool) error {
+	s.sequence++
+	if done {
+		return s.client.FinishStreamCard(ctx, s.cardID, text, s.sequence, failed)
+	}
+	return s.client.StreamCardText(ctx, s.cardID, text, s.sequence)
+}
+
+func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed bool) error {
 	if s.messageID == "" {
 		id, err := s.client.SendCard(ctx, s.chatID, text, done, failed)
 		if err != nil {

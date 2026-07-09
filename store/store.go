@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	system_prompt TEXT,
 	provider_tool TEXT,
 	provider_id TEXT,
+	default_model TEXT,
 	memory_scope TEXT,
 	env TEXT,
 	channel_bindings TEXT,
@@ -194,7 +195,25 @@ CREATE TABLE IF NOT EXISTS triggers (
 	last_error TEXT,
 	created_at TEXT,
 	updated_at TEXT
-);`
+);
+CREATE TABLE IF NOT EXISTS conversations (
+	id TEXT PRIMARY KEY,
+	scope TEXT NOT NULL,
+	chat_id TEXT NOT NULL,
+	chat_type TEXT,
+	agent_id TEXT,
+	work_dir TEXT,
+	native_session_id TEXT,
+	title TEXT,
+	message_count INTEGER DEFAULT 0,
+	created_at TEXT,
+	updated_at TEXT,
+	last_active_at TEXT,
+	ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
+	ON conversations(scope, chat_id) WHERE ended_at IS NULL OR ended_at = '';`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
@@ -211,6 +230,9 @@ CREATE TABLE IF NOT EXISTS triggers (
 		if err := s.ensureColumn("providers", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if err := s.ensureColumn("agent_instances", "default_model", "TEXT"); err != nil {
+		return err
 	}
 	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
 		return err

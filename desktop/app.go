@@ -58,6 +58,7 @@ func (a *App) startup(ctx context.Context) {
 	if eng, err := server.BuildEngine(log, cfg, initializer); err != nil {
 		log.Error("build engine", "err", err)
 	} else {
+		eng.SetConversationStore(st)
 		connectSvc := core.NewConnectService(log, eng, st)
 		srv.SetSender(eng)
 		srv.SetConnect(connectSvc)

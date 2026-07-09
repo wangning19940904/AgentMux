@@ -33,10 +33,11 @@ func Register() {
 
 // Agent is a core.Agent backed by an SDK framework hosted in the sidecar.
 type Agent struct {
-	kind         string
-	systemPrompt string
-	model        string
-	env          map[string]string
+	kind            string
+	systemPrompt    string
+	defaultModel    string
+	supportedModels []string
+	env             map[string]string
 }
 
 func newAgent(kind string, cfg map[string]any) *Agent {
@@ -44,8 +45,9 @@ func newAgent(kind string, cfg map[string]any) *Agent {
 	if v, ok := cfg["system_prompt"].(string); ok {
 		a.systemPrompt = v
 	}
-	if v, ok := cfg["model"].(string); ok {
-		a.model = v
+	if model := core.ModelSelectionFromConfig(cfg); model != nil {
+		a.defaultModel = model.DefaultModel()
+		a.supportedModels = model.SupportedModels()
 	}
 	if env, ok := cfg["env"].(map[string]string); ok {
 		a.env = env
@@ -65,7 +67,13 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 	if err != nil {
 		return nil, err
 	}
-	return &session{agent: a, client: c, workDir: workDir, id: a.kind + "-" + newID()}, nil
+	return &session{
+		agent:   a,
+		client:  c,
+		workDir: workDir,
+		id:      a.kind + "-" + newID(),
+		model:   core.NewModelSelection(a.defaultModel, a.supportedModels),
+	}, nil
 }
 
 // ListSessions returns no persistent sessions.
@@ -79,9 +87,17 @@ type session struct {
 	client  *client
 	workDir string
 	id      string
+	model   *core.ModelSelection
 }
 
 func (s *session) ID() string { return s.id }
+
+func (s *session) ModelSwitchingSupported() bool { return true }
+func (s *session) CurrentModel() string          { return s.model.CurrentModel() }
+func (s *session) DefaultModel() string          { return s.model.DefaultModel() }
+func (s *session) SupportedModels() []string     { return s.model.SupportedModels() }
+func (s *session) SetModel(model string) error   { return s.model.SetModel(model) }
+func (s *session) ResetModel() error             { return s.model.ResetModel() }
 
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
 	out := make(chan *core.Event, 16)
@@ -90,7 +106,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		Prompt:       text,
 		SystemPrompt: s.agent.systemPrompt,
 		WorkDir:      s.workDir,
-		Model:        s.agent.model,
+		Model:        s.CurrentModel(),
 		Env:          s.agent.env,
 	}
 	go s.client.run(ctx, req, out)

@@ -138,6 +138,25 @@ type Agent interface {
 	Stop(ctx context.Context) error
 }
 
+// ResumableAgent is an optional Agent capability: starting a session that
+// resumes a prior agent-native session id so context carries across process
+// restarts. Agents that cannot resume simply omit this interface and the
+// Engine starts a fresh session instead.
+type ResumableAgent interface {
+	// StartSessionResume spawns a session bound to workDir that resumes the
+	// conversation identified by resumeID (agent-native session id). When
+	// resumeID is empty it behaves like StartSession.
+	StartSessionResume(ctx context.Context, workDir, resumeID string) (AgentSession, error)
+}
+
+// NativeSessioned is an optional AgentSession capability exposing the
+// agent-native session id (resume handle) discovered while running turns. The
+// Engine persists this onto the durable Conversation so later turns and
+// restarts can resume.
+type NativeSessioned interface {
+	NativeSessionID() string
+}
+
 // AgentSession is a running conversation with an agent.
 type AgentSession interface {
 	// ID returns the agent-native session identifier.

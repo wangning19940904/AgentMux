@@ -2933,8 +2933,25 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: auto;
+}
+
+.tool-card-foot .action {
+  min-width: 108px;
+}
+
+.cli-status-stack {
+  display: flex;
+  flex: 1 1 150px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cli-status-stack .status-badge {
+  max-width: 100%;
 }
 
 .tools-search {

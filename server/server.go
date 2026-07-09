@@ -99,6 +99,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/agent-instances", s.handleAgentInstanceDelete)
 	s.mux.HandleFunc("GET /api/v1/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/v1/tools/cli/install", s.handleCLIInstall)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/check", s.handleCLICheck)
 	s.mux.HandleFunc("GET /api/v1/providers", s.handleProvidersList)
 	s.mux.HandleFunc("POST /api/v1/providers", s.handleProviderUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/providers", s.handleProviderDelete)

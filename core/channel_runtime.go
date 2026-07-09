@@ -48,26 +48,54 @@ func (rt *channelRuntime) status() ChannelStatus {
 	}
 }
 
-// session returns the agent session for chatID, creating one when needed.
-func (rt *channelRuntime) session(ctx context.Context, chatID string) (AgentSession, bool, error) {
+// scope returns the conversation scope namespace for this channel.
+func (rt *channelRuntime) scope() string { return "channel:" + rt.channel.ID }
+
+// session returns the agent session for chatID, creating one when needed. It
+// also returns the durable conversation (nil when no conversation store is
+// attached) so callers can persist turn activity and native session ids.
+func (rt *channelRuntime) session(ctx context.Context, chatID, chatType string) (AgentSession, *Conversation, bool, error) {
+	if rt.agent == nil {
+		return nil, nil, false, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
+	}
+	opts := rt.workspace
+	if opts.WorkDir == "" {
+		opts.WorkDir = rt.workDir
+	}
+	conv, workDir, err := rt.owner.prepareConversation(ctx, rt.scope(), chatID, chatType, opts, rt.workDir)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	cacheKey := chatID
+	if conv != nil {
+		cacheKey = conv.ID
+	}
+
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if s, ok := rt.sessions[chatID]; ok {
-		return s, false, nil
+	if s, ok := rt.sessions[cacheKey]; ok {
+		return s, conv, false, nil
 	}
-	if rt.agent == nil {
-		return nil, false, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
-	}
-	workDir, err := rt.prepareWorkspace(ctx)
+	s, err := rt.owner.startAgentSession(ctx, rt.agent, workDir, conv)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	s, err := rt.agent.StartSession(ctx, workDir)
-	if err != nil {
-		return nil, false, err
+	rt.sessions[cacheKey] = s
+	return s, conv, true, nil
+}
+
+// dropSession closes and removes the cached in-memory session for cacheKey
+// (the conversation id). No-op when absent.
+func (rt *channelRuntime) dropSession(ctx context.Context, cacheKey string) {
+	rt.mu.Lock()
+	s, ok := rt.sessions[cacheKey]
+	if ok {
+		delete(rt.sessions, cacheKey)
 	}
-	rt.sessions[chatID] = s
-	return s, true, nil
+	rt.mu.Unlock()
+	if ok && s != nil {
+		_ = s.Close(ctx)
+	}
 }
 
 // duplicateMessage marks an inbound platform message as seen and reports
@@ -290,10 +318,15 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		return
 	}
 
+	if e.handleConversationCommand(ctx, rt, msg) {
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+
 	reactionID := e.addChannelAckReaction(ctx, rt, msg)
 	defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
 
-	sess, created, err := rt.session(ctx, msg.ChatID)
+	sess, conv, created, err := rt.session(ctx, msg.ChatID, msg.ChatType)
 	if err != nil {
 		e.log.Error("start channel session", "channel", rt.channel.Name, "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -304,6 +337,15 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	}
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
+	}
+	defer e.persistConversationTurn(ctx, conv, sess)
+	if e.handleModelCommand(sess, msg.Text, func(text string) {
+		if err := rt.platform.Reply(ctx, msg, text); err != nil {
+			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
+		}
+	}) {
+		e.emit(ctx, HookMessageSent, data)
+		return
 	}
 
 	mode, ok := channelReplyMode(rt.channel)
@@ -363,6 +405,41 @@ func (e *Engine) deleteChannelAckReaction(ctx context.Context, rt *channelRuntim
 	if err := reacter.DeleteReaction(ctx, msg, reactionID); err != nil {
 		e.log.Warn("delete channel ack reaction", "channel", rt.channel.Name, "message_id", msg.ID, "reaction_id", reactionID, "err", err)
 	}
+}
+
+// handleConversationCommand intercepts control commands like /new and /clear
+// that end the active conversation for a chat (soft delete) so the next
+// message starts fresh. It reports whether the message was a command and was
+// handled (and thus should not be forwarded to the agent).
+func (e *Engine) handleConversationCommand(ctx context.Context, rt *channelRuntime, msg *Message) bool {
+	if e.conversations == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(msg.Text)) {
+	case "/new", "/clear", "/reset":
+	default:
+		return false
+	}
+	// End the active conversation (soft delete) so the next message opens a
+	// fresh one, and drop the in-memory session cached under its id.
+	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
+		Scope:    rt.scope(),
+		ChatID:   msg.ChatID,
+		ChatType: msg.ChatType,
+		AgentID:  rt.workspace.AgentID,
+	})
+	if err != nil {
+		e.log.Warn("resolve conversation for command", "channel", rt.channel.Name, "err", err)
+	} else if conv != nil {
+		if endErr := e.conversations.EndConversation(ctx, conv.ID); endErr != nil {
+			e.log.Warn("end conversation", "conversation", conv.ID, "err", endErr)
+		}
+		rt.dropSession(ctx, conv.ID)
+	}
+	if replyErr := rt.platform.Reply(ctx, msg, "Started a new conversation. Previous context has been cleared."); replyErr != nil {
+		e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
+	}
+	return true
 }
 
 func isFeishuLikeChannel(typ string) bool {

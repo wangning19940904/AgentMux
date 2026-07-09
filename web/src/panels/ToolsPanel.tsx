@@ -1,8 +1,10 @@
 import { Bot, CheckCircle2, Download, Package, RefreshCw, Search, ShieldCheck, TerminalSquare, TriangleAlert } from "lucide-react";
-import { useState } from "react";
-import { api, CLIInstallResult, CLIManagedTool, Framework, MarketplaceSkill, Skill } from "../api";
+import { useEffect, useState } from "react";
+import { api, CLIInstallResult, CLIManagedTool, CLIUpdateCheck, Framework, MarketplaceSkill, Skill } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+
+type CLIBusyAction = "install" | "update" | "check";
 
 export function ToolsPanel() {
   const { t } = useI18n();
@@ -10,6 +12,8 @@ export function ToolsPanel() {
   const [marketQuery, setMarketQuery] = useState("");
   const marketplace = useAsync(() => api.skillMarketplace(marketQuery), [marketQuery]);
   const [busy, setBusy] = useState("");
+  const [cliBusy, setCliBusy] = useState<Record<string, CLIBusyAction>>({});
+  const [cliChecks, setCliChecks] = useState<Record<string, CLIUpdateCheck>>({});
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<CLIInstallResult | null>(null);
 
@@ -20,23 +24,81 @@ export function ToolsPanel() {
   const mcp = data?.mcp ?? [];
   const market = marketplace.data ?? data?.marketplace ?? [];
 
+  useEffect(() => {
+    cli.forEach((item) => {
+      const id = item.spec.id;
+      if (!item.installed || cliChecks[id] || cliBusy[id]) return;
+      void checkCLIUpdate(id, true);
+    });
+  }, [cli, cliBusy, cliChecks]);
+
   async function refreshAll() {
+    setCliChecks({});
     await Promise.all([tools.reload(), marketplace.reload()]);
   }
 
+  function markCLIBusy(id: string, action: CLIBusyAction) {
+    setCliBusy((current) => ({ ...current, [id]: action }));
+  }
+
+  function clearCLIBusy(id: string) {
+    setCliBusy((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function forgetCLICheck(id: string) {
+    setCliChecks((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  async function checkCLIUpdate(id: string, silent = false) {
+    markCLIBusy(id, "check");
+    if (!silent) {
+      setNotice("");
+      setResult(null);
+    }
+    try {
+      const res = await api.checkCLIUpdate(id);
+      setCliChecks((current) => ({ ...current, [id]: res }));
+      if (!silent) {
+        if (res.error) {
+          setNotice(`${t("tools.updateCheckFailed")}: ${res.error}`);
+        } else if (res.update_available) {
+          setNotice(`${t("tools.updateAvailable")}: ${res.current_version || "?"} -> ${res.latest_version || "?"}`);
+        } else {
+          setNotice(t("tools.upToDate"));
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setCliChecks((current) => ({ ...current, [id]: { id, installed: true, update_available: false, error: message } }));
+      if (!silent) setNotice(`${t("tools.updateCheckFailed")}: ${message}`);
+    } finally {
+      clearCLIBusy(id);
+    }
+  }
+
   async function installCLI(id: string, action: "install" | "update") {
-    setBusy(`cli:${id}`);
+    markCLIBusy(id, action);
     setNotice("");
     setResult(null);
+    if (action === "install") forgetCLICheck(id);
     try {
       const res = await api.installCLI(id, action);
       setResult(res);
       setNotice(res.ok ? t("tools.cliReady") : res.error || t("tools.cliFailed"));
       await tools.reload();
+      forgetCLICheck(id);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy("");
+      clearCLIBusy(id);
     }
   }
 
@@ -84,7 +146,15 @@ export function ToolsPanel() {
         </div>
         <div className="surface-body tools-grid">
           {cli.map((item) => (
-            <CLIManagedCard key={item.spec.id} item={item} busy={busy === `cli:${item.spec.id}`} onInstall={installCLI} t={t} />
+            <CLIManagedCard
+              key={item.spec.id}
+              item={item}
+              busy={cliBusy[item.spec.id]}
+              check={cliChecks[item.spec.id]}
+              onCheck={checkCLIUpdate}
+              onInstall={installCLI}
+              t={t}
+            />
           ))}
         </div>
       </section>
@@ -187,15 +257,33 @@ export function ToolsPanel() {
 function CLIManagedCard({
   item,
   busy,
+  check,
+  onCheck,
   onInstall,
   t,
 }: {
   item: CLIManagedTool;
-  busy: boolean;
+  busy?: CLIBusyAction;
+  check?: CLIUpdateCheck;
+  onCheck: (id: string) => void;
   onInstall: (id: string, action: "install" | "update") => void;
   t: (key: string) => string;
 }) {
-  const action = item.installed ? "update" : "install";
+  const hasUpdate = Boolean(check?.update_available);
+  const action: "install" | "update" | "check" = item.installed ? (hasUpdate ? "update" : "check") : "install";
+  const disabled = Boolean(busy);
+  const buttonLabel =
+    busy === "check"
+      ? t("tools.checkingUpdate")
+      : busy
+        ? t("frameworks.installing")
+        : action === "install"
+          ? t("frameworks.install")
+          : action === "update"
+            ? t("tools.update")
+            : t("tools.checkUpdate");
+  const updateStatus = cliUpdateStatusLabel(check, t);
+  const updateStatusClass = check?.error ? "warning" : check?.update_available ? "warning" : "success";
   return (
     <article className="tool-card">
       <div className="tool-card-head">
@@ -209,17 +297,31 @@ function CLIManagedCard({
       </div>
       <p>{item.spec.note}</p>
       <div className="tool-card-foot">
-        <span className={`status-badge ${item.installed ? "success" : ""}`}>
-          {item.installed ? <CheckCircle2 size={14} /> : <TriangleAlert size={14} />}
-          {item.installed ? item.version || t("frameworks.installed") : t("frameworks.notDetected")}
+        <span className="cli-status-stack">
+          <span className={`status-badge ${item.installed ? "success" : ""}`}>
+            {item.installed ? <CheckCircle2 size={14} /> : <TriangleAlert size={14} />}
+            {item.installed ? item.version || t("frameworks.installed") : t("frameworks.notDetected")}
+          </span>
+          {item.installed && updateStatus && <span className={`status-badge ${updateStatusClass}`}>{updateStatus}</span>}
         </span>
-        <button className="action" disabled={busy} onClick={() => onInstall(item.spec.id, action)}>
-          <Download size={14} />
-          {busy ? t("frameworks.installing") : item.installed ? t("tools.update") : t("frameworks.install")}
+        <button
+          className="action"
+          disabled={disabled}
+          onClick={() => (action === "check" ? onCheck(item.spec.id) : onInstall(item.spec.id, action))}
+        >
+          {busy === "check" || action === "check" ? <RefreshCw size={14} /> : <Download size={14} />}
+          {buttonLabel}
         </button>
       </div>
     </article>
   );
+}
+
+function cliUpdateStatusLabel(check: CLIUpdateCheck | undefined, t: (key: string) => string) {
+  if (!check) return "";
+  if (check.error) return t("tools.updateCheckFailed");
+  if (check.update_available) return `${t("tools.updateAvailable")} ${check.latest_version || ""}`.trim();
+  return t("tools.upToDate");
 }
 
 function FrameworkToolCard({ item, t }: { item: Framework; t: (key: string) => string }) {

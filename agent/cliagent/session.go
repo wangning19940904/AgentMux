@@ -17,13 +17,21 @@ type session struct {
 	agent   *Agent
 	workDir string
 	id      string
+	model   *core.ModelSelection
 }
 
 func (s *session) ID() string { return s.id }
 
+func (s *session) ModelSwitchingSupported() bool { return s.model != nil }
+func (s *session) CurrentModel() string          { return s.model.CurrentModel() }
+func (s *session) DefaultModel() string          { return s.model.DefaultModel() }
+func (s *session) SupportedModels() []string     { return s.model.SupportedModels() }
+func (s *session) SetModel(model string) error   { return s.model.SetModel(model) }
+func (s *session) ResetModel() error             { return s.model.ResetModel() }
+
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
 	out := make(chan *core.Event, 16)
-	args := s.agent.spec.Args(text, s.agent.systemPrompt)
+	args := s.agent.spec.Args(text, s.agent.systemPrompt, s.CurrentModel())
 
 	bin := s.agent.spec.Binary
 	if p, err := exec.LookPath(bin); err == nil {

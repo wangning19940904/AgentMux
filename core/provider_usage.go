@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -159,6 +160,44 @@ type ProviderRoute struct {
 	APIFormat       string       `json:"api_format,omitempty"`
 	Meta            ProviderMeta `json:"meta,omitempty"`
 	Configured      bool         `json:"configured"`
+}
+
+// NormalizeProviderTool collapses UI/runtime aliases onto the canonical tool
+// families used by live config and local routing.
+func NormalizeProviderTool(tool string) string {
+	switch strings.TrimSpace(tool) {
+	case "claude", "claudecode", "claudecode-cli", "claude-code-cli":
+		return "claudecode"
+	case "claude-desktop", "claudecode-desktop", "claude-code-desktop":
+		return "claude-desktop"
+	case "codex", "codex-cli", "codex-app", "codex-desktop", "codex-app-server":
+		return "codex"
+	default:
+		return strings.TrimSpace(tool)
+	}
+}
+
+// ProviderModelOptions returns the selectable models advertised by a provider:
+// its default model first, then supported_models, de-duplicated.
+func ProviderModelOptions(p *Provider) []string {
+	if p == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			return
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	add(p.Model)
+	for _, model := range p.Meta.SupportedModels {
+		add(model)
+	}
+	return out
 }
 
 // ProxyTrace records one request that passed through AgentNexus local routing.

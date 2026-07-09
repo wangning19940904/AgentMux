@@ -1,12 +1,13 @@
 // Package cliagents registers all subprocess-based coding-agent adapters built
 // on top of cliagent. Each agent's invocation mirrors the documented
 // non-interactive mode (from cc-connect's INSTALL.md), e.g.:
-//   codex   exec --json
-//   cursor  agent --print --output-format stream-json
-//   gemini  -p --output-format stream-json
-//   qoder   -p -f stream-json
-//   opencode run --format json
-//   iflow   -i -r -o
+//
+//	codex   exec --json
+//	cursor  agent --print --output-format stream-json
+//	gemini  -p --output-format stream-json
+//	qoder   -p -f stream-json
+//	opencode run --format json
+//	iflow   -i -r -o
 package cliagents
 
 import (
@@ -16,50 +17,62 @@ import (
 	"github.com/agentnexus/agentnexus/core"
 )
 
-func register(name, binary string, args func(prompt, sys string) []string, mapper cliagent.LineMapper, finalLast bool) {
+func register(name, binary string, supportsModel bool, args func(prompt, sys, model string) []string, mapper cliagent.LineMapper, finalLast bool) {
 	core.RegisterAgent(name, func(cfg map[string]any) (core.Agent, error) {
 		return cliagent.New(cliagent.Spec{
 			Name: name, Binary: binary, Args: args,
-			Mapper: mapper, FinalFromLast: finalLast,
+			Mapper: mapper, FinalFromLast: finalLast, SupportsModel: supportsModel,
 		}, cfg), nil
 	})
 }
 
 func init() {
 	// Codex: emits JSON lines; treat any {"text"|"message"} as output.
-	register("codex", "codex", func(p, _ string) []string {
-		return []string{"exec", "--json", p}
-	}, jsonTextMapper, true)
+	register("codex", "codex", true, codexArgs, jsonTextMapper, true)
 
 	// Cursor Agent: stream-json.
-	register("cursor", "cursor-agent", func(p, _ string) []string {
-		return []string{"agent", "--print", "--output-format", "stream-json", p}
-	}, jsonTextMapper, true)
+	register("cursor", "cursor-agent", true, cursorArgs, jsonTextMapper, true)
 
 	// Gemini CLI: stream-json.
-	register("gemini", "gemini", func(p, _ string) []string {
+	register("gemini", "gemini", false, func(p, _, _ string) []string {
 		return []string{"-p", p, "--output-format", "stream-json"}
 	}, jsonTextMapper, true)
 
 	// Qoder CLI.
-	register("qoder", "qodercli", func(p, _ string) []string {
+	register("qoder", "qodercli", false, func(p, _, _ string) []string {
 		return []string{"-p", p, "-f", "stream-json"}
 	}, jsonTextMapper, true)
 
 	// OpenCode.
-	register("opencode", "opencode", func(p, _ string) []string {
+	register("opencode", "opencode", false, func(p, _, _ string) []string {
 		return []string{"run", "--format", "json", p}
 	}, jsonTextMapper, true)
 
 	// iFlow CLI.
-	register("iflow", "iflow", func(p, _ string) []string {
+	register("iflow", "iflow", false, func(p, _, _ string) []string {
 		return []string{"-i", "-r", "-o", p}
 	}, cliagent.PlainTextMapper, true)
 
 	// Kimi CLI.
-	register("kimi", "kimi", func(p, _ string) []string {
+	register("kimi", "kimi", false, func(p, _, _ string) []string {
 		return []string{"-p", p}
 	}, cliagent.PlainTextMapper, true)
+}
+
+func codexArgs(prompt, _, model string) []string {
+	args := []string{"exec", "--json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return append(args, prompt)
+}
+
+func cursorArgs(prompt, _, model string) []string {
+	args := []string{"agent", "--print", "--output-format", "stream-json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return append(args, prompt)
 }
 
 // jsonTextMapper extracts a "text"/"message"/"content"/"result" field from a

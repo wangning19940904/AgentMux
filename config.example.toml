@@ -16,6 +16,7 @@ name = "demo"
 agent = "claudecode"
 work_dir = "."
 system_prompt = "You are a helpful coding assistant."
+# default_model = "sonnet"
 
   [projects.env]
   # ANTHROPIC_API_KEY = "${MY_KEY}"

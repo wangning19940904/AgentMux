@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +42,17 @@ type CLIInstallResult struct {
 	Log     string `json:"log,omitempty"`
 	Version string `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// CLIUpdateCheck reports whether an installed CLI has a newer package version.
+type CLIUpdateCheck struct {
+	ID              string    `json:"id"`
+	Installed       bool      `json:"installed"`
+	CurrentVersion  string    `json:"current_version,omitempty"`
+	LatestVersion   string    `json:"latest_version,omitempty"`
+	UpdateAvailable bool      `json:"update_available"`
+	CheckedAt       time.Time `json:"checked_at"`
+	Error           string    `json:"error,omitempty"`
 }
 
 var cliCatalog = []CLISpec{
@@ -92,6 +105,43 @@ func DetectCLI(ctx context.Context, spec CLISpec) CLIStatus {
 	return st
 }
 
+// CheckCLIUpdate compares the installed CLI version with the registry latest.
+func CheckCLIUpdate(ctx context.Context, id string) CLIUpdateCheck {
+	id = strings.TrimSpace(id)
+	res := CLIUpdateCheck{ID: id, CheckedAt: time.Now()}
+	spec, ok := lookupCLI(id)
+	if !ok {
+		res.Error = fmt.Sprintf("unknown CLI %q", id)
+		return res
+	}
+	status := DetectCLI(ctx, spec)
+	res.Installed = status.Installed
+	if !status.Installed {
+		res.Error = fmt.Sprintf("CLI %q is not installed", id)
+		return res
+	}
+	current := normalizeVersion(status.Version)
+	if current == "" {
+		res.Error = fmt.Sprintf("could not parse installed version from %q", status.Version)
+		return res
+	}
+	res.CurrentVersion = current
+
+	latest, err := latestCLIVersion(ctx, spec)
+	if err != nil {
+		res.Error = fmt.Sprintf("check update failed: %v", err)
+		return res
+	}
+	latest = normalizeVersion(latest)
+	if latest == "" {
+		res.Error = "registry did not return a latest version"
+		return res
+	}
+	res.LatestVersion = latest
+	res.UpdateAvailable = versionGreater(latest, current)
+	return res
+}
+
 // InstallCLI installs or updates a whitelisted CLI.
 func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 	id = strings.TrimSpace(id)
@@ -110,10 +160,27 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		return res
 	}
 
-	installed := DetectCLI(ctx, spec).Installed
+	statusBefore := DetectCLI(ctx, spec)
 	cmdArgs := spec.InstallCommand
-	if action == "update" && installed && len(spec.UpdateCommand) > 0 {
-		cmdArgs = spec.UpdateCommand
+	if action == "update" {
+		if !statusBefore.Installed {
+			res.Error = fmt.Sprintf("CLI %q is not installed; install it first", id)
+			return res
+		}
+		check := CheckCLIUpdate(ctx, id)
+		if check.Error != "" {
+			res.Error = check.Error
+			return res
+		}
+		if !check.UpdateAvailable {
+			res.OK = true
+			res.Version = statusBefore.Version
+			res.Log = fmt.Sprintf("%s is already up to date (current %s, latest %s)", spec.Name, check.CurrentVersion, check.LatestVersion)
+			return res
+		}
+		if len(spec.UpdateCommand) > 0 {
+			cmdArgs = spec.UpdateCommand
+		}
 	}
 	if len(cmdArgs) == 0 {
 		res.Error = fmt.Sprintf("CLI %q has no install command", id)
@@ -150,6 +217,14 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 	return res
 }
 
+func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {
+	args := []string{"view", spec.Package, "version", "--silent"}
+	if spec.Registry != "" {
+		args = append(args, "--registry="+spec.Registry)
+	}
+	return commandOutputWithEnv(ctx, cliEnv(spec), "npm", args...)
+}
+
 func lookupCLI(id string) (CLISpec, bool) {
 	for _, spec := range cliCatalog {
 		if spec.ID == id {
@@ -168,6 +243,10 @@ func cliEnv(spec CLISpec) []string {
 }
 
 func commandOutput(ctx context.Context, name string, args ...string) (string, error) {
+	return commandOutputWithEnv(ctx, nil, name, args...)
+}
+
+func commandOutputWithEnv(ctx context.Context, env []string, name string, args ...string) (string, error) {
 	runCtx := ctx
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -175,9 +254,70 @@ func commandOutput(ctx context.Context, name string, args ...string) (string, er
 		defer cancel()
 	}
 	cmd := exec.CommandContext(runCtx, name, args...)
+	if env != nil {
+		cmd.Env = env
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), err
 	}
 	return string(out), nil
+}
+
+var versionRE = regexp.MustCompile(`\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?`)
+
+func normalizeVersion(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if match := versionRE.FindString(raw); match != "" {
+		return match
+	}
+	return ""
+}
+
+func versionGreater(candidate, current string) bool {
+	candidateParts, ok := numericVersionParts(candidate)
+	if !ok {
+		return false
+	}
+	currentParts, ok := numericVersionParts(current)
+	if !ok {
+		return false
+	}
+	for i := range candidateParts {
+		if candidateParts[i] > currentParts[i] {
+			return true
+		}
+		if candidateParts[i] < currentParts[i] {
+			return false
+		}
+	}
+	return false
+}
+
+func numericVersionParts(version string) ([4]int, bool) {
+	var parts [4]int
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return parts, false
+	}
+	base := strings.SplitN(version, "-", 2)[0]
+	base = strings.SplitN(base, "+", 2)[0]
+	rawParts := strings.Split(base, ".")
+	for i, raw := range rawParts {
+		if i >= len(parts) {
+			break
+		}
+		if raw == "" {
+			return parts, false
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return parts, false
+		}
+		parts[i] = value
+	}
+	return parts, true
 }

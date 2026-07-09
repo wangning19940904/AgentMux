@@ -36,6 +36,7 @@ type AgentInstance struct {
 	ProviderTool    string                `json:"provider_tool,omitempty"`
 	ProviderID      string                `json:"provider_id,omitempty"`
 	ProviderName    string                `json:"provider_name,omitempty"`
+	DefaultModel    string                `json:"default_model,omitempty"`
 	MemoryScope     string                `json:"memory_scope,omitempty"`
 	Env             map[string]string     `json:"env,omitempty"`
 	ChannelBindings []AgentChannelBinding `json:"channel_bindings,omitempty"`

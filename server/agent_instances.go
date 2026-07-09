@@ -169,6 +169,7 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.WorkDir = strings.TrimSpace(a.WorkDir)
 	a.ProviderTool = strings.TrimSpace(a.ProviderTool)
 	a.ProviderID = strings.TrimSpace(a.ProviderID)
+	a.DefaultModel = strings.TrimSpace(a.DefaultModel)
 	a.MemoryScope = strings.TrimSpace(a.MemoryScope)
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
@@ -198,6 +199,9 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.UpdatedAt = now
 	if a.ProviderTool == "" {
 		a.ProviderTool = a.RuntimeID
+	}
+	if err := s.validateAgentDefaultModel(ctx, a); err != nil {
+		return err
 	}
 	if a.MemoryScope == "" {
 		a.MemoryScope = "agent:" + a.ID
@@ -246,6 +250,7 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 			WorkDir:         p.WorkDir,
 			SystemPrompt:    p.SystemPrompt,
 			ProviderTool:    p.Agent,
+			DefaultModel:    p.DefaultModel,
 			MemoryScope:     "project:" + p.Name,
 			Env:             redactStringMap(p.Env),
 			ChannelBindings: channels,
@@ -254,6 +259,53 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 		})
 	}
 	return out
+}
+
+func (s *Server) validateAgentDefaultModel(ctx context.Context, a *core.AgentInstance) error {
+	if a.DefaultModel == "" {
+		return nil
+	}
+	p, err := s.agentProvider(ctx, a)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		return fmt.Errorf("default model requires a configured provider route")
+	}
+	models := core.ProviderModelOptions(p)
+	if len(models) == 0 {
+		return fmt.Errorf("provider %q has no selectable models", p.ID)
+	}
+	for _, model := range models {
+		if model == a.DefaultModel {
+			return nil
+		}
+	}
+	return fmt.Errorf("default model %q is not supported by provider %q", a.DefaultModel, p.ID)
+}
+
+func (s *Server) agentProvider(ctx context.Context, a *core.AgentInstance) (*core.Provider, error) {
+	if s.provider == nil {
+		return nil, nil
+	}
+	if a.ProviderID != "" {
+		return s.provider.Get(ctx, a.ProviderID)
+	}
+	tool := a.ProviderTool
+	if tool == "" {
+		tool = a.RuntimeID
+	}
+	routes, err := s.provider.ActiveRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := core.NormalizeProviderTool(tool)
+	for _, route := range routes {
+		if route.Tool == tool || core.NormalizeProviderTool(route.Tool) == want {
+			return s.provider.Get(ctx, route.ProviderID)
+		}
+	}
+	return nil, nil
 }
 
 func (s *Server) enrichAgentProviders(ctx context.Context, items []core.AgentInstance) {

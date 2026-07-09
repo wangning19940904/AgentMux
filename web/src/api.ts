@@ -201,6 +201,7 @@ export interface AgentInstance {
   provider_tool?: string;
   provider_id?: string;
   provider_name?: string;
+  default_model?: string;
   memory_scope?: string;
   env?: Record<string, string>;
   channel_bindings?: AgentChannelBinding[];
@@ -377,6 +378,16 @@ export interface CLIInstallResult {
   error?: string;
 }
 
+export interface CLIUpdateCheck {
+  id: string;
+  installed: boolean;
+  current_version?: string;
+  latest_version?: string;
+  update_available: boolean;
+  checked_at?: string;
+  error?: string;
+}
+
 export interface MarketplaceSkill {
   name: string;
   description: string;
@@ -529,6 +540,7 @@ export const api = {
   tools: () => get<ToolsResponse>("/api/v1/tools"),
   installCLI: (id: string, action: "install" | "update") =>
     postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
+  checkCLIUpdate: (id: string) => post<CLIUpdateCheck>("/api/v1/tools/cli/check", { id }),
   providers: () => getProviders("/api/v1/providers"),
   activeRoutes: () => get<ProviderRoute[] | null>("/api/v1/providers/active"),
   presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],

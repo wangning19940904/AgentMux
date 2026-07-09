@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 )
 
@@ -29,14 +30,15 @@ type EventSink func(event HookEvent, data map[string]string)
 // inbound messages to agent sessions, streaming responses back. Besides
 // config.toml projects it hosts dynamically attached console-managed channels.
 type Engine struct {
-	log       *slog.Logger
-	hooks     *HookRunner
-	sink      EventSink
-	mu        sync.RWMutex
-	projects  map[string]*projectRuntime
-	channels  map[string]*channelRuntime
-	inbound   chan *Message
-	workspace WorkspaceInitializer
+	log           *slog.Logger
+	hooks         *HookRunner
+	sink          EventSink
+	mu            sync.RWMutex
+	projects      map[string]*projectRuntime
+	channels      map[string]*channelRuntime
+	inbound       chan *Message
+	workspace     WorkspaceInitializer
+	conversations ConversationStore
 }
 
 // NewEngine constructs an Engine.
@@ -60,6 +62,13 @@ func (e *Engine) SetEventSink(sink EventSink) { e.sink = sink }
 // SetWorkspaceInitializer attaches the pre-run workspace initializer.
 func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
 	e.workspace = initializer
+}
+
+// SetConversationStore attaches the durable conversation backend. When set,
+// runtimes locate and persist conversations by (scope, chatID); when nil they
+// fall back to purely in-memory sessions keyed by chatID.
+func (e *Engine) SetConversationStore(cs ConversationStore) {
+	e.conversations = cs
 }
 
 // emit dispatches a lifecycle event to config.toml hooks and the event sink.
@@ -194,7 +203,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
-	sess, created, err := pr.session(ctx, msg.ChatID)
+	sess, conv, created, err := pr.session(ctx, msg.ChatID, msg.ChatType)
 	if err != nil {
 		e.log.Error("start session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -204,10 +213,18 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
 	}
+	if e.handleModelCommand(sess, msg.Text, func(text string) {
+		e.replyAll(ctx, pr, msg, text)
+	}) {
+		e.persistConversationTurn(ctx, conv, sess)
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
 
 	_, _ = e.streamTurn(ctx, sess, msg.Text, func(text string) {
 		e.replyAll(ctx, pr, msg, text)
 	}, data)
+	e.persistConversationTurn(ctx, conv, sess)
 	e.emit(ctx, HookMessageSent, data)
 }
 
@@ -225,6 +242,77 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 	}
 
 	return e.consumeTurn(ctx, events, reply, data)
+}
+
+func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string)) bool {
+	cmd, ok := parseModelCommand(text)
+	if !ok {
+		return false
+	}
+	if reply == nil {
+		return true
+	}
+	models, ok := sess.(ModelSwitchingSession)
+	if !ok || !models.ModelSwitchingSupported() {
+		reply("This runtime does not support /model switching.")
+		return true
+	}
+	switch strings.ToLower(cmd) {
+	case "", "current", "list":
+		reply(formatModelStatus(models))
+	case "reset":
+		if err := models.ResetModel(); err != nil {
+			reply(err.Error())
+			return true
+		}
+		current := models.CurrentModel()
+		if current == "" {
+			reply("Model reset. No default model is configured.")
+		} else {
+			reply("Model reset to default: " + current)
+		}
+	default:
+		if err := models.SetModel(cmd); err != nil {
+			reply(err.Error() + "\n\n" + formatAvailableModels(models.SupportedModels()))
+			return true
+		}
+		reply("Model switched for this conversation: " + models.CurrentModel())
+	}
+	return true
+}
+
+func parseModelCommand(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 || fields[0] != "/model" {
+		return "", false
+	}
+	if len(fields) == 1 {
+		return "", true
+	}
+	return fields[1], true
+}
+
+func formatModelStatus(models ModelSwitchingSession) string {
+	current := models.CurrentModel()
+	if current == "" {
+		current = "(runtime default)"
+	}
+	def := models.DefaultModel()
+	if def == "" {
+		def = "(runtime default)"
+	}
+	return "Current model: " + current + "\nDefault model: " + def + "\n\n" + formatAvailableModels(models.SupportedModels())
+}
+
+func formatAvailableModels(models []string) string {
+	if len(models) == 0 {
+		return "Available models: none configured."
+	}
+	return "Available models:\n- " + strings.Join(models, "\n- ")
 }
 
 // consumeTurn drains a session event channel, forwarding textual output through
@@ -389,25 +477,112 @@ func (e *Engine) replyAll(ctx context.Context, pr *projectRuntime, msg *Message,
 	}
 }
 
-func (pr *projectRuntime) session(ctx context.Context, chatID string) (AgentSession, bool, error) {
+func (pr *projectRuntime) session(ctx context.Context, chatID, chatType string) (AgentSession, *Conversation, bool, error) {
+	if pr.agent == nil {
+		return nil, nil, false, fmt.Errorf("project %q has no agent", pr.name)
+	}
+	scope := "project:" + pr.name
+	conv, workDir, err := pr.owner.prepareConversation(ctx, scope, chatID, chatType, pr.workspace, pr.workDir)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	cacheKey := chatID
+	if conv != nil {
+		cacheKey = conv.ID
+	}
+
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
-	if s, ok := pr.sessions[chatID]; ok {
-		return s, false, nil
+	if s, ok := pr.sessions[cacheKey]; ok {
+		return s, conv, false, nil
 	}
-	if pr.agent == nil {
-		return nil, false, fmt.Errorf("project %q has no agent", pr.name)
-	}
-	workDir, err := pr.owner.initializeWorkspace(ctx, pr.workspace, pr.workDir)
+	s, err := pr.owner.startAgentSession(ctx, pr.agent, workDir, conv)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	s, err := pr.agent.StartSession(ctx, workDir)
+	pr.sessions[cacheKey] = s
+	return s, conv, true, nil
+}
+
+// prepareConversation resolves (or creates) the durable conversation for
+// (scope, chatID) and prepares its isolated working directory. When no
+// conversation store is attached it returns a nil conversation and the
+// initialized fallback work dir, preserving the legacy chatID-keyed behavior.
+func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatType string, ws WorkspaceInitOptions, fallbackWorkDir string) (*Conversation, string, error) {
+	if e.conversations == nil {
+		workDir, err := e.initializeWorkspace(ctx, ws, fallbackWorkDir)
+		return nil, workDir, err
+	}
+
+	baseWorkDir := ws.WorkDir
+	if baseWorkDir == "" {
+		baseWorkDir = fallbackWorkDir
+	}
+	cwd, err := conversationCwd(conversationBaseDir(baseWorkDir), ws.AgentID, scope, chatID)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
-	pr.sessions[chatID] = s
-	return s, true, nil
+	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
+		Scope:    scope,
+		ChatID:   chatID,
+		ChatType: chatType,
+		AgentID:  ws.AgentID,
+		WorkDir:  cwd,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve conversation: %w", err)
+	}
+	target := conv.WorkDir
+	if target == "" {
+		target = cwd
+	}
+	convOpts := ws
+	convOpts.WorkDir = target
+	workDir, err := e.initializeWorkspace(ctx, convOpts, target)
+	if err != nil {
+		return nil, "", err
+	}
+	if conv.WorkDir != workDir {
+		if uerr := e.conversations.UpdateConversationSession(ctx, conv.ID, conv.NativeSessionID, workDir); uerr != nil {
+			e.log.Warn("persist conversation workdir", "conversation", conv.ID, "err", uerr)
+		}
+		conv.WorkDir = workDir
+	}
+	return conv, workDir, nil
+}
+
+// startAgentSession starts a new agent session, resuming the conversation's
+// native session id when both the agent and a stored id are available.
+func (e *Engine) startAgentSession(ctx context.Context, agent Agent, workDir string, conv *Conversation) (AgentSession, error) {
+	if conv != nil && conv.NativeSessionID != "" {
+		if ra, ok := agent.(ResumableAgent); ok {
+			return ra.StartSessionResume(ctx, workDir, conv.NativeSessionID)
+		}
+	}
+	return agent.StartSession(ctx, workDir)
+}
+
+// persistConversationTurn records a completed turn: it bumps the conversation
+// activity counter and persists any newly discovered native session id so
+// later turns and restarts can resume.
+func (e *Engine) persistConversationTurn(ctx context.Context, conv *Conversation, sess AgentSession) {
+	if e.conversations == nil || conv == nil {
+		return
+	}
+	if err := e.conversations.TouchConversation(ctx, conv.ID); err != nil {
+		e.log.Warn("touch conversation", "conversation", conv.ID, "err", err)
+	}
+	ns, ok := sess.(NativeSessioned)
+	if !ok {
+		return
+	}
+	if id := ns.NativeSessionID(); id != "" && id != conv.NativeSessionID {
+		if err := e.conversations.UpdateConversationSession(ctx, conv.ID, id, conv.WorkDir); err != nil {
+			e.log.Warn("persist native session id", "conversation", conv.ID, "err", err)
+			return
+		}
+		conv.NativeSessionID = id
+	}
 }
 
 func (e *Engine) shutdown() error {

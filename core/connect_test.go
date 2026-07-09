@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,55 @@ func (a *fakeAgent) StartSession(ctx context.Context, workDir string) (AgentSess
 func (a *fakeAgent) ListSessions(ctx context.Context) ([]string, error) { return nil, nil }
 func (a *fakeAgent) Stop(ctx context.Context) error                     { return nil }
 
+type modelAgent struct {
+	mu       sync.Mutex
+	last     *modelSession
+	sessions int
+}
+
+func (a *modelAgent) Name() string { return "model-agent" }
+func (a *modelAgent) StartSession(ctx context.Context, workDir string) (AgentSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessions++
+	s := &modelSession{
+		id:             fmt.Sprintf("m%d", a.sessions),
+		ModelSelection: NewModelSelection("gpt-5", []string{"gpt-5", "gpt-5-mini"}),
+	}
+	a.last = s
+	return s, nil
+}
+func (a *modelAgent) ListSessions(ctx context.Context) ([]string, error) { return nil, nil }
+func (a *modelAgent) Stop(ctx context.Context) error                     { return nil }
+
+type modelSession struct {
+	*ModelSelection
+	id    string
+	mu    sync.Mutex
+	turns []string
+}
+
+func (s *modelSession) ID() string                    { return s.id }
+func (s *modelSession) ModelSwitchingSupported() bool { return true }
+func (s *modelSession) Send(ctx context.Context, text string) (<-chan *Event, error) {
+	s.mu.Lock()
+	s.turns = append(s.turns, text)
+	model := s.CurrentModel()
+	s.mu.Unlock()
+	out := make(chan *Event, 1)
+	out <- &Event{Type: EventFinal, Text: "model:" + model + " " + text, Final: true}
+	close(out)
+	return out, nil
+}
+func (s *modelSession) RespondPermission(ctx context.Context, allow bool) error { return nil }
+func (s *modelSession) Close(ctx context.Context) error                         { return nil }
+
+func (s *modelSession) turnCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.turns)
+}
+
 type fakeStore struct {
 	mu       sync.Mutex
 	channels []Channel
@@ -161,6 +211,12 @@ func (s *fakeStore) UpdateTriggerRun(ctx context.Context, id string, lastRun tim
 	return nil
 }
 func (s *fakeStore) GetAgentInstance(ctx context.Context, id string) (*AgentInstance, error) {
+	return nil, nil
+}
+func (s *fakeStore) ActiveProviderRoutes(ctx context.Context) ([]ProviderRoute, error) {
+	return nil, nil
+}
+func (s *fakeStore) GetProvider(ctx context.Context, id string) (*Provider, error) {
 	return nil, nil
 }
 
@@ -280,6 +336,94 @@ func TestChannelMessageDeduplicatesMessageID(t *testing.T) {
 	agent.mu.Unlock()
 	if len(turns) != 2 {
 		t.Fatalf("turns = %+v, want two unique message turns", turns)
+	}
+}
+
+func TestChannelModelCommandSwitchesSessionModelWithoutSendingTurn(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake")
+	restore := stubPlatformFactory(t, "fake-model", plat)
+	defer restore()
+
+	agent := &modelAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-model", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "/model", Platform: "fake"})
+	waitFor(t, "model status reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil {
+		t.Fatal("model command did not create a session")
+	}
+	if sess.turnCount() != 0 {
+		t.Fatalf("model status reached Send: turns=%d", sess.turnCount())
+	}
+
+	plat.push(&Message{ID: "m2", ChatID: "chat-1", Text: "/model gpt-5-mini", Platform: "fake"})
+	waitFor(t, "model switch reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 2
+	})
+	if got := sess.CurrentModel(); got != "gpt-5-mini" {
+		t.Fatalf("current model = %q", got)
+	}
+	if sess.turnCount() != 0 {
+		t.Fatalf("model switch reached Send: turns=%d", sess.turnCount())
+	}
+
+	plat.push(&Message{ID: "m3", ChatID: "chat-1", Text: "hello", Platform: "fake"})
+	waitFor(t, "normal reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 3
+	})
+	if sess.turnCount() != 1 {
+		t.Fatalf("normal message turns = %d", sess.turnCount())
+	}
+	plat.mu.Lock()
+	normalReply := plat.replies[2]
+	plat.mu.Unlock()
+	if normalReply != "model:gpt-5-mini hello" {
+		t.Fatalf("normal reply = %q", normalReply)
+	}
+
+	plat.push(&Message{ID: "m4", ChatID: "chat-1", Text: "/model missing", Platform: "fake"})
+	waitFor(t, "invalid model reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 4
+	})
+	plat.mu.Lock()
+	invalidReply := plat.replies[3]
+	plat.mu.Unlock()
+	if !strings.Contains(invalidReply, "not supported") || sess.turnCount() != 1 {
+		t.Fatalf("invalid model reply=%q turns=%d", invalidReply, sess.turnCount())
+	}
+
+	plat.push(&Message{ID: "m5", ChatID: "chat-1", Text: "/model reset", Platform: "fake"})
+	waitFor(t, "model reset reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 5
+	})
+	if got := sess.CurrentModel(); got != "gpt-5" {
+		t.Fatalf("reset current model = %q", got)
+	}
+	if sess.turnCount() != 1 {
+		t.Fatalf("model reset reached Send: turns=%d", sess.turnCount())
 	}
 }
 

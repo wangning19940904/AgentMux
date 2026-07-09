@@ -50,6 +50,7 @@ func attachRuntime(cfg *config.Config, st *store.Store, srv *server.Server) (*co
 		return nil, nil, err
 	}
 	srv.SetWorkspaceInitializer(initializer)
+	eng.SetConversationStore(st)
 	connectSvc := core.NewConnectService(logger, eng, st)
 	srv.SetSender(eng)
 	srv.SetConnect(connectSvc)

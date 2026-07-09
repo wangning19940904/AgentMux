@@ -186,6 +186,7 @@ func TestAgentInstanceCRUD(t *testing.T) {
 		WorkDir:      "/tmp/work",
 		ProviderTool: "codex",
 		ProviderID:   "openai",
+		DefaultModel: "gpt-5",
 		MemoryScope:  "agent:agent-test",
 		Env:          map[string]string{"CODEX_HOME": "/tmp/codex"},
 		ChannelBindings: []core.AgentChannelBinding{{
@@ -223,7 +224,7 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" {
+	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" {
 		t.Fatalf("agent = %+v", got)
 	}
 	if len(got.ChannelBindings) != 1 || got.ChannelBindings[0].Type != "telegram" {
@@ -244,5 +245,71 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("deleted agent still present: %+v", got)
+	}
+}
+
+func TestConversationLifecycle(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	seed := core.Conversation{Scope: "channel:c1", ChatID: "chatA", ChatType: "group", AgentID: "agent-x", WorkDir: "/tmp/a"}
+	conv, created, err := st.GetOrCreateConversation(ctx, seed)
+	if err != nil || !created || conv == nil {
+		t.Fatalf("create = %+v, created=%v, err=%v", conv, created, err)
+	}
+	firstID := conv.ID
+
+	// Same (scope, chatID) reuses the active conversation.
+	again, created, err := st.GetOrCreateConversation(ctx, seed)
+	if err != nil || created || again.ID != firstID {
+		t.Fatalf("reuse = %+v, created=%v, err=%v", again, created, err)
+	}
+
+	// A different chat in the same scope is a distinct conversation.
+	other, created, err := st.GetOrCreateConversation(ctx, core.Conversation{Scope: "channel:c1", ChatID: "chatB", AgentID: "agent-x"})
+	if err != nil || !created || other.ID == firstID {
+		t.Fatalf("distinct chat = %+v, created=%v, err=%v", other, created, err)
+	}
+
+	if err := st.UpdateConversationSession(ctx, firstID, "native-123", "/tmp/a/cwd"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TouchConversation(ctx, firstID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _, err := st.GetOrCreateConversation(ctx, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.NativeSessionID != "native-123" || reloaded.WorkDir != "/tmp/a/cwd" || reloaded.MessageCount != 1 {
+		t.Fatalf("after update/touch = %+v", reloaded)
+	}
+
+	// Ending soft-deletes: the next get-or-create starts a fresh conversation.
+	if err := st.EndConversation(ctx, firstID); err != nil {
+		t.Fatal(err)
+	}
+	fresh, created, err := st.GetOrCreateConversation(ctx, seed)
+	if err != nil || !created || fresh.ID == firstID {
+		t.Fatalf("after end = %+v, created=%v, err=%v", fresh, created, err)
+	}
+
+	active, err := st.ListConversations(ctx, "channel:c1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 2 { // chatB + fresh chatA (ended one excluded)
+		t.Fatalf("active conversations = %d, want 2 (%+v)", len(active), active)
+	}
+	all, err := st.ListConversations(ctx, "channel:c1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("all conversations = %d, want 3", len(all))
 	}
 }

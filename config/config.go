@@ -12,13 +12,13 @@ import (
 
 // Config is the top-level configuration.
 type Config struct {
-	DisplayMode string         `toml:"display_mode"`
-	Server      ServerConfig   `toml:"server"`
-	Bridge      BridgeConfig   `toml:"bridge"`
+	DisplayMode string          `toml:"display_mode"`
+	Server      ServerConfig    `toml:"server"`
+	Bridge      BridgeConfig    `toml:"bridge"`
 	Projects    []ProjectConfig `toml:"projects"`
-	Hooks       []HookConfig   `toml:"hooks"`
-	Provider    ProviderConfig `toml:"provider"`
-	Usage       UsageConfig    `toml:"usage"`
+	Hooks       []HookConfig    `toml:"hooks"`
+	Provider    ProviderConfig  `toml:"provider"`
+	Usage       UsageConfig     `toml:"usage"`
 }
 
 // ServerConfig configures the HTTP/WS management server.
@@ -35,12 +35,13 @@ type BridgeConfig struct {
 
 // ProjectConfig pairs one agent with one or more platforms.
 type ProjectConfig struct {
-	Name         string           `toml:"name"`
-	Agent        string           `toml:"agent"`
-	WorkDir      string           `toml:"work_dir"`
-	SystemPrompt string           `toml:"system_prompt"`
+	Name         string            `toml:"name"`
+	Agent        string            `toml:"agent"`
+	WorkDir      string            `toml:"work_dir"`
+	SystemPrompt string            `toml:"system_prompt"`
+	DefaultModel string            `toml:"default_model"`
 	Env          map[string]string `toml:"env"`
-	Platforms    []map[string]any `toml:"platforms"`
+	Platforms    []map[string]any  `toml:"platforms"`
 }
 
 // HookConfig is a single lifecycle hook.
@@ -59,21 +60,21 @@ type ProviderConfig struct {
 
 // UsageConfig configures the token-usage engine.
 type UsageConfig struct {
-	Sources   []string        `toml:"sources"`
-	CacheDir  string          `toml:"cache_dir"`
-	Offline   bool            `toml:"offline"`
-	SSHTargets []SSHTarget    `toml:"ssh"`
+	Sources    []string    `toml:"sources"`
+	CacheDir   string      `toml:"cache_dir"`
+	Offline    bool        `toml:"offline"`
+	SSHTargets []SSHTarget `toml:"ssh"`
 }
 
 // SSHTarget describes a remote machine to collect usage from.
 type SSHTarget struct {
-	Name     string   `toml:"name"`
-	Host     string   `toml:"host"`
-	Port     int      `toml:"port"`
-	User     string   `toml:"user"`
-	KeyPath  string   `toml:"key_path"`
-	Password string   `toml:"password"`
-	Sources  []string `toml:"sources"`
+	Name     string            `toml:"name"`
+	Host     string            `toml:"host"`
+	Port     int               `toml:"port"`
+	User     string            `toml:"user"`
+	KeyPath  string            `toml:"key_path"`
+	Password string            `toml:"password"`
+	Sources  []string          `toml:"sources"`
 	Paths    map[string]string `toml:"paths"` // source -> remote path
 }
 

@@ -26,7 +26,7 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 
 	for _, p := range cfg.Projects {
 		ag, err := core.CreateAgent(p.Agent, map[string]any{
-			"work_dir": p.WorkDir, "system_prompt": p.SystemPrompt, "env": p.Env,
+			"work_dir": p.WorkDir, "system_prompt": p.SystemPrompt, "model": p.DefaultModel, "env": p.Env,
 		})
 		if err != nil {
 			return nil, err

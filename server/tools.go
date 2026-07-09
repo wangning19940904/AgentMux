@@ -69,3 +69,18 @@ func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
 	res := toolpkg.InstallCLI(r.Context(), id, strings.TrimSpace(req.Action))
 	writeJSON(w, http.StatusOK, res)
 }
+
+func (s *Server) handleCLICheck(w http.ResponseWriter, r *http.Request) {
+	var req cliInstallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cli id is required"})
+		return
+	}
+	res := toolpkg.CheckCLIUpdate(r.Context(), id)
+	writeJSON(w, http.StatusOK, res)
+}

@@ -9,11 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/core"
+	"github.com/agentnexus/agentnexus/provider"
 	"github.com/agentnexus/agentnexus/store"
 
+	// Register agent adapters for agent instance validation.
+	_ "github.com/agentnexus/agentnexus/agent"
 	// Register platform adapters for channel type validation.
 	_ "github.com/agentnexus/agentnexus/platform"
 )
@@ -26,6 +30,16 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return New(config.Default(), nil, st, nil, nil), st
+}
+
+func newTestServerWithProvider(t *testing.T) (*Server, *store.Store) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return New(config.Default(), nil, st, provider.NewManager(st), nil), st
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any) *httptest.ResponseRecorder {
@@ -182,6 +196,72 @@ func TestPlatformsIncludeLarkAlias(t *testing.T) {
 	}
 	if !containsString(platforms, "feishu") || !containsString(platforms, "lark") {
 		t.Fatalf("platforms = %+v, want feishu and lark", platforms)
+	}
+}
+
+func TestAgentDefaultModelValidation(t *testing.T) {
+	s, st := newTestServerWithProvider(t)
+	ctx := context.Background()
+	p := &core.Provider{
+		ID:        "relay",
+		Name:      "Relay",
+		BaseURL:   "http://relay.local",
+		Model:     "gpt-5",
+		Meta:      core.ProviderMeta{SupportedModels: []string{"gpt-5-mini", "gpt-5"}},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := st.UpsertProvider(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "codex", p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+		Name:         "Research",
+		RuntimeID:    "codex",
+		ProviderTool: "codex",
+		DefaultModel: "gpt-5-mini",
+		Enabled:      true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid default model: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var saved core.AgentInstance
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.DefaultModel != "gpt-5-mini" {
+		t.Fatalf("saved default model = %q", saved.DefaultModel)
+	}
+
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+		Name:         "Bad model",
+		RuntimeID:    "codex",
+		ProviderTool: "codex",
+		DefaultModel: "missing-model",
+		Enabled:      true,
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not supported") {
+		t.Fatalf("invalid default model: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+
+	override := core.AgentInstance{
+		Name:         "Override",
+		RuntimeID:    "codex",
+		ProviderTool: "codex",
+		ProviderID:   "relay",
+		DefaultModel: "gpt-5",
+		Enabled:      true,
+	}
+	if err := s.normalizeAgentInstance(ctx, &override); err != nil {
+		t.Fatalf("override valid model: %v", err)
+	}
+	override.ID = ""
+	override.DefaultModel = "nope"
+	if err := s.normalizeAgentInstance(ctx, &override); err == nil {
+		t.Fatal("override invalid model unexpectedly passed")
 	}
 }
 

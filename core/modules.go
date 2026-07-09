@@ -71,6 +71,14 @@ type WorkspaceInitOptions struct {
 	MCPServers []string `json:"mcp_servers,omitempty"`
 }
 
+// ConversationBaseDir returns the root under which per-conversation working
+// directories live for the given agent workspace. When the agent configures a
+// WorkDir it lives beside it under .agentnexus/conversations; otherwise it
+// falls back to ~/.agentnexus/conversations.
+func (o WorkspaceInitOptions) ConversationBaseDir() string {
+	return conversationBaseDir(o.WorkDir)
+}
+
 // WorkspaceInitResult reports what the initializer created or warned about.
 type WorkspaceInitResult struct {
 	WorkDir   string   `json:"work_dir"`

@@ -16,6 +16,10 @@ func init() {
 		if v, ok := cfg["system_prompt"].(string); ok {
 			a.systemPrompt = v
 		}
+		if model := core.ModelSelectionFromConfig(cfg); model != nil {
+			a.defaultModel = model.DefaultModel()
+			a.supportedModels = model.SupportedModels()
+		}
 		if env, ok := cfg["env"].(map[string]string); ok {
 			a.env = env
 		}
@@ -25,8 +29,10 @@ func init() {
 
 // Agent is the Claude Code adapter.
 type Agent struct {
-	systemPrompt string
-	env          map[string]string
+	systemPrompt    string
+	defaultModel    string
+	supportedModels []string
+	env             map[string]string
 }
 
 // Name returns the registered name.
@@ -35,6 +41,13 @@ func (a *Agent) Name() string { return "claudecode" }
 // StartSession spawns a new Claude Code session in workDir.
 func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
 	return newSession(a, workDir)
+}
+
+// StartSessionResume spawns a session that resumes the given claude-native
+// session id, restoring prior context. Empty resumeID behaves like
+// StartSession. Implements core.ResumableAgent.
+func (a *Agent) StartSessionResume(ctx context.Context, workDir, resumeID string) (core.AgentSession, error) {
+	return newSessionResume(a, workDir, resumeID)
 }
 
 // ListSessions is not yet backed by persistent state; returns empty.
