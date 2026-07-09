@@ -225,6 +225,11 @@ func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {
 	return commandOutputWithEnv(ctx, cliEnv(spec), "npm", args...)
 }
 
+// LookupCLI returns the catalog spec for a CLI id.
+func LookupCLI(id string) (CLISpec, bool) {
+	return lookupCLI(id)
+}
+
 func lookupCLI(id string) (CLISpec, bool) {
 	for _, spec := range cliCatalog {
 		if spec.ID == id {

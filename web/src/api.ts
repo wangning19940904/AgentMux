@@ -208,6 +208,7 @@ export interface AgentInstance {
   schedules?: AgentSchedule[];
   mcp_servers?: string[];
   skills?: string[];
+  clis?: string[];
   enabled: boolean;
   source?: string;
   created_at?: string;

@@ -43,6 +43,7 @@ type AgentInstance struct {
 	Schedules       []AgentSchedule       `json:"schedules,omitempty"`
 	MCPServers      []string              `json:"mcp_servers,omitempty"`
 	Skills          []string              `json:"skills,omitempty"`
+	CLIs            []string              `json:"clis,omitempty"`
 	Enabled         bool                  `json:"enabled"`
 	Source          string                `json:"source,omitempty"` // manual, console, config.toml
 	CreatedAt       time.Time             `json:"created_at"`

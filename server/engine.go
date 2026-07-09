@@ -20,6 +20,7 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 	}
 	hooks := core.NewHookRunner(log, hookList)
 	eng := core.NewEngine(log, hooks)
+	eng.SetMessageLogger(core.NewMessageLogger(""))
 	if len(initializer) > 0 {
 		eng.SetWorkspaceInitializer(initializer[0])
 	}

@@ -1097,6 +1097,21 @@ textarea:focus {
   border-radius: var(--radius);
 }
 
+.injected-prompt-preview {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-muted, rgba(127, 127, 127, 0.08));
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .agent-section header {
   justify-content: flex-start;
 }

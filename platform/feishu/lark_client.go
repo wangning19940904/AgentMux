@@ -13,6 +13,7 @@ import (
 	"github.com/agentnexus/agentnexus/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
@@ -22,6 +23,12 @@ import (
 // stream text into. It must match the element_id embedded in the card JSON
 // created by BeginStreamCard.
 const streamCardElementID = "answer"
+
+const (
+	modelPickerActionKey    = "agentnexus_action"
+	modelPickerActionSelect = "model_select"
+	modelPickerActionReset  = "model_reset"
+)
 
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
 // and an API client for outbound messages.
@@ -91,6 +98,18 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				Project:      project,
 			}
 			return nil
+		}).
+		OnP2CardActionTrigger(func(eventCtx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+			msg, ok := c.modelCommandFromCardAction(project, event)
+			if !ok {
+				return nil, nil
+			}
+			select {
+			case inbound <- msg:
+			case <-ctx.Done():
+			case <-eventCtx.Done():
+			}
+			return nil, nil
 		})
 
 	c.ws = larkws.NewClient(c.appID, c.appSecret, larkws.WithDomain(c.domain), larkws.WithEventHandler(handler))
@@ -167,6 +186,28 @@ func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, fa
 	}
 	if resp.Data == nil || resp.Data.MessageId == nil {
 		return "", fmt.Errorf("%s send card: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) SendModelPickerCard(ctx context.Context, msg *core.Message, state core.ModelPickerState) (string, error) {
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType("chat_id").
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(msg.ChatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(buildModelPickerCard(msg, state)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send model picker card failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send model picker card: missing message id", c.platform)
 	}
 	return *resp.Data.MessageId, nil
 }
@@ -369,6 +410,138 @@ func buildCard(text string, done, failed bool) string {
 	return string(b)
 }
 
+func buildModelPickerCard(msg *core.Message, state core.ModelPickerState) string {
+	current := modelPickerDisplay(state.CurrentModel)
+	def := modelPickerDisplay(state.DefaultModel)
+	elements := []map[string]any{
+		{
+			"tag":     "markdown",
+			"content": fmt.Sprintf("**当前模型**: `%s`\n**默认模型**: `%s`", current, def),
+		},
+	}
+	if len(state.Options) == 0 {
+		elements = append(elements, map[string]any{
+			"tag":     "markdown",
+			"content": "当前 Provider 没有配置可选模型。",
+		})
+	} else {
+		for i := 0; i < len(state.Options); i += 2 {
+			end := i + 2
+			if end > len(state.Options) {
+				end = len(state.Options)
+			}
+			elements = append(elements, modelPickerButtonRow(msg, state.Options[i:end]))
+		}
+		if state.CurrentModel != state.DefaultModel {
+			elements = append(elements, modelPickerResetRow(msg))
+		}
+	}
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"template": "blue",
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "选择模型",
+			},
+		},
+		"body": map[string]any{
+			"elements": elements,
+		},
+	}
+	b, err := json.Marshal(card)
+	if err != nil {
+		return `{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"model picker unavailable"}]}}`
+	}
+	return string(b)
+}
+
+func modelPickerButtonRow(msg *core.Message, options []core.ModelPickerOption) map[string]any {
+	columns := make([]map[string]any, 0, len(options))
+	for _, option := range options {
+		label := option.Model
+		if option.Current {
+			label += " 当前"
+		} else if option.Default {
+			label += " 默认"
+		}
+		buttonType := "default"
+		if option.Current {
+			buttonType = "primary"
+		}
+		columns = append(columns, map[string]any{
+			"tag":            "column",
+			"width":          "weighted",
+			"weight":         1,
+			"vertical_align": "top",
+			"elements": []map[string]any{
+				modelPickerButton(label, buttonType, map[string]any{
+					modelPickerActionKey: modelPickerActionSelect,
+					"model":              option.Model,
+					"chat_id":            msg.ChatID,
+					"chat_type":          msg.ChatType,
+				}),
+			},
+		})
+	}
+	return map[string]any{
+		"tag":              "column_set",
+		"flex_mode":        "stretch",
+		"background_style": "default",
+		"columns":          columns,
+	}
+}
+
+func modelPickerResetRow(msg *core.Message) map[string]any {
+	return map[string]any{
+		"tag":              "column_set",
+		"flex_mode":        "stretch",
+		"background_style": "default",
+		"columns": []map[string]any{
+			{
+				"tag":            "column",
+				"width":          "weighted",
+				"weight":         1,
+				"vertical_align": "top",
+				"elements": []map[string]any{
+					modelPickerButton("恢复默认", "default", map[string]any{
+						modelPickerActionKey: modelPickerActionReset,
+						"chat_id":            msg.ChatID,
+						"chat_type":          msg.ChatType,
+					}),
+				},
+			},
+		},
+	}
+}
+
+func modelPickerButton(label, buttonType string, value map[string]any) map[string]any {
+	return map[string]any{
+		"tag":   "button",
+		"type":  buttonType,
+		"width": "fill",
+		"text": map[string]any{
+			"tag":     "plain_text",
+			"content": label,
+		},
+		"behaviors": []map[string]any{
+			{
+				"type":  "callback",
+				"value": value,
+			},
+		},
+	}
+}
+
+func modelPickerDisplay(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "runtime default"
+	}
+	return model
+}
+
 // buildStreamCardJSON renders a JSON 2.0 card with a single markdown element
 // (element_id = streamCardElementID) that native streaming updates write into.
 // While streaming (done=false) streaming_mode is on so text-content updates
@@ -431,6 +604,59 @@ func extractText(msgType, content string) string {
 		return ""
 	}
 	return strings.TrimSpace(c.Text)
+}
+
+func (c *larkClient) modelCommandFromCardAction(project string, event *callback.CardActionTriggerEvent) (*core.Message, bool) {
+	if event == nil || event.Event == nil || event.Event.Action == nil {
+		return nil, false
+	}
+	value := event.Event.Action.Value
+	action := stringValue(value[modelPickerActionKey])
+	if action == "" {
+		return nil, false
+	}
+	chatID := stringValue(value["chat_id"])
+	chatType := stringValue(value["chat_type"])
+	if chatID == "" && event.Event.Context != nil {
+		chatID = event.Event.Context.OpenChatID
+	}
+	if chatID == "" {
+		return nil, false
+	}
+	text := ""
+	switch action {
+	case modelPickerActionSelect:
+		model := stringValue(value["model"])
+		if model == "" {
+			return nil, false
+		}
+		text = "/model " + model
+	case modelPickerActionReset:
+		text = "/model reset"
+	default:
+		return nil, false
+	}
+	userID := ""
+	if event.Event.Operator != nil {
+		userID = event.Event.Operator.OpenID
+	}
+	return &core.Message{
+		ChatID:       chatID,
+		ChatType:     chatType,
+		UserID:       userID,
+		Text:         text,
+		MentionedBot: true,
+		Platform:     c.platform,
+		Project:      project,
+		Timestamp:    time.Now(),
+	}, true
+}
+
+func stringValue(raw any) string {
+	if s, ok := raw.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 func (c *larkClient) loadBotOpenID(ctx context.Context) string {

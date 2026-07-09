@@ -99,6 +99,15 @@ func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.Repl
 	return &cardStream{client: p.client, chatID: msg.ChatID}, nil
 }
 
+// ReplyModelPicker renders /model status as an interactive selector.
+func (p *Platform) ReplyModelPicker(ctx context.Context, msg *core.Message, state core.ModelPickerState) error {
+	if p.client == nil {
+		return fmt.Errorf("%s: client not started", p.name)
+	}
+	_, err := p.client.SendModelPickerCard(ctx, msg, state)
+	return err
+}
+
 // AddReaction marks the inbound message while the agent is working.
 func (p *Platform) AddReaction(ctx context.Context, msg *core.Message, emojiType string) (string, error) {
 	if p.client == nil {

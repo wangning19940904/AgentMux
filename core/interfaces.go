@@ -118,6 +118,12 @@ type StreamMessageReplier interface {
 	BeginMessageReply(ctx context.Context, msg *Message) (ReplyStream, error)
 }
 
+// ModelPickerReplier is an optional Platform capability for rendering the
+// /model status command as an interactive model picker.
+type ModelPickerReplier interface {
+	ReplyModelPicker(ctx context.Context, msg *Message, state ModelPickerState) error
+}
+
 // MessageReactioner is an optional Platform capability for marking an inbound
 // message while work is in progress and removing that mark when finished.
 type MessageReactioner interface {

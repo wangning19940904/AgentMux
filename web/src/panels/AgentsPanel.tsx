@@ -21,6 +21,7 @@ const EMPTY_AGENT: AgentInstance = {
   schedules: [],
   mcp_servers: [],
   skills: [],
+  clis: [],
   enabled: true,
   source: "manual",
 };
@@ -35,6 +36,7 @@ export function AgentsPanel() {
   const triggers = useAsync(() => api.triggers(), []);
   const mcpServers = useAsync(() => api.mcp(), []);
   const skills = useAsync(() => api.skills(), []);
+  const tools = useAsync(() => api.tools(), []);
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<AgentInstance | null>(null);
   const [selectedChannelIDs, setSelectedChannelIDs] = useState<string[]>([]);
@@ -50,6 +52,7 @@ export function AgentsPanel() {
   const triggerItems = triggers.data ?? [];
   const mcpOptions = mcpServers.data ?? [];
   const skillOptions = skills.data ?? [];
+  const cliCatalog = tools.data?.cli ?? [];
   const draft = drawerDraft ?? EMPTY_AGENT;
   const drawerOpen = drawerMode !== null && drawerDraft !== null;
 
@@ -208,6 +211,7 @@ export function AgentsPanel() {
                 canSave={canSave}
                 activeRoutes={activeRouteItems}
                 channelOptions={channelItems}
+                cliOptions={cliCatalog.map((tool) => ({ id: tool.spec.id, name: tool.spec.name, note: tool.spec.note }))}
                 compatibleProviders={compatibleProviders}
                 draft={draft}
                 mcpOptions={mcpOptions.map((server) => server.name)}
@@ -311,11 +315,14 @@ export function AgentsPanel() {
   );
 }
 
+type CLIOption = { id: string; name: string; note?: string };
+
 function AgentForm({
   busy,
   canSave,
   activeRoutes,
   channelOptions,
+  cliOptions,
   compatibleProviders,
   draft,
   drawerMode,
@@ -337,6 +344,7 @@ function AgentForm({
   canSave: boolean;
   activeRoutes: ProviderRoute[];
   channelOptions: Channel[];
+  cliOptions: CLIOption[];
   compatibleProviders: Provider[];
   draft: AgentInstance;
   drawerMode: DrawerMode | null;
@@ -356,6 +364,14 @@ function AgentForm({
 }) {
   const [directoryBusy, setDirectoryBusy] = useState("");
   const [directoryNotice, setDirectoryNotice] = useState("");
+  const injectedPrompt = useMemo(() => {
+    const logPaths = selectedChannelIDs.map((id) => `~/.agentnexus/logs/channels/${id}.jsonl`);
+    const clis = (draft.clis ?? [])
+      .map((id) => cliOptions.find((option) => option.id === id))
+      .filter((option): option is CLIOption => Boolean(option))
+      .map((option) => ({ name: option.name, note: option.note ?? "" }));
+    return composeInjectedPrompt(draft.system_prompt ?? "", logPaths, clis);
+  }, [draft.system_prompt, draft.clis, selectedChannelIDs, cliOptions]);
   const selectedRouteTool = draft.provider_tool || draft.runtime_id;
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.provider_name || activeRoute?.provider_id || "";
@@ -478,6 +494,11 @@ function AgentForm({
               onChange={(event) => onUpdate("system_prompt", event.target.value)}
             />
           </label>
+          <div className="field wide">
+            <span>{t("agents.injectedPrompt")}</span>
+            <pre className="injected-prompt-preview">{injectedPrompt || t("agents.injectedPromptEmpty")}</pre>
+            <small>{t("agents.injectedPromptHelp")}</small>
+          </div>
         </div>
       </section>
 
@@ -622,6 +643,15 @@ function AgentForm({
             onChange={(next) => onUpdate("skills", next)}
             empty={t("skills.empty")}
           />
+          <Picker
+            title={t("agents.clis")}
+            items={cliOptions.map((option) => option.id)}
+            labels={Object.fromEntries(cliOptions.map((option) => [option.id, option.name]))}
+            selected={draft.clis ?? []}
+            readOnly={readOnly}
+            onChange={(next) => onUpdate("clis", next)}
+            empty={t("agents.clisEmpty")}
+          />
         </div>
       </section>
 
@@ -651,6 +681,7 @@ function Summary({ label, value }: { label: string; value: number }) {
 function Picker({
   title,
   items,
+  labels,
   selected,
   readOnly,
   onChange,
@@ -658,6 +689,7 @@ function Picker({
 }: {
   title: string;
   items: string[];
+  labels?: Record<string, string>;
   selected: string[];
   readOnly: boolean;
   onChange: (next: string[]) => void;
@@ -677,13 +709,36 @@ function Picker({
               disabled={readOnly}
               onClick={() => onChange(active ? selected.filter((value) => value !== item) : [...selected, item])}
             >
-              {item}
+              {labels?.[item] ?? item}
             </button>
           );
         })}
       </div>
     </div>
   );
+}
+
+// composeInjectedPrompt mirrors core.ComposeSystemPrompt so the agent form can
+// preview the exact prompt injected at runtime.
+function composeInjectedPrompt(
+  base: string,
+  logPaths: string[],
+  clis: { name: string; note: string }[]
+): string {
+  const sections: string[] = [];
+  const trimmedBase = base.replace(/\n+$/, "");
+
+  if (logPaths.length > 0) {
+    sections.push(["绑定的事件回调日志路径为：", ...logPaths.map((path) => `- ${path}`)].join("\n"));
+  }
+  if (clis.length > 0) {
+    const lines = clis
+      .filter((cli) => cli.name.trim())
+      .map((cli) => (cli.note.trim() ? `- ${cli.name}：${cli.note}` : `- ${cli.name}`));
+    sections.push(["已启用以下 CLI 工具：", ...lines].join("\n"));
+  }
+
+  return [trimmedBase, ...sections].filter((part) => part !== "").join("\n\n");
 }
 
 async function syncAgentConnectBindings(

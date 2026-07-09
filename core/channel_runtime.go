@@ -343,6 +343,16 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		if err := rt.platform.Reply(ctx, msg, text); err != nil {
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
 		}
+	}, func(state ModelPickerState) bool {
+		mp, ok := rt.platform.(ModelPickerReplier)
+		if !ok {
+			return false
+		}
+		if err := mp.ReplyModelPicker(ctx, msg, state); err != nil {
+			e.log.Error("channel model picker reply", "channel", rt.channel.Name, "err", err)
+			return false
+		}
+		return true
 	}) {
 		e.emit(ctx, HookMessageSent, data)
 		return
@@ -412,31 +422,11 @@ func (e *Engine) deleteChannelAckReaction(ctx context.Context, rt *channelRuntim
 // message starts fresh. It reports whether the message was a command and was
 // handled (and thus should not be forwarded to the agent).
 func (e *Engine) handleConversationCommand(ctx context.Context, rt *channelRuntime, msg *Message) bool {
-	if e.conversations == nil {
+	if !isConversationCommand(msg.Text) {
 		return false
 	}
-	switch strings.ToLower(strings.TrimSpace(msg.Text)) {
-	case "/new", "/clear", "/reset":
-	default:
-		return false
-	}
-	// End the active conversation (soft delete) so the next message opens a
-	// fresh one, and drop the in-memory session cached under its id.
-	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
-		Scope:    rt.scope(),
-		ChatID:   msg.ChatID,
-		ChatType: msg.ChatType,
-		AgentID:  rt.workspace.AgentID,
-	})
-	if err != nil {
-		e.log.Warn("resolve conversation for command", "channel", rt.channel.Name, "err", err)
-	} else if conv != nil {
-		if endErr := e.conversations.EndConversation(ctx, conv.ID); endErr != nil {
-			e.log.Warn("end conversation", "conversation", conv.ID, "err", endErr)
-		}
-		rt.dropSession(ctx, conv.ID)
-	}
-	if replyErr := rt.platform.Reply(ctx, msg, "Started a new conversation. Previous context has been cleared."); replyErr != nil {
+	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, rt.workspace.AgentID, rt.dropSession)
+	if replyErr := rt.platform.Reply(ctx, msg, conversationResetReply); replyErr != nil {
 		e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
 	}
 	return true

@@ -39,6 +39,7 @@ type Engine struct {
 	inbound       chan *Message
 	workspace     WorkspaceInitializer
 	conversations ConversationStore
+	msgLog        *MessageLogger
 }
 
 // NewEngine constructs an Engine.
@@ -58,6 +59,13 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 // SetEventSink attaches the unified event callback. Must be called before
 // Start.
 func (e *Engine) SetEventSink(sink EventSink) { e.sink = sink }
+
+// SetMessageLogger attaches the channel message logger used to persist inbound
+// channel messages to disk.
+func (e *Engine) SetMessageLogger(l *MessageLogger) { e.msgLog = l }
+
+// MessageLogger returns the attached channel message logger, or nil.
+func (e *Engine) MessageLogger() *MessageLogger { return e.msgLog }
 
 // SetWorkspaceInitializer attaches the pre-run workspace initializer.
 func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
@@ -188,6 +196,13 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	}
 
 	data := eventData(msg)
+
+	if msg.ChannelID != "" && e.msgLog != nil {
+		if err := e.msgLog.Log(msg.ChannelID, data); err != nil {
+			e.log.Warn("write channel message log", "channel_id", msg.ChannelID, "err", err)
+		}
+	}
+
 	e.emit(ctx, HookMessageReceived, data)
 
 	if msg.ChannelID != "" {
@@ -203,6 +218,11 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
+	if e.handleProjectConversationCommand(ctx, pr, msg) {
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+
 	sess, conv, created, err := pr.session(ctx, msg.ChatID, msg.ChatType)
 	if err != nil {
 		e.log.Error("start session", "err", err)
@@ -215,6 +235,8 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	}
 	if e.handleModelCommand(sess, msg.Text, func(text string) {
 		e.replyAll(ctx, pr, msg, text)
+	}, func(state ModelPickerState) bool {
+		return e.replyModelPicker(ctx, pr, msg, state)
 	}) {
 		e.persistConversationTurn(ctx, conv, sess)
 		e.emit(ctx, HookMessageSent, data)
@@ -244,13 +266,13 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 	return e.consumeTurn(ctx, events, reply, data)
 }
 
-func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string)) bool {
+func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string), picker func(ModelPickerState) bool) bool {
 	cmd, ok := parseModelCommand(text)
 	if !ok {
 		return false
 	}
 	if reply == nil {
-		return true
+		reply = func(string) {}
 	}
 	models, ok := sess.(ModelSwitchingSession)
 	if !ok || !models.ModelSwitchingSupported() {
@@ -259,6 +281,12 @@ func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(s
 	}
 	switch strings.ToLower(cmd) {
 	case "", "current", "list":
+		if picker != nil {
+			state := modelPickerState(models)
+			if len(state.Options) > 0 && picker(state) {
+				return true
+			}
+		}
 		reply(formatModelStatus(models))
 	case "reset":
 		if err := models.ResetModel(); err != nil {
@@ -313,6 +341,29 @@ func formatAvailableModels(models []string) string {
 		return "Available models: none configured."
 	}
 	return "Available models:\n- " + strings.Join(models, "\n- ")
+}
+
+func modelPickerState(models ModelSwitchingSession) ModelPickerState {
+	current := models.CurrentModel()
+	def := models.DefaultModel()
+	supported := models.SupportedModels()
+	options := make([]ModelPickerOption, 0, len(supported))
+	for _, model := range supported {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		options = append(options, ModelPickerOption{
+			Model:   model,
+			Current: model == current,
+			Default: model == def,
+		})
+	}
+	return ModelPickerState{
+		CurrentModel: current,
+		DefaultModel: def,
+		Options:      options,
+	}
 }
 
 // consumeTurn drains a session event channel, forwarding textual output through
@@ -477,12 +528,89 @@ func (e *Engine) replyAll(ctx context.Context, pr *projectRuntime, msg *Message,
 	}
 }
 
+func (e *Engine) replyModelPicker(ctx context.Context, pr *projectRuntime, msg *Message, state ModelPickerState) bool {
+	for _, p := range pr.platforms {
+		if p.Name() != msg.Platform {
+			continue
+		}
+		mp, ok := p.(ModelPickerReplier)
+		if !ok {
+			return false
+		}
+		if err := mp.ReplyModelPicker(ctx, msg, state); err != nil {
+			e.log.Error("reply model picker", "platform", p.Name(), "err", err)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (e *Engine) handleProjectConversationCommand(ctx context.Context, pr *projectRuntime, msg *Message) bool {
+	if !isConversationCommand(msg.Text) {
+		return false
+	}
+	e.resetConversation(ctx, pr.scope(), msg.ChatID, msg.ChatType, pr.workspace.AgentID, pr.dropSession)
+	e.replyAll(ctx, pr, msg, conversationResetReply)
+	return true
+}
+
+func (pr *projectRuntime) scope() string { return "project:" + pr.name }
+
+// dropSession closes and removes the cached in-memory session for cacheKey.
+// With durable conversations cacheKey is the conversation id; without them it
+// is the platform chat id.
+func (pr *projectRuntime) dropSession(ctx context.Context, cacheKey string) {
+	pr.mu.Lock()
+	s, ok := pr.sessions[cacheKey]
+	if ok {
+		delete(pr.sessions, cacheKey)
+	}
+	pr.mu.Unlock()
+	if ok && s != nil {
+		_ = s.Close(ctx)
+	}
+}
+
+const conversationResetReply = "Started a new conversation. Previous context has been cleared."
+
+func isConversationCommand(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "/new", "/clear", "/reset":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) resetConversation(ctx context.Context, scope, chatID, chatType, agentID string, dropSession func(context.Context, string)) {
+	cacheKey := chatID
+	if e.conversations != nil {
+		conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
+			Scope:    scope,
+			ChatID:   chatID,
+			ChatType: chatType,
+			AgentID:  agentID,
+		})
+		if err != nil {
+			e.log.Warn("resolve conversation for command", "scope", scope, "chat_id", chatID, "err", err)
+		} else if conv != nil {
+			cacheKey = conv.ID
+			if endErr := e.conversations.EndConversation(ctx, conv.ID); endErr != nil {
+				e.log.Warn("end conversation", "conversation", conv.ID, "err", endErr)
+			}
+		}
+	}
+	if dropSession != nil {
+		dropSession(ctx, cacheKey)
+	}
+}
+
 func (pr *projectRuntime) session(ctx context.Context, chatID, chatType string) (AgentSession, *Conversation, bool, error) {
 	if pr.agent == nil {
 		return nil, nil, false, fmt.Errorf("project %q has no agent", pr.name)
 	}
-	scope := "project:" + pr.name
-	conv, workDir, err := pr.owner.prepareConversation(ctx, scope, chatID, chatType, pr.workspace, pr.workDir)
+	conv, workDir, err := pr.owner.prepareConversation(ctx, pr.scope(), chatID, chatType, pr.workspace, pr.workDir)
 	if err != nil {
 		return nil, nil, false, err
 	}

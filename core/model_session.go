@@ -17,6 +17,20 @@ type ModelSwitchingSession interface {
 	ResetModel() error
 }
 
+// ModelPickerState is the transport-neutral payload a platform can render as
+// a model selection card.
+type ModelPickerState struct {
+	CurrentModel string
+	DefaultModel string
+	Options      []ModelPickerOption
+}
+
+type ModelPickerOption struct {
+	Model   string
+	Current bool
+	Default bool
+}
+
 // ModelSelection stores the default and per-session model override for
 // turn-based agent sessions.
 type ModelSelection struct {

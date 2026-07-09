@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	schedules TEXT,
 	mcp_servers TEXT,
 	skills TEXT,
+	clis TEXT,
 	enabled INTEGER DEFAULT 1,
 	source TEXT,
 	created_at TEXT,
@@ -232,6 +233,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 		}
 	}
 	if err := s.ensureColumn("agent_instances", "default_model", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "clis", "TEXT"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {

@@ -59,6 +59,22 @@ func (p *fakePlatform) push(msg *Message) {
 	in <- msg
 }
 
+type modelPickerPlatform struct {
+	*fakePlatform
+	modelCards []ModelPickerState
+}
+
+func newModelPickerPlatform(name string) *modelPickerPlatform {
+	return &modelPickerPlatform{fakePlatform: newFakePlatform(name)}
+}
+
+func (p *modelPickerPlatform) ReplyModelPicker(ctx context.Context, msg *Message, state ModelPickerState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.modelCards = append(p.modelCards, state)
+	return nil
+}
+
 type fakeSession struct {
 	id     string
 	agent  *fakeAgent
@@ -293,6 +309,116 @@ func TestChannelMessageRouting(t *testing.T) {
 	}
 }
 
+func TestProjectConversationCommandClearsInMemorySession(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	plat := newFakePlatform("fake")
+	agent := &fakeAgent{}
+	eng.AddProject("demo", "", agent, []Platform{plat})
+	go func() { _ = eng.Start(ctx) }()
+
+	plat.push(&Message{ChatID: "chat-1", Text: "hello", Platform: "fake", Project: "demo"})
+	waitFor(t, "first project reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1
+	})
+
+	plat.push(&Message{ChatID: "chat-1", Text: "/new", Platform: "fake", Project: "demo"})
+	waitFor(t, "project reset reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 2
+	})
+
+	agent.mu.Lock()
+	sessionsAfterReset := agent.sessions
+	turnsAfterReset := append([]string(nil), agent.turns...)
+	agent.mu.Unlock()
+	if sessionsAfterReset != 1 {
+		t.Fatalf("sessions after /new = %d, want existing session only", sessionsAfterReset)
+	}
+	if len(turnsAfterReset) != 1 || turnsAfterReset[0] != "hello" {
+		t.Fatalf("turns after /new = %+v, command should not reach Send", turnsAfterReset)
+	}
+
+	plat.push(&Message{ChatID: "chat-1", Text: "again", Platform: "fake", Project: "demo"})
+	waitFor(t, "second project reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 3
+	})
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.sessions != 2 {
+		t.Fatalf("sessions after next message = %d, want new session", agent.sessions)
+	}
+	if len(agent.turns) != 2 || agent.turns[1] != "again" {
+		t.Fatalf("turns after next message = %+v", agent.turns)
+	}
+}
+
+func TestChannelConversationCommandClearsInMemorySession(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake")
+	restore := stubPlatformFactory(t, "fake-clear", plat)
+	defer restore()
+
+	agent := &fakeAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-clear", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ChatID: "chat-1", Text: "hello", Platform: "fake"})
+	waitFor(t, "first channel reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1
+	})
+
+	plat.push(&Message{ChatID: "chat-1", Text: "/clear", Platform: "fake"})
+	waitFor(t, "channel reset reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 2
+	})
+
+	agent.mu.Lock()
+	sessionsAfterReset := agent.sessions
+	turnsAfterReset := append([]string(nil), agent.turns...)
+	agent.mu.Unlock()
+	if sessionsAfterReset != 1 {
+		t.Fatalf("sessions after /clear = %d, want existing session only", sessionsAfterReset)
+	}
+	if len(turnsAfterReset) != 1 || turnsAfterReset[0] != "hello" {
+		t.Fatalf("turns after /clear = %+v, command should not reach Send", turnsAfterReset)
+	}
+
+	plat.push(&Message{ChatID: "chat-1", Text: "again", Platform: "fake"})
+	waitFor(t, "second channel reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 3
+	})
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.sessions != 2 {
+		t.Fatalf("sessions after next message = %d, want new session", agent.sessions)
+	}
+	if len(agent.turns) != 2 || agent.turns[1] != "again" {
+		t.Fatalf("turns after next message = %+v", agent.turns)
+	}
+}
+
 func TestChannelMessageDeduplicatesMessageID(t *testing.T) {
 	eng := NewEngine(nil, NewHookRunner(nil, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -424,6 +550,53 @@ func TestChannelModelCommandSwitchesSessionModelWithoutSendingTurn(t *testing.T)
 	}
 	if sess.turnCount() != 1 {
 		t.Fatalf("model reset reached Send: turns=%d", sess.turnCount())
+	}
+}
+
+func TestChannelModelCommandRendersModelPickerCardWhenSupported(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newModelPickerPlatform("fake")
+	restore := stubPlatformFactory(t, "fake-model-picker", plat)
+	defer restore()
+
+	agent := &modelAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-model-picker", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "/model", Platform: "fake"})
+	waitFor(t, "model picker card", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.modelCards) == 1
+	})
+
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil {
+		t.Fatal("model command did not create a session")
+	}
+	if sess.turnCount() != 0 {
+		t.Fatalf("model picker reached Send: turns=%d", sess.turnCount())
+	}
+
+	plat.mu.Lock()
+	defer plat.mu.Unlock()
+	if len(plat.replies) != 0 {
+		t.Fatalf("plain replies = %+v, want none when picker is supported", plat.replies)
+	}
+	state := plat.modelCards[0]
+	if state.CurrentModel != "gpt-5" || state.DefaultModel != "gpt-5" {
+		t.Fatalf("model picker state current=%q default=%q", state.CurrentModel, state.DefaultModel)
+	}
+	if len(state.Options) != 2 || state.Options[0].Model != "gpt-5" || !state.Options[0].Current || !state.Options[0].Default {
+		t.Fatalf("model picker options = %+v", state.Options)
 	}
 }
 

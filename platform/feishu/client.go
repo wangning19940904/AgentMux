@@ -22,6 +22,9 @@ type clientAPI interface {
 	SendCard(ctx context.Context, chatID, text string, done, failed bool) (messageID string, err error)
 	// UpdateCard replaces the content of a previously sent card message.
 	UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error
+	// SendModelPickerCard posts an interactive model selector for the
+	// conversation that originated msg.
+	SendModelPickerCard(ctx context.Context, msg *core.Message, state core.ModelPickerState) (messageID string, err error)
 	// BeginStreamCard creates a CardKit streaming card entity and sends it to
 	// the chat, returning the card entity ID used for subsequent streaming
 	// text updates. This is the native "typewriter" streaming path; it

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/agentnexus/agentnexus/tools"
 )
 
 // ConnectService supervises console-managed channels and triggers: it loads
@@ -249,7 +251,7 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	}
 	cfg := map[string]any{
 		"work_dir":      inst.WorkDir,
-		"system_prompt": inst.SystemPrompt,
+		"system_prompt": c.composeAgentPrompt(ctx, inst),
 	}
 	if inst.DefaultModel != "" {
 		cfg["model"] = inst.DefaultModel
@@ -266,6 +268,53 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		return nil, "", workspace
 	}
 	return agent, inst.WorkDir, workspace
+}
+
+// composeAgentPrompt builds the injected system prompt for an agent instance:
+// the user-configured prompt plus the event-callback log paths for its bound
+// channels and descriptions of any enabled CLI tools.
+func (c *ConnectService) composeAgentPrompt(ctx context.Context, inst *AgentInstance) string {
+	logPaths := c.agentChannelLogPaths(ctx, inst.ID)
+	clis := c.agentCLINotes(inst.CLIs)
+	return ComposeSystemPrompt(inst.SystemPrompt, logPaths, clis)
+}
+
+// agentChannelLogPaths returns the message log paths for every enabled channel
+// bound to agentID.
+func (c *ConnectService) agentChannelLogPaths(ctx context.Context, agentID string) []string {
+	logger := c.eng.MessageLogger()
+	if logger == nil || agentID == "" {
+		return nil
+	}
+	channels, err := c.store.ListChannels(ctx)
+	if err != nil {
+		c.log.Warn("list channels for prompt injection", "agent_id", agentID, "err", err)
+		return nil
+	}
+	var paths []string
+	for _, ch := range channels {
+		if ch.Enabled && ch.AgentID == agentID {
+			paths = append(paths, logger.ChannelLogPath(ch.ID))
+		}
+	}
+	return paths
+}
+
+// agentCLINotes resolves the catalog description for each enabled CLI id.
+func (c *ConnectService) agentCLINotes(ids []string) []CLINote {
+	var notes []CLINote
+	for _, id := range ids {
+		spec, ok := tools.LookupCLI(id)
+		if !ok {
+			continue
+		}
+		name := spec.Name
+		if name == "" {
+			name = spec.ID
+		}
+		notes = append(notes, CLINote{Name: name, Note: spec.Note})
+	}
+	return notes
 }
 
 func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInstance) []string {
