@@ -16,9 +16,20 @@ func init() {
 		if v, ok := cfg["system_prompt"].(string); ok {
 			a.systemPrompt = v
 		}
-		if model := core.ModelSelectionFromConfig(cfg); model != nil {
-			a.defaultModel = model.DefaultModel()
-			a.supportedModels = model.SupportedModels()
+		if settings := core.RuntimeSettingsSelectionFromConfig(cfg); settings != nil {
+			defaults := settings.DefaultRuntimeSettings()
+			capabilities := settings.RuntimeSettingsCapabilities()
+			a.defaultModel = defaults.Model
+			a.defaultReasoningEffort = defaults.ReasoningEffort
+			for _, option := range capabilities.Models {
+				a.supportedModels = append(a.supportedModels, option.Value)
+			}
+			for _, option := range capabilities.ReasoningEfforts {
+				a.supportedReasoningEfforts = append(a.supportedReasoningEfforts, option.Value)
+			}
+		}
+		if len(a.supportedReasoningEfforts) == 0 {
+			a.supportedReasoningEfforts = []string{"low", "medium", "high", "max"}
 		}
 		if env, ok := cfg["env"].(map[string]string); ok {
 			a.env = env
@@ -29,10 +40,12 @@ func init() {
 
 // Agent is the Claude Code adapter.
 type Agent struct {
-	systemPrompt    string
-	defaultModel    string
-	supportedModels []string
-	env             map[string]string
+	systemPrompt              string
+	defaultModel              string
+	defaultReasoningEffort    string
+	supportedModels           []string
+	supportedReasoningEfforts []string
+	env                       map[string]string
 }
 
 // Name returns the registered name.

@@ -124,6 +124,7 @@ type ConnectStore interface {
 	GetTrigger(ctx context.Context, id string) (*Trigger, error)
 	UpdateTriggerRun(ctx context.Context, id string, lastRun time.Time, status, errMsg string) error
 	GetAgentInstance(ctx context.Context, id string) (*AgentInstance, error)
+	UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error
 	GetProvider(ctx context.Context, id string) (*Provider, error)
 	ActiveProviderRoutes(ctx context.Context) ([]ProviderRoute, error)
 }

@@ -36,11 +36,17 @@ type Provider struct {
 // ProviderMeta carries tool-specific routing hints without forcing the core
 // provider row to know every downstream config shape.
 type ProviderMeta struct {
-	APIFormat           string   `json:"api_format,omitempty"`     // anthropic, openai_responses, openai_chat
-	CodexWireAPI        string   `json:"codex_wire_api,omitempty"` // responses, chat
-	SupportedModels     []string `json:"supported_models,omitempty"`
-	SupportedAPIFormats []string `json:"supported_api_formats,omitempty"`
-	SupportedProtocols  []string `json:"supported_protocols,omitempty"`
+	APIFormat       string   `json:"api_format,omitempty"`     // anthropic, openai_responses, openai_chat
+	CodexWireAPI    string   `json:"codex_wire_api,omitempty"` // responses, chat
+	SupportedModels []string `json:"supported_models,omitempty"`
+	// Explicit runtime controls for custom providers. They are exposed only
+	// when the selected adapter can carry the corresponding protocol field.
+	SupportedReasoningEfforts []string `json:"supported_reasoning_efforts,omitempty"`
+	DefaultReasoningEffort    string   `json:"default_reasoning_effort,omitempty"`
+	SupportedServiceTiers     []string `json:"supported_service_tiers,omitempty"`
+	DefaultServiceTier        string   `json:"default_service_tier,omitempty"`
+	SupportedAPIFormats       []string `json:"supported_api_formats,omitempty"`
+	SupportedProtocols        []string `json:"supported_protocols,omitempty"`
 	// ClaudeAuthScheme selects the env credential key written for Claude Code:
 	// "auth_token" (ANTHROPIC_AUTH_TOKEN, cc-switch's third-party default) or
 	// "api_key" (ANTHROPIC_API_KEY, official direct). Empty = auto: official

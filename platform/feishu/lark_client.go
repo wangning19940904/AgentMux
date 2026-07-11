@@ -28,6 +28,7 @@ const (
 	modelPickerActionKey    = "agentnexus_action"
 	modelPickerActionSelect = "model_select"
 	modelPickerActionReset  = "model_reset"
+	runtimeSettingsAction   = "runtime_settings"
 )
 
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
@@ -210,6 +211,45 @@ func (c *larkClient) SendModelPickerCard(ctx context.Context, msg *core.Message,
 		return "", fmt.Errorf("%s send model picker card: missing message id", c.platform)
 	}
 	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) SendRuntimeSettingsPickerCard(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) (string, error) {
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType("chat_id").
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(msg.ChatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(buildRuntimeSettingsPickerCard(msg, state)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send runtime settings picker failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send runtime settings picker: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) UpdateRuntimeSettingsPickerCard(ctx context.Context, messageID string, msg *core.Message, state core.RuntimeSettingsPickerState) error {
+	req := larkim.NewPatchMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewPatchMessageReqBodyBuilder().
+			Content(buildRuntimeSettingsPickerCard(msg, state)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Patch(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("%s update runtime settings picker failed: %s", c.platform, resp.Msg)
+	}
+	return nil
 }
 
 func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error {
@@ -457,6 +497,116 @@ func buildModelPickerCard(msg *core.Message, state core.ModelPickerState) string
 	return string(b)
 }
 
+func buildRuntimeSettingsPickerCard(msg *core.Message, state core.RuntimeSettingsPickerState) string {
+	scopeLabel := "当前会话"
+	if state.Scope == core.RuntimeSettingsScopeAgent {
+		scopeLabel = "Agent 默认（仅后续会话）"
+	}
+	elements := []map[string]any{
+		{
+			"tag": "markdown",
+			"content": fmt.Sprintf("**设置范围**：%s\n**模型**：`%s`\n**思考强度**：`%s`\n**速度**：`%s`", scopeLabel,
+				modelPickerDisplay(state.Settings.Model), modelPickerDisplay(state.Settings.ReasoningEffort), modelPickerDisplay(state.Settings.ServiceTier)),
+		},
+	}
+	if state.Notice != "" {
+		elements = append(elements, map[string]any{"tag": "markdown", "content": "<font color='red'>" + state.Notice + "</font>"})
+	}
+	if state.AgentDefaultsEditable {
+		elements = append(elements, runtimeSettingsScopeRow(msg, state.Scope))
+	}
+	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingModel, "模型", state.Capabilities.Models)...)
+	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingReasoningEffort, "思考强度", state.Capabilities.ReasoningEfforts)...)
+	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingServiceTier, "速度", state.Capabilities.ServiceTiers)...)
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"template": "blue",
+			"title":    map[string]any{"tag": "plain_text", "content": "运行时设置"},
+		},
+		"body": map[string]any{"elements": elements},
+	}
+	b, err := json.Marshal(card)
+	if err != nil {
+		return `{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"settings picker unavailable"}]}}`
+	}
+	return string(b)
+}
+
+func runtimeSettingsScopeRow(msg *core.Message, current core.RuntimeSettingsScope) map[string]any {
+	return runtimeSettingsButtonRow(msg, []runtimeSettingsButton{
+		{label: "当前会话", primary: current == core.RuntimeSettingsScopeConversation, action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeConversation, Setting: core.RuntimeSettingScope}},
+		{label: "Agent 默认", primary: current == core.RuntimeSettingsScopeAgent, action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeAgent, Setting: core.RuntimeSettingScope}},
+	})
+}
+
+type runtimeSettingsButton struct {
+	label   string
+	primary bool
+	action  core.RuntimeSettingsAction
+}
+
+func runtimeSettingsRows(msg *core.Message, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, title string, options []core.RuntimeOption) []map[string]any {
+	if len(options) == 0 {
+		if reason := state.Unsupported[setting]; reason != "" {
+			return []map[string]any{{"tag": "markdown", "content": "**" + title + "**：" + reason}}
+		}
+		return nil
+	}
+	rows := []map[string]any{{"tag": "markdown", "content": "**" + title + "**"}}
+	selected := state.Settings.Value(setting)
+	for i := 0; i < len(options); i += 2 {
+		end := i + 2
+		if end > len(options) {
+			end = len(options)
+		}
+		buttons := make([]runtimeSettingsButton, 0, end-i)
+		for _, option := range options[i:end] {
+			label := option.Label
+			if label == "" {
+				label = option.Value
+			}
+			if option.Value == selected {
+				label += " 当前"
+			}
+			buttons = append(buttons, runtimeSettingsButton{
+				label: label, primary: option.Value == selected,
+				action: core.RuntimeSettingsAction{Scope: state.Scope, Setting: setting, Value: option.Value},
+			})
+		}
+		rows = append(rows, runtimeSettingsButtonRow(msg, buttons))
+	}
+	return rows
+}
+
+func runtimeSettingsButtonRow(msg *core.Message, buttons []runtimeSettingsButton) map[string]any {
+	columns := make([]map[string]any, 0, len(buttons))
+	for _, button := range buttons {
+		buttonType := "default"
+		if button.primary {
+			buttonType = "primary"
+		}
+		columns = append(columns, map[string]any{
+			"tag": "column", "width": "weighted", "weight": 1, "vertical_align": "top",
+			"elements": []map[string]any{modelPickerButton(button.label, buttonType, runtimeSettingsActionValue(msg, button.action))},
+		})
+	}
+	return map[string]any{"tag": "column_set", "flex_mode": "stretch", "background_style": "default", "columns": columns}
+}
+
+func runtimeSettingsActionValue(msg *core.Message, action core.RuntimeSettingsAction) map[string]any {
+	return map[string]any{
+		modelPickerActionKey: runtimeSettingsAction,
+		"scope":              string(action.Scope),
+		"setting":            string(action.Setting),
+		"value":              action.Value,
+		"reset":              action.Reset,
+		"chat_id":            msg.ChatID,
+		"chat_type":          msg.ChatType,
+	}
+}
+
 func modelPickerButtonRow(msg *core.Message, options []core.ModelPickerOption) map[string]any {
 	columns := make([]map[string]any, 0, len(options))
 	for _, option := range options {
@@ -623,6 +773,38 @@ func (c *larkClient) modelCommandFromCardAction(project string, event *callback.
 	if chatID == "" {
 		return nil, false
 	}
+	messageID := ""
+	if event.Event.Context != nil {
+		messageID = event.Event.Context.OpenMessageID
+	}
+	if action == runtimeSettingsAction {
+		scope := core.RuntimeSettingsScope(stringValue(value["scope"]))
+		setting := core.RuntimeSetting(stringValue(value["setting"]))
+		if scope == "" {
+			scope = core.RuntimeSettingsScopeConversation
+		}
+		if setting == "" {
+			return nil, false
+		}
+		userID := ""
+		if event.Event.Operator != nil {
+			userID = event.Event.Operator.OpenID
+		}
+		return &core.Message{
+			ID:                   larkCardActionEventID(event, messageID),
+			InteractionMessageID: messageID,
+			ChatID:               chatID,
+			ChatType:             chatType,
+			UserID:               userID,
+			MentionedBot:         true,
+			Platform:             c.platform,
+			Project:              project,
+			Timestamp:            time.Now(),
+			RuntimeSettingsAction: &core.RuntimeSettingsAction{
+				Scope: scope, Setting: setting, Value: stringValue(value["value"]), Reset: boolValue(value["reset"]),
+			},
+		}, true
+	}
 	text := ""
 	switch action {
 	case modelPickerActionSelect:
@@ -641,15 +823,24 @@ func (c *larkClient) modelCommandFromCardAction(project string, event *callback.
 		userID = event.Event.Operator.OpenID
 	}
 	return &core.Message{
-		ChatID:       chatID,
-		ChatType:     chatType,
-		UserID:       userID,
-		Text:         text,
-		MentionedBot: true,
-		Platform:     c.platform,
-		Project:      project,
-		Timestamp:    time.Now(),
+		ID:                   larkCardActionEventID(event, messageID),
+		InteractionMessageID: messageID,
+		ChatID:               chatID,
+		ChatType:             chatType,
+		UserID:               userID,
+		Text:                 text,
+		MentionedBot:         true,
+		Platform:             c.platform,
+		Project:              project,
+		Timestamp:            time.Now(),
 	}, true
+}
+
+func larkCardActionEventID(event *callback.CardActionTriggerEvent, fallback string) string {
+	if event != nil && event.EventV2Base != nil && event.EventV2Base.Header != nil && event.EventV2Base.Header.EventID != "" {
+		return event.EventV2Base.Header.EventID
+	}
+	return fallback
 }
 
 func stringValue(raw any) string {
@@ -657,6 +848,11 @@ func stringValue(raw any) string {
 		return strings.TrimSpace(s)
 	}
 	return ""
+}
+
+func boolValue(raw any) bool {
+	value, ok := raw.(bool)
+	return ok && value
 }
 
 func (c *larkClient) loadBotOpenID(ctx context.Context) string {

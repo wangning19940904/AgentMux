@@ -33,7 +33,17 @@ func NewConnectService(log *slog.Logger, eng *Engine, store ConnectStore) *Conne
 	c := &ConnectService{log: log, eng: eng, store: store}
 	c.sched = NewScheduler(log, c.runScheduled)
 	eng.SetEventSink(c.onEvent)
+	eng.SetRuntimeSettingsDefaultStore(c)
 	return c
+}
+
+// UpdateAgentRuntimeSettings satisfies Engine's optional default-settings
+// store. It is called by the interactive picker after core validation.
+func (c *ConnectService) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error {
+	if c.store == nil {
+		return fmt.Errorf("agent settings store unavailable")
+	}
+	return c.store.UpdateAgentRuntimeSettings(ctx, id, settings)
 }
 
 // Start attaches enabled channels, schedules cron triggers and starts the
@@ -242,22 +252,55 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		c.log.Warn("agent instance not found", "agent_id", agentID, "err", err)
 		return nil, "", WorkspaceInitOptions{}
 	}
+	providerDefaults := c.agentProviderRuntimeDefaults(ctx, inst)
+	runtimeDefaults := RuntimeSettings{
+		Model:           inst.DefaultModel,
+		ReasoningEffort: inst.DefaultReasoningEffort,
+		ServiceTier:     inst.DefaultServiceTier,
+	}
+	if runtimeDefaults.ReasoningEffort == "" {
+		runtimeDefaults.ReasoningEffort = providerDefaults.ReasoningEffort
+	}
+	if runtimeDefaults.ServiceTier == "" {
+		runtimeDefaults.ServiceTier = providerDefaults.ServiceTier
+	}
 	workspace := WorkspaceInitOptions{
-		AgentID:    inst.ID,
-		RuntimeID:  inst.RuntimeID,
-		WorkDir:    inst.WorkDir,
-		Skills:     append([]string(nil), inst.Skills...),
-		MCPServers: append([]string(nil), inst.MCPServers...),
+		AgentID:         inst.ID,
+		RuntimeID:       inst.RuntimeID,
+		WorkDir:         inst.WorkDir,
+		Skills:          append([]string(nil), inst.Skills...),
+		MCPServers:      append([]string(nil), inst.MCPServers...),
+		RuntimeDefaults: runtimeDefaults,
 	}
 	cfg := map[string]any{
 		"work_dir":      inst.WorkDir,
 		"system_prompt": c.composeAgentPrompt(ctx, inst),
 	}
-	if inst.DefaultModel != "" {
-		cfg["model"] = inst.DefaultModel
+	if runtimeDefaults.Model != "" {
+		cfg["model"] = runtimeDefaults.Model
+	}
+	if runtimeDefaults.ReasoningEffort != "" {
+		cfg["reasoning_effort"] = runtimeDefaults.ReasoningEffort
+	}
+	if runtimeDefaults.ServiceTier != "" {
+		cfg["service_tier"] = runtimeDefaults.ServiceTier
 	}
 	if models := c.agentModelOptions(ctx, inst); len(models) > 0 {
 		cfg["supported_models"] = models
+	}
+	if caps := c.agentRuntimeSettingsCapabilities(ctx, inst); len(caps.ReasoningEfforts) > 0 || len(caps.ServiceTiers) > 0 {
+		values := make([]string, 0, len(caps.ReasoningEfforts))
+		for _, option := range caps.ReasoningEfforts {
+			values = append(values, option.Value)
+		}
+		cfg["supported_reasoning_efforts"] = values
+		values = values[:0]
+		for _, option := range caps.ServiceTiers {
+			values = append(values, option.Value)
+		}
+		if len(values) > 0 {
+			cfg["supported_service_tiers"] = values
+		}
 	}
 	if len(inst.Env) > 0 {
 		cfg["env"] = inst.Env
@@ -268,6 +311,59 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		return nil, "", workspace
 	}
 	return agent, inst.WorkDir, workspace
+}
+
+func (c *ConnectService) agentProviderRuntimeDefaults(ctx context.Context, inst *AgentInstance) RuntimeSettings {
+	if c.store == nil || inst == nil {
+		return RuntimeSettings{}
+	}
+	p, err := c.agentRuntimeProvider(ctx, inst)
+	if err != nil || p == nil {
+		return RuntimeSettings{}
+	}
+	return RuntimeSettings{
+		ReasoningEffort: p.Meta.DefaultReasoningEffort,
+		ServiceTier:     p.Meta.DefaultServiceTier,
+	}
+}
+
+func (c *ConnectService) agentRuntimeProvider(ctx context.Context, inst *AgentInstance) (*Provider, error) {
+	if c.store == nil || inst == nil {
+		return nil, nil
+	}
+	if inst.ProviderID != "" {
+		return c.store.GetProvider(ctx, inst.ProviderID)
+	}
+	tool := inst.ProviderTool
+	if tool == "" {
+		tool = inst.RuntimeID
+	}
+	routes, err := c.store.ActiveProviderRoutes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	want := NormalizeProviderTool(tool)
+	for _, route := range routes {
+		if route.Tool == tool || NormalizeProviderTool(route.Tool) == want {
+			return c.store.GetProvider(ctx, route.ProviderID)
+		}
+	}
+	return nil, nil
+}
+
+func (c *ConnectService) agentRuntimeSettingsCapabilities(ctx context.Context, inst *AgentInstance) RuntimeSettingsCapabilities {
+	if c.store == nil || inst == nil {
+		return RuntimeSettingsCapabilities{}
+	}
+	p, err := c.agentRuntimeProvider(ctx, inst)
+	if err != nil || p == nil {
+		return RuntimeSettingsCapabilities{}
+	}
+	return RuntimeSettingsCapabilities{
+		Models:           RuntimeOptions(ProviderModelOptions(p)),
+		ReasoningEfforts: RuntimeOptions(p.Meta.SupportedReasoningEfforts),
+		ServiceTiers:     RuntimeOptions(p.Meta.SupportedServiceTiers),
+	}
 }
 
 // composeAgentPrompt builds the injected system prompt for an agent instance:

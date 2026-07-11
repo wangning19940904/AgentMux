@@ -30,16 +30,17 @@ type EventSink func(event HookEvent, data map[string]string)
 // inbound messages to agent sessions, streaming responses back. Besides
 // config.toml projects it hosts dynamically attached console-managed channels.
 type Engine struct {
-	log           *slog.Logger
-	hooks         *HookRunner
-	sink          EventSink
-	mu            sync.RWMutex
-	projects      map[string]*projectRuntime
-	channels      map[string]*channelRuntime
-	inbound       chan *Message
-	workspace     WorkspaceInitializer
-	conversations ConversationStore
-	msgLog        *MessageLogger
+	log                     *slog.Logger
+	hooks                   *HookRunner
+	sink                    EventSink
+	mu                      sync.RWMutex
+	projects                map[string]*projectRuntime
+	channels                map[string]*channelRuntime
+	inbound                 chan *Message
+	workspace               WorkspaceInitializer
+	conversations           ConversationStore
+	runtimeSettingsDefaults RuntimeSettingsDefaultStore
+	msgLog                  *MessageLogger
 }
 
 // NewEngine constructs an Engine.
@@ -77,6 +78,16 @@ func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
 // fall back to purely in-memory sessions keyed by chatID.
 func (e *Engine) SetConversationStore(cs ConversationStore) {
 	e.conversations = cs
+}
+
+// RuntimeSettingsDefaultStore persists Agent-level defaults selected from a
+// channel picker. It is optional so config.toml projects keep working.
+type RuntimeSettingsDefaultStore interface {
+	UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error
+}
+
+func (e *Engine) SetRuntimeSettingsDefaultStore(store RuntimeSettingsDefaultStore) {
+	e.runtimeSettingsDefaults = store
 }
 
 // emit dispatches a lifecycle event to config.toml hooks and the event sink.
@@ -233,8 +244,17 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
 	}
-	if e.handleModelCommand(sess, msg.Text, func(text string) {
+	if e.handleRuntimeSettingsAction(ctx, sess, msg, nil, "", func(state RuntimeSettingsPickerState) bool {
+		return e.updateRuntimeSettingsPicker(ctx, pr, msg, state)
+	}, func(text string) { e.replyAll(ctx, pr, msg, text) }) {
+		e.persistConversationTurn(ctx, conv, sess)
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+	if e.handleRuntimeSettingsCommand(sess, msg.Text, func(text string) {
 		e.replyAll(ctx, pr, msg, text)
+	}, func(state RuntimeSettingsPickerState) bool {
+		return e.replyRuntimeSettingsPicker(ctx, pr, msg, state)
 	}, func(state ModelPickerState) bool {
 		return e.replyModelPicker(ctx, pr, msg, state)
 	}) {
@@ -266,45 +286,104 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 	return e.consumeTurn(ctx, events, reply, data)
 }
 
-func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string), picker func(ModelPickerState) bool) bool {
-	cmd, ok := parseModelCommand(text)
+func (e *Engine) handleRuntimeSettingsCommand(sess AgentSession, text string, reply func(string), picker func(RuntimeSettingsPickerState) bool, legacyPicker func(ModelPickerState) bool) bool {
+	cmd, ok := parseRuntimeSettingsCommand(text)
 	if !ok {
 		return false
 	}
 	if reply == nil {
 		reply = func(string) {}
 	}
-	models, ok := sess.(ModelSwitchingSession)
-	if !ok || !models.ModelSwitchingSupported() {
-		reply("This runtime does not support /model switching.")
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok {
+		reply("This runtime does not support runtime settings.")
 		return true
 	}
-	switch strings.ToLower(cmd) {
-	case "", "current", "list":
-		if picker != nil {
-			state := modelPickerState(models)
-			if len(state.Options) > 0 && picker(state) {
+	if cmd.List {
+		if picker != nil && picker(runtimeSettingsPickerState(settings, RuntimeSettingsScopeConversation, RuntimeSettings{}, false)) {
+			return true
+		}
+		if cmd.Setting == RuntimeSettingModel && legacyPicker != nil {
+			if models, ok := sess.(ModelSwitchingSession); ok && models.ModelSwitchingSupported() && legacyPicker(modelPickerState(models)) {
 				return true
 			}
 		}
-		reply(formatModelStatus(models))
-	case "reset":
-		if err := models.ResetModel(); err != nil {
-			reply(err.Error())
-			return true
+		reply(formatRuntimeSettingsStatus(settings))
+		return true
+	}
+	var err error
+	if cmd.Reset {
+		err = settings.ResetRuntimeSetting(cmd.Setting)
+	} else {
+		err = settings.SetRuntimeSetting(cmd.Setting, cmd.Value)
+	}
+	if err != nil {
+		reply(err.Error())
+		return true
+	}
+	// The command response itself is the refreshed menu/status; interactive
+	// pickers use handleRuntimeSettingsAction and edit their existing message.
+	reply(formatRuntimeSettingsStatus(settings))
+	return true
+}
+
+// handleModelCommand is retained for package tests and third-party callers
+// that still use the model-only callback. New engine paths call the richer
+// handleRuntimeSettingsCommand above.
+func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string), picker func(ModelPickerState) bool) bool {
+	return e.handleRuntimeSettingsCommand(sess, text, reply, nil, picker)
+}
+
+func (e *Engine) handleRuntimeSettingsAction(ctx context.Context, sess AgentSession, msg *Message, agentDefaults *RuntimeSettings, agentID string, update func(RuntimeSettingsPickerState) bool, reply func(string)) bool {
+	if msg == nil || msg.RuntimeSettingsAction == nil {
+		return false
+	}
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok {
+		if reply != nil {
+			reply("This runtime does not support runtime settings.")
 		}
-		current := models.CurrentModel()
-		if current == "" {
-			reply("Model reset. No default model is configured.")
+		return true
+	}
+	action := *msg.RuntimeSettingsAction
+	if action.Scope == "" {
+		action.Scope = RuntimeSettingsScopeConversation
+	}
+	agentEditable := agentDefaults != nil && agentID != "" && !strings.HasPrefix(agentID, "config:") && e.runtimeSettingsDefaults != nil
+	var err error
+	if action.Scope == RuntimeSettingsScopeAgent {
+		if !agentEditable {
+			err = fmt.Errorf("Agent defaults are not editable for this channel")
 		} else {
-			reply("Model reset to default: " + current)
+			candidate := *agentDefaults
+			err = applyRuntimeSettingsAction(settings, action, &candidate)
+			if err == nil {
+				err = e.runtimeSettingsDefaults.UpdateAgentRuntimeSettings(ctx, agentID, candidate)
+			}
+			if err == nil {
+				*agentDefaults = candidate
+			}
 		}
-	default:
-		if err := models.SetModel(cmd); err != nil {
-			reply(err.Error() + "\n\n" + formatAvailableModels(models.SupportedModels()))
-			return true
+	} else {
+		err = applyRuntimeSettingsAction(settings, action, nil)
+	}
+	defaults := RuntimeSettings{}
+	if agentDefaults != nil {
+		defaults = *agentDefaults
+	}
+	state := runtimeSettingsPickerState(settings, action.Scope, defaults, agentEditable)
+	if err != nil {
+		state.Notice = err.Error()
+	}
+	if update != nil && update(state) {
+		return true
+	}
+	if reply != nil {
+		if err != nil {
+			reply(err.Error())
+		} else {
+			reply(formatRuntimeSettingsStatus(settings))
 		}
-		reply("Model switched for this conversation: " + models.CurrentModel())
 	}
 	return true
 }
@@ -375,6 +454,16 @@ func (e *Engine) consumeTurn(ctx context.Context, events <-chan *Event, reply fu
 	var firstErr error
 	for ev := range events {
 		switch ev.Type {
+		case EventToolUse:
+			// This path posts a new message per event, so only surface the
+			// tool invocation itself (not results) as a compact progress note.
+			if reply != nil && ev.ToolName != "" {
+				note := "🔧 " + ev.ToolName
+				if ev.ToolInput != "" {
+					note += " " + ev.ToolInput
+				}
+				reply(note)
+			}
 		case EventFinal, EventOutput:
 			if ev.Text != "" && ev.Text != "NO_REPLY" {
 				lastText = ev.Text
@@ -461,32 +550,61 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 }
 
 func (e *Engine) driveReplyStream(ctx context.Context, stream ReplyStream, events <-chan *Event, data map[string]string) {
-	var lastText, rendered string
+	var answer, thinking, rendered string
 	var failed bool
+	var tools toolProgress
 	for ev := range events {
 		switch ev.Type {
+		case EventThinking:
+			if ev.Text == "" {
+				continue
+			}
+			thinking = ev.Text
+			body := tools.render(thinking, answer, false)
+			if body != rendered {
+				if err := stream.Update(ctx, body, false, false); err != nil {
+					e.log.Error("stream update", "err", err)
+				}
+				rendered = body
+			}
+		case EventToolUse:
+			// A tool_use frame opens a step; a tool_result frame (ToolResult
+			// set, ToolName empty) closes the most recent open one.
+			if ev.ToolName != "" {
+				tools.add(ev.ToolName, ev.ToolInput)
+			} else if ev.ToolResult != "" || ev.Err != nil {
+				tools.attachResult(ev.ToolResult, ev.Err != nil)
+			}
+			body := tools.render(thinking, answer, false)
+			if body != rendered {
+				if err := stream.Update(ctx, body, false, false); err != nil {
+					e.log.Error("stream update", "err", err)
+				}
+				rendered = body
+			}
 		case EventFinal, EventOutput:
 			if ev.Text == "" || ev.Text == "NO_REPLY" {
 				continue
 			}
-			lastText = ev.Text
-			if ev.Text != rendered {
-				if err := stream.Update(ctx, ev.Text, false, false); err != nil {
+			answer = ev.Text
+			body := tools.render(thinking, answer, false)
+			if body != rendered {
+				if err := stream.Update(ctx, body, false, false); err != nil {
 					e.log.Error("stream update", "err", err)
 				}
-				rendered = ev.Text
+				rendered = body
 			}
 		case EventError:
 			e.emit(ctx, HookError, withError(data, ev.Err))
 			failed = true
-			lastText = "error: " + errString(ev.Err)
+			answer = "error: " + errString(ev.Err)
 		}
 	}
 
-	if lastText == "" {
-		lastText = "(no reply)"
+	if answer == "" && tools.empty() && thinking == "" {
+		answer = "(no reply)"
 	}
-	if err := stream.Update(ctx, lastText, true, failed); err != nil {
+	if err := stream.Update(ctx, tools.render(thinking, answer, true), true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
 	}
 }
@@ -539,6 +657,42 @@ func (e *Engine) replyModelPicker(ctx context.Context, pr *projectRuntime, msg *
 		}
 		if err := mp.ReplyModelPicker(ctx, msg, state); err != nil {
 			e.log.Error("reply model picker", "platform", p.Name(), "err", err)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (e *Engine) replyRuntimeSettingsPicker(ctx context.Context, pr *projectRuntime, msg *Message, state RuntimeSettingsPickerState) bool {
+	for _, p := range pr.platforms {
+		if p.Name() != msg.Platform {
+			continue
+		}
+		picker, ok := p.(RuntimeSettingsPickerReplier)
+		if !ok {
+			return false
+		}
+		if err := picker.ReplyRuntimeSettingsPicker(ctx, msg, state); err != nil {
+			e.log.Error("reply runtime settings picker", "platform", p.Name(), "err", err)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (e *Engine) updateRuntimeSettingsPicker(ctx context.Context, pr *projectRuntime, msg *Message, state RuntimeSettingsPickerState) bool {
+	for _, p := range pr.platforms {
+		if p.Name() != msg.Platform {
+			continue
+		}
+		picker, ok := p.(RuntimeSettingsPickerReplier)
+		if !ok {
+			return false
+		}
+		if err := picker.UpdateRuntimeSettingsPicker(ctx, msg, state); err != nil {
+			e.log.Error("update runtime settings picker", "platform", p.Name(), "err", err)
 			return false
 		}
 		return true

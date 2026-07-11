@@ -170,6 +170,8 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.ProviderTool = strings.TrimSpace(a.ProviderTool)
 	a.ProviderID = strings.TrimSpace(a.ProviderID)
 	a.DefaultModel = strings.TrimSpace(a.DefaultModel)
+	a.DefaultReasoningEffort = strings.TrimSpace(a.DefaultReasoningEffort)
+	a.DefaultServiceTier = strings.TrimSpace(a.DefaultServiceTier)
 	a.MemoryScope = strings.TrimSpace(a.MemoryScope)
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
@@ -200,7 +202,7 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	if a.ProviderTool == "" {
 		a.ProviderTool = a.RuntimeID
 	}
-	if err := s.validateAgentDefaultModel(ctx, a); err != nil {
+	if err := s.validateAgentDefaultRuntimeSettings(ctx, a); err != nil {
 		return err
 	}
 	if a.MemoryScope == "" {
@@ -261,8 +263,8 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 	return out
 }
 
-func (s *Server) validateAgentDefaultModel(ctx context.Context, a *core.AgentInstance) error {
-	if a.DefaultModel == "" {
+func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *core.AgentInstance) error {
+	if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" {
 		return nil
 	}
 	p, err := s.agentProvider(ctx, a)
@@ -270,18 +272,38 @@ func (s *Server) validateAgentDefaultModel(ctx context.Context, a *core.AgentIns
 		return err
 	}
 	if p == nil {
-		return fmt.Errorf("default model requires a configured provider route")
+		// Local Codex login discovers its catalog only after app-server starts.
+		// Let that runtime validate the values instead of rejecting the Agent
+		// record before it can reach the signed-in account.
+		return nil
 	}
-	models := core.ProviderModelOptions(p)
-	if len(models) == 0 {
-		return fmt.Errorf("provider %q has no selectable models", p.ID)
-	}
-	for _, model := range models {
-		if model == a.DefaultModel {
-			return nil
+	if a.DefaultModel != "" {
+		models := core.ProviderModelOptions(p)
+		if len(models) == 0 {
+			return fmt.Errorf("provider %q has no selectable models", p.ID)
+		}
+		if !containsRuntimeValue(models, a.DefaultModel) {
+			return fmt.Errorf("default model %q is not supported by provider %q", a.DefaultModel, p.ID)
 		}
 	}
-	return fmt.Errorf("default model %q is not supported by provider %q", a.DefaultModel, p.ID)
+	if a.DefaultReasoningEffort != "" && len(p.Meta.SupportedReasoningEfforts) > 0 &&
+		!containsRuntimeValue(p.Meta.SupportedReasoningEfforts, a.DefaultReasoningEffort) {
+		return fmt.Errorf("default reasoning effort %q is not supported by provider %q", a.DefaultReasoningEffort, p.ID)
+	}
+	if a.DefaultServiceTier != "" && len(p.Meta.SupportedServiceTiers) > 0 &&
+		!containsRuntimeValue(p.Meta.SupportedServiceTiers, a.DefaultServiceTier) {
+		return fmt.Errorf("default service tier %q is not supported by provider %q", a.DefaultServiceTier, p.ID)
+	}
+	return nil
+}
+
+func containsRuntimeValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) agentProvider(ctx context.Context, a *core.AgentInstance) (*core.Provider, error) {

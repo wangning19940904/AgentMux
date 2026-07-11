@@ -28,24 +28,26 @@ type AgentSchedule struct {
 // wraps a local coding-agent runtime with routing, channels, memory, tools and
 // governance bindings.
 type AgentInstance struct {
-	ID              string                `json:"id"`
-	Name            string                `json:"name"`
-	RuntimeID       string                `json:"runtime_id"`
-	WorkDir         string                `json:"work_dir,omitempty"`
-	SystemPrompt    string                `json:"system_prompt,omitempty"`
-	ProviderTool    string                `json:"provider_tool,omitempty"`
-	ProviderID      string                `json:"provider_id,omitempty"`
-	ProviderName    string                `json:"provider_name,omitempty"`
-	DefaultModel    string                `json:"default_model,omitempty"`
-	MemoryScope     string                `json:"memory_scope,omitempty"`
-	Env             map[string]string     `json:"env,omitempty"`
-	ChannelBindings []AgentChannelBinding `json:"channel_bindings,omitempty"`
-	Schedules       []AgentSchedule       `json:"schedules,omitempty"`
-	MCPServers      []string              `json:"mcp_servers,omitempty"`
-	Skills          []string              `json:"skills,omitempty"`
-	CLIs            []string              `json:"clis,omitempty"`
-	Enabled         bool                  `json:"enabled"`
-	Source          string                `json:"source,omitempty"` // manual, console, config.toml
-	CreatedAt       time.Time             `json:"created_at"`
-	UpdatedAt       time.Time             `json:"updated_at"`
+	ID                     string                `json:"id"`
+	Name                   string                `json:"name"`
+	RuntimeID              string                `json:"runtime_id"`
+	WorkDir                string                `json:"work_dir,omitempty"`
+	SystemPrompt           string                `json:"system_prompt,omitempty"`
+	ProviderTool           string                `json:"provider_tool,omitempty"`
+	ProviderID             string                `json:"provider_id,omitempty"`
+	ProviderName           string                `json:"provider_name,omitempty"`
+	DefaultModel           string                `json:"default_model,omitempty"`
+	DefaultReasoningEffort string                `json:"default_reasoning_effort,omitempty"`
+	DefaultServiceTier     string                `json:"default_service_tier,omitempty"`
+	MemoryScope            string                `json:"memory_scope,omitempty"`
+	Env                    map[string]string     `json:"env,omitempty"`
+	ChannelBindings        []AgentChannelBinding `json:"channel_bindings,omitempty"`
+	Schedules              []AgentSchedule       `json:"schedules,omitempty"`
+	MCPServers             []string              `json:"mcp_servers,omitempty"`
+	Skills                 []string              `json:"skills,omitempty"`
+	CLIs                   []string              `json:"clis,omitempty"`
+	Enabled                bool                  `json:"enabled"`
+	Source                 string                `json:"source,omitempty"` // manual, console, config.toml
+	CreatedAt              time.Time             `json:"created_at"`
+	UpdatedAt              time.Time             `json:"updated_at"`
 }

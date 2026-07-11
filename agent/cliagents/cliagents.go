@@ -27,8 +27,10 @@ func register(name, binary string, supportsModel bool, args func(prompt, sys, mo
 }
 
 func init() {
-	// Codex: emits JSON lines; treat any {"text"|"message"} as output.
-	register("codex", "codex", true, codexArgs, jsonTextMapper, true)
+	// Codex uses its native app-server protocol. Unlike `codex exec --json`,
+	// that protocol provides agent-message deltas, reasoning summaries, tools,
+	// and the signed-in account's live model catalog.
+	registerCodex()
 
 	// Cursor Agent: stream-json.
 	register("cursor", "cursor-agent", true, cursorArgs, jsonTextMapper, true)
@@ -57,14 +59,6 @@ func init() {
 	register("kimi", "kimi", false, func(p, _, _ string) []string {
 		return []string{"-p", p}
 	}, cliagent.PlainTextMapper, true)
-}
-
-func codexArgs(prompt, _, model string) []string {
-	args := []string{"exec", "--json"}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	return append(args, prompt)
 }
 
 func cursorArgs(prompt, _, model string) []string {

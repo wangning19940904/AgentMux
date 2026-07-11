@@ -14,13 +14,14 @@ const channelMessageDedupTTL = 10 * time.Minute
 // channelRuntime holds one live console-managed channel: the platform
 // connection, the bound agent and its per-chat sessions.
 type channelRuntime struct {
-	owner     *Engine
-	channel   Channel
-	platform  Platform
-	agent     Agent
-	workDir   string
-	workspace WorkspaceInitOptions
-	cancel    context.CancelFunc
+	owner           *Engine
+	channel         Channel
+	platform        Platform
+	agent           Agent
+	workDir         string
+	workspace       WorkspaceInitOptions
+	defaultSettings RuntimeSettings
+	cancel          context.CancelFunc
 
 	mu       sync.Mutex
 	sessions map[string]AgentSession // chatID -> session
@@ -46,6 +47,18 @@ func (rt *channelRuntime) status() ChannelStatus {
 		Error:     rt.errMsg,
 		StartedAt: rt.started,
 	}
+}
+
+func (rt *channelRuntime) runtimeDefaults() RuntimeSettings {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return rt.defaultSettings
+}
+
+func (rt *channelRuntime) setRuntimeDefaults(settings RuntimeSettings) {
+	rt.mu.Lock()
+	rt.defaultSettings = settings
+	rt.mu.Unlock()
 }
 
 // scope returns the conversation scope namespace for this channel.
@@ -80,8 +93,30 @@ func (rt *channelRuntime) session(ctx context.Context, chatID, chatType string) 
 	if err != nil {
 		return nil, nil, false, err
 	}
+	// The live Agent object was created when the channel attached. Apply the
+	// persisted Agent defaults to each newly created conversation so a settings
+	// card change affects future sessions without restarting the channel, while
+	// leaving already cached sessions untouched.
+	rt.applyRuntimeDefaults(s)
 	rt.sessions[cacheKey] = s
 	return s, conv, true, nil
+}
+
+func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok {
+		return
+	}
+	defaults := rt.defaultSettings
+	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier} {
+		value := defaults.Value(setting)
+		if value == "" || !settings.RuntimeSettingsCapabilities().Supports(setting) {
+			continue
+		}
+		if err := settings.SetRuntimeSetting(setting, value); err != nil {
+			rt.owner.log.Warn("apply Agent runtime default", "channel", rt.channel.Name, "setting", setting, "err", err)
+		}
+	}
 }
 
 // dropSession closes and removes the cached in-memory session for cacheKey
@@ -188,15 +223,16 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 	}
 
 	rt := &channelRuntime{
-		owner:     e,
-		channel:   ch,
-		agent:     agent,
-		workDir:   workDir,
-		workspace: opts,
-		sessions:  map[string]AgentSession{},
-		seen:      map[string]time.Time{},
-		state:     ChannelStateRunning,
-		started:   time.Now(),
+		owner:           e,
+		channel:         ch,
+		agent:           agent,
+		workDir:         workDir,
+		workspace:       opts,
+		defaultSettings: opts.RuntimeDefaults,
+		sessions:        map[string]AgentSession{},
+		seen:            map[string]time.Time{},
+		state:           ChannelStateRunning,
+		started:         time.Now(),
 	}
 
 	cfg := make(map[string]any, len(ch.Config)+1)
@@ -323,8 +359,11 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		return
 	}
 
-	reactionID := e.addChannelAckReaction(ctx, rt, msg)
-	defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
+	reactionID := ""
+	if msg.RuntimeSettingsAction == nil {
+		reactionID = e.addChannelAckReaction(ctx, rt, msg)
+		defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
+	}
 
 	sess, conv, created, err := rt.session(ctx, msg.ChatID, msg.ChatType)
 	if err != nil {
@@ -339,10 +378,44 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.emit(ctx, HookSessionStarted, data)
 	}
 	defer e.persistConversationTurn(ctx, conv, sess)
-	if e.handleModelCommand(sess, msg.Text, func(text string) {
+	defaults := rt.runtimeDefaults()
+	if e.handleRuntimeSettingsAction(ctx, sess, msg, &defaults, rt.workspace.AgentID, func(state RuntimeSettingsPickerState) bool {
+		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
+		if !ok {
+			return false
+		}
+		if err := picker.UpdateRuntimeSettingsPicker(ctx, msg, state); err != nil {
+			e.log.Error("channel runtime settings picker update", "channel", rt.channel.Name, "err", err)
+			return false
+		}
+		return true
+	}, func(text string) {
+		if err := rt.platform.Reply(ctx, msg, text); err != nil {
+			e.log.Error("channel runtime settings reply", "channel", rt.channel.Name, "err", err)
+		}
+	}) {
+		if msg.RuntimeSettingsAction != nil && msg.RuntimeSettingsAction.Scope == RuntimeSettingsScopeAgent {
+			rt.setRuntimeDefaults(defaults)
+		}
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+	if e.handleRuntimeSettingsCommand(sess, msg.Text, func(text string) {
 		if err := rt.platform.Reply(ctx, msg, text); err != nil {
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
 		}
+	}, func(state RuntimeSettingsPickerState) bool {
+		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
+		if !ok {
+			return false
+		}
+		state.AgentDefaultsEditable = rt.workspace.AgentID != "" && !strings.HasPrefix(rt.workspace.AgentID, "config:") && e.runtimeSettingsDefaults != nil
+		state.RuntimeDefaults = defaults
+		if err := picker.ReplyRuntimeSettingsPicker(ctx, msg, state); err != nil {
+			e.log.Error("channel runtime settings picker reply", "channel", rt.channel.Name, "err", err)
+			return false
+		}
+		return true
 	}, func(state ModelPickerState) bool {
 		mp, ok := rt.platform.(ModelPickerReplier)
 		if !ok {

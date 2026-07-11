@@ -64,6 +64,51 @@ type modelPickerPlatform struct {
 	modelCards []ModelPickerState
 }
 
+type runtimeSettingsPickerPlatform struct {
+	*fakePlatform
+	pickerMu          sync.Mutex
+	cards             []RuntimeSettingsPickerState
+	updates           []RuntimeSettingsPickerState
+	updatedMessageIDs []string
+}
+
+func newRuntimeSettingsPickerPlatform(name string) *runtimeSettingsPickerPlatform {
+	return &runtimeSettingsPickerPlatform{fakePlatform: newFakePlatform(name)}
+}
+
+func (p *runtimeSettingsPickerPlatform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *Message, state RuntimeSettingsPickerState) error {
+	p.pickerMu.Lock()
+	defer p.pickerMu.Unlock()
+	p.cards = append(p.cards, state)
+	return nil
+}
+
+func (p *runtimeSettingsPickerPlatform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *Message, state RuntimeSettingsPickerState) error {
+	p.pickerMu.Lock()
+	defer p.pickerMu.Unlock()
+	messageID := msg.InteractionMessageID
+	if messageID == "" {
+		messageID = msg.ID
+	}
+	p.updatedMessageIDs = append(p.updatedMessageIDs, messageID)
+	p.updates = append(p.updates, state)
+	return nil
+}
+
+type fakeRuntimeDefaultsStore struct {
+	mu       sync.Mutex
+	agentID  string
+	settings RuntimeSettings
+}
+
+func (s *fakeRuntimeDefaultsStore) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentID = id
+	s.settings = settings
+	return nil
+}
+
 func newModelPickerPlatform(name string) *modelPickerPlatform {
 	return &modelPickerPlatform{fakePlatform: newFakePlatform(name)}
 }
@@ -228,6 +273,9 @@ func (s *fakeStore) UpdateTriggerRun(ctx context.Context, id string, lastRun tim
 }
 func (s *fakeStore) GetAgentInstance(ctx context.Context, id string) (*AgentInstance, error) {
 	return nil, nil
+}
+func (s *fakeStore) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error {
+	return nil
 }
 func (s *fakeStore) ActiveProviderRoutes(ctx context.Context) ([]ProviderRoute, error) {
 	return nil, nil
@@ -586,8 +634,8 @@ func TestChannelModelCommandRendersModelPickerCardWhenSupported(t *testing.T) {
 		t.Fatalf("model picker reached Send: turns=%d", sess.turnCount())
 	}
 
-	plat.mu.Lock()
-	defer plat.mu.Unlock()
+	plat.fakePlatform.mu.Lock()
+	defer plat.fakePlatform.mu.Unlock()
 	if len(plat.replies) != 0 {
 		t.Fatalf("plain replies = %+v, want none when picker is supported", plat.replies)
 	}
@@ -598,6 +646,122 @@ func TestChannelModelCommandRendersModelPickerCardWhenSupported(t *testing.T) {
 	if len(state.Options) != 2 || state.Options[0].Model != "gpt-5" || !state.Options[0].Current || !state.Options[0].Default {
 		t.Fatalf("model picker options = %+v", state.Options)
 	}
+}
+
+func TestRuntimeSettingsCardActionUpdatesOriginalCardWithoutReply(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newRuntimeSettingsPickerPlatform("fake")
+	restore := stubPlatformFactory(t, "fake-runtime-settings", plat)
+	defer restore()
+	agent := &modelAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-runtime-settings", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "/model", Platform: "fake"})
+	waitFor(t, "runtime settings card", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.cards) == 1
+	})
+	plat.push(&Message{ID: "action-1", InteractionMessageID: "picker-1", ChatID: "chat-1", Platform: "fake", RuntimeSettingsAction: &RuntimeSettingsAction{
+		Scope: RuntimeSettingsScopeConversation, Setting: RuntimeSettingModel, Value: "gpt-5-mini",
+	}})
+	waitFor(t, "runtime settings card update", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.updates) == 1
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if got := sess.CurrentModel(); got != "gpt-5-mini" {
+		t.Fatalf("current model = %q", got)
+	}
+	plat.fakePlatform.mu.Lock()
+	if len(plat.replies) != 0 {
+		plat.fakePlatform.mu.Unlock()
+		t.Fatalf("settings action posted replies = %+v, want no confirmation message", plat.replies)
+	}
+	plat.fakePlatform.mu.Unlock()
+	plat.pickerMu.Lock()
+	if got := plat.updatedMessageIDs[0]; got != "picker-1" {
+		plat.pickerMu.Unlock()
+		t.Fatalf("updated message id = %q, want original picker id", got)
+	}
+	plat.pickerMu.Unlock()
+	plat.push(&Message{ID: "action-2", InteractionMessageID: "picker-1", ChatID: "chat-1", Platform: "fake", RuntimeSettingsAction: &RuntimeSettingsAction{
+		Scope: RuntimeSettingsScopeConversation, Setting: RuntimeSettingModel, Value: "gpt-5",
+	}})
+	waitFor(t, "second action updates the same card", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.updates) == 2 && plat.updatedMessageIDs[1] == "picker-1"
+	})
+	if got := sess.CurrentModel(); got != "gpt-5" {
+		t.Fatalf("second card action was deduplicated: current model = %q", got)
+	}
+}
+
+func TestAgentDefaultRuntimeSettingDoesNotOverrideCurrentSession(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	defaultsStore := &fakeRuntimeDefaultsStore{}
+	eng.SetRuntimeSettingsDefaultStore(defaultsStore)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newRuntimeSettingsPickerPlatform("fake")
+	restore := stubPlatformFactory(t, "fake-agent-default-settings", plat)
+	defer restore()
+	agent := &modelAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-agent-default-settings", AgentID: "agent-1", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, "", WorkspaceInitOptions{AgentID: "agent-1", RuntimeDefaults: RuntimeSettings{Model: "gpt-5"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "/model", Platform: "fake"})
+	waitFor(t, "runtime settings card", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.cards) == 1
+	})
+	plat.push(&Message{ID: "action-1", InteractionMessageID: "picker-1", ChatID: "chat-1", Platform: "fake", RuntimeSettingsAction: &RuntimeSettingsAction{
+		Scope: RuntimeSettingsScopeAgent, Setting: RuntimeSettingModel, Value: "gpt-5-mini",
+	}})
+	waitFor(t, "agent default settings update", func() bool {
+		defaultsStore.mu.Lock()
+		defer defaultsStore.mu.Unlock()
+		return defaultsStore.agentID == "agent-1"
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if got := sess.CurrentModel(); got != "gpt-5" {
+		t.Fatalf("current session model = %q, Agent default must not override active session", got)
+	}
+	defaultsStore.mu.Lock()
+	got := defaultsStore.settings
+	defaultsStore.mu.Unlock()
+	if got.Model != "gpt-5-mini" {
+		t.Fatalf("stored Agent defaults = %+v", got)
+	}
+	plat.push(&Message{ID: "m2", ChatID: "chat-2", Text: "hello", Platform: "fake"})
+	waitFor(t, "future session uses Agent default", func() bool {
+		plat.fakePlatform.mu.Lock()
+		defer plat.fakePlatform.mu.Unlock()
+		for _, reply := range plat.replies {
+			if reply == "model:gpt-5-mini hello" {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestStreamTurnSkipsDuplicateOutputAndFinal(t *testing.T) {

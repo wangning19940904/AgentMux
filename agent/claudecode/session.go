@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/agentnexus/agentnexus/core"
@@ -23,7 +24,7 @@ type session struct {
 	mu       sync.Mutex
 	nativeID string // claude-native session id, discovered from stream output
 	resumeID string // native id to resume on the next Send (persisted context)
-	model    *core.ModelSelection
+	settings *core.RuntimeSettingsSelection
 }
 
 func newSession(a *Agent, workDir string) (*session, error) {
@@ -40,18 +41,50 @@ func newSessionResume(a *Agent, workDir, resumeID string) (*session, error) {
 		id:       "claude-" + randID(),
 		nativeID: resumeID,
 		resumeID: resumeID,
-		model:    core.NewModelSelection(a.defaultModel, a.supportedModels),
+		settings: core.NewRuntimeSettingsSelection(core.RuntimeSettings{
+			Model:           a.defaultModel,
+			ReasoningEffort: a.defaultReasoningEffort,
+		}, core.RuntimeSettingsCapabilities{
+			Models:           core.RuntimeOptions(a.supportedModels),
+			ReasoningEfforts: core.RuntimeOptions(a.supportedReasoningEfforts),
+		}),
 	}, nil
 }
 
 func (s *session) ID() string { return s.id }
 
-func (s *session) ModelSwitchingSupported() bool { return true }
-func (s *session) CurrentModel() string          { return s.model.CurrentModel() }
-func (s *session) DefaultModel() string          { return s.model.DefaultModel() }
-func (s *session) SupportedModels() []string     { return s.model.SupportedModels() }
-func (s *session) SetModel(model string) error   { return s.model.SetModel(model) }
-func (s *session) ResetModel() error             { return s.model.ResetModel() }
+func (s *session) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabilities {
+	return s.settings.RuntimeSettingsCapabilities()
+}
+func (s *session) CurrentRuntimeSettings() core.RuntimeSettings {
+	return s.settings.CurrentRuntimeSettings()
+}
+func (s *session) DefaultRuntimeSettings() core.RuntimeSettings {
+	return s.settings.DefaultRuntimeSettings()
+}
+func (s *session) SetRuntimeSetting(setting core.RuntimeSetting, value string) error {
+	return s.settings.SetRuntimeSetting(setting, value)
+}
+func (s *session) ResetRuntimeSetting(setting core.RuntimeSetting) error {
+	return s.settings.ResetRuntimeSetting(setting)
+}
+func (s *session) ModelSwitchingSupported() bool {
+	return len(s.RuntimeSettingsCapabilities().Models) > 0
+}
+func (s *session) CurrentModel() string { return s.CurrentRuntimeSettings().Model }
+func (s *session) DefaultModel() string { return s.DefaultRuntimeSettings().Model }
+func (s *session) SupportedModels() []string {
+	options := s.RuntimeSettingsCapabilities().Models
+	models := make([]string, 0, len(options))
+	for _, option := range options {
+		models = append(models, option.Value)
+	}
+	return models
+}
+func (s *session) SetModel(model string) error {
+	return s.SetRuntimeSetting(core.RuntimeSettingModel, model)
+}
+func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
 
 // NativeSessionID returns the claude-native session id discovered so far.
 func (s *session) NativeSessionID() string {
@@ -90,9 +123,10 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 				s.resumeID = sid
 				s.mu.Unlock()
 			}
-			ev := m.map_(line)
-			if ev != nil {
-				out <- ev
+			for _, ev := range m.map_(line) {
+				if ev != nil {
+					out <- ev
+				}
 			}
 		}
 		if err := cmd.Wait(); err != nil {
@@ -109,6 +143,9 @@ func (s *session) args(text string) []string {
 	}
 	if model := s.CurrentModel(); model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort := s.CurrentRuntimeSettings().ReasoningEffort; effort != "" {
+		args = append(args, "--effort", effort)
 	}
 	// Resume prior context when we already know the native session id, so the
 	// conversation carries across turns and process restarts.
@@ -145,18 +182,29 @@ type streamLine struct {
 		} `json:"delta"`
 	} `json:"event"`
 	Message struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Model string `json:"model"`
-		Usage struct {
+		Role    string          `json:"role"`
+		Content []streamContent `json:"content"`
+		Model   string          `json:"model"`
+		Usage   struct {
 			InputTokens              int64 `json:"input_tokens"`
 			OutputTokens             int64 `json:"output_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+}
+
+// streamContent is one content block in an assistant/user message. Assistant
+// messages carry text and tool_use blocks; user messages carry tool_result
+// blocks (whose Content is the tool's output, either a string or an array of
+// {type,text} parts).
+type streamContent struct {
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Name    string          `json:"name"`
+	Input   json.RawMessage `json:"input"`
+	IsError bool            `json:"is_error"`
+	Content json.RawMessage `json:"content"`
 }
 
 // streamMapper turns Claude Code stream-json lines into core.Events while
@@ -167,7 +215,7 @@ type streamMapper struct {
 	buf string
 }
 
-func (m *streamMapper) map_(b []byte) *core.Event {
+func (m *streamMapper) map_(b []byte) []*core.Event {
 	var l streamLine
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil
@@ -176,21 +224,63 @@ func (m *streamMapper) map_(b []byte) *core.Event {
 	case "stream_event":
 		if l.Event.Type == "content_block_delta" && l.Event.Delta.Type == "text_delta" && l.Event.Delta.Text != "" {
 			m.buf += l.Event.Delta.Text
-			return &core.Event{Type: core.EventOutput, Text: m.buf}
+			return []*core.Event{{Type: core.EventOutput, Text: m.buf}}
 		}
 		return nil
 	case "assistant":
-		var text string
+		return m.mapAssistant(l)
+	case "user":
+		// User messages during a turn carry tool_result blocks (the output of
+		// the tools the assistant just invoked).
+		var evs []*core.Event
 		for _, c := range l.Message.Content {
-			if c.Type == "text" {
-				text += c.Text
+			if c.Type == "tool_result" {
+				evs = append(evs, &core.Event{
+					Type:       core.EventToolUse,
+					ToolResult: summarizeToolResult(c.Content),
+					Final:      false,
+					Err:        toolResultErr(c.IsError),
+				})
 			}
 		}
-		// The complete assistant message is authoritative; resync the buffer
-		// so any bytes missed by delta parsing are reflected.
-		if text != "" {
-			m.buf = text
+		return evs
+	case "result":
+		text := l.Result
+		if text == "" {
+			text = m.buf
 		}
+		return []*core.Event{{Type: core.EventFinal, Text: text, Final: true}}
+	default:
+		return nil
+	}
+}
+
+// mapAssistant turns one assistant message into text output plus one
+// EventToolUse per tool_use block, preserving order (tool calls before the
+// output that references them).
+func (m *streamMapper) mapAssistant(l streamLine) []*core.Event {
+	var evs []*core.Event
+	var text string
+	for _, c := range l.Message.Content {
+		switch c.Type {
+		case "text":
+			text += c.Text
+		case "tool_use":
+			evs = append(evs, &core.Event{
+				Type:      core.EventToolUse,
+				ToolName:  c.Name,
+				ToolInput: summarizeToolInput(c.Input),
+			})
+		}
+	}
+	// The complete assistant message is authoritative; resync the buffer so any
+	// bytes missed by delta parsing are reflected.
+	if text != "" {
+		m.buf = text
+	}
+	// Only emit an output event when this message actually carried text; a
+	// tool-only assistant turn should not blank the accumulated answer.
+	if text != "" || len(evs) == 0 {
 		ev := &core.Event{Type: core.EventOutput, Text: m.buf}
 		if l.Message.Model != "" {
 			ev.Usage = &core.TurnUsage{
@@ -201,16 +291,16 @@ func (m *streamMapper) map_(b []byte) *core.Event {
 				CacheWriteTokens: l.Message.Usage.CacheCreationInputTokens,
 			}
 		}
-		return ev
-	case "result":
-		text := l.Result
-		if text == "" {
-			text = m.buf
-		}
-		return &core.Event{Type: core.EventFinal, Text: text, Final: true}
-	default:
-		return nil
+		evs = append(evs, ev)
 	}
+	return evs
+}
+
+func toolResultErr(isErr bool) error {
+	if isErr {
+		return fmt.Errorf("tool reported error")
+	}
+	return nil
 }
 
 // parseSessionID extracts the claude-native session id from any stream line
@@ -238,4 +328,71 @@ func buildEnv(extra map[string]string) []string {
 		filtered = append(filtered, fmt.Sprintf("%s=%s", k, v))
 	}
 	return filtered
+}
+
+// toolSummaryMax bounds the length of tool input/result summaries so a single
+// noisy tool call cannot blow up the card.
+const toolSummaryMax = 120
+
+// summarizeToolInput renders a tool's JSON input into a short one-line summary,
+// preferring the common "command"/"query"/"path"/"file_path" keys and falling
+// back to the compact JSON.
+func summarizeToolInput(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return clip(strings.TrimSpace(string(raw)), toolSummaryMax)
+	}
+	for _, k := range []string{"command", "query", "prompt", "file_path", "path", "pattern", "url"} {
+		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+			return clip(strings.TrimSpace(v), toolSummaryMax)
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return clip(string(b), toolSummaryMax)
+}
+
+// summarizeToolResult renders a tool_result content payload (either a JSON
+// string or an array of {type,text} parts) into a short one-line summary.
+func summarizeToolResult(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return clip(collapseWhitespace(s), toolSummaryMax)
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var texts []string
+		for _, p := range parts {
+			if p.Text != "" {
+				texts = append(texts, p.Text)
+			}
+		}
+		if len(texts) > 0 {
+			return clip(collapseWhitespace(strings.Join(texts, " ")), toolSummaryMax)
+		}
+	}
+	return clip(collapseWhitespace(string(raw)), toolSummaryMax)
+}
+
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func clip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

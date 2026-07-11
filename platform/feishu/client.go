@@ -25,6 +25,10 @@ type clientAPI interface {
 	// SendModelPickerCard posts an interactive model selector for the
 	// conversation that originated msg.
 	SendModelPickerCard(ctx context.Context, msg *core.Message, state core.ModelPickerState) (messageID string, err error)
+	// SendRuntimeSettingsPickerCard posts the unified model/effort/speed card.
+	SendRuntimeSettingsPickerCard(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) (messageID string, err error)
+	// UpdateRuntimeSettingsPickerCard patches the original picker message.
+	UpdateRuntimeSettingsPickerCard(ctx context.Context, messageID string, msg *core.Message, state core.RuntimeSettingsPickerState) error
 	// BeginStreamCard creates a CardKit streaming card entity and sends it to
 	// the chat, returning the card entity ID used for subsequent streaming
 	// text updates. This is the native "typewriter" streaming path; it

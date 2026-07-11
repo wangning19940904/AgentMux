@@ -180,15 +180,17 @@ func TestAgentInstanceCRUD(t *testing.T) {
 
 	now := time.Now()
 	agent := &core.AgentInstance{
-		ID:           "agent-test",
-		Name:         "Research Codex",
-		RuntimeID:    "codex",
-		WorkDir:      "/tmp/work",
-		ProviderTool: "codex",
-		ProviderID:   "openai",
-		DefaultModel: "gpt-5",
-		MemoryScope:  "agent:agent-test",
-		Env:          map[string]string{"CODEX_HOME": "/tmp/codex"},
+		ID:                     "agent-test",
+		Name:                   "Research Codex",
+		RuntimeID:              "codex",
+		WorkDir:                "/tmp/work",
+		ProviderTool:           "codex",
+		ProviderID:             "openai",
+		DefaultModel:           "gpt-5",
+		DefaultReasoningEffort: "high",
+		DefaultServiceTier:     "priority",
+		MemoryScope:            "agent:agent-test",
+		Env:                    map[string]string{"CODEX_HOME": "/tmp/codex"},
 		ChannelBindings: []core.AgentChannelBinding{{
 			ID:     "channel-1",
 			Type:   "telegram",
@@ -224,8 +226,15 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" {
+	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" {
 		t.Fatalf("agent = %+v", got)
+	}
+	if err := st.UpdateAgentRuntimeSettings(ctx, "agent-test", core.RuntimeSettings{Model: "gpt-5-mini", ReasoningEffort: "xhigh", ServiceTier: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetAgentInstance(ctx, "agent-test")
+	if err != nil || got == nil || got.DefaultModel != "gpt-5-mini" || got.DefaultReasoningEffort != "xhigh" || got.DefaultServiceTier != "default" {
+		t.Fatalf("updated runtime settings = %+v, err=%v", got, err)
 	}
 	if len(got.ChannelBindings) != 1 || got.ChannelBindings[0].Type != "telegram" {
 		t.Fatalf("channels = %+v", got.ChannelBindings)

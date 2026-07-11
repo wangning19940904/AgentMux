@@ -13,6 +13,11 @@ import (
 	"github.com/agentnexus/agentnexus/core"
 )
 
+const (
+	stderrTailLimit = 16 * 1024
+	stdoutScanLimit = 16 * 1024 * 1024
+)
+
 type session struct {
 	agent   *Agent
 	workDir string
@@ -40,6 +45,8 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.workDir
 	cmd.Env = buildEnv(s.agent.env)
+	stderr := &tailBuffer{limit: stderrTailLimit}
+	cmd.Stderr = stderr
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -52,9 +59,10 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	go func() {
 		defer close(out)
 		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+		sc.Buffer(make([]byte, 0, 1024*1024), stdoutScanLimit)
 		var last string
 		var sawFinal bool
+		var sawError bool
 		for sc.Scan() {
 			line := sc.Bytes()
 			if ev := s.agent.spec.Mapper(line); ev != nil {
@@ -64,11 +72,34 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 				if ev.Type == core.EventFinal {
 					sawFinal = true
 				}
+				if ev.Type == core.EventError {
+					sawError = true
+				}
 				out <- ev
 			}
 		}
-		if err := cmd.Wait(); err != nil {
-			out <- &core.Event{Type: core.EventError, Err: err}
+		scanErr := sc.Err()
+		if scanErr != nil {
+			// Stop stdout backpressure before Wait. Without this close, a child
+			// that keeps writing after Scanner rejects an oversized frame can
+			// deadlock with the parent waiting for it to exit.
+			_ = stdout.Close()
+		}
+		waitErr := cmd.Wait()
+		if scanErr != nil {
+			err := fmt.Errorf("read %s output: %w", s.agent.spec.Name, scanErr)
+			if waitErr != nil {
+				err = fmt.Errorf("%v (%w)", err, waitErr)
+			}
+			out <- &core.Event{Type: core.EventError, Err: processError(err, stderr.String())}
+			return
+		}
+		if waitErr != nil {
+			// A structured CLI error already contains the useful explanation.
+			// Do not follow it with a second, generic exit-status event.
+			if !sawError {
+				out <- &core.Event{Type: core.EventError, Err: processError(waitErr, stderr.String())}
+			}
 			return
 		}
 		if s.agent.spec.FinalFromLast && !sawFinal {
@@ -77,6 +108,41 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	}()
 	return out, nil
 }
+
+func processError(err error, stderr string) error {
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		return err
+	}
+	return fmt.Errorf("%s (%w)", detail, err)
+}
+
+// tailBuffer continuously drains stderr while retaining only the most recent
+// bytes, where command failures normally put their actionable explanation.
+// Write always reports the full input length so os/exec keeps draining.
+type tailBuffer struct {
+	limit int
+	buf   []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.limit <= 0 || n == 0 {
+		return n, nil
+	}
+	if n >= b.limit {
+		b.buf = append(b.buf[:0], p[n-b.limit:]...)
+		return n, nil
+	}
+	if overflow := len(b.buf) + n - b.limit; overflow > 0 {
+		copy(b.buf, b.buf[overflow:])
+		b.buf = b.buf[:len(b.buf)-overflow]
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
 
 func (s *session) RespondPermission(ctx context.Context, allow bool) error { return nil }
 func (s *session) Close(ctx context.Context) error                         { return nil }

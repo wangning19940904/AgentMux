@@ -32,6 +32,12 @@ type Message struct {
 	ChannelID string
 	// Origin records what produced the message: channel, cron, webhook or api.
 	Origin string
+	// RuntimeSettingsAction is set by interactive setting cards. It is kept
+	// separate from Text so callbacks cannot accidentally become agent prompts.
+	RuntimeSettingsAction *RuntimeSettingsAction
+	// InteractionMessageID is the card/message that an interactive action
+	// updates. ID remains the unique inbound event id used for deduplication.
+	InteractionMessageID string
 }
 
 // Message origins.
@@ -43,7 +49,8 @@ const (
 )
 
 // Event is something an AgentSession emits while processing a turn: streamed
-// output, a tool call, a permission request, or the final answer.
+// output, a user-visible reasoning summary, a tool call, a permission request,
+// or the final answer.
 type Event struct {
 	Type    EventType
 	Text    string
@@ -51,13 +58,23 @@ type Event struct {
 	Err     error
 	Usage   *TurnUsage
 	ToolUse string
+	// ToolName is the invoked tool's name (e.g. "Bash", "mcp__lark__im_send")
+	// for EventToolUse events. ToolInput is a short, human-readable summary of
+	// its arguments (already truncated by the adapter). ToolResult, when set on
+	// a later EventToolUse, carries a short summary of that tool's output.
+	ToolName   string
+	ToolInput  string
+	ToolResult string
 }
 
 // EventType enumerates the kinds of events an agent session emits.
 type EventType string
 
 const (
-	EventOutput     EventType = "output"
+	EventOutput EventType = "output"
+	// EventThinking carries an adapter-provided reasoning summary or progress
+	// status. It deliberately is not raw private chain-of-thought.
+	EventThinking   EventType = "thinking"
 	EventToolUse    EventType = "tool_use"
 	EventPermission EventType = "permission"
 	EventFinal      EventType = "final"
@@ -122,6 +139,14 @@ type StreamMessageReplier interface {
 // /model status command as an interactive model picker.
 type ModelPickerReplier interface {
 	ReplyModelPicker(ctx context.Context, msg *Message, state ModelPickerState) error
+}
+
+// RuntimeSettingsPickerReplier renders and updates the richer model/effort/
+// speed picker. UpdateRuntimeSettingsPicker must edit the original picker
+// message referenced by msg.ID instead of posting a confirmation message.
+type RuntimeSettingsPickerReplier interface {
+	ReplyRuntimeSettingsPicker(ctx context.Context, msg *Message, state RuntimeSettingsPickerState) error
+	UpdateRuntimeSettingsPicker(ctx context.Context, msg *Message, state RuntimeSettingsPickerState) error
 }
 
 // MessageReactioner is an optional Platform capability for marking an inbound

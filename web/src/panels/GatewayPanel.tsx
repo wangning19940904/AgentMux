@@ -67,6 +67,13 @@ type ProviderDraft = {
   supported_models: string[];
   supported_api_formats: string[];
   supported_protocols: string[];
+	// Explicit values used by Agent runtime setting cards. These are never
+	// inferred from a protocol probe because cross-protocol conversion may not
+	// preserve the semantics.
+	supported_reasoning_efforts: string;
+	default_reasoning_effort: string;
+	supported_service_tiers: string;
+	default_service_tier: string;
   claude_desktop_mode: string;
   manual_models: boolean;
   model_list: string;
@@ -145,6 +152,10 @@ const emptyDraft: ProviderDraft = {
   supported_models: [],
   supported_api_formats: [],
   supported_protocols: [],
+	supported_reasoning_efforts: "",
+	default_reasoning_effort: "",
+	supported_service_tiers: "",
+	default_service_tier: "",
   claude_desktop_mode: "",
   manual_models: false,
   model_list: "",
@@ -183,6 +194,16 @@ function metaStringArray(provider: Provider, key: string) {
   const value = provider.meta?.[key];
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function metaValuesString(meta: Record<string, unknown> | undefined, key: string) {
+	const values = meta?.[key];
+	if (!Array.isArray(values)) return "";
+	return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).join(", ");
+}
+
+function parseRuntimeValues(value: string) {
+	return uniqueValues(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean));
 }
 
 function modelListString(provider: Provider) {
@@ -317,6 +338,10 @@ function providerToDraft(provider: Provider): ProviderDraft {
     supported_models: metaStringArray(provider, "supported_models"),
     supported_api_formats: metaStringArray(provider, "supported_api_formats"),
     supported_protocols: metaStringArray(provider, "supported_protocols"),
+		supported_reasoning_efforts: metaValuesString(provider.meta, "supported_reasoning_efforts"),
+		default_reasoning_effort: metaString(provider, "default_reasoning_effort"),
+		supported_service_tiers: metaValuesString(provider.meta, "supported_service_tiers"),
+		default_service_tier: metaString(provider, "default_service_tier"),
     claude_desktop_mode: metaString(provider, "claude_desktop_mode"),
     manual_models: modelList.length > 0,
     model_list: modelList,
@@ -562,6 +587,12 @@ function draftToProvider(draft: ProviderDraft, providers: Provider[]): Provider 
   if (draft.supported_models.length > 0) meta.supported_models = uniqueValues(draft.supported_models);
   if (draft.supported_api_formats.length > 0) meta.supported_api_formats = uniqueValues(draft.supported_api_formats);
   if (draft.supported_protocols.length > 0) meta.supported_protocols = uniqueValues(draft.supported_protocols);
+	const reasoningEfforts = parseRuntimeValues(draft.supported_reasoning_efforts);
+	const serviceTiers = parseRuntimeValues(draft.supported_service_tiers);
+	if (reasoningEfforts.length > 0) meta.supported_reasoning_efforts = reasoningEfforts;
+	if (draft.default_reasoning_effort.trim()) meta.default_reasoning_effort = draft.default_reasoning_effort.trim();
+	if (serviceTiers.length > 0) meta.supported_service_tiers = serviceTiers;
+	if (draft.default_service_tier.trim()) meta.default_service_tier = draft.default_service_tier.trim();
   if (draft.claude_desktop_mode) {
     meta.claude_desktop_mode = draft.claude_desktop_mode;
     meta.claude_desktop_auth_mode = "bearer";
@@ -1239,6 +1270,24 @@ export function GatewayPanel() {
                       <small>{t("gateway.modelOptionsHint").replace("{count}", String(modelOptions.length))}</small>
                     )}
                   </label>
+				  <label className="field">
+					<span>{t("gateway.supportedReasoningEfforts")}</span>
+					<input value={draft.supported_reasoning_efforts} onChange={(event) => updateDraft("supported_reasoning_efforts", event.target.value)} placeholder="low, medium, high" />
+					<small>{t("gateway.runtimeCapabilityHint")}</small>
+				  </label>
+				  <label className="field">
+					<span>{t("gateway.defaultReasoningEffort")}</span>
+					<input value={draft.default_reasoning_effort} onChange={(event) => updateDraft("default_reasoning_effort", event.target.value)} placeholder="high" />
+				  </label>
+				  <label className="field">
+					<span>{t("gateway.supportedServiceTiers")}</span>
+					<input value={draft.supported_service_tiers} onChange={(event) => updateDraft("supported_service_tiers", event.target.value)} placeholder="default, priority" />
+					<small>{t("gateway.runtimeCapabilityHint")}</small>
+				  </label>
+				  <label className="field">
+					<span>{t("gateway.defaultServiceTier")}</span>
+					<input value={draft.default_service_tier} onChange={(event) => updateDraft("default_service_tier", event.target.value)} placeholder="default" />
+				  </label>
                 </div>
 
                 <div className="probe-row">

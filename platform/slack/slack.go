@@ -7,6 +7,7 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -74,6 +75,10 @@ func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) erro
 }
 
 func (p *Platform) handleEvent(ctx context.Context, socket *socketmode.Client, evt socketmode.Event, inbound chan<- *core.Message) {
+	if evt.Type == socketmode.EventTypeInteractive {
+		p.handleInteractive(ctx, socket, evt, inbound)
+		return
+	}
 	if evt.Type != socketmode.EventTypeEventsAPI {
 		return
 	}
@@ -125,6 +130,43 @@ func (p *Platform) handleEvent(ctx context.Context, socket *socketmode.Client, e
 	}
 }
 
+func (p *Platform) handleInteractive(ctx context.Context, socket *socketmode.Client, evt socketmode.Event, inbound chan<- *core.Message) {
+	callback, ok := evt.Data.(slackapi.InteractionCallback)
+	if evt.Request != nil {
+		socket.Ack(*evt.Request)
+	}
+	if !ok || callback.Type != slackapi.InteractionTypeBlockActions || len(callback.ActionCallback.BlockActions) == 0 {
+		return
+	}
+	action := callback.ActionCallback.BlockActions[0]
+	value := action.Value
+	if action.SelectedOption.Value != "" {
+		value = action.SelectedOption.Value
+	}
+	var decoded slackRuntimeSettingsAction
+	if err := json.Unmarshal([]byte(value), &decoded); err != nil || decoded.Setting == "" {
+		return
+	}
+	messageID := callback.Container.MessageTs
+	if messageID == "" {
+		messageID = callback.MessageTs
+	}
+	msg := &core.Message{
+		ID:                   callback.ActionTs,
+		InteractionMessageID: messageID,
+		ChatID:               callback.Channel.ID,
+		UserID:               callback.User.ID,
+		Platform:             "slack",
+		RuntimeSettingsAction: &core.RuntimeSettingsAction{
+			Scope: core.RuntimeSettingsScope(decoded.Scope), Setting: core.RuntimeSetting(decoded.Setting), Value: decoded.Value, Reset: decoded.Reset,
+		},
+	}
+	select {
+	case inbound <- msg:
+	case <-ctx.Done():
+	}
+}
+
 func (p *Platform) duplicate(ts string) bool {
 	if ts == "" {
 		return false
@@ -162,6 +204,123 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 		return fmt.Errorf("slack send: %w", err)
 	}
 	return nil
+}
+
+func (p *Platform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
+	if msg == nil || msg.ChatID == "" {
+		return fmt.Errorf("slack: empty chat id")
+	}
+	client := p.slackClient()
+	_, _, err := client.PostMessageContext(ctx, msg.ChatID,
+		slackapi.MsgOptionText("Runtime settings", false),
+		slackapi.MsgOptionBlocks(slackRuntimeSettingsBlocks(state)...),
+	)
+	if err != nil {
+		return fmt.Errorf("slack settings picker: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
+	if msg == nil || msg.ChatID == "" || msg.ID == "" {
+		return fmt.Errorf("slack: missing picker message reference")
+	}
+	client := p.slackClient()
+	_, _, _, err := client.UpdateMessageContext(ctx, msg.ChatID, msg.ID,
+		slackapi.MsgOptionText("Runtime settings", false),
+		slackapi.MsgOptionBlocks(slackRuntimeSettingsBlocks(state)...),
+	)
+	if err != nil {
+		return fmt.Errorf("slack update settings picker: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) slackClient() *slackapi.Client {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.client == nil {
+		p.client = slackapi.New(p.botToken, slackapi.OptionAppLevelToken(p.appToken))
+	}
+	return p.client
+}
+
+type slackRuntimeSettingsAction struct {
+	Scope   string `json:"s"`
+	Setting string `json:"k"`
+	Value   string `json:"v,omitempty"`
+	Reset   bool   `json:"r,omitempty"`
+}
+
+func slackRuntimeSettingsBlocks(state core.RuntimeSettingsPickerState) []slackapi.Block {
+	scope := "当前会话"
+	if state.Scope == core.RuntimeSettingsScopeAgent {
+		scope = "Agent 默认（仅后续会话）"
+	}
+	blocks := []slackapi.Block{slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("*运行时设置*\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`", scope, slackDisplay(state.Settings.Model), slackDisplay(state.Settings.ReasoningEffort), slackDisplay(state.Settings.ServiceTier)), false, false), nil, nil,
+	)}
+	if state.Notice != "" {
+		blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", ":warning: "+state.Notice, false, false), nil, nil))
+	}
+	if state.AgentDefaultsEditable {
+		blocks = append(blocks, slackSettingsSelect("scope", "设置范围", []slackSettingOption{
+			{label: "当前会话", action: slackRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeConversation), Setting: string(core.RuntimeSettingScope)}},
+			{label: "Agent 默认", action: slackRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeAgent), Setting: string(core.RuntimeSettingScope)}},
+		}, string(state.Scope)))
+	}
+	blocks = append(blocks, slackSettingBlock("model", "模型", state, core.RuntimeSettingModel, state.Capabilities.Models)...)
+	blocks = append(blocks, slackSettingBlock("effort", "思考强度", state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
+	blocks = append(blocks, slackSettingBlock("tier", "速度", state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
+	return blocks
+}
+
+type slackSettingOption struct {
+	label  string
+	action slackRuntimeSettingsAction
+}
+
+func slackSettingBlock(id, title string, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, options []core.RuntimeOption) []slackapi.Block {
+	if len(options) == 0 {
+		if reason := state.Unsupported[setting]; reason != "" {
+			return []slackapi.Block{slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", "*"+title+"*："+reason, false, false), nil, nil)}
+		}
+		return nil
+	}
+	entries := make([]slackSettingOption, 0, len(options))
+	for _, option := range options {
+		label := option.Label
+		if label == "" {
+			label = option.Value
+		}
+		entries = append(entries, slackSettingOption{label: label, action: slackRuntimeSettingsAction{Scope: string(state.Scope), Setting: string(setting), Value: option.Value}})
+	}
+	return []slackapi.Block{slackSettingsSelect(id, title, entries, state.Settings.Value(setting))}
+}
+
+func slackSettingsSelect(id, title string, entries []slackSettingOption, selected string) slackapi.Block {
+	options := make([]*slackapi.OptionBlockObject, 0, len(entries))
+	var initial *slackapi.OptionBlockObject
+	for _, entry := range entries {
+		data, _ := json.Marshal(entry.action)
+		option := slackapi.NewOptionBlockObject(string(data), slackapi.NewTextBlockObject("plain_text", entry.label, false, false), nil)
+		options = append(options, option)
+		if entry.action.Value == selected || (entry.action.Setting == string(core.RuntimeSettingScope) && entry.action.Scope == selected) {
+			initial = option
+		}
+	}
+	selectElement := slackapi.NewOptionsSelectBlockElement("static_select", slackapi.NewTextBlockObject("plain_text", title, false, false), "agentnexus_settings_"+id, options...)
+	if initial != nil {
+		selectElement.WithInitialOption(initial)
+	}
+	return slackapi.NewActionBlock("agentnexus_settings_"+id, selectElement)
+}
+
+func slackDisplay(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "runtime default"
+	}
+	return value
 }
 
 // Stop is a no-op; RunContext exits on ctx cancellation.

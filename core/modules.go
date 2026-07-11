@@ -64,11 +64,12 @@ type SkillManager interface {
 // WorkspaceInitOptions describes the agent workspace that must be prepared
 // before a local agent runtime starts.
 type WorkspaceInitOptions struct {
-	AgentID    string   `json:"agent_id,omitempty"`
-	RuntimeID  string   `json:"runtime_id,omitempty"`
-	WorkDir    string   `json:"work_dir,omitempty"`
-	Skills     []string `json:"skills,omitempty"`
-	MCPServers []string `json:"mcp_servers,omitempty"`
+	AgentID         string          `json:"agent_id,omitempty"`
+	RuntimeID       string          `json:"runtime_id,omitempty"`
+	WorkDir         string          `json:"work_dir,omitempty"`
+	Skills          []string        `json:"skills,omitempty"`
+	MCPServers      []string        `json:"mcp_servers,omitempty"`
+	RuntimeDefaults RuntimeSettings `json:"runtime_defaults,omitempty"`
 }
 
 // ConversationBaseDir returns the root under which per-conversation working

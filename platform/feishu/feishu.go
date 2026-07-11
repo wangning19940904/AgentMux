@@ -108,6 +108,28 @@ func (p *Platform) ReplyModelPicker(ctx context.Context, msg *core.Message, stat
 	return err
 }
 
+func (p *Platform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
+	if p.client == nil {
+		return fmt.Errorf("%s: client not started", p.name)
+	}
+	_, err := p.client.SendRuntimeSettingsPickerCard(ctx, msg, state)
+	return err
+}
+
+func (p *Platform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
+	if p.client == nil {
+		return fmt.Errorf("%s: client not started", p.name)
+	}
+	if msg == nil || (msg.ID == "" && msg.InteractionMessageID == "") {
+		return fmt.Errorf("%s: missing settings picker message id", p.name)
+	}
+	messageID := msg.InteractionMessageID
+	if messageID == "" {
+		messageID = msg.ID
+	}
+	return p.client.UpdateRuntimeSettingsPickerCard(ctx, messageID, msg, state)
+}
+
 // AddReaction marks the inbound message while the agent is working.
 func (p *Platform) AddReaction(ctx context.Context, msg *core.Message, emojiType string) (string, error) {
 	if p.client == nil {

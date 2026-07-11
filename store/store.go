@@ -122,6 +122,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	provider_tool TEXT,
 	provider_id TEXT,
 	default_model TEXT,
+	default_reasoning_effort TEXT,
+	default_service_tier TEXT,
 	memory_scope TEXT,
 	env TEXT,
 	channel_bindings TEXT,
@@ -233,6 +235,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 		}
 	}
 	if err := s.ensureColumn("agent_instances", "default_model", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "default_reasoning_effort", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "default_service_tier", "TEXT"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("agent_instances", "clis", "TEXT"); err != nil {

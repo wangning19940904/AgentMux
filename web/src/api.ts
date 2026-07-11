@@ -202,6 +202,8 @@ export interface AgentInstance {
   provider_id?: string;
   provider_name?: string;
   default_model?: string;
+  default_reasoning_effort?: string;
+  default_service_tier?: string;
   memory_scope?: string;
   env?: Record<string, string>;
   channel_bindings?: AgentChannelBinding[];

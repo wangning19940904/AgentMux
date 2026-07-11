@@ -16,6 +16,8 @@ const EMPTY_AGENT: AgentInstance = {
   provider_tool: "",
   provider_id: "",
   default_model: "",
+  default_reasoning_effort: "",
+  default_service_tier: "",
   memory_scope: "",
   channel_bindings: [],
   schedules: [],
@@ -112,12 +114,15 @@ export function AgentsPanel() {
     setDrawerDraft((current) => {
       if (!current) return current;
       const routeChanged = key === "runtime_id" || key === "provider_tool" || key === "provider_id";
+      const nextRuntimeRouteTool = key === "runtime_id" ? routeToolForRuntime(String(value)) : current.provider_tool;
       return {
         ...current,
         [key]: value,
-        provider_tool: key === "runtime_id" ? String(value) : current.provider_tool,
+        provider_tool: nextRuntimeRouteTool,
         provider_id: key === "runtime_id" ? "" : current.provider_id,
         default_model: routeChanged ? "" : current.default_model,
+		default_reasoning_effort: routeChanged ? "" : current.default_reasoning_effort,
+		default_service_tier: routeChanged ? "" : current.default_service_tier,
       };
     });
   }
@@ -372,24 +377,38 @@ function AgentForm({
       .map((option) => ({ name: option.name, note: option.note ?? "" }));
     return composeInjectedPrompt(draft.system_prompt ?? "", logPaths, clis);
   }, [draft.system_prompt, draft.clis, selectedChannelIDs, cliOptions]);
-  const selectedRouteTool = draft.provider_tool || draft.runtime_id;
+  const selectedRouteTool = draft.provider_tool || routeToolForRuntime(draft.runtime_id);
+  const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
-  const activeRouteProvider = activeRoute?.provider_name || activeRoute?.provider_id || "";
+  const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
   const overrideProvider = compatibleProviders.find((provider) => provider.id === draft.provider_id);
-  const routeProvider = compatibleProviders.find((provider) => provider.id === activeRoute?.provider_id);
+  const routeProvider = activeRoute?.configured
+    ? compatibleProviders.find((provider) => provider.id === activeRoute.provider_id)
+    : undefined;
   const modelProvider = overrideProvider ?? routeProvider;
   const modelOptions = providerModelOptions(modelProvider);
+	const reasoningOptions = runtimeProviderOptions(modelProvider, "supported_reasoning_efforts");
+	const serviceTierOptions = runtimeProviderOptions(modelProvider, "supported_service_tiers");
+  const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
   const providerStatus = draft.provider_id
     ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
     : activeRouteProvider
       ? `${t("agents.activeRouteProvider")} ${runtimeLabel(selectedRouteTool)} -> ${activeRouteProvider}`
-      : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}`;
+      : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}. ${t("agents.localLoginActive")}`;
   const defaultModelStatus =
     modelOptions.length > 0
       ? t("agents.defaultModelHelp")
       : modelProvider
         ? t("agents.defaultModelUnavailable")
-        : t("agents.defaultModelNoProvider");
+        : usingLocalLogin
+          ? t("agents.defaultModelLocalLogin")
+          : t("agents.defaultModelNoProvider");
+
+  useEffect(() => {
+    if (readOnly || !draft.runtime_id) return;
+    const nextRouteTool = routeToolForRuntime(draft.runtime_id);
+    if (draft.provider_tool !== nextRouteTool) onUpdate("provider_tool", nextRouteTool);
+  }, [draft.provider_tool, draft.runtime_id, onUpdate, readOnly]);
 
   useEffect(() => {
     if (readOnly || !draft.default_model) return;
@@ -511,22 +530,22 @@ function AgentForm({
           <label className="field">
             <span>{t("agents.routeTool")}</span>
             <select
-              disabled={readOnly}
-              value={draft.provider_tool || draft.runtime_id}
+              disabled={readOnly || routeToolOptions.length <= 1}
+              value={selectedRouteTool}
               onChange={(event) => onUpdate("provider_tool", event.target.value)}
             >
-              {runtimeOptions.map((runtime) => (
-                <option key={runtime} value={runtime}>
-                  {runtimeLabel(runtime)}
+              {routeToolOptions.map((tool) => (
+                <option key={tool} value={tool}>
+                  {runtimeLabel(tool)}
                 </option>
               ))}
-              <option value="claude-desktop">{runtimeLabel("claude-desktop")}</option>
             </select>
+            <small>{t("agents.routeToolFollowsRuntime")}</small>
           </label>
           <label className="field">
             <span>{t("agents.providerOverride")}</span>
             <select disabled={readOnly} value={draft.provider_id ?? ""} onChange={(event) => onUpdate("provider_id", event.target.value)}>
-              <option value="">{t("agents.followActiveRoute")}</option>
+              <option value="">{activeRouteProvider ? t("agents.followActiveRoute") : t("agents.useLocalLogin")}</option>
               {compatibleProviders.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
@@ -535,6 +554,14 @@ function AgentForm({
             </select>
             <small>{providerStatus}</small>
           </label>
+          {usingLocalLogin && (
+            <div className="agent-route-notice">
+              <strong>
+                {t("agents.routeMissingTitle")} {runtimeLabel(selectedRouteTool)}
+              </strong>
+              <span>{t("agents.routeMissingLocalLogin")}</span>
+            </div>
+          )}
           <label className="field">
             <span>{t("agents.defaultModel")}</span>
             <select
@@ -551,6 +578,22 @@ function AgentForm({
             </select>
             <small>{defaultModelStatus}</small>
           </label>
+		  <label className="field">
+			<span>{t("agents.defaultReasoningEffort")}</span>
+			<select disabled={readOnly || reasoningOptions.length === 0} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
+			  <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
+			  {reasoningOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+			</select>
+			<small>{t("agents.defaultReasoningEffortHelp")}</small>
+		  </label>
+		  <label className="field">
+			<span>{t("agents.defaultServiceTier")}</span>
+			<select disabled={readOnly || serviceTierOptions.length === 0} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
+			  <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
+			  {serviceTierOptions.map((value) => <option key={value} value={value}>{serviceTierLabel(value)}</option>)}
+			</select>
+			<small>{t("agents.defaultServiceTierHelp")}</small>
+		  </label>
         </div>
       </section>
 
@@ -776,10 +819,19 @@ function newAgent(runtimeOptions: string[]): AgentInstance {
   return copyAgent({
     ...EMPTY_AGENT,
     runtime_id: runtime,
-    provider_tool: runtime,
+    provider_tool: routeToolForRuntime(runtime),
     memory_scope: "agent:new",
     source: "manual",
   });
+}
+
+function routeToolForRuntime(runtime: string): string {
+  return normalizeTool(runtime);
+}
+
+function routeToolOptionsForRuntime(runtime: string): string[] {
+  const tool = routeToolForRuntime(runtime);
+  return tool ? [tool] : [];
 }
 
 function runtimeLabel(runtime: string): string {
@@ -817,7 +869,7 @@ function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRout
 function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
   if (agent.provider_name || agent.provider_id) return `${t("agents.providerOverrideShort")}: ${agent.provider_name || agent.provider_id}`;
   const route = activeRouteForTool(activeRoutes, agent.provider_tool || agent.runtime_id);
-  const provider = route?.provider_name || route?.provider_id;
+  const provider = route?.configured ? route.provider_name || route.provider_id : "";
   return provider ? `${t("agents.followRouteShort")}: ${provider}` : t("agents.followRouteShort");
 }
 
@@ -857,6 +909,18 @@ function providerModelOptions(provider: Provider | undefined): string[] {
   const supported = provider?.meta?.supported_models;
   if (Array.isArray(supported)) supported.forEach(add);
   return out;
+}
+
+function runtimeProviderOptions(provider: Provider | undefined, key: "supported_reasoning_efforts" | "supported_service_tiers"): string[] {
+	const values = provider?.meta?.[key];
+	if (!Array.isArray(values)) return [];
+	return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
+}
+
+function serviceTierLabel(value: string): string {
+	if (value === "priority" || value === "fast") return `${value} (${value === "priority" ? "快速" : "fast"})`;
+	if (value === "default" || value === "normal" || value === "standard") return `${value} (普通)`;
+	return value;
 }
 
 function workDirErrorMessage(err: unknown, t: (key: string) => string): string {
