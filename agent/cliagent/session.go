@@ -44,7 +44,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.workDir
-	cmd.Env = buildEnv(s.agent.env)
+	cmd.Env = withTraceparent(buildEnv(s.agent.env), core.ObservationTraceparent(ctx))
 	stderr := &tailBuffer{limit: stderrTailLimit}
 	cmd.Stderr = stderr
 
@@ -153,6 +153,20 @@ func buildEnv(extra map[string]string) []string {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	return env
+}
+
+func withTraceparent(env []string, traceparent string) []string {
+	if traceparent == "" {
+		return env
+	}
+	filtered := make([]string, 0, len(env)+1)
+	for _, value := range env {
+		if strings.HasPrefix(value, "TRACEPARENT=") {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return append(filtered, "TRACEPARENT="+traceparent)
 }
 
 func randID() string {

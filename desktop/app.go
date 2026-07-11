@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +13,10 @@ import (
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/core"
 	"github.com/agentnexus/agentnexus/guard"
+	nativeintegration "github.com/agentnexus/agentnexus/integrations/native"
 	"github.com/agentnexus/agentnexus/mcp"
 	"github.com/agentnexus/agentnexus/memory"
+	observationpkg "github.com/agentnexus/agentnexus/observability"
 	"github.com/agentnexus/agentnexus/provider"
 	"github.com/agentnexus/agentnexus/server"
 	"github.com/agentnexus/agentnexus/skills"
@@ -55,10 +58,44 @@ func (a *App) startup(ctx context.Context) {
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
 	srv.SetWorkspaceInitializer(initializer)
+	go ue.Start(a.ctx, time.Duration(cfg.Observability.BackfillDays)*24*time.Hour)
+	var observationRuntime *observationpkg.Runtime
+	if cfg.Observability.Enabled {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			log.Error("resolve observability home", "err", homeErr)
+		} else if runtimeValue, runtimeErr := observationpkg.NewRuntime(log, cfg.Observability, st, home, desktopConfiguredSecrets(cfg)); runtimeErr != nil {
+			log.Error("build observability runtime", "err", runtimeErr)
+		} else {
+			observationRuntime = runtimeValue
+			var nativeManager *nativeintegration.Manager
+			if manager, managerErr := nativeintegration.NewManager(nativeintegration.Options{HomeDir: home}); managerErr != nil {
+				log.Warn("native observation integrations unavailable", "err", managerErr)
+			} else {
+				nativeManager = manager
+			}
+			srv.SetObservability(cfg.Observability, runtimeValue.Recorder, runtimeValue.Insights, nativeManager, runtimeValue.Ingest)
+			if runtimeErr := runtimeValue.Start(a.ctx); runtimeErr != nil {
+				log.Warn("start observability runtime", "err", runtimeErr)
+			}
+		}
+	}
 	if eng, err := server.BuildEngine(log, cfg, initializer); err != nil {
 		log.Error("build engine", "err", err)
 	} else {
 		eng.SetConversationStore(st)
+		if observationRuntime != nil {
+			eng.SetObservationBus(observationRuntime.Bus)
+			eng.SetUsageSink(ue.Record)
+			eng.SetObservationChildTelemetry(core.ObservationChildTelemetry{
+				Endpoint: observationpkg.LocalOTLPEndpoint(cfg.Server.Addr), Token: observationRuntime.IngestToken,
+				CaptureContent: cfg.Observability.CaptureContent == "full",
+			})
+			svc.Proxy().SetTraceCostEstimator(ue.ProxyCost)
+			svc.Proxy().SetTraceObserver(func(ctx context.Context, trace core.ProxyTrace, requestBody, responseBody []byte) error {
+				return errors.Join(ue.RecordProxy(ctx, trace), observationRuntime.ObserveProxyTrace(ctx, trace, requestBody, responseBody))
+			})
+		}
 		connectSvc := core.NewConnectService(log, eng, st)
 		srv.SetSender(eng)
 		srv.SetConnect(connectSvc)
@@ -80,6 +117,21 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 	a.startMenuBar(log, cfg.Server.Addr)
+}
+
+func desktopConfiguredSecrets(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	values := []string{cfg.Bridge.Token}
+	for _, project := range cfg.Projects {
+		for _, value := range project.Env {
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
 }
 
 func (a *App) shutdown(ctx context.Context) {

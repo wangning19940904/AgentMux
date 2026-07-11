@@ -12,13 +12,14 @@ import (
 
 // Config is the top-level configuration.
 type Config struct {
-	DisplayMode string          `toml:"display_mode"`
-	Server      ServerConfig    `toml:"server"`
-	Bridge      BridgeConfig    `toml:"bridge"`
-	Projects    []ProjectConfig `toml:"projects"`
-	Hooks       []HookConfig    `toml:"hooks"`
-	Provider    ProviderConfig  `toml:"provider"`
-	Usage       UsageConfig     `toml:"usage"`
+	DisplayMode   string              `toml:"display_mode"`
+	Server        ServerConfig        `toml:"server"`
+	Bridge        BridgeConfig        `toml:"bridge"`
+	Projects      []ProjectConfig     `toml:"projects"`
+	Hooks         []HookConfig        `toml:"hooks"`
+	Provider      ProviderConfig      `toml:"provider"`
+	Usage         UsageConfig         `toml:"usage"`
+	Observability ObservabilityConfig `toml:"observability"`
 }
 
 // ServerConfig configures the HTTP/WS management server.
@@ -66,6 +67,34 @@ type UsageConfig struct {
 	SSHTargets []SSHTarget `toml:"ssh"`
 }
 
+// ObservabilityConfig controls local trace capture, encrypted content
+// retention, transcript backfill, and optional remote exporters.
+type ObservabilityConfig struct {
+	Enabled              bool   `toml:"enabled"`
+	CaptureContent       string `toml:"capture_content"`
+	ContentRetentionDays int    `toml:"content_retention_days"`
+	DetailRetentionDays  int    `toml:"detail_retention_days"`
+	BackfillDays         int    `toml:"backfill_days"`
+	// MasterKeyEnv is primarily for non-macOS deployments. macOS uses
+	// Keychain when this is empty; other platforms fall back to metadata-only.
+	MasterKeyEnv string                        `toml:"master_key_env"`
+	Exporters    []ObservabilityExporterConfig `toml:"exporters"`
+}
+
+// ObservabilityExporterConfig configures an isolated exporter queue. OTLP
+// content export remains opt-in per exporter.
+type ObservabilityExporterConfig struct {
+	Name           string            `toml:"name"`
+	Type           string            `toml:"type"`
+	Enabled        bool              `toml:"enabled"`
+	Endpoint       string            `toml:"endpoint"`
+	Protocol       string            `toml:"protocol"`
+	Headers        map[string]string `toml:"headers"`
+	IncludeContent bool              `toml:"include_content"`
+	TimeoutSeconds int               `toml:"timeout_seconds"`
+	QueueSize      int               `toml:"queue_size"`
+}
+
 // SSHTarget describes a remote machine to collect usage from.
 type SSHTarget struct {
 	Name     string            `toml:"name"`
@@ -90,14 +119,16 @@ func Load(path string) (*Config, error) {
 		name := envRe.FindStringSubmatch(m)[1]
 		return os.Getenv(name)
 	})
-	var c Config
+	// Observability is an in-process, encrypted feature and is enabled for new
+	// and existing configs unless the user explicitly opts out.
+	c := Config{Observability: ObservabilityConfig{Enabled: true}}
 	if _, err := toml.Decode(expanded, &c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	c.applyDefaults()
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
-	c.applyDefaults()
 	return &c, nil
 }
 
@@ -113,6 +144,22 @@ func (c *Config) validate() error {
 			return fmt.Errorf("project %q has no agent", p.Name)
 		}
 	}
+	switch c.Observability.CaptureContent {
+	case "off", "metadata", "full":
+	default:
+		return fmt.Errorf("observability.capture_content must be off, metadata, or full")
+	}
+	for _, exporter := range c.Observability.Exporters {
+		if exporter.Enabled && exporter.Endpoint == "" {
+			return fmt.Errorf("observability exporter %q enabled without endpoint", exporter.Name)
+		}
+		if exporter.Type != "otlp_http" {
+			return fmt.Errorf("observability exporter %q has unsupported type %q", exporter.Name, exporter.Type)
+		}
+		if exporter.Protocol != "http/json" {
+			return fmt.Errorf("observability exporter %q has unsupported protocol %q (use http/json)", exporter.Name, exporter.Protocol)
+		}
+	}
 	return nil
 }
 
@@ -126,12 +173,42 @@ func (c *Config) applyDefaults() {
 	if len(c.Usage.Sources) == 0 {
 		c.Usage.Sources = []string{"claude", "codex", "cursor", "gemini"}
 	}
+	if c.Observability.CaptureContent == "" {
+		c.Observability.CaptureContent = "full"
+	}
+	if c.Observability.ContentRetentionDays <= 0 {
+		c.Observability.ContentRetentionDays = 30
+	}
+	if c.Observability.DetailRetentionDays <= 0 {
+		c.Observability.DetailRetentionDays = 180
+	}
+	if c.Observability.BackfillDays <= 0 {
+		c.Observability.BackfillDays = 180
+	}
+	for index := range c.Observability.Exporters {
+		exporter := &c.Observability.Exporters[index]
+		if exporter.Name == "" {
+			exporter.Name = fmt.Sprintf("otlp-%d", index+1)
+		}
+		if exporter.Type == "" {
+			exporter.Type = "otlp_http"
+		}
+		if exporter.Protocol == "" {
+			exporter.Protocol = "http/json"
+		}
+		if exporter.TimeoutSeconds <= 0 {
+			exporter.TimeoutSeconds = 10
+		}
+		if exporter.QueueSize <= 0 {
+			exporter.QueueSize = 10000
+		}
+	}
 }
 
 // Default returns a config with defaults applied (used when no config file
 // exists for store-only commands).
 func Default() *Config {
-	c := &Config{}
+	c := &Config{Observability: ObservabilityConfig{Enabled: true}}
 	c.applyDefaults()
 	return c
 }

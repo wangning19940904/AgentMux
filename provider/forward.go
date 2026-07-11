@@ -44,7 +44,9 @@ func (s *ProxyServer) forwardChain(w http.ResponseWriter, r *http.Request, parse
 		return
 	}
 	requestModel := stringValue(parsed["model"])
+	identity := proxyRequestIdentityFrom(r)
 	var lastErr error
+	var parentAttemptID string
 	now := time.Now()
 	for i, p := range chain {
 		br := s.breakerFor(p.ID)
@@ -52,27 +54,42 @@ func (s *ProxyServer) forwardChain(w http.ResponseWriter, r *http.Request, parse
 			continue
 		}
 		reqBody := cloneJSONMap(parsed)
+		attemptID := randomProxyID("pattempt-")
+		startedAt := time.Now().UTC()
 		upstreamModel, err := resolveUpstreamModel(p, reqBody, opts.mapModel)
 		if err != nil {
-			s.recordProxyTrace(r, parsed, opts, p, requestModel, "", upstreamProto(p.Meta.APIFormat, opts.clientProto), http.StatusBadRequest, false, err)
+			result := proxyAttemptResult{
+				StatusCode: http.StatusBadRequest, Upstream: upstreamProto(p.Meta.APIFormat, opts.clientProto),
+				Err: err, StartedAt: startedAt, Duration: time.Since(startedAt),
+			}
+			s.recordProxyTrace(r, parsed, opts, p, requestModel, "", identity, attemptID, parentAttemptID, i+1, result)
 			opts.writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		ok, retryable, statusCode, upstream, ferr := s.forwardOne(w, r, p, reqBody, requestModel, upstreamModel, opts)
-		if ok {
-			br.recordSuccess()
-			if i > 0 && cfg.AutoFailover {
-				s.hotSwitchAfterFailover(r.Context(), opts.tool, p)
+		var beforeRespond func()
+		if i > 0 && cfg.AutoFailover {
+			// Commit the route change before exposing the successful failover
+			// response to the client. A net/http client may finish reading a
+			// flushed response while this handler is still running, so switching
+			// after forwardOne returns makes the route state observably racy.
+			beforeRespond = func() {
+				switchCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+				defer cancel()
+				s.hotSwitchAfterFailover(switchCtx, opts.tool, p)
 			}
-			s.recordProxyTrace(r, parsed, opts, p, requestModel, upstreamModel, upstream, statusCode, true, nil)
+		}
+		result := s.forwardOne(w, r, p, reqBody, requestModel, upstreamModel, opts, startedAt, beforeRespond)
+		s.recordProxyTrace(r, parsed, opts, p, requestModel, upstreamModel, identity, attemptID, parentAttemptID, i+1, result)
+		if result.OK {
+			br.recordSuccess()
 			return
 		}
-		s.recordProxyTrace(r, parsed, opts, p, requestModel, upstreamModel, upstream, statusCode, false, ferr)
-		lastErr = ferr
+		lastErr = result.Err
+		parentAttemptID = attemptID
 		if br.recordFailure(int32(cfg.FailureThreshold), time.Duration(cfg.CooldownSeconds)*time.Second) {
 			s.log.Warn("circuit opened", "provider", p.ID, "cooldown_s", cfg.CooldownSeconds)
 		}
-		if !retryable {
+		if !result.Retryable {
 			return
 		}
 	}
@@ -103,115 +120,186 @@ func resolveUpstreamModel(p *core.Provider, body map[string]any, mapModel func(*
 // forwardOne performs a single upstream attempt against provider p. It returns
 // ok=true once a response has been written to the client; retryable indicates
 // whether failover should try the next provider on failure.
-func (s *ProxyServer) forwardOne(w http.ResponseWriter, r *http.Request, p *core.Provider, body map[string]any, requestModel, upstreamModel string, opts forwardOpts) (ok, retryable bool, statusCode int, upstream string, err error) {
-	upstream = upstreamProto(p.Meta.APIFormat, opts.clientProto)
+func (s *ProxyServer) forwardOne(w http.ResponseWriter, r *http.Request, p *core.Provider, body map[string]any, requestModel, upstreamModel string, opts forwardOpts, startedAt time.Time, beforeRespond func()) (result proxyAttemptResult) {
+	result.StartedAt = startedAt
+	result.Upstream = upstreamProto(p.Meta.APIFormat, opts.clientProto)
+	defer func() { result.Duration = time.Since(startedAt) }()
 
 	if issue := providerAPIKeyIssue(p); issue != "" {
-		return false, true, 0, upstream, fmt.Errorf("%s: %s", p.ID, issue)
+		result.Retryable = true
+		result.Err = fmt.Errorf("%s: %s", p.ID, issue)
+		return result
 	}
 
 	var payload []byte
-	if upstream == opts.clientProto {
+	if result.Upstream == opts.clientProto {
 		// Same protocol: pass the (model-rewritten) body through unchanged.
 		payload, _ = json.Marshal(body)
 	} else {
 		ir, cerr := decodeToIR(opts.clientProto, body)
 		if cerr != nil {
-			return false, false, 0, upstream, cerr
+			result.Err = cerr
+			return result
 		}
 		if upstreamModel != "" {
 			ir["model"] = upstreamModel
 		}
-		upstreamBody, cerr := encodeFromIR(upstream, ir)
+		upstreamBody, cerr := encodeFromIR(result.Upstream, ir)
 		if cerr != nil {
-			return false, false, 0, upstream, cerr
+			result.Err = cerr
+			return result
 		}
 		payload, _ = json.Marshal(upstreamBody)
 	}
 
-	endpoint := upstreamEndpoint(upstream, p.BaseURL, upstreamModel, opts.stream)
+	result.RequestBytes = int64(len(payload))
+	endpoint := upstreamEndpoint(result.Upstream, p.BaseURL, upstreamModel, opts.stream)
 	req, rerr := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
 	if rerr != nil {
-		return false, true, 0, upstream, rerr
+		result.Retryable = true
+		result.Err = rerr
+		return result
 	}
-	if upstream == opts.clientProto {
+	if result.Upstream == opts.clientProto {
 		copyProxyHeaders(req.Header, r.Header)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	applyUpstreamAuth(req, upstream, providerAPIKey(p))
+	applyUpstreamAuth(req, result.Upstream, providerAPIKey(p))
 
 	resp, derr := s.client.Do(req)
 	if derr != nil {
-		return false, true, 0, upstream, derr
+		result.Retryable = true
+		result.Err = derr
+		return result
 	}
 	defer resp.Body.Close()
+	result.StatusCode = resp.StatusCode
+	capture := &proxyCaptureReader{r: resp.Body, start: startedAt}
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{Reader: capture, Closer: resp.Body}
+	defer capture.apply(&result, result.Upstream, opts.stream)
 
 	if isFailoverStatus(resp.StatusCode) || resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return false, isFailoverStatus(resp.StatusCode), resp.StatusCode, upstream, fmt.Errorf("%s: upstream %d: %s", p.ID, resp.StatusCode, truncate(string(b), 300))
+		result.Retryable = isFailoverStatus(resp.StatusCode)
+		result.Err = fmt.Errorf("%s: upstream %d: %s", p.ID, resp.StatusCode, truncate(string(b), 300))
+		return result
 	}
 
 	// Same-protocol responses (including streams) are relayed verbatim.
-	if upstream == opts.clientProto {
-		relayResponse(w, resp)
-		return true, false, resp.StatusCode, upstream, nil
+	if result.Upstream == opts.clientProto {
+		if beforeRespond != nil {
+			beforeRespond()
+		}
+		if err := relayResponse(w, resp); err != nil {
+			result.Err = fmt.Errorf("relay upstream stream: %w", err)
+			return result
+		}
+		result.OK = true
+		return result
 	}
 
 	if opts.stream {
+		if beforeRespond != nil {
+			beforeRespond()
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		if serr := streamUpstreamToClient(upstream, opts.clientProto, resp.Body, w, requestModel); serr != nil {
+		if serr := streamUpstreamToClient(result.Upstream, opts.clientProto, resp.Body, w, requestModel); serr != nil {
 			s.log.Warn("stream conversion aborted", "provider", p.ID, "err", serr)
+			result.Err = fmt.Errorf("stream conversion aborted: %w", serr)
+			return result
 		}
-		return true, false, resp.StatusCode, upstream, nil
+		result.OK = true
+		return result
 	}
 
 	raw, rerr := io.ReadAll(resp.Body)
 	if rerr != nil {
-		return false, false, resp.StatusCode, upstream, rerr
+		result.Err = rerr
+		return result
 	}
 	var upstreamResp map[string]any
 	if jerr := json.Unmarshal(raw, &upstreamResp); jerr != nil {
-		return false, true, resp.StatusCode, upstream, fmt.Errorf("%s: invalid upstream JSON", p.ID)
+		result.Retryable = true
+		result.Err = fmt.Errorf("%s: invalid upstream JSON", p.ID)
+		return result
 	}
-	ir, cerr := upstreamRespToIR(upstream, upstreamResp)
+	ir, cerr := upstreamRespToIR(result.Upstream, upstreamResp)
 	if cerr != nil {
-		return false, false, resp.StatusCode, upstream, cerr
+		result.Err = cerr
+		return result
 	}
 	clientResp, cerr := irRespToClient(opts.clientProto, ir, requestModel)
 	if cerr != nil {
-		return false, false, resp.StatusCode, upstream, cerr
+		result.Err = cerr
+		return result
+	}
+	if beforeRespond != nil {
+		beforeRespond()
 	}
 	writeProxyJSON(w, http.StatusOK, clientResp)
-	return true, false, resp.StatusCode, upstream, nil
+	result.OK = true
+	return result
 }
 
-func (s *ProxyServer) recordProxyTrace(r *http.Request, body map[string]any, opts forwardOpts, p *core.Provider, clientModel, upstreamModel, upstream string, statusCode int, success bool, ferr error) {
+func (s *ProxyServer) recordProxyTrace(r *http.Request, body map[string]any, opts forwardOpts, p *core.Provider, clientModel, upstreamModel string, identity proxyRequestIdentity, attemptID, parentAttemptID string, attempt int, result proxyAttemptResult) {
 	if s.st == nil || p == nil {
 		return
 	}
 	trace := core.ProxyTrace{
+		ID:               attemptID,
+		RequestID:        identity.RequestID,
+		TraceID:          identity.TraceID,
+		ParentSpanID:     identity.ParentSpanID,
+		Attempt:          attempt,
+		ParentAttemptID:  parentAttemptID,
 		Timestamp:        time.Now().UTC(),
+		StartedAt:        result.StartedAt,
 		Tool:             opts.tool,
 		ProviderID:       p.ID,
 		ProviderName:     p.Name,
 		ClientProtocol:   opts.clientProto,
-		UpstreamProtocol: upstream,
+		UpstreamProtocol: result.Upstream,
 		ClientModel:      clientModel,
 		UpstreamModel:    upstreamModel,
-		StatusCode:       statusCode,
-		Success:          success,
+		StatusCode:       result.StatusCode,
+		Success:          result.OK,
 		SessionID:        traceSessionID(r, body),
 		ProjectDir:       traceProjectDir(r, body),
+		TTFTMs:           result.TTFT.Milliseconds(),
+		DurationMs:       result.Duration.Milliseconds(),
+		StreamComplete:   result.StreamComplete,
+		FinishReason:     result.FinishReason,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		CacheReadTokens:  result.CacheReadTokens,
+		CacheWriteTokens: result.CacheWriteTokens,
+		RequestBytes:     result.RequestBytes,
+		ResponseBytes:    result.ResponseBytes,
 	}
-	if ferr != nil {
-		trace.Error = ferr.Error()
+	rawError := ""
+	if result.Err != nil {
+		rawError = result.Err.Error()
+		trace.Error = "Proxy request failed"
 	}
+	trace.CostUSD = s.estimateTraceCost(trace)
 	traceCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 	defer cancel()
 	if err := s.st.InsertProxyTrace(traceCtx, trace); err != nil {
 		s.log.Warn("proxy trace insert failed", "tool", opts.tool, "provider", p.ID, "err", err)
+		return
+	}
+	requestBody, _ := json.Marshal(body)
+	responseCapture := result.ResponseBody
+	if len(responseCapture) == 0 && rawError != "" {
+		responseCapture = []byte(rawError)
+	}
+	if err := s.observeTrace(traceCtx, trace, requestBody, responseCapture); err != nil {
+		s.log.Warn("proxy observation publish failed", "tool", opts.tool, "provider", p.ID, "err", err)
 	}
 }
 

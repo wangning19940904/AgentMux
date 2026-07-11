@@ -1,11 +1,46 @@
 package cliagents
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/agentnexus/agentnexus/core"
 )
+
+func TestCodexAppServerUsesPrivateJSONOTLPOverrides(t *testing.T) {
+	ctx := core.WithObservationChildTelemetry(context.Background(), core.ObservationChildTelemetry{
+		Endpoint: "http://127.0.0.1:8765/api/v1/observability/otlp", Token: "local-token", CaptureContent: true,
+	})
+	args := codexAppServerArgs(ctx)
+	joined := strings.Join(args, " ")
+	for _, expected := range []string{
+		`otel.trace_exporter={"otlp-http"={endpoint="http://127.0.0.1:8765/api/v1/observability/otlp/v1/traces",protocol="json"`,
+		`Authorization="Bearer local-token"`, `otel.log_user_prompt=true`, `otel.exporter="none"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("args missing %q: %v", expected, args)
+		}
+	}
+	if len(args) < 3 || args[len(args)-3] != "app-server" || args[len(args)-1] != "stdio://" {
+		t.Fatalf("app-server args = %v", args)
+	}
+}
+
+func TestUnavailableCodexThreadError(t *testing.T) {
+	missing := fmt.Errorf(`codex app-server RPC error: {"code":-32600,"message":"no rollout found for thread id 019f4c48"}`)
+	if !errors.Is(unavailableCodexThreadError(missing), core.ErrNativeSessionUnavailable) {
+		t.Fatal("missing Codex rollout must be marked as an unavailable native session")
+	}
+
+	other := errors.New("codex app-server RPC error: unauthorized")
+	if got := unavailableCodexThreadError(other); got != other {
+		t.Fatalf("other Codex errors must be returned unchanged: %v", got)
+	}
+}
 
 func TestModelArgsForVerifiedCLIs(t *testing.T) {
 	tests := []struct {
@@ -66,6 +101,22 @@ func TestCodexAppServerMapperDoesNotExposeRawReasoning(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerMapperDoesNotEmitThinkingPlaceholder(t *testing.T) {
+	m := &codexEventMapper{}
+	for _, notification := range []struct {
+		method string
+		params map[string]any
+	}{
+		{"item/started", map[string]any{"item": map[string]any{"type": "reasoning"}}},
+		{"item/reasoning/summaryPartAdded", map[string]any{}},
+	} {
+		events, done, err := m.mapNotification(notification.method, notification.params)
+		if err != nil || done || len(events) != 0 {
+			t.Fatalf("%s should not render a thinking placeholder: events=%#v done=%t err=%v", notification.method, events, done, err)
+		}
+	}
+}
+
 func TestCodexModelsFromResultUsesNativeCatalog(t *testing.T) {
 	models := codexModelsFromResult(map[string]any{"data": []any{
 		map[string]any{"id": "gpt-5.6-sol", "model": "gpt-5.6-sol"},
@@ -107,5 +158,169 @@ func TestCodexCatalogExtractsNativeReasoningAndServiceCapabilities(t *testing.T)
 	}
 	if got := codexServiceTiersFromResult(result); !reflect.DeepEqual(got, []string{"default", "priority"}) {
 		t.Fatalf("service capabilities = %#v", got)
+	}
+}
+
+func TestCodexAppServerMapperCorrelatesParallelToolsOutOfOrder(t *testing.T) {
+	m := &codexEventMapper{}
+	start := func(id, command string, startedAt float64) *core.Event {
+		events, _, err := m.mapNotification("item/started", map[string]any{
+			"threadId": "thread-1", "turnId": "turn-1", "startedAtMs": startedAt,
+			"item": map[string]any{"id": id, "type": "commandExecution", "command": command, "status": "inProgress"},
+		})
+		if err != nil || len(events) != 1 {
+			t.Fatalf("start %s: events=%#v err=%v", id, events, err)
+		}
+		return events[0]
+	}
+	a := start("call-a", "cat a", 1000)
+	b := start("call-b", "cat b", 1100)
+	if a.ToolCallID != "call-a" || b.ToolCallID != "call-b" || a.ToolInputRaw != "cat a" || b.ToolInputRaw != "cat b" {
+		t.Fatalf("starts lost ids/raw input: a=%#v b=%#v", a, b)
+	}
+	updates, _, _ := m.mapNotification("item/commandExecution/outputDelta", map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1", "itemId": "call-b", "delta": "streamed b output",
+	})
+	if len(updates) != 1 || updates[0].ToolCallID != "call-b" || updates[0].ToolResultRaw != "streamed b output" || updates[0].ToolResult != "" {
+		t.Fatalf("tool output update = %#v", updates)
+	}
+
+	complete := func(id, output string, completedAt float64) *core.Event {
+		events, _, err := m.mapNotification("item/completed", map[string]any{
+			"threadId": "thread-1", "turnId": "turn-1", "completedAtMs": completedAt,
+			"item": map[string]any{"id": id, "type": "commandExecution", "status": "completed", "exitCode": float64(0), "aggregatedOutput": output},
+		})
+		if err != nil || len(events) != 1 {
+			t.Fatalf("complete %s: events=%#v err=%v", id, events, err)
+		}
+		return events[0]
+	}
+	resultB := complete("call-b", "b result", 1300)
+	resultA := complete("call-a", "a result", 1600)
+	if resultB.ToolCallID != "call-b" || resultA.ToolCallID != "call-a" {
+		t.Fatalf("out-of-order correlation failed: b=%#v a=%#v", resultB, resultA)
+	}
+	if resultB.DurationMs != 200 || resultA.DurationMs != 600 {
+		t.Fatalf("durations: b=%d a=%d", resultB.DurationMs, resultA.DurationMs)
+	}
+	if resultB.ToolName != "" || resultA.ToolName != "" {
+		t.Fatal("completion events must remain result-only for legacy renderers")
+	}
+	if resultB.ToolResultRaw == "" || resultA.ToolResultRaw == "" {
+		t.Fatal("full adapter-visible results must be retained")
+	}
+}
+
+func TestCodexAppServerMapperEmitsCumulativeUsageDeltas(t *testing.T) {
+	m := &codexEventMapper{requestedModel: "gpt-5.5", resolvedModel: "gpt-5.5"}
+	notification := func(input, cached, output, reasoning, total float64) []*core.Event {
+		events, done, err := m.mapNotification("thread/tokenUsage/updated", map[string]any{
+			"threadId": "thread-1", "turnId": "turn-1",
+			"tokenUsage": map[string]any{
+				"total": map[string]any{"inputTokens": input, "cachedInputTokens": cached, "outputTokens": output, "reasoningOutputTokens": reasoning, "totalTokens": total},
+				"last":  map[string]any{},
+			},
+		})
+		if done || err != nil {
+			t.Fatalf("usage notification: done=%t err=%v", done, err)
+		}
+		return events
+	}
+
+	first := notification(100, 40, 20, 5, 120)
+	if len(first) != 1 || first[0].Usage == nil || first[0].Usage.InputTokens != 60 || first[0].Usage.CacheReadTokens != 40 || first[0].Usage.TotalTokens != 120 {
+		t.Fatalf("first delta = %#v", first)
+	}
+	if got := first[0].Usage.InputTokens + first[0].Usage.CacheReadTokens + first[0].Usage.OutputTokens; got != first[0].Usage.TotalTokens {
+		t.Fatalf("first normalized token sum = %d, total = %d", got, first[0].Usage.TotalTokens)
+	}
+	if duplicate := notification(100, 40, 20, 5, 120); len(duplicate) != 0 {
+		t.Fatalf("duplicate cumulative usage must be suppressed: %#v", duplicate)
+	}
+	second := notification(160, 70, 35, 8, 195)
+	if len(second) != 1 || second[0].Usage.InputTokens != 30 || second[0].Usage.CacheReadTokens != 30 ||
+		second[0].Usage.OutputTokens != 15 || second[0].Usage.ReasoningTokens != 3 || second[0].Usage.TotalTokens != 75 {
+		t.Fatalf("second delta = %#v", second)
+	}
+	if got := second[0].Usage.InputTokens + second[0].Usage.CacheReadTokens + second[0].Usage.OutputTokens; got != second[0].Usage.TotalTokens {
+		t.Fatalf("second normalized token sum = %d, total = %d", got, second[0].Usage.TotalTokens)
+	}
+}
+
+func TestCodexAppServerMapperRerouteFailureAndCompaction(t *testing.T) {
+	m := &codexEventMapper{requestedModel: "gpt-5.5", resolvedModel: "gpt-5.5"}
+	rerouted, _, _ := m.mapNotification("model/rerouted", map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1", "fromModel": "gpt-5.5", "toModel": "gpt-5.5-safe", "reason": "highRiskCyberActivity",
+	})
+	if len(rerouted) != 1 || rerouted[0].Usage == nil || rerouted[0].Usage.ResolvedModel != "gpt-5.5-safe" || rerouted[0].Status != "rerouted" {
+		t.Fatalf("reroute = %#v", rerouted)
+	}
+
+	started, _, _ := m.mapNotification("item/started", map[string]any{
+		"turnId": "turn-1", "startedAtMs": float64(1000), "item": map[string]any{"id": "compact-1", "type": "contextCompaction"},
+	})
+	completed, _, _ := m.mapNotification("item/completed", map[string]any{
+		"turnId": "turn-1", "completedAtMs": float64(1250), "item": map[string]any{"id": "compact-1", "type": "contextCompaction"},
+	})
+	if len(started) != 1 || len(completed) != 1 || started[0].Type != core.EventCompaction || completed[0].DurationMs != 250 {
+		t.Fatalf("compaction lifecycle: started=%#v completed=%#v", started, completed)
+	}
+
+	failed, done, err := m.mapNotification("turn/completed", map[string]any{
+		"turn": map[string]any{"id": "turn-1", "status": "failed", "durationMs": float64(900), "error": map[string]any{"message": "model failed"}},
+	})
+	if !done || err == nil || len(failed) != 1 || failed[0].Status != "failed" || failed[0].DurationMs != 900 {
+		t.Fatalf("failure = %#v done=%t err=%v", failed, done, err)
+	}
+}
+
+func TestCodexAppServerMapperTracksRetryAttempts(t *testing.T) {
+	m := &codexEventMapper{threadID: "thread-1", turnID: "turn-1", requestedModel: "gpt-5.5", resolvedModel: "gpt-5.5", retryAttempt: 1}
+	events, done, err := m.mapNotification("error", map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1", "willRetry": true,
+		"error": map[string]any{"message": "upstream overloaded"},
+	})
+	if done || err != nil || len(events) != 2 {
+		t.Fatalf("retry events=%#v done=%t err=%v", events, done, err)
+	}
+	if events[0].Usage.Attempt != 1 || events[1].Usage.Attempt != 2 || events[0].Usage.RequestID != events[1].Usage.RequestID {
+		t.Fatalf("retry attempt correlation = %#v", events)
+	}
+
+	usage, _, _ := m.mapNotification("thread/tokenUsage/updated", map[string]any{
+		"threadId": "thread-1", "turnId": "turn-1",
+		"tokenUsage": map[string]any{
+			"total": map[string]any{"inputTokens": float64(20), "cachedInputTokens": float64(5), "outputTokens": float64(4), "totalTokens": float64(24)},
+			"last":  map[string]any{"inputTokens": float64(20), "cachedInputTokens": float64(5), "outputTokens": float64(4), "totalTokens": float64(24)},
+		},
+	})
+	if len(usage) != 1 || usage[0].Usage.Attempt != 2 || usage[0].Usage.RequestID != events[0].Usage.RequestID {
+		t.Fatalf("retried usage = %#v", usage)
+	}
+}
+
+func TestCodexAppServerMapperUsesLastUsageAsResumeBaseline(t *testing.T) {
+	m := &codexEventMapper{turnID: "turn-1", requestedModel: "gpt-5.5", resolvedModel: "gpt-5.5"}
+	events, _, _ := m.mapNotification("thread/tokenUsage/updated", map[string]any{
+		"turnId": "turn-1",
+		"tokenUsage": map[string]any{
+			"total": map[string]any{"inputTokens": float64(1000), "cachedInputTokens": float64(500), "outputTokens": float64(100), "totalTokens": float64(1100)},
+			"last":  map[string]any{"inputTokens": float64(20), "cachedInputTokens": float64(5), "outputTokens": float64(4), "totalTokens": float64(24)},
+		},
+	})
+	if len(events) != 1 || events[0].Usage == nil || events[0].Usage.InputTokens != 15 ||
+		events[0].Usage.CacheReadTokens != 5 || events[0].Usage.OutputTokens != 4 || events[0].Usage.TotalTokens != 24 {
+		t.Fatalf("resumed usage must exclude historic cumulative totals: %#v", events)
+	}
+}
+
+func TestGenericCLIEventsDeclarePartialCoverage(t *testing.T) {
+	for name, event := range map[string]*core.Event{
+		"json":  jsonTextMapper([]byte(`{"text":"hello"}`)),
+		"plain": partialPlainTextMapper([]byte("hello")),
+	} {
+		if event == nil || event.Metadata["coverage"] != "partial" {
+			t.Fatalf("%s event = %#v", name, event)
+		}
 	}
 }

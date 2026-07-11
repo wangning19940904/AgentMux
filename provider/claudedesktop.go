@@ -297,10 +297,37 @@ func applyClaudeDesktopProfile(paths claudeDesktopPaths, profile map[string]any)
 	if err := writeClaudeDesktopDeploymentMode(paths.threepConfigPath, "3p"); err != nil {
 		return err
 	}
-	if err := writeJSONObject(paths.profilePath, profile); err != nil {
+	if err := writeClaudeDesktopProfile(paths.profilePath, profile); err != nil {
 		return err
 	}
 	return writeClaudeDesktopMeta(paths.metaPath, claudeDesktopProfileID, claudeDesktopProfileName)
+}
+
+// writeClaudeDesktopProfile owns the documented AgentNexus profile keys while
+// retaining unknown keys another local integration may have added. This is the
+// three-way merge side of takeover's file lock + ownership CAS: a provider
+// hot-switch must not erase unrelated Flux/user profile metadata merely
+// because the desired AgentNexus profile is rebuilt from scratch.
+func writeClaudeDesktopProfile(path string, profile map[string]any) error {
+	existing := readJSONObject(path)
+	for _, key := range []string{
+		"coworkEgressAllowedHosts",
+		"disableDeploymentModeChooser",
+		"id",
+		"name",
+		"isActive",
+		"inferenceGatewayBaseUrl",
+		"inferenceGatewayApiKey",
+		"inferenceGatewayAuthScheme",
+		"inferenceProvider",
+		"inferenceModels",
+	} {
+		delete(existing, key)
+	}
+	for key, value := range profile {
+		existing[key] = value
+	}
+	return writeJSONObject(path, existing)
 }
 
 // restoreClaudeDesktopOfficialAtPaths mirrors restore_official_at_paths_inner.

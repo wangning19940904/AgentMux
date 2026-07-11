@@ -9,10 +9,10 @@ import (
 
 // Report is the aggregated usage view returned to clients.
 type Report struct {
-	Period  string        `json:"period"`
-	Totals  Totals        `json:"totals"`
-	Buckets []Bucket      `json:"buckets"`
-	ByModel []ModelStat   `json:"by_model"`
+	Period   string       `json:"period"`
+	Totals   Totals       `json:"totals"`
+	Buckets  []Bucket     `json:"buckets"`
+	ByModel  []ModelStat  `json:"by_model"`
 	BySource []SourceStat `json:"by_source"`
 }
 
@@ -28,8 +28,8 @@ type Totals struct {
 
 // Bucket is one period bucket (a day/week/month/session/block).
 type Bucket struct {
-	Key     string  `json:"key"`
-	Totals  Totals  `json:"totals"`
+	Key    string `json:"key"`
+	Totals Totals `json:"totals"`
 }
 
 // ModelStat aggregates by model.
@@ -107,7 +107,11 @@ func addTotals(t *Totals, rec core.UsageRecord) {
 	t.CacheReadTokens += rec.CacheReadTokens
 	t.CacheWriteTokens += rec.CacheWriteTokens
 	t.CostUSD += rec.CostUSD
-	t.Records++
+	requests := rec.Requests
+	if requests <= 0 {
+		requests = 1
+	}
+	t.Records += int(requests)
 }
 
 func totalTokens(rec core.UsageRecord) int64 {

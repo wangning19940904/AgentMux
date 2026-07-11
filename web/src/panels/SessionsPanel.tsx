@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clipboard, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
+import { Activity, Clipboard, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
 import { AgentSession, ProxyTrace, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -160,6 +160,14 @@ export function SessionsPanel() {
                     <p className="muted mono">{selected.session_id}</p>
                   </div>
                   <div className="control-row">
+                    <a
+                      className="ghost-action"
+                      href={`#observability/traces?session_id=${encodeURIComponent(selected.session_id)}`}
+                      title={t("sessions.viewTraces")}
+                    >
+                      <Activity size={15} />
+                      {t("sessions.viewTraces")}
+                    </a>
                     {selected.resume_command && (
                       <button className="ghost-action" onClick={() => copy(selected.resume_command || "")} title={t("sessions.copy")}>
                         <Clipboard size={15} />

@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { ProvidersPanel } from "./panels/ProvidersPanel";
 import { UsagePanel } from "./panels/UsagePanel";
+import { ObservabilityPanel } from "./panels/ObservabilityPanel";
 import { AgentsPanel } from "./panels/AgentsPanel";
 import { ConnectPanel } from "./panels/ConnectPanel";
 import { FrameworksPanel } from "./panels/FrameworksPanel";
@@ -48,6 +49,7 @@ type Tab =
   | "connect"
   | "tools"
   | "frameworks"
+  | "observability"
   | "usage"
   | "providers"
   | "gateway"
@@ -64,6 +66,7 @@ const TABS: { id: Tab; labelKey: string; icon: typeof LayoutGrid }[] = [
   { id: "tools", labelKey: "nav.tools", icon: Wrench },
   { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
   { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
+  { id: "observability", labelKey: "nav.observability", icon: Activity },
   { id: "usage", labelKey: "nav.usage", icon: Gauge },
   { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
   { id: "memory", labelKey: "nav.memory", icon: Brain },
@@ -96,8 +99,17 @@ function initialThemeMode(): ThemeMode {
   return "system";
 }
 
+function tabFromHash(): Tab | null {
+  const value = window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0];
+  return TABS.some((item) => item.id === value) ? value as Tab : null;
+}
+
+function initialTab(): Tab {
+  return tabFromHash() ?? "agents";
+}
+
 export function App() {
-  const [tab, setTab] = useState<Tab>("agents");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [language, setLanguage] = useState<Language>(initialLanguage);
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
@@ -120,11 +132,29 @@ export function App() {
     return () => media.removeEventListener("change", applyTheme);
   }, [themeMode]);
 
+  useEffect(() => {
+    const onHashChange = () => {
+      const hashTab = tabFromHash();
+      setTab((current) => hashTab ?? (current === "observability" ? "agents" : current));
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    if (next === "observability") {
+      if (!window.location.hash.startsWith("#observability")) window.location.hash = "#observability/overview";
+    } else if (window.location.hash.startsWith("#observability")) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
+  }
+
   return (
     <I18nProvider language={language}>
       <Shell
         tab={tab}
-        setTab={setTab}
+        setTab={selectTab}
         language={language}
         setLanguage={setLanguage}
         themeMode={themeMode}
@@ -250,6 +280,7 @@ function Shell({
             {tab === "connect" && <ConnectPanel />}
             {tab === "tools" && <ToolsPanel />}
             {tab === "frameworks" && <FrameworksPanel />}
+            {tab === "observability" && <ObservabilityPanel />}
             {tab === "usage" && <UsagePanel />}
             {tab === "sessions" && <SessionsPanel />}
             {tab === "providers" && <ProvidersPanel />}

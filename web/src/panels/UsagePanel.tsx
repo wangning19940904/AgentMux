@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Activity } from "lucide-react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -19,16 +20,22 @@ export function UsagePanel() {
             <h2>{t("usage.title")}</h2>
             <p className="subtle-copy">{t("usage.period")}: {t(`period.${period}`)}</p>
           </div>
-          <label className="control-row">
-            <span className="muted">{t("usage.period")}</span>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)}>
-              {PERIODS.map((p) => (
-                <option key={p} value={p}>
-                  {t(`period.${p}`)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="control-row">
+            <a className="ghost-action" href="#observability/traces">
+              <Activity size={14} />
+              {t("usage.viewTraces")}
+            </a>
+            <label className="control-row">
+              <span className="muted">{t("usage.period")}</span>
+              <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+                {PERIODS.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`period.${p}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
       </section>
 

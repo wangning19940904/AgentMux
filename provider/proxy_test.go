@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,6 +57,26 @@ func latestTrace(t *testing.T, st *store.Store, tool string) core.ProxyTrace {
 		t.Fatalf("trace count = %d, want 1", len(traces))
 	}
 	return traces[0]
+}
+
+func TestProxyTraceStoresGenericErrorAndForwardsDetailToEncryptedObserver(t *testing.T) {
+	srv, st := newTestProxy(t)
+	var observedBody []byte
+	var observedTrace core.ProxyTrace
+	srv.SetTraceObserver(func(_ context.Context, trace core.ProxyTrace, _, responseBody []byte) error {
+		observedTrace = trace
+		observedBody = append([]byte(nil), responseBody...)
+		return nil
+	})
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/v1/messages", nil)
+	provider := &core.Provider{ID: "provider", Name: "Provider"}
+	srv.recordProxyTrace(request, map[string]any{"model": "model"}, forwardOpts{tool: "claudecode", clientProto: protoAnthropic},
+		provider, "model", "model", proxyRequestIdentity{RequestID: "request"}, "attempt", "", 1,
+		proxyAttemptResult{Err: errors.New("upstream-secret-error"), Upstream: protoAnthropic})
+	stored := latestTrace(t, st, "claudecode")
+	if stored.Error != "Proxy request failed" || observedTrace.Error != "Proxy request failed" || !bytes.Contains(observedBody, []byte("upstream-secret-error")) {
+		t.Fatalf("stored=%+v observed=%+v body=%q", stored, observedTrace, observedBody)
+	}
 }
 
 func TestProxyAnthropicPassthroughInjectsAuth(t *testing.T) {

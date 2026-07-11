@@ -2,7 +2,7 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,9 +14,9 @@ import (
 )
 
 // takeover.go implements cc-switch's Local Routing takeover lifecycle:
-// enabling routes a tool's live config at the local proxy (with a backup of
-// the original), switching while enabled is a DB-only hot switch, and
-// disabling restores the backup (or rebuilds live from the active provider).
+// enabling routes a tool's live config at the local proxy, switching advances
+// only the owned live pointers required by that host, and disabling restores
+// those pointers while preserving third-party state.
 
 // takeoverTools are the canonical tools local routing can take over.
 var takeoverTools = map[string]bool{
@@ -25,10 +25,14 @@ var takeoverTools = map[string]bool{
 	"claude-desktop": true,
 }
 
-// liveBackupBlob is the JSON stored in proxy_live_backup: file path -> content
-// (null = file did not exist).
+// liveBackupBlob is the versioned takeover ownership journal. Files carries a
+// temporary before image only during the crash-safe write window; finalized
+// v2 state keeps pointer-level Ownership entries and clears Files.
 type liveBackupBlob struct {
-	Files map[string]*string `json:"files"`
+	Version   int                      `json:"version,omitempty"`
+	InstallID string                   `json:"install_id,omitempty"`
+	Files     map[string]*string       `json:"files,omitempty"`
+	Ownership map[string]ownedLiveFile `json:"ownership,omitempty"`
 }
 
 // takeoverLiveFiles lists the live files a tool's takeover touches.
@@ -51,43 +55,11 @@ func takeoverLiveFiles(home, tool string, p *core.Provider) ([]string, error) {
 }
 
 func snapshotLiveFiles(files []string) (string, error) {
-	blob := liveBackupBlob{Files: map[string]*string{}}
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if os.IsNotExist(err) {
-			blob.Files[f] = nil
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		content := string(data)
-		blob.Files[f] = &content
-	}
-	raw, err := json.Marshal(blob)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
+	return makeLiveOwnershipSnapshot(files)
 }
 
 func restoreLiveFiles(blobRaw string) error {
-	var blob liveBackupBlob
-	if err := json.Unmarshal([]byte(blobRaw), &blob); err != nil {
-		return fmt.Errorf("corrupt live backup: %w", err)
-	}
-	for path, content := range blob.Files {
-		if content == nil {
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			continue
-		}
-		if err := store.AtomicWrite(path, []byte(*content), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return restoreOwnedLiveFiles(blobRaw)
 }
 
 // liveAlreadyProxied detects a live config that already points at a local
@@ -272,11 +244,7 @@ func (s *Service) switchRouteWithTakeover(ctx context.Context, route core.Provid
 	}
 	if cfg.Enabled {
 		if canonical == "claude-desktop" {
-			token, err := s.st.GetOrCreateGatewayToken(ctx)
-			if err != nil {
-				return err
-			}
-			if err := WriteClaudeDesktopProxyProfile(effective, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
+			if err := s.rewriteClaudeDesktopTakeoverProfile(ctx, effective); err != nil {
 				return err
 			}
 		}
@@ -303,12 +271,9 @@ func (s *Service) switchRoute(ctx context.Context, route core.ProviderRoute, wri
 		effective := core.ProviderWithRouteMeta(p, route.Meta)
 		if canonical == "claude-desktop" {
 			// The Desktop profile lists per-provider model routes, so a hot
-			// switch still rewrites the profile (gateway URL/token stable).
-			token, err := s.st.GetOrCreateGatewayToken(ctx)
-			if err != nil {
-				return err
-			}
-			if err := WriteClaudeDesktopProxyProfile(effective, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
+			// switch still rewrites the profile (gateway URL/token stable). The
+			// rewrite advances the per-key ownership journal under the same locks.
+			if err := s.rewriteClaudeDesktopTakeoverProfile(ctx, effective); err != nil {
 				return err
 			}
 		}
@@ -404,35 +369,91 @@ func (s *Service) EnableTakeover(ctx context.Context, tool string) error {
 	if err != nil {
 		return err
 	}
-	if _, exists, err := s.st.GetLiveBackup(ctx, canonical); err != nil {
+	existingBlob, hadBackup, err := s.st.GetLiveBackup(ctx, canonical)
+	if err != nil {
 		return err
-	} else if !exists && !liveAlreadyProxied(files) {
-		blob, err := snapshotLiveFiles(files)
+	}
+	journalFiles := []string(nil)
+	if hadBackup {
+		journalFiles, err = liveBackupPaths(existingBlob)
 		if err != nil {
-			return err
-		}
-		if err := s.st.SaveLiveBackup(ctx, canonical, blob); err != nil {
 			return err
 		}
 	}
+	lockFiles := mergeLiveFilePaths(files, journalFiles, []string{takeoverJournalLockPath(home, canonical)})
 	proxyURL := s.proxy.BaseURL()
-	switch canonical {
-	case "claudecode":
-		if err := writeClaudeTakeoverConfig(home, active, proxyURL); err != nil {
-			return err
-		}
-	case "codex":
-		if err := writeCodexTakeoverConfig(home, active, proxyURL); err != nil {
-			return err
-		}
-	case "claude-desktop":
-		token, err := s.st.GetOrCreateGatewayToken(ctx)
+	if err := withLiveFileLocks(ctx, lockFiles, func() error {
+		currentBlob, hasBackup, err := s.st.GetLiveBackup(ctx, canonical)
 		if err != nil {
 			return err
 		}
-		if err := WriteClaudeDesktopProxyProfile(active, proxyURL+"/claude-desktop", token); err != nil {
+		if hasBackup != hadBackup || (hasBackup && currentBlob != existingBlob) {
+			return fmt.Errorf("takeover ownership journal changed while waiting for file lock")
+		}
+		blob := currentBlob
+		if !hasBackup {
+			if err := detectForeignLoopbackRouting(files, proxyURL); err != nil {
+				return err
+			}
+			var err error
+			blob, err = snapshotLiveFiles(files)
+			if err != nil {
+				return err
+			}
+			// Persist the before image before any shared file changes. A crash
+			// can therefore always recover at least the exact prior file.
+			if err := s.st.SaveLiveBackup(ctx, canonical, blob); err != nil {
+				return err
+			}
+		} else {
+			if err := validateLiveOwnershipSnapshot(blob); err != nil {
+				return err
+			}
+			blob, err = extendLiveOwnershipSnapshot(blob, files)
+			if err != nil {
+				return err
+			}
+			// Persist any newly-enrolled target's before image before changing it.
+			if blob != currentBlob {
+				if err := s.st.SaveLiveBackup(ctx, canonical, blob); err != nil {
+					return err
+				}
+			}
+		}
+		before, err := captureLiveFileStates(files)
+		if err != nil {
 			return err
 		}
+		switch canonical {
+		case "claudecode":
+			if err := writeClaudeTakeoverConfig(home, active, proxyURL); err != nil {
+				return err
+			}
+		case "codex":
+			if err := writeCodexTakeoverConfig(home, active, proxyURL); err != nil {
+				return err
+			}
+		case "claude-desktop":
+			token, err := s.st.GetOrCreateGatewayToken(ctx)
+			if err != nil {
+				return err
+			}
+			if err := WriteClaudeDesktopProxyProfile(active, proxyURL+"/claude-desktop", token); err != nil {
+				return err
+			}
+		}
+		finalized, err := updateLiveOwnershipAfterRewrite(blob, before, files)
+		if err != nil {
+			return err
+		}
+		// Re-read and verify every owned value before committing the new journal.
+		if err := validateLiveOwnershipSnapshot(finalized); err != nil {
+			return err
+		}
+		return s.st.SaveLiveBackup(ctx, canonical, finalized)
+	}); err != nil {
+		_ = s.stopProxyIfIdle(ctx)
+		return err
 	}
 	cfg, err := s.st.GetProxyToolConfig(ctx, canonical)
 	if err != nil {
@@ -455,7 +476,25 @@ func (s *Service) DisableTakeover(ctx context.Context, tool string) error {
 	}
 	restored := false
 	if hasBackup {
-		if err := restoreLiveFiles(blob); err != nil {
+		files, err := liveBackupPaths(blob)
+		if err != nil {
+			return err
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		files = mergeLiveFilePaths(files, []string{takeoverJournalLockPath(home, canonical)})
+		if err := withLiveFileLocks(ctx, files, func() error {
+			currentBlob, current, err := s.st.GetLiveBackup(ctx, canonical)
+			if err != nil {
+				return err
+			}
+			if !current || currentBlob != blob {
+				return fmt.Errorf("takeover ownership journal changed while waiting for file lock")
+			}
+			return restoreLiveFiles(currentBlob)
+		}); err != nil {
 			return err
 		}
 		if err := s.st.DeleteLiveBackup(ctx, canonical); err != nil {
@@ -549,4 +588,90 @@ func (s *Service) activeProviderFor(ctx context.Context, canonical string) (*cor
 		}
 	}
 	return nil, nil
+}
+
+// rewriteClaudeDesktopTakeoverProfile performs the only takeover hot-switch
+// which must touch live files. It uses a stable per-tool lock plus all old and
+// new target-file locks, re-reads the journal after locking (CAS), rejects
+// owned-key drift, and advances only the pointers changed by this rewrite.
+func (s *Service) rewriteClaudeDesktopTakeoverProfile(ctx context.Context, p *core.Provider) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	files, err := takeoverLiveFiles(home, "claude-desktop", p)
+	if err != nil {
+		return err
+	}
+	existingBlob, hasBackup, err := s.st.GetLiveBackup(ctx, "claude-desktop")
+	if err != nil {
+		return err
+	}
+	if !hasBackup {
+		return errors.New("claude-desktop takeover is enabled without an ownership journal; refusing live profile rewrite")
+	}
+	journalFiles, err := liveBackupPaths(existingBlob)
+	if err != nil {
+		return err
+	}
+	lockFiles := mergeLiveFilePaths(files, journalFiles, []string{takeoverJournalLockPath(home, "claude-desktop")})
+	return withLiveFileLocks(ctx, lockFiles, func() error {
+		currentBlob, current, err := s.st.GetLiveBackup(ctx, "claude-desktop")
+		if err != nil {
+			return err
+		}
+		if !current || currentBlob != existingBlob {
+			return errors.New("takeover ownership journal changed while waiting for file lock")
+		}
+		if err := validateLiveOwnershipSnapshot(currentBlob); err != nil {
+			return err
+		}
+		currentBlob, err = extendLiveOwnershipSnapshot(currentBlob, files)
+		if err != nil {
+			return err
+		}
+		if currentBlob != existingBlob {
+			if err := s.st.SaveLiveBackup(ctx, "claude-desktop", currentBlob); err != nil {
+				return err
+			}
+		}
+		before, err := captureLiveFileStates(files)
+		if err != nil {
+			return err
+		}
+		token, err := s.st.GetOrCreateGatewayToken(ctx)
+		if err != nil {
+			return err
+		}
+		if err := WriteClaudeDesktopProxyProfile(p, s.proxy.BaseURL()+"/claude-desktop", token); err != nil {
+			return err
+		}
+		updated, err := updateLiveOwnershipAfterRewrite(currentBlob, before, files)
+		if err != nil {
+			return err
+		}
+		if err := validateLiveOwnershipSnapshot(updated); err != nil {
+			return err
+		}
+		return s.st.SaveLiveBackup(ctx, "claude-desktop", updated)
+	})
+}
+
+func takeoverJournalLockPath(home, tool string) string {
+	return filepath.Join(home, ".agentnexus", "locks", "takeover-"+tool)
+}
+
+func mergeLiveFilePaths(groups ...[]string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, group := range groups {
+		for _, path := range group {
+			if path == "" || seen[path] {
+				continue
+			}
+			seen[path] = true
+			result = append(result, path)
+		}
+	}
+	return result
 }

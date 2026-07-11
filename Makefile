@@ -13,9 +13,12 @@
 BINARY      := anx
 ALIAS       := agent-nexus
 CMD         := ./cmd/anx
+HOOK_BINARY := agentnexus-hook
+HOOK_CMD    := ./cmd/agentnexus-hook
 DIST        := dist
 VERSION     ?= 0.1.0
 LDFLAGS     := -s -w -X main.version=$(VERSION)
+HOOK_LDFLAGS := -s -w
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 WAILS       ?= $(HOME)/go/bin/wails
 
@@ -25,6 +28,7 @@ all: release
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@ln -sf $(BINARY) $(ALIAS)
 
 web:
@@ -33,6 +37,7 @@ web:
 # Release build with the WebUI embedded (requires `make web` first).
 release: web
 	go build -tags embedweb -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@ln -sf $(BINARY) $(ALIAS)
 
 # Cross-compile the CLI with embedded WebUI for every target platform.
@@ -42,22 +47,28 @@ cross: web
 		os=$${p%/*}; arch=$${p#*/}; \
 		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		out="$(DIST)/$(BINARY)-$(VERSION)-$$os-$$arch$$ext"; \
+		hook_out="$(DIST)/$(HOOK_BINARY)-$(VERSION)-$$os-$$arch$$ext"; \
 		echo "building $$out"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 			go build -tags embedweb -ldflags "$(LDFLAGS)" -o "$$out" $(CMD) || exit 1; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -ldflags "$(HOOK_LDFLAGS)" -o "$$hook_out" $(HOOK_CMD) || exit 1; \
 	done
 	@echo "artifacts in $(DIST)/"
 
 # Wails desktop app. Requires: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 # and a frontend symlink: ln -s ../web desktop/frontend
 desktop: web
+	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
 	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		macos_dir="desktop/build/bin/agentnexus-desktop.app/Contents/MacOS"; \
 		if [ -d "$$macos_dir" ]; then \
 			cp macos-menubar/AgentNexusMenuBar "$$macos_dir/AgentNexusMenuBar"; \
+			cp $(HOOK_BINARY) "$$macos_dir/$(HOOK_BINARY)"; \
 			codesign --force --sign - "$$macos_dir/AgentNexusMenuBar"; \
+			codesign --force --sign - "$$macos_dir/$(HOOK_BINARY)"; \
 			codesign --force --deep --sign - "desktop/build/bin/agentnexus-desktop.app"; \
 		fi; \
 	fi
@@ -77,7 +88,7 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -rf $(DIST) $(BINARY) $(ALIAS) web/dist macos-menubar/AgentNexusMenuBar
+	rm -rf $(DIST) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentNexusMenuBar
 
 # Codesign + notarize macOS artifacts. Set these env vars first:
 #   MACOS_SIGN_IDENTITY  e.g. "Developer ID Application: Your Name (TEAMID)"

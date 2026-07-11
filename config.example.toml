@@ -64,6 +64,30 @@ sources = ["claude", "codex", "cursor", "gemini"]
 offline = false
 # cache_dir = "~/.cache/agentnexus"
 
+# ---- Agent observability ----
+# Full content is redacted, compressed and AES-256-GCM encrypted. On macOS the
+# wrapping key lives in Keychain; without a secure key other platforms fall
+# back to metadata-only capture.
+[observability]
+enabled = true
+capture_content = "full" # off | metadata | full
+content_retention_days = 30
+detail_retention_days = 180
+backfill_days = 180
+# master_key_env = "AGENTNEXUS_OBSERVABILITY_KEY"
+
+# OTLP/HTTP JSON exporters have independent durable queues. Content is never
+# exported unless include_content is explicitly enabled for that exporter.
+# [[observability.exporters]]
+# name = "local-otel"
+# type = "otlp_http"
+# protocol = "http/json"
+# enabled = true
+# endpoint = "http://127.0.0.1:4318"
+# include_content = false
+# timeout_seconds = 10
+# queue_size = 10000
+
 # Optional: collect usage from remote machines over SSH.
 # [[usage.ssh]]
 # name = "build-box"

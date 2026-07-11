@@ -140,13 +140,28 @@ func (s *Store) InsertProxyTrace(ctx context.Context, trace core.ProxyTrace) err
 	if trace.Success {
 		success = 1
 	}
+	streamComplete := 0
+	if trace.StreamComplete {
+		streamComplete = 1
+	}
+	startedAt := ""
+	if !trace.StartedAt.IsZero() {
+		startedAt = trace.StartedAt.Format(time.RFC3339Nano)
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_traces
-		(id,timestamp,tool,provider_id,provider_name,client_protocol,upstream_protocol,
-		 client_model,upstream_model,status_code,success,error,session_id,project_dir)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		trace.ID, trace.Timestamp.Format(time.RFC3339Nano), trace.Tool, trace.ProviderID,
+		(id,request_id,trace_id,parent_span_id,attempt,parent_attempt_id,timestamp,started_at,tool,
+		 provider_id,provider_name,client_protocol,upstream_protocol,client_model,
+		 upstream_model,status_code,success,error,session_id,project_dir,ttft_ms,
+		 duration_ms,stream_complete,finish_reason,input_tokens,output_tokens,
+			 cache_read_tokens,cache_write_tokens,request_bytes,response_bytes,cost_usd)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		trace.ID, trace.RequestID, trace.TraceID, trace.ParentSpanID, trace.Attempt, trace.ParentAttemptID,
+		trace.Timestamp.Format(time.RFC3339Nano), startedAt, trace.Tool, trace.ProviderID,
 		trace.ProviderName, trace.ClientProtocol, trace.UpstreamProtocol, trace.ClientModel,
-		trace.UpstreamModel, trace.StatusCode, success, trace.Error, trace.SessionID, trace.ProjectDir)
+		trace.UpstreamModel, trace.StatusCode, success, trace.Error, trace.SessionID, trace.ProjectDir,
+		trace.TTFTMs, trace.DurationMs, streamComplete, trace.FinishReason, trace.InputTokens,
+		trace.OutputTokens, trace.CacheReadTokens, trace.CacheWriteTokens, trace.RequestBytes,
+		trace.ResponseBytes, trace.CostUSD)
 	return err
 }
 
@@ -158,8 +173,11 @@ func (s *Store) QueryProxyTraces(ctx context.Context, tool, sessionID string, li
 	if limit > 500 {
 		limit = 500
 	}
-	q := `SELECT id,timestamp,tool,provider_id,provider_name,client_protocol,upstream_protocol,
-		client_model,upstream_model,status_code,success,error,session_id,project_dir
+	q := `SELECT id,request_id,trace_id,parent_span_id,attempt,parent_attempt_id,timestamp,started_at,
+		tool,provider_id,provider_name,client_protocol,upstream_protocol,client_model,
+		upstream_model,status_code,success,error,session_id,project_dir,ttft_ms,duration_ms,
+		stream_complete,finish_reason,input_tokens,output_tokens,cache_read_tokens,
+		cache_write_tokens,request_bytes,response_bytes,cost_usd
 		FROM proxy_traces`
 	args := []any{}
 	where := []string{}
@@ -190,15 +208,21 @@ func (s *Store) QueryProxyTraces(ctx context.Context, tool, sessionID string, li
 	var out []core.ProxyTrace
 	for rows.Next() {
 		var trace core.ProxyTrace
-		var ts string
-		var success int
-		if err := rows.Scan(&trace.ID, &ts, &trace.Tool, &trace.ProviderID, &trace.ProviderName,
+		var ts, startedAt string
+		var success, streamComplete int
+		if err := rows.Scan(&trace.ID, &trace.RequestID, &trace.TraceID, &trace.ParentSpanID, &trace.Attempt,
+			&trace.ParentAttemptID, &ts, &startedAt, &trace.Tool, &trace.ProviderID, &trace.ProviderName,
 			&trace.ClientProtocol, &trace.UpstreamProtocol, &trace.ClientModel, &trace.UpstreamModel,
-			&trace.StatusCode, &success, &trace.Error, &trace.SessionID, &trace.ProjectDir); err != nil {
+			&trace.StatusCode, &success, &trace.Error, &trace.SessionID, &trace.ProjectDir,
+			&trace.TTFTMs, &trace.DurationMs, &streamComplete, &trace.FinishReason,
+			&trace.InputTokens, &trace.OutputTokens, &trace.CacheReadTokens, &trace.CacheWriteTokens,
+			&trace.RequestBytes, &trace.ResponseBytes, &trace.CostUSD); err != nil {
 			return nil, err
 		}
 		trace.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		trace.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
 		trace.Success = success != 0
+		trace.StreamComplete = streamComplete != 0
 		out = append(out, trace)
 	}
 	return out, rows.Err()

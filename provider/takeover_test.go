@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,45 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 	svc := NewServiceWithProxy(st, NewProxyServer(nil, st, "127.0.0.1:0"))
 	t.Cleanup(func() { _ = svc.Proxy().Stop() })
 	return svc, st
+}
+
+func TestFinalizedTakeoverJournalDropsWholeFileSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.json")
+	if err := os.WriteFile(path, []byte(`{"managed":"before","unowned":"do-not-copy-whole-file"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := snapshotLiveFiles([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"managed":"after","unowned":"do-not-copy-whole-file"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = finalizeLiveOwnershipSnapshot(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(journal, "do-not-copy-whole-file") {
+		t.Fatalf("finalized journal retained an unowned full-file value: %s", journal)
+	}
+	var decoded liveBackupBlob
+	if err := json.Unmarshal([]byte(journal), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	entry := decoded.Ownership[path]
+	if len(decoded.Files) != 0 || !entry.Finalized || !entry.BeforeExists || len(entry.Values) != 1 || entry.Values[0].Pointer != "/managed" {
+		t.Fatalf("pointer journal = %+v", decoded)
+	}
+	if err := os.WriteFile(path, []byte(`{"managed":"after","unowned":"do-not-copy-whole-file","flux":"preserve"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreLiveFiles(journal); err != nil {
+		t.Fatal(err)
+	}
+	restored := readJSON(t, path)
+	if restored["managed"] != "before" || restored["flux"] != "preserve" || restored["unowned"] != "do-not-copy-whole-file" {
+		t.Fatalf("pointer restore = %+v", restored)
+	}
 }
 
 func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
@@ -105,6 +145,82 @@ func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
 	}
 	if svc.Proxy().Running() {
 		t.Fatal("proxy should stop when no tool is taken over")
+	}
+}
+
+func TestTakeoverDisablePreservesThirdPartyDrift(t *testing.T) {
+	ctx := context.Background()
+	claudeDir := filepath.Join(t.TempDir(), ".claude")
+	svc, st := newTestService(t)
+	t.Setenv("DRIFT_KEY", "sk-drift")
+	p := &core.Provider{
+		ID: "drift", Name: "Drift", Category: "third_party",
+		BaseURL: "https://relay.example.com", APIKeyEnv: "DRIFT_KEY",
+		SettingsConfig: map[string]any{"claude_config_dir": claudeDir},
+		Meta:           core.ProviderMeta{APIFormat: "anthropic"},
+	}
+	if err := svc.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Switch(ctx, p.ID, "claudecode"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnableTakeover(ctx, "claudecode"); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	settings := readJSON(t, settingsPath)
+	env := envOf(t, settings)
+	env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:19999"
+	env["FLUX_KEEP"] = "third-party"
+	settings["env"] = env
+	raw, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := svc.DisableTakeover(ctx, "claudecode")
+	var drift *TakeoverDriftError
+	if !errors.As(err, &drift) {
+		t.Fatalf("disable error = %v, want TakeoverDriftError", err)
+	}
+	after := envOf(t, readJSON(t, settingsPath))
+	if after["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:19999" || after["FLUX_KEEP"] != "third-party" {
+		t.Fatalf("third-party values were overwritten: %#v", after)
+	}
+	if _, exists, _ := st.GetLiveBackup(ctx, "claudecode"); !exists {
+		t.Fatal("ownership journal must remain while drift is unresolved")
+	}
+}
+
+func TestTakeoverRefusesForeignLoopbackOwner(t *testing.T) {
+	ctx := context.Background()
+	claudeDir := filepath.Join(t.TempDir(), ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	original := []byte(`{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:15721","CC_SWITCH":"owned"}}`)
+	if err := os.WriteFile(settingsPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc, st := newTestService(t)
+	p := &core.Provider{
+		ID: "foreign", Name: "Foreign", Category: "third_party", BaseURL: "https://relay.example.com",
+		SettingsConfig: map[string]any{"claude_config_dir": claudeDir}, Meta: core.ProviderMeta{APIFormat: "anthropic"},
+	}
+	if err := svc.Upsert(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "claudecode", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnableTakeover(ctx, "claudecode"); err == nil || !strings.Contains(err.Error(), "refusing takeover") {
+		t.Fatalf("enable error = %v, want foreign-owner refusal", err)
+	}
+	got, _ := os.ReadFile(settingsPath)
+	if string(got) != string(original) {
+		t.Fatalf("foreign config changed: %s", got)
 	}
 }
 
@@ -250,6 +366,157 @@ func TestTakeoverClaudeDesktopProxyProfile(t *testing.T) {
 	profile = readJSON(t, filepath.Join(profileRoot, "configLibrary", claudeDesktopProfileID+".json"))
 	if profile["inferenceGatewayBaseUrl"] != p.BaseURL {
 		t.Fatalf("restored gateway url = %v", profile["inferenceGatewayBaseUrl"])
+	}
+}
+
+func TestTakeoverClaudeDesktopHotSwitchAdvancesJournalAndPreservesUnownedKeys(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	profileRoot := filepath.Join(home, "Claude-3p")
+	normalRoot := filepath.Join(home, "Claude")
+	if err := os.MkdirAll(normalRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	normalConfig := filepath.Join(normalRoot, claudeDesktopConfigFile)
+	if err := os.WriteFile(normalConfig, []byte(`{"deploymentMode":"1p","fluxOriginal":"keep"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc, st := newTestService(t)
+	providerFor := func(id, route, upstream string) *core.Provider {
+		return &core.Provider{
+			ID: id, Name: id, Category: "third_party", BaseURL: "https://" + id + ".example.com",
+			SettingsConfig: map[string]any{
+				"claude_desktop_dir":        profileRoot,
+				"claude_desktop_normal_dir": normalRoot,
+			},
+			Meta: core.ProviderMeta{
+				APIFormat:         "anthropic",
+				ClaudeDesktopMode: "direct",
+				ClaudeDesktopModels: []core.ClaudeDesktopModel{
+					{ID: route, DisplayName: route, UpstreamModel: upstream},
+				},
+			},
+		}
+	}
+	first := providerFor("desktop-first", "claude-sonnet-4-8", "first-sonnet")
+	second := providerFor("desktop-second", "claude-opus-4-6", "second-opus")
+	for _, item := range []*core.Provider{first, second} {
+		if err := svc.Upsert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.Switch(ctx, first.ID, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnableTakeover(ctx, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	journalBefore, ok, err := st.GetLiveBackup(ctx, "claude-desktop")
+	if err != nil || !ok {
+		t.Fatalf("journal before = %q, %v, %v", journalBefore, ok, err)
+	}
+
+	// Flux/user state added to a shared, pre-existing file is not an owned
+	// pointer and must survive both the hot-switch and final restore.
+	normal := readJSON(t, normalConfig)
+	normal["fluxRuntime"] = "preserve"
+	raw, _ := json.MarshalIndent(normal, "", "  ")
+	if err := os.WriteFile(normalConfig, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(profileRoot, "configLibrary", claudeDesktopProfileID+".json")
+	profile := readJSON(t, profilePath)
+	profile["fluxProfileMetadata"] = "preserve"
+	raw, _ = json.MarshalIndent(profile, "", "  ")
+	if err := os.WriteFile(profilePath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Switch(ctx, second.ID, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	journalAfter, ok, err := st.GetLiveBackup(ctx, "claude-desktop")
+	if err != nil || !ok || journalAfter == journalBefore {
+		t.Fatalf("hot-switch did not advance ownership journal: ok=%v err=%v", ok, err)
+	}
+	profile = readJSON(t, profilePath)
+	profileRaw, _ := json.Marshal(profile["inferenceModels"])
+	if !strings.Contains(string(profileRaw), "claude-opus-4-6") || strings.Contains(string(profileRaw), "claude-sonnet-4-8") {
+		t.Fatalf("profile was not hot-switched: %s", profileRaw)
+	}
+	if profile["fluxProfileMetadata"] != "preserve" {
+		t.Fatalf("hot-switch erased unowned profile metadata: %#v", profile)
+	}
+
+	if err := svc.DisableTakeover(ctx, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	normal = readJSON(t, normalConfig)
+	if normal["deploymentMode"] != "3p" || normal["fluxOriginal"] != "keep" || normal["fluxRuntime"] != "preserve" {
+		t.Fatalf("shared config was not safely restored: %#v", normal)
+	}
+	profile = readJSON(t, profilePath)
+	profileRaw, _ = json.Marshal(profile["inferenceModels"])
+	if !strings.Contains(string(profileRaw), "claude-sonnet-4-8") {
+		t.Fatalf("original direct profile was not restored: %s", profileRaw)
+	}
+	if profile["fluxProfileMetadata"] != "preserve" {
+		t.Fatalf("restore erased unowned profile metadata: %#v", profile)
+	}
+}
+
+func TestTakeoverClaudeDesktopHotSwitchRejectsOwnedDrift(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	profileRoot := filepath.Join(home, "Claude-3p")
+	svc, st := newTestService(t)
+	providerFor := func(id, route string) *core.Provider {
+		return &core.Provider{
+			ID: id, Name: id, Category: "third_party", BaseURL: "https://" + id + ".example.com",
+			SettingsConfig: map[string]any{"claude_desktop_dir": profileRoot},
+			Meta: core.ProviderMeta{APIFormat: "anthropic", ClaudeDesktopMode: "direct", ClaudeDesktopModels: []core.ClaudeDesktopModel{
+				{ID: route, DisplayName: route, UpstreamModel: route},
+			}},
+		}
+	}
+	first := providerFor("drift-first", "claude-sonnet-4-8")
+	second := providerFor("drift-second", "claude-opus-4-6")
+	for _, item := range []*core.Provider{first, second} {
+		if err := svc.Upsert(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.Switch(ctx, first.ID, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnableTakeover(ctx, "claude-desktop"); err != nil {
+		t.Fatal(err)
+	}
+	journalBefore, _, _ := st.GetLiveBackup(ctx, "claude-desktop")
+	profilePath := filepath.Join(profileRoot, "configLibrary", claudeDesktopProfileID+".json")
+	profile := readJSON(t, profilePath)
+	profile["inferenceGatewayBaseUrl"] = "http://127.0.0.1:16666/flux"
+	raw, _ := json.MarshalIndent(profile, "", "  ")
+	if err := os.WriteFile(profilePath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := svc.Switch(ctx, second.ID, "claude-desktop")
+	var drift *TakeoverDriftError
+	if !errors.As(err, &drift) {
+		t.Fatalf("hot-switch error = %v, want TakeoverDriftError", err)
+	}
+	active, ok, activeErr := st.ActiveProviderID(ctx, "claude-desktop")
+	if activeErr != nil || !ok || active != first.ID {
+		t.Fatalf("failed hot-switch changed active provider: %q, %v, %v", active, ok, activeErr)
+	}
+	journalAfter, _, _ := st.GetLiveBackup(ctx, "claude-desktop")
+	if journalAfter != journalBefore {
+		t.Fatal("failed hot-switch changed ownership journal")
+	}
+	if got := readJSON(t, profilePath)["inferenceGatewayBaseUrl"]; got != "http://127.0.0.1:16666/flux" {
+		t.Fatalf("owned drift was overwritten: %v", got)
 	}
 }
 

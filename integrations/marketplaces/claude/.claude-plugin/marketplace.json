@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentnexus-local",
+  "description": "Local AgentNexus integrations for Claude Code",
+  "owner": {
+    "name": "AgentNexus"
+  },
+  "plugins": [
+    {
+      "name": "agentnexus-observer",
+      "description": "Additive lifecycle hooks for local AgentNexus observability.",
+      "author": {
+        "name": "AgentNexus"
+      },
+      "category": "monitoring",
+      "source": "./plugins/agentnexus-observer",
+      "homepage": "https://github.com/agentnexus/agentnexus"
+    }
+  ]
+}

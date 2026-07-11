@@ -20,19 +20,20 @@ type ConnectService struct {
 	store ConnectStore
 	sched *Scheduler
 
-	mu  sync.Mutex
-	ctx context.Context
+	mu                sync.Mutex
+	ctx               context.Context
+	unsubscribeEvents func()
 }
 
 // NewConnectService wires the service onto an engine and store. It registers
-// itself as the engine's event sink; construct it before Engine.Start.
+// an additive lifecycle subscription; construct it before Engine.Start.
 func NewConnectService(log *slog.Logger, eng *Engine, store ConnectStore) *ConnectService {
 	if log == nil {
 		log = slog.Default()
 	}
 	c := &ConnectService{log: log, eng: eng, store: store}
 	c.sched = NewScheduler(log, c.runScheduled)
-	eng.SetEventSink(c.onEvent)
+	c.unsubscribeEvents = eng.SubscribeEventSink(c.onEvent)
 	eng.SetRuntimeSettingsDefaultStore(c)
 	return c
 }
@@ -62,14 +63,20 @@ func (c *ConnectService) Start(ctx context.Context) error {
 	c.sched.Start()
 	go func() {
 		<-ctx.Done()
-		c.sched.Stop()
+		c.Stop()
 	}()
 	c.log.Info("connect runtime started", "cron_entries", c.sched.Scheduled())
 	return nil
 }
 
-// Stop halts the scheduler (idempotent; also happens on ctx cancellation).
-func (c *ConnectService) Stop() { c.sched.Stop() }
+// Stop halts the scheduler and removes the additive lifecycle subscription.
+// Both operations are idempotent and also happen on context cancellation.
+func (c *ConnectService) Stop() {
+	c.sched.Stop()
+	if c.unsubscribeEvents != nil {
+		c.unsubscribeEvents()
+	}
+}
 
 func (c *ConnectService) baseCtx() context.Context {
 	c.mu.Lock()

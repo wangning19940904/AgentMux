@@ -11,6 +11,7 @@ const toolProgressCollapseThreshold = 3
 
 // toolStep records one tool invocation and, once known, a short result summary.
 type toolStep struct {
+	id     string
 	name   string
 	input  string
 	result string
@@ -28,11 +29,15 @@ type toolProgress struct {
 // add records a new tool invocation and returns its index so a later result can
 // be attached to it.
 func (t *toolProgress) add(name, input string) int {
+	return t.addWithID("", name, input)
+}
+
+func (t *toolProgress) addWithID(id, name, input string) int {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "tool"
 	}
-	t.steps = append(t.steps, toolStep{name: name, input: strings.TrimSpace(input)})
+	t.steps = append(t.steps, toolStep{id: strings.TrimSpace(id), name: name, input: strings.TrimSpace(input)})
 	return len(t.steps) - 1
 }
 
@@ -40,7 +45,22 @@ func (t *toolProgress) add(name, input string) int {
 // (Claude's tool_result frames arrive after the matching tool_use and carry no
 // reliable id we can map, so newest-open-step ordering is the best heuristic).
 func (t *toolProgress) attachResult(result string, failed bool) {
+	t.attachResultForID("", result, failed)
+}
+
+// attachResultForID uses the adapter's stable call id when available, falling
+// back to newest-open ordering for partial generic CLIs.
+func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 	result = strings.TrimSpace(result)
+	if id = strings.TrimSpace(id); id != "" {
+		for i := range t.steps {
+			if t.steps[i].id == id {
+				t.steps[i].result = result
+				t.steps[i].failed = failed
+				return
+			}
+		}
+	}
 	for i := len(t.steps) - 1; i >= 0; i-- {
 		if t.steps[i].result == "" && !t.steps[i].failed {
 			t.steps[i].result = result
@@ -66,15 +86,8 @@ func (t *toolProgress) render(thinking, answer string, done bool) string {
 
 	var b strings.Builder
 	if thinking != "" {
-		header := "💭 思考摘要"
-		if !done {
-			header += " · 进行中…"
-		}
-		b.WriteString("**")
-		b.WriteString(header)
-		b.WriteString("**\n")
-		b.WriteString(thinking)
-		b.WriteString("\n\n")
+		b.WriteString(renderThinkingSummary(thinking, done))
+		b.WriteString("\n")
 	}
 
 	if len(t.steps) > 0 {
@@ -105,6 +118,28 @@ func (t *toolProgress) render(thinking, answer string, done bool) string {
 
 	if strings.TrimSpace(answer) != "" {
 		b.WriteString(answer)
+	}
+	return b.String()
+}
+
+// renderThinkingSummary keeps user-visible reasoning summaries visually
+// secondary to the answer. Feishu's streaming card supports Markdown quotes
+// and grey font tags, whereas a font-size override is not part of its Markdown
+// surface. Prefix every line so multi-paragraph summaries remain one quote.
+func renderThinkingSummary(thinking string, done bool) string {
+	header := "💭 思考摘要"
+	if !done {
+		header += " · 进行中…"
+	}
+
+	var b strings.Builder
+	b.WriteString("> <font color=grey>")
+	b.WriteString(header)
+	b.WriteString("</font>\n")
+	for _, line := range strings.Split(thinking, "\n") {
+		b.WriteString("> <font color=grey>")
+		b.WriteString(line)
+		b.WriteString("</font>\n")
 	}
 	return b.String()
 }

@@ -249,6 +249,53 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
 		return err
 	}
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"conversation_id", "TEXT"},
+		{"trace_id", "TEXT"},
+		{"turn_id", "TEXT"},
+		{"request_id", "TEXT"},
+		{"runtime_id", "TEXT"},
+	} {
+		if err := s.ensureColumn("usage_records", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request
+		ON usage_records(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>''`); err != nil {
+		return err
+	}
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{"request_id", "TEXT"},
+		{"trace_id", "TEXT"},
+		{"parent_span_id", "TEXT"},
+		{"attempt", "INTEGER DEFAULT 0"},
+		{"parent_attempt_id", "TEXT"},
+		{"started_at", "TEXT"},
+		{"ttft_ms", "INTEGER DEFAULT 0"},
+		{"duration_ms", "INTEGER DEFAULT 0"},
+		{"stream_complete", "INTEGER DEFAULT 0"},
+		{"finish_reason", "TEXT"},
+		{"input_tokens", "INTEGER DEFAULT 0"},
+		{"output_tokens", "INTEGER DEFAULT 0"},
+		{"cache_read_tokens", "INTEGER DEFAULT 0"},
+		{"cache_write_tokens", "INTEGER DEFAULT 0"},
+		{"request_bytes", "INTEGER DEFAULT 0"},
+		{"response_bytes", "INTEGER DEFAULT 0"},
+		{"cost_usd", "REAL DEFAULT 0"},
+	} {
+		if err := s.ensureColumn("proxy_traces", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	if err := s.migrateObservations(); err != nil {
+		return err
+	}
 	return s.migrateAgentBindings()
 }
 
@@ -307,15 +354,15 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR IGNORE INTO usage_records
-		(source,session_id,project,model,timestamp,input_tokens,output_tokens,
+		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, r := range recs {
-		if _, err := stmt.ExecContext(ctx, r.Source, r.SessionID, r.Project, r.Model,
+		if _, err := stmt.ExecContext(ctx, r.Source, r.SessionID, r.ConversationID, r.TraceID, r.TurnID, r.RequestID, r.RuntimeID, r.Project, r.Model,
 			r.Timestamp.Format(time.RFC3339Nano), r.InputTokens, r.OutputTokens,
 			r.CacheReadTokens, r.CacheWriteTokens, r.Tool, r.CostUSD, r.Host); err != nil {
 			return err
@@ -326,7 +373,7 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 
 // QueryUsage returns usage records since the given time (zero = all).
 func (s *Store) QueryUsage(ctx context.Context, since time.Time) ([]core.UsageRecord, error) {
-	q := `SELECT source,session_id,project,model,timestamp,input_tokens,output_tokens,
+	q := `SELECT source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		cache_read_tokens,cache_write_tokens,tool,cost_usd,host FROM usage_records`
 	args := []any{}
 	if !since.IsZero() {
@@ -342,7 +389,7 @@ func (s *Store) QueryUsage(ctx context.Context, since time.Time) ([]core.UsageRe
 	for rows.Next() {
 		var r core.UsageRecord
 		var ts string
-		if err := rows.Scan(&r.Source, &r.SessionID, &r.Project, &r.Model, &ts,
+		if err := rows.Scan(&r.Source, &r.SessionID, &r.ConversationID, &r.TraceID, &r.TurnID, &r.RequestID, &r.RuntimeID, &r.Project, &r.Model, &ts,
 			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
 			&r.Tool, &r.CostUSD, &r.Host); err != nil {
 			return nil, err

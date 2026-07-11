@@ -1,0 +1,20 @@
+{
+  "name": "agentnexus-local",
+  "interface": {
+    "displayName": "AgentNexus Local"
+  },
+  "plugins": [
+    {
+      "name": "agentnexus-observer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agentnexus-observer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

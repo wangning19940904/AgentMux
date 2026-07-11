@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -32,7 +33,14 @@ type EventSink func(event HookEvent, data map[string]string)
 type Engine struct {
 	log                     *slog.Logger
 	hooks                   *HookRunner
-	sink                    EventSink
+	sinkMu                  sync.RWMutex
+	sink                    EventSink // compatibility slot used by SetEventSink
+	sinks                   map[uint64]EventSink
+	nextSinkID              uint64
+	observationMu           sync.RWMutex
+	observations            *ObservationBus
+	usageSink               UsageRecordSink
+	childTelemetry          ObservationChildTelemetry
 	mu                      sync.RWMutex
 	projects                map[string]*projectRuntime
 	channels                map[string]*channelRuntime
@@ -51,15 +59,42 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 	return &Engine{
 		log:      log,
 		hooks:    hooks,
+		sinks:    map[uint64]EventSink{},
 		projects: map[string]*projectRuntime{},
 		channels: map[string]*channelRuntime{},
 		inbound:  make(chan *Message, 256),
 	}
 }
 
-// SetEventSink attaches the unified event callback. Must be called before
-// Start.
-func (e *Engine) SetEventSink(sink EventSink) { e.sink = sink }
+// SetEventSink attaches the legacy unified event callback. New consumers
+// should use SubscribeEventSink so Connect, recording and exporters can
+// coexist without replacing each other.
+func (e *Engine) SetEventSink(sink EventSink) {
+	e.sinkMu.Lock()
+	e.sink = sink
+	e.sinkMu.Unlock()
+}
+
+// SubscribeEventSink adds an independent lifecycle subscriber and returns an
+// idempotent unsubscribe function.
+func (e *Engine) SubscribeEventSink(sink EventSink) func() {
+	if sink == nil {
+		return func() {}
+	}
+	e.sinkMu.Lock()
+	e.nextSinkID++
+	id := e.nextSinkID
+	e.sinks[id] = sink
+	e.sinkMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.sinkMu.Lock()
+			delete(e.sinks, id)
+			e.sinkMu.Unlock()
+		})
+	}
+}
 
 // SetMessageLogger attaches the channel message logger used to persist inbound
 // channel messages to disk.
@@ -94,18 +129,36 @@ func (e *Engine) SetRuntimeSettingsDefaultStore(store RuntimeSettingsDefaultStor
 // It copies data per consumer so the caller's map is never mutated and async
 // sinks cannot observe a later event's fields (both share nothing).
 func (e *Engine) emit(ctx context.Context, event HookEvent, data map[string]string) {
+	if e.ObservationBus() != nil {
+		ensureObservationData(data)
+	}
 	payload := make(map[string]string, len(data)+1)
 	for k, v := range data {
 		payload[k] = v
 	}
 	payload["event"] = string(event)
 	e.hooks.Fire(ctx, event, payload)
-	if e.sink != nil {
+	e.observeLifecycle(ctx, event, payload)
+	e.sinkMu.RLock()
+	legacy := e.sink
+	sinks := make([]EventSink, 0, len(e.sinks))
+	for _, sink := range e.sinks {
+		sinks = append(sinks, sink)
+	}
+	e.sinkMu.RUnlock()
+	if legacy != nil {
 		sinkCopy := make(map[string]string, len(payload))
 		for k, v := range payload {
 			sinkCopy[k] = v
 		}
-		e.sink(event, sinkCopy)
+		legacy(event, sinkCopy)
+	}
+	for _, sink := range sinks {
+		sinkCopy := make(map[string]string, len(payload))
+		for k, v := range payload {
+			sinkCopy[k] = v
+		}
+		sink(event, sinkCopy)
 	}
 }
 
@@ -241,6 +294,15 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		e.replyAll(ctx, pr, msg, "failed to start agent session: "+err.Error())
 		return
 	}
+	data["agent_id"] = pr.workspace.AgentID
+	data["runtime_id"] = pr.workspace.RuntimeID
+	if pr.agent != nil {
+		data["agent_name"] = pr.agent.Name()
+	}
+	data["session_id"] = sessionObservationID(sess)
+	if conv != nil {
+		data["conversation_id"] = conv.ID
+	}
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
 	}
@@ -273,7 +335,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 // streamTurn submits text to a session and forwards output through reply
 // (when non-nil). It returns the last answer text and the first error event.
 func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string, reply func(string), data map[string]string) (string, error) {
-	events, err := sess.Send(ctx, text)
+	events, err := e.observeSend(ctx, sess, text, data)
 	if err != nil {
 		e.log.Error("send to session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -488,7 +550,7 @@ func (e *Engine) consumeTurn(ctx context.Context, events <-chan *Event, reply fu
 // streamTurnMessage drives a single turn onto a StreamMessageReplier,
 // rendering the whole answer as one in-place updating plain-text message.
 func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier, sess AgentSession, msg *Message, data map[string]string) {
-	events, err := sess.Send(ctx, msg.Text)
+	events, err := e.observeSend(ctx, sess, msg.Text, data)
 	if err != nil {
 		e.log.Error("send to session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -520,7 +582,7 @@ func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier,
 // message as the agent streams output and marks it done/failed at the end. On
 // any streaming setup failure it degrades to a single final update.
 func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess AgentSession, msg *Message, data map[string]string) {
-	events, err := sess.Send(ctx, msg.Text)
+	events, err := e.observeSend(ctx, sess, msg.Text, data)
 	if err != nil {
 		e.log.Error("send to session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -568,12 +630,12 @@ func (e *Engine) driveReplyStream(ctx context.Context, stream ReplyStream, event
 				rendered = body
 			}
 		case EventToolUse:
-			// A tool_use frame opens a step; a tool_result frame (ToolResult
-			// set, ToolName empty) closes the most recent open one.
+			// Native adapters provide ToolCallID, allowing parallel and
+			// out-of-order results to close the correct rendered step.
 			if ev.ToolName != "" {
-				tools.add(ev.ToolName, ev.ToolInput)
+				tools.addWithID(ev.ToolCallID, ev.ToolName, ev.ToolInput)
 			} else if ev.ToolResult != "" || ev.Err != nil {
-				tools.attachResult(ev.ToolResult, ev.Err != nil)
+				tools.attachResultForID(ev.ToolCallID, ev.ToolResult, ev.Err != nil)
 			}
 			body := tools.render(thinking, answer, false)
 			if body != rendered {
@@ -722,6 +784,14 @@ func (pr *projectRuntime) dropSession(ctx context.Context, cacheKey string) {
 	}
 	pr.mu.Unlock()
 	if ok && s != nil {
+		data := map[string]string{
+			"project": pr.name, "agent_id": pr.workspace.AgentID, "runtime_id": pr.workspace.RuntimeID,
+			"session_id": sessionObservationID(s), "conversation_id": cacheKey,
+		}
+		if pr.agent != nil {
+			data["agent_name"] = pr.agent.Name()
+		}
+		pr.owner.emit(ctx, HookSessionEnded, data)
 		_ = s.Close(ctx)
 	}
 }
@@ -836,9 +906,33 @@ func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatTyp
 // startAgentSession starts a new agent session, resuming the conversation's
 // native session id when both the agent and a stored id are available.
 func (e *Engine) startAgentSession(ctx context.Context, agent Agent, workDir string, conv *Conversation) (AgentSession, error) {
+	if telemetry := e.observationChildTelemetry(); telemetry.Endpoint != "" && telemetry.Token != "" {
+		ctx = WithObservationChildTelemetry(ctx, telemetry)
+	}
 	if conv != nil && conv.NativeSessionID != "" {
 		if ra, ok := agent.(ResumableAgent); ok {
-			return ra.StartSessionResume(ctx, workDir, conv.NativeSessionID)
+			sess, err := ra.StartSessionResume(ctx, workDir, conv.NativeSessionID)
+			if err == nil {
+				return sess, nil
+			}
+			if !errors.Is(err, ErrNativeSessionUnavailable) {
+				return nil, err
+			}
+
+			// Codex app-server occasionally prunes old native threads. Forget
+			// only that known-stale handle, then let the same chat continue in a
+			// new native session. Persisting the cleared id prevents every later
+			// command (including /model) from failing before it can render.
+			e.log.Warn("native session is unavailable; starting a fresh session",
+				"conversation", conv.ID,
+				"native_session_id", conv.NativeSessionID,
+				"err", err)
+			if e.conversations != nil {
+				if clearErr := e.conversations.UpdateConversationSession(ctx, conv.ID, "", conv.WorkDir); clearErr != nil {
+					e.log.Warn("clear unavailable native session", "conversation", conv.ID, "err", clearErr)
+				}
+			}
+			conv.NativeSessionID = ""
 		}
 	}
 	return agent.StartSession(ctx, workDir)
@@ -881,7 +975,15 @@ func (e *Engine) shutdown() error {
 	defer e.mu.RUnlock()
 	for _, pr := range e.projects {
 		pr.mu.Lock()
-		for _, s := range pr.sessions {
+		for cacheKey, s := range pr.sessions {
+			data := map[string]string{
+				"project": pr.name, "agent_id": pr.workspace.AgentID, "runtime_id": pr.workspace.RuntimeID,
+				"session_id": sessionObservationID(s), "conversation_id": cacheKey,
+			}
+			if pr.agent != nil {
+				data["agent_name"] = pr.agent.Name()
+			}
+			e.emit(ctx, HookSessionEnded, data)
 			_ = s.Close(ctx)
 		}
 		pr.mu.Unlock()

@@ -209,7 +209,13 @@ func ProviderModelOptions(p *Provider) []string {
 // ProxyTrace records one request that passed through AgentNexus local routing.
 type ProxyTrace struct {
 	ID               string    `json:"id"`
+	RequestID        string    `json:"request_id,omitempty"`
+	TraceID          string    `json:"trace_id,omitempty"`
+	ParentSpanID     string    `json:"parent_span_id,omitempty"`
+	Attempt          int       `json:"attempt,omitempty"`
+	ParentAttemptID  string    `json:"parent_attempt_id,omitempty"`
 	Timestamp        time.Time `json:"timestamp"`
+	StartedAt        time.Time `json:"started_at,omitempty"`
 	Tool             string    `json:"tool"`
 	ProviderID       string    `json:"provider_id"`
 	ProviderName     string    `json:"provider_name,omitempty"`
@@ -222,6 +228,17 @@ type ProxyTrace struct {
 	Error            string    `json:"error,omitempty"`
 	SessionID        string    `json:"session_id,omitempty"`
 	ProjectDir       string    `json:"project_dir,omitempty"`
+	TTFTMs           int64     `json:"ttft_ms,omitempty"`
+	DurationMs       int64     `json:"duration_ms,omitempty"`
+	StreamComplete   bool      `json:"stream_complete"`
+	FinishReason     string    `json:"finish_reason,omitempty"`
+	InputTokens      int64     `json:"input_tokens,omitempty"`
+	OutputTokens     int64     `json:"output_tokens,omitempty"`
+	CacheReadTokens  int64     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64     `json:"cache_write_tokens,omitempty"`
+	RequestBytes     int64     `json:"request_bytes,omitempty"`
+	ResponseBytes    int64     `json:"response_bytes,omitempty"`
+	CostUSD          float64   `json:"cost_usd,omitempty"`
 }
 
 // UsageRecord is a single normalized usage row produced by a parser. Every
@@ -230,6 +247,11 @@ type ProxyTrace struct {
 type UsageRecord struct {
 	Source           string    `json:"source"` // claude, codex, cursor...
 	SessionID        string    `json:"session_id"`
+	ConversationID   string    `json:"conversation_id,omitempty"`
+	TraceID          string    `json:"trace_id,omitempty"`
+	TurnID           string    `json:"turn_id,omitempty"`
+	RequestID        string    `json:"request_id,omitempty"`
+	RuntimeID        string    `json:"runtime_id,omitempty"`
 	Project          string    `json:"project"`
 	Model            string    `json:"model"`
 	Timestamp        time.Time `json:"timestamp"`
@@ -240,6 +262,7 @@ type UsageRecord struct {
 	Tool             string    `json:"tool,omitempty"` // tool_use name
 	CostUSD          float64   `json:"cost_usd"`
 	Host             string    `json:"host,omitempty"` // "" = local, else SSH host
+	Requests         int64     `json:"requests,omitempty"`
 }
 
 // UsageCollector reads a local (or remote-synced) data source and yields

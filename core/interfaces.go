@@ -52,19 +52,30 @@ const (
 // output, a user-visible reasoning summary, a tool call, a permission request,
 // or the final answer.
 type Event struct {
-	Type    EventType
-	Text    string
-	Final   bool
-	Err     error
-	Usage   *TurnUsage
-	ToolUse string
+	Type       EventType
+	EventID    string
+	TurnID     string
+	ItemID     string
+	Text       string
+	Final      bool
+	Err        error
+	Status     string
+	DurationMs int64
+	Usage      *TurnUsage
+	ToolUse    string
 	// ToolName is the invoked tool's name (e.g. "Bash", "mcp__lark__im_send")
 	// for EventToolUse events. ToolInput is a short, human-readable summary of
 	// its arguments (already truncated by the adapter). ToolResult, when set on
 	// a later EventToolUse, carries a short summary of that tool's output.
-	ToolName   string
-	ToolInput  string
-	ToolResult string
+	ToolCallID    string
+	ToolName      string
+	ToolInput     string
+	ToolInputRaw  string
+	ToolResult    string
+	ToolResultRaw string
+	// Metadata carries adapter-specific correlation and coverage hints without
+	// forcing renderers to understand every native protocol field.
+	Metadata map[string]string
 }
 
 // EventType enumerates the kinds of events an agent session emits.
@@ -74,20 +85,32 @@ const (
 	EventOutput EventType = "output"
 	// EventThinking carries an adapter-provided reasoning summary or progress
 	// status. It deliberately is not raw private chain-of-thought.
-	EventThinking   EventType = "thinking"
-	EventToolUse    EventType = "tool_use"
-	EventPermission EventType = "permission"
-	EventFinal      EventType = "final"
-	EventError      EventType = "error"
+	EventThinking      EventType = "thinking"
+	EventToolUse       EventType = "tool_use"
+	EventModelRequest  EventType = "model_request"
+	EventModelResponse EventType = "model_response"
+	EventCompaction    EventType = "compaction"
+	EventPermission    EventType = "permission"
+	EventFinal         EventType = "final"
+	EventError         EventType = "error"
 )
 
 // TurnUsage carries token accounting for a single agent turn.
 type TurnUsage struct {
 	Model            string
+	RequestID        string
+	RequestedModel   string
+	ResolvedModel    string
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	ReasoningTokens  int64
+	TotalTokens      int64
+	Cumulative       bool
+	Attempt          int
+	TTFTMs           int64
+	DurationMs       int64
 }
 
 // Platform is a messaging integration (Feishu, Slack, Telegram, ...). It

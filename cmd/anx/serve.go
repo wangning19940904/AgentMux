@@ -65,8 +65,8 @@ func serveCmd() *cobra.Command {
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			srv, providerSvc := newServer(cfg, st)
-			eng, connectSvc, err := attachRuntime(cfg, st, srv)
+			srv, providerSvc, usageEngine := newServer(cfg, st)
+			eng, connectSvc, err := attachRuntime(ctx, cfg, st, srv, providerSvc, usageEngine)
 			if err != nil {
 				return err
 			}

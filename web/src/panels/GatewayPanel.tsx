@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   CirclePlus,
   Cloud,
   Cpu,
@@ -39,6 +40,8 @@ const CURATED_PRESET_IDS = [
   "moonshot-kimi-claude",
   "qwen-dashscope",
 ];
+const PROVIDER_MODEL_COLLAPSE_THRESHOLD = 8;
+const PROVIDER_MODEL_PREVIEW_COUNT = 4;
 
 type ProbeCapabilities = {
   formats: ProviderProbeCheck[];
@@ -724,6 +727,7 @@ export function GatewayPanel() {
   const [probeCapabilities, setProbeCapabilities] = useState<ProbeCapabilities | null>(null);
   const [draft, setDraft] = useState<ProviderDraft>(emptyDraft);
   const [routeDraft, setRouteDraft] = useState<RouteDraft>(emptyRouteDraft);
+  const [expandedProviderModels, setExpandedProviderModels] = useState<Set<string>>(() => new Set());
 
   const providerList = providers.data ?? [];
   const presetList = presets.data ?? [];
@@ -803,6 +807,18 @@ export function GatewayPanel() {
     providers.reload();
     activeRoutes.reload();
     proxyStatus.reload();
+  }
+
+  function toggleProviderModels(providerID: string) {
+    setExpandedProviderModels((current) => {
+      const next = new Set(current);
+      if (next.has(providerID)) {
+        next.delete(providerID);
+      } else {
+        next.add(providerID);
+      }
+      return next;
+    });
   }
 
   async function toggleTakeover(tool: string, enabled: boolean) {
@@ -1641,11 +1657,6 @@ export function GatewayPanel() {
                       <div className="field wide">
                         <span>{t("gateway.tierModels")}</span>
                         <div className="model-mapping-editor claude-code-model-map">
-                          <datalist id="route-upstream-model-options">
-                            {upstreamModelOptions.map((model) => (
-                              <option key={model} value={model} />
-                            ))}
-                          </datalist>
                           <div className="model-mapping-head">
                             <span>{t("gateway.claudeVisibleModel")}</span>
                             <span>{t("gateway.upstreamModel")}</span>
@@ -1721,13 +1732,19 @@ export function GatewayPanel() {
                                 onChange={(event) => updateRouteModelRow(index, "desktopModel", event.target.value)}
                                 placeholder="claude-sonnet-5"
                               />
-                              <input
-                                list="route-upstream-model-options"
+                              <select
                                 value={row.upstreamModel}
                                 disabled={!isProxyDesktopMode}
                                 onChange={(event) => updateRouteModelRow(index, "upstreamModel", event.target.value)}
-                                placeholder={isProxyDesktopMode ? selectedRouteProvider?.model || "deepseek-v4-pro" : "direct"}
-                              />
+                                aria-label={t("gateway.upstreamModel")}
+                              >
+                                <option value="">{t("gateway.selectUpstreamModel")}</option>
+                                {upstreamModelOptions.map((model) => (
+                                  <option key={model} value={model}>
+                                    {model}
+                                  </option>
+                                ))}
+                              </select>
                               <button
                                 className="ghost-action icon-action"
                                 type="button"
@@ -1811,6 +1828,11 @@ export function GatewayPanel() {
               const keyReady = Boolean(provider.api_key_available);
               const supportedModels = providerSupportedModels(provider);
               const supportedProtocols = providerSupportedProtocols(provider);
+              const modelsCollapsible = supportedModels.length > PROVIDER_MODEL_COLLAPSE_THRESHOLD;
+              const modelsExpanded = expandedProviderModels.has(provider.id);
+              const visibleModels =
+                modelsCollapsible && !modelsExpanded ? supportedModels.slice(0, PROVIDER_MODEL_PREVIEW_COUNT) : supportedModels;
+              const hiddenModelCount = supportedModels.length - PROVIDER_MODEL_PREVIEW_COUNT;
               return (
                 <article className="provider-card" key={provider.id}>
                   <header>
@@ -1841,7 +1863,23 @@ export function GatewayPanel() {
                     <div className="provider-fact-wide">
                       <dt>{t("providers.model")}</dt>
                       <dd className="provider-fact-chips">
-                        <CapabilityBadges items={supportedModels} />
+                        <div className="provider-model-list">
+                          <div className="provider-fact-chips">
+                            <CapabilityBadges items={visibleModels} />
+                          </div>
+                          {modelsCollapsible && (
+                            <button
+                              className="provider-model-toggle"
+                              type="button"
+                              aria-expanded={modelsExpanded}
+                              onClick={() => toggleProviderModels(provider.id)}
+                            >
+                              <span>{modelsExpanded ? t("gateway.collapseModels") : t("gateway.showAllModels")}</span>
+                              {!modelsExpanded && <span className="provider-model-toggle-count">+{hiddenModelCount}</span>}
+                              <ChevronDown size={14} aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
                       </dd>
                     </div>
                     <div className="provider-fact-wide">

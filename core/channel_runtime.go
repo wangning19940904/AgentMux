@@ -129,6 +129,14 @@ func (rt *channelRuntime) dropSession(ctx context.Context, cacheKey string) {
 	}
 	rt.mu.Unlock()
 	if ok && s != nil {
+		data := map[string]string{
+			"channel_id": rt.channel.ID, "agent_id": rt.workspace.AgentID, "runtime_id": rt.workspace.RuntimeID,
+			"session_id": sessionObservationID(s), "conversation_id": cacheKey,
+		}
+		if rt.agent != nil {
+			data["agent_name"] = rt.agent.Name()
+		}
+		rt.owner.emit(ctx, HookSessionEnded, data)
 		_ = s.Close(ctx)
 	}
 }
@@ -193,7 +201,15 @@ func (rt *channelRuntime) close(ctx context.Context) {
 	agent := rt.agent
 	rt.state = ChannelStateStopped
 	rt.mu.Unlock()
-	for _, s := range sessions {
+	for cacheKey, s := range sessions {
+		data := map[string]string{
+			"channel_id": rt.channel.ID, "agent_id": rt.workspace.AgentID, "runtime_id": rt.workspace.RuntimeID,
+			"session_id": sessionObservationID(s), "conversation_id": cacheKey,
+		}
+		if agent != nil {
+			data["agent_name"] = agent.Name()
+		}
+		rt.owner.emit(ctx, HookSessionEnded, data)
 		_ = s.Close(ctx)
 	}
 	if agent != nil {
@@ -373,6 +389,15 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
 		}
 		return
+	}
+	data["agent_id"] = rt.workspace.AgentID
+	data["runtime_id"] = rt.workspace.RuntimeID
+	if rt.agent != nil {
+		data["agent_name"] = rt.agent.Name()
+	}
+	data["session_id"] = sessionObservationID(sess)
+	if conv != nil {
+		data["conversation_id"] = conv.ID
 	}
 	if created {
 		e.emit(ctx, HookSessionStarted, data)

@@ -445,6 +445,291 @@ export interface SessionMessage {
   timestamp?: string;
 }
 
+export interface ObservationError {
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+}
+
+export interface ObservationModel {
+  provider?: string;
+  requested?: string;
+  resolved?: string;
+  protocol?: string;
+  request_id?: string;
+  attempt?: number;
+  reasoning_effort?: string;
+  service_tier?: string;
+  finish_reason?: string;
+  ttft_ms?: number;
+  duration_ms?: number;
+}
+
+export interface ObservationTool {
+  name?: string;
+  call_id?: string;
+  category?: string;
+  duration_ms?: number;
+  input_bytes?: number;
+  output_bytes?: number;
+}
+
+export interface ObservationUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  reasoning_tokens?: number;
+  tool_tokens?: number;
+  total_tokens?: number;
+  cost_usd?: number;
+  cumulative?: boolean;
+}
+
+export interface ObservationPayloadRef {
+  id: string;
+  content_type?: string;
+  key_id?: string;
+  original_bytes?: number;
+  stored_bytes?: number;
+  redacted?: boolean;
+  expires_at?: string;
+}
+
+export interface ObservationTrace {
+  trace_id: string;
+  root_span_id?: string;
+  name?: string;
+  started_at: string;
+  ended_at?: string;
+  agent_id?: string;
+  agent_name?: string;
+  runtime_id?: string;
+  conversation_id?: string;
+  session_id?: string;
+  turn_id?: string;
+  source?: string;
+  provenance?: string[];
+  quality?: string;
+  status?: string;
+  error?: ObservationError;
+  model?: ObservationModel;
+  usage?: ObservationUsage;
+  span_count?: number;
+  event_count?: number;
+  attributes?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ObservationSpan {
+  span_id: string;
+  trace_id: string;
+  parent_span_id?: string;
+  kind: string;
+  name?: string;
+  sequence?: number;
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  agent_id?: string;
+  runtime_id?: string;
+  conversation_id?: string;
+  session_id?: string;
+  turn_id?: string;
+  source?: string;
+  provenance?: string[];
+  quality?: string;
+  status?: string;
+  error?: ObservationError;
+  model?: ObservationModel;
+  tool?: ObservationTool;
+  payload_id?: string;
+  payload_ref?: ObservationPayloadRef;
+  usage?: ObservationUsage;
+  attributes?: Record<string, unknown>;
+  content?: unknown;
+  tool_input?: unknown;
+  tool_output?: unknown;
+}
+
+export interface ObservationEvent {
+  version?: string;
+  event_id: string;
+  sequence?: number;
+  time: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string;
+  kind: string;
+  name?: string;
+  lifecycle?: string;
+  source?: string;
+  provenance?: string[];
+  quality?: string;
+  status?: string;
+  error?: ObservationError;
+  model?: ObservationModel;
+  tool?: ObservationTool;
+  usage?: ObservationUsage;
+  payload_ref?: ObservationPayloadRef;
+  attributes?: Record<string, unknown>;
+  content?: unknown;
+}
+
+export interface ObservationTraceDetail {
+  trace: ObservationTrace;
+  spans: ObservationSpan[];
+  events: ObservationEvent[];
+}
+
+export interface ObservationCoverage {
+  source: string;
+  quality?: string;
+  status?: string;
+  events?: number;
+  traces?: number;
+  last_seen_at?: string;
+  detail?: string;
+}
+
+export interface ObservationOverview {
+  traces?: number;
+  spans?: number;
+  events?: number;
+  model_requests?: number;
+  tool_calls?: number;
+  failed_traces?: number;
+  partial_traces?: number;
+  active_agents?: number;
+  error_rate?: number;
+  usage?: ObservationUsage;
+  coverage?: ObservationCoverage[];
+  recent_traces?: ObservationTrace[];
+}
+
+export interface ObservationInsight {
+  id: string;
+  rule_id: string;
+  agent_id?: string;
+  trace_id?: string;
+  severity?: string;
+  status: string;
+  title: string;
+  summary?: string;
+  suggestion?: string;
+  sample_size?: number;
+  confidence?: number;
+  estimated_token_savings?: number;
+  estimated_cost_savings_usd?: number;
+  related_trace_ids?: string[];
+  only_suggestion?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ObservationExporterSettings {
+  name?: string;
+  type?: string;
+  endpoint?: string;
+  enabled?: boolean;
+  include_content?: boolean;
+  status?: string;
+  pending?: number;
+  last_error?: string;
+}
+
+export interface ObservationSettings {
+  enabled?: boolean;
+  capture_content?: string;
+  content_retention_days?: number;
+  detail_retention_days?: number;
+  backfill_days?: number;
+  metadata_only?: boolean;
+  key_status?: string;
+  exporters?: ObservationExporterSettings[];
+}
+
+export interface ObservationIntegrationCoverage {
+  enabled?: boolean;
+  available?: boolean;
+  status?: string;
+  quality?: string;
+  detail?: string;
+  last_seen_at?: string;
+}
+
+export interface ObservationIntegration {
+  host: string;
+  name?: string;
+  status?: string;
+  installed?: boolean;
+  version?: string;
+  trust?: string;
+  pending_trust?: boolean;
+  plugin?: ObservationIntegrationCoverage;
+  otel?: ObservationIntegrationCoverage;
+  transcript?: ObservationIntegrationCoverage;
+  proxy?: ObservationIntegrationCoverage;
+  owners?: string[];
+  owner?: string;
+  drift?: boolean;
+  conflicts?: string[];
+  warnings?: string[];
+  target_paths?: string[];
+  install_id?: string;
+  coverage?: Record<string, string>;
+  findings?: ObservationIntegrationFinding[];
+  updated_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ObservationIntegrationFinding {
+  code?: string;
+  severity?: string;
+  message: string;
+  owner?: string;
+  path?: string;
+  blocking?: boolean;
+}
+
+export interface ObservationIntegrationAction {
+  kind?: string;
+  target?: string;
+  command?: string[];
+  reason?: string;
+}
+
+export interface ObservationIntegrationActionResult {
+  ok?: boolean;
+  host?: string;
+  action?: string;
+  status?: string;
+  message?: string;
+  pending_trust?: boolean;
+  warnings?: string[];
+  conflicts?: string[];
+  changes?: string[];
+  integration?: ObservationIntegration;
+  preview?: unknown;
+  changed?: boolean;
+  blocked?: boolean;
+  actions?: ObservationIntegrationAction[];
+  findings?: ObservationIntegrationFinding[];
+  preserved?: string[];
+  record?: Record<string, unknown>;
+}
+
+export interface ObservationTraceFilters {
+  agentID?: string;
+  runtimeID?: string;
+  sessionID?: string;
+  status?: string;
+  source?: string;
+  limit?: number;
+  offset?: number;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(apiPath(path));
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -470,6 +755,76 @@ async function postChecked<T>(path: string, body: unknown): Promise<T> {
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+let observationSessionPromise: Promise<void> | null = null;
+let observationBearer = "";
+
+async function ensureObservationSession(): Promise<void> {
+  if (observationSessionPromise) return observationSessionPromise;
+  observationSessionPromise = (async () => {
+    const nonceResponse = await fetch(apiPath("/api/v1/observability/session/nonce"), {
+      credentials: "include",
+    });
+    if (!nonceResponse.ok) throw new Error(`observability nonce: ${nonceResponse.status}`);
+    const noncePayload = (await nonceResponse.json()) as { nonce?: string };
+    if (!noncePayload.nonce) throw new Error("observability nonce missing");
+    const desktop = apiBase() !== "";
+    const sessionResponse = await fetch(apiPath("/api/v1/observability/session"), {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(desktop ? { "X-AgentNexus-Desktop": "1" } : {}),
+      },
+      body: JSON.stringify({ nonce: noncePayload.nonce }),
+    });
+    const sessionPayload = (await sessionResponse.json().catch(() => ({}))) as {
+      error?: string;
+      session_token?: string;
+    };
+    if (!sessionResponse.ok) {
+      throw new Error(sessionPayload.error || `observability session: ${sessionResponse.status}`);
+    }
+    observationBearer = sessionPayload.session_token || "";
+  })().catch((error) => {
+    observationSessionPromise = null;
+    throw error;
+  });
+  return observationSessionPromise;
+}
+
+async function observationFetch(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
+  await ensureObservationSession();
+  const headers = new Headers(init.headers);
+  if (observationBearer) headers.set("Authorization", `Bearer ${observationBearer}`);
+  const response = await fetch(apiPath(path), { ...init, headers, credentials: "include" });
+  if (response.status === 401 && retry) {
+    observationBearer = "";
+    observationSessionPromise = null;
+    return observationFetch(path, init, false);
+  }
+  return response;
+}
+
+async function observationGet<T>(path: string): Promise<T> {
+  const response = await observationFetch(path);
+  if (!response.ok) throw new Error(`${path}: ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
+async function observationPost<T>(path: string, body: unknown): Promise<T> {
+  const response = await observationFetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const message = typeof payload.error === "string" ? payload.error : `${path}: ${response.status}`;
     throw new Error(message);
   }
   return payload as T;
@@ -585,6 +940,55 @@ export const api = {
     postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind }),
   usage: (period: string) =>
     get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
+
+  // AgentNexus Observability
+  observationOverview: () => observationGet<ObservationOverview>("/api/v1/observability/overview"),
+  observationTraces: ({
+    agentID = "",
+    runtimeID = "",
+    sessionID = "",
+    status = "",
+    source = "",
+    limit = 100,
+    offset = 0,
+  }: ObservationTraceFilters = {}) =>
+    observationGet<ObservationTrace[] | { traces: ObservationTrace[]; total?: number }>(
+      `/api/v1/observability/traces?agent_id=${encodeURIComponent(agentID)}&runtime_id=${encodeURIComponent(
+        runtimeID
+      )}&session_id=${encodeURIComponent(sessionID)}&status=${encodeURIComponent(status)}&source=${encodeURIComponent(
+        source
+      )}&limit=${limit}&offset=${offset}`
+    ),
+  observationTrace: (traceID: string) =>
+    observationGet<ObservationTraceDetail>(`/api/v1/observability/traces/${encodeURIComponent(traceID)}`),
+  observationInsights: ({
+    agentID = "",
+    status = "",
+    ruleID = "",
+    limit = 100,
+  }: {
+    agentID?: string;
+    status?: string;
+    ruleID?: string;
+    limit?: number;
+  } = {}) =>
+    observationGet<ObservationInsight[] | { insights: ObservationInsight[]; total?: number }>(
+      `/api/v1/observability/insights?agent_id=${encodeURIComponent(agentID)}&status=${encodeURIComponent(
+        status
+      )}&rule_id=${encodeURIComponent(ruleID)}&limit=${limit}`
+    ),
+  observationSettings: () => observationGet<ObservationSettings>("/api/v1/observability/settings"),
+  observationIntegrations: () =>
+    observationGet<ObservationIntegration[] | { integrations: ObservationIntegration[] }>("/api/v1/observability/integrations"),
+  observationIntegrationAction: (
+    host: string,
+    action: "preview" | "install" | "repair" | "uninstall" | "doctor",
+    body: Record<string, unknown> = {}
+  ) =>
+    observationPost<ObservationIntegrationActionResult>(
+      `/api/v1/observability/integrations/${encodeURIComponent(host)}/${action}`,
+      body
+    ),
 
   // AgentNexus Connect: channels & triggers
   channels: () => get<Channel[] | null>("/api/v1/channels"),

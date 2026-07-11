@@ -87,6 +87,9 @@ type codexSession struct {
 	closed   bool
 	nextID   int
 	threadID string
+	// usageTotal tracks the app-server's thread-cumulative counters across
+	// turns. runTurn is serialized by turnMu, so it needs no separate lock.
+	usageTotal codexTokenUsage
 
 	modelMu                   sync.Mutex
 	defaultModel              string
@@ -285,7 +288,7 @@ func (s *codexSession) start(ctx context.Context, resumeID string) error {
 	if path, err := exec.LookPath(name); err == nil {
 		name = path
 	}
-	cmd := exec.Command(name, "app-server", "--listen", "stdio://")
+	cmd := exec.Command(name, codexAppServerArgs(ctx)...)
 	cmd.Dir = s.workDir
 	cmd.Env = codexBuildEnv(s.agent.env)
 	cmd.Stderr = &s.stderr
@@ -319,7 +322,7 @@ func (s *codexSession) start(ctx context.Context, resumeID string) error {
 	if resumeID != "" {
 		result, err := s.call(ctx, "thread/resume", map[string]any{"threadId": resumeID})
 		if err != nil {
-			return s.withStderr(err)
+			return unavailableCodexThreadError(s.withStderr(err))
 		}
 		s.threadID = firstString(nestedMap(result, "thread"), "id", "threadId")
 		if s.threadID == "" {
@@ -357,6 +360,36 @@ func (s *codexSession) start(ctx context.Context, resumeID string) error {
 		}
 	}
 	return nil
+}
+
+func codexAppServerArgs(ctx context.Context) []string {
+	telemetry := core.ObservationChildTelemetryFromContext(ctx)
+	args := []string{}
+	if telemetry.Endpoint != "" && telemetry.Token != "" {
+		endpoint := strings.TrimRight(telemetry.Endpoint, "/") + "/v1/traces"
+		exporter := fmt.Sprintf(`{"otlp-http"={endpoint=%q,protocol="json",headers={Authorization=%q}}}`,
+			endpoint, "Bearer "+telemetry.Token)
+		args = append(args,
+			"-c", "otel.environment=\"agentnexus\"",
+			"-c", "otel.exporter=\"none\"",
+			"-c", "otel.metrics_exporter=\"none\"",
+			"-c", "otel.trace_exporter="+exporter,
+			"-c", fmt.Sprintf("otel.log_user_prompt=%t", telemetry.CaptureContent),
+			"-c", `otel.span_attributes={"agentnexus.runtime"="codex"}`,
+		)
+	}
+	return append(args, "app-server", "--listen", "stdio://")
+}
+
+// unavailableCodexThreadError identifies the one app-server resume failure
+// that is safe to recover from: its backing rollout no longer exists. Keep
+// every other RPC error intact so callers never mistake an auth or transport
+// failure for a fresh conversation.
+func unavailableCodexThreadError(err error) error {
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "no rollout found for thread id") {
+		return err
+	}
+	return fmt.Errorf("%w: %w", core.ErrNativeSessionUnavailable, err)
 }
 
 func (s *codexSession) loadNativeModels(ctx context.Context) error {
@@ -487,10 +520,6 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	// Emit immediately, before the first server response, so the Feishu reply
-	// is visibly live even for turns that spend time setting up tools.
-	out <- &core.Event{Type: core.EventThinking, Text: "正在思考…"}
-
 	s.mu.Lock()
 	requestID := s.nextID
 	s.nextID++
@@ -502,7 +531,15 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 		return
 	}
 
-	mapper := &codexEventMapper{}
+	requestedModel := firstString(params, "model")
+	mapper := &codexEventMapper{
+		threadID:       threadID,
+		requestedModel: requestedModel,
+		resolvedModel:  requestedModel,
+		lastUsage:      s.usageTotal,
+		itemStarted:    map[string]int64{},
+	}
+	defer func() { s.usageTotal = mapper.lastUsage }()
 	for {
 		message, err := s.readMessage()
 		if err != nil {
@@ -513,6 +550,14 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 			if rpcErr := rpcError(message); rpcErr != nil {
 				out <- &core.Event{Type: core.EventError, Err: rpcErr}
 				return
+			}
+			result, _ := message["result"].(map[string]any)
+			turn := nestedMap(result, "turn")
+			if turnID := firstString(turn, "id"); turnID != "" {
+				mapper.turnID = turnID
+			}
+			if event := mapper.modelRequestEvent(); event != nil {
+				out <- event
 			}
 			continue // turn/start acknowledgement; stream notifications follow.
 		}
@@ -667,60 +712,201 @@ func codexBuildEnv(extra map[string]string) []string {
 }
 
 type codexEventMapper struct {
-	answer   string
-	thinking string
+	answer         string
+	thinking       string
+	threadID       string
+	turnID         string
+	requestedModel string
+	resolvedModel  string
+	requestEmitted bool
+	usageEvents    int
+	retryAttempt   int
+	lastUsage      codexTokenUsage
+	itemStarted    map[string]int64
 }
 
 func (m *codexEventMapper) mapNotification(method string, params map[string]any) ([]*core.Event, bool, error) {
+	m.updateContext(params)
 	switch method {
+	case "turn/started":
+		turn := nestedMap(params, "turn")
+		if turnID := firstString(turn, "id"); turnID != "" {
+			m.turnID = turnID
+		}
+		if event := m.modelRequestEvent(); event != nil {
+			return []*core.Event{event}, false, nil
+		}
 	case "item/agentMessage/delta":
 		delta, _ := params["delta"].(string)
 		if delta == "" {
 			return nil, false, nil
 		}
 		m.answer += delta
-		return []*core.Event{{Type: core.EventOutput, Text: m.answer}}, false, nil
+		return []*core.Event{{
+			Type: core.EventOutput, TurnID: m.turnID, ItemID: firstString(params, "itemId"), Text: m.answer,
+			Metadata: m.metadata("delta"),
+		}}, false, nil
 	case "item/reasoning/summaryTextDelta", "item/plan/delta":
 		delta, _ := params["delta"].(string)
 		if delta == "" {
 			return nil, false, nil
 		}
 		m.thinking += delta
-		return []*core.Event{{Type: core.EventThinking, Text: m.thinking}}, false, nil
-	case "item/reasoning/summaryPartAdded":
-		if m.thinking == "" {
-			return []*core.Event{{Type: core.EventThinking, Text: "正在思考…"}}, false, nil
-		}
-		return nil, false, nil
+		return []*core.Event{{
+			Type: core.EventThinking, TurnID: m.turnID, ItemID: firstString(params, "itemId"), Text: m.thinking,
+			Metadata: m.metadata("public_summary"),
+		}}, false, nil
 	case "item/started":
 		item := nestedMap(params, "item")
-		if firstString(item, "type") == "reasoning" && m.thinking == "" {
-			return []*core.Event{{Type: core.EventThinking, Text: "正在思考…"}}, false, nil
+		itemID := firstString(item, "id")
+		startedAt := codexInt64(params["startedAtMs"])
+		if itemID != "" && startedAt != 0 {
+			if m.itemStarted == nil {
+				m.itemStarted = map[string]int64{}
+			}
+			m.itemStarted[itemID] = startedAt
+		}
+		if firstString(item, "type") == "contextCompaction" {
+			status := firstString(item, "status")
+			if status == "" {
+				status = "in_progress"
+			}
+			return []*core.Event{{
+				Type: core.EventCompaction, EventID: lifecycleEventID(itemID, "started"), TurnID: m.turnID,
+				ItemID: itemID, Status: status, Metadata: m.metadata("started"),
+			}}, false, nil
 		}
 		if event := codexToolStart(item); event != nil {
+			m.decorateItemEvent(event, itemID, "started", 0)
 			return []*core.Event{event}, false, nil
 		}
 	case "item/completed":
 		item := nestedMap(params, "item")
+		itemID := firstString(item, "id")
+		duration := codexInt64(item["durationMs"])
+		if duration == 0 && itemID != "" {
+			if started := m.itemStarted[itemID]; started != 0 {
+				if elapsed := codexInt64(params["completedAtMs"]) - started; elapsed > 0 {
+					duration = elapsed
+				}
+			}
+		}
+		delete(m.itemStarted, itemID)
 		if firstString(item, "type") == "agentMessage" {
 			if text := firstString(item, "text"); text != "" {
 				m.answer = text
-				return []*core.Event{{Type: core.EventFinal, Text: text, Final: true}}, false, nil
+				return []*core.Event{{
+					Type: core.EventOutput, EventID: lifecycleEventID(itemID, "completed"), TurnID: m.turnID,
+					ItemID: itemID, Text: text, Status: "completed", DurationMs: duration, Metadata: m.metadata("completed"),
+				}}, false, nil
 			}
 			return nil, false, nil
 		}
-		if result, ok := codexToolResult(item); ok {
-			return []*core.Event{{Type: core.EventToolUse, ToolResult: result}}, false, nil
+		if firstString(item, "type") == "contextCompaction" {
+			return []*core.Event{{
+				Type: core.EventCompaction, EventID: lifecycleEventID(itemID, "completed"), TurnID: m.turnID,
+				ItemID: itemID, Status: "completed", DurationMs: duration, Metadata: m.metadata("completed"),
+			}}, false, nil
 		}
+		if event := codexToolResult(item); event != nil {
+			m.decorateItemEvent(event, itemID, "completed", duration)
+			return []*core.Event{event}, false, nil
+		}
+	case "item/commandExecution/outputDelta", "item/fileChange/outputDelta":
+		if delta, _ := params["delta"].(string); delta != "" {
+			return []*core.Event{m.toolUpdateEvent(firstString(params, "itemId"), "output_delta", "", delta)}, false, nil
+		}
+	case "item/mcpToolCall/progress":
+		if message, _ := params["message"].(string); message != "" {
+			return []*core.Event{m.toolUpdateEvent(firstString(params, "itemId"), "progress", "", message)}, false, nil
+		}
+	case "item/fileChange/patchUpdated":
+		if changes := codexValue(params["changes"]); changes != "" {
+			return []*core.Event{m.toolUpdateEvent(firstString(params, "itemId"), "input_update", changes, "")}, false, nil
+		}
+	case "item/commandExecution/terminalInteraction":
+		if stdin, _ := params["stdin"].(string); stdin != "" {
+			event := m.toolUpdateEvent(firstString(params, "itemId"), "terminal_input", stdin, "")
+			event.Metadata["process_id"] = firstString(params, "processId")
+			return []*core.Event{event}, false, nil
+		}
+	case "thread/tokenUsage/updated":
+		if event := m.tokenUsageEvent(params); event != nil {
+			return []*core.Event{event}, false, nil
+		}
+	case "thread/compacted":
+		return []*core.Event{{
+			Type: core.EventCompaction, EventID: lifecycleEventID(m.turnID, "legacy_compaction"), TurnID: m.turnID,
+			Status: "completed", Metadata: m.metadata("completed"),
+		}}, false, nil
+	case "model/rerouted":
+		fromModel := firstString(params, "fromModel")
+		toModel := firstString(params, "toModel")
+		if m.requestedModel == "" {
+			m.requestedModel = fromModel
+		}
+		if toModel != "" {
+			m.resolvedModel = toModel
+		}
+		metadata := m.metadata("rerouted")
+		metadata["from_model"] = fromModel
+		metadata["to_model"] = toModel
+		metadata["reroute_reason"] = firstString(params, "reason")
+		requestID := m.currentModelRequestID()
+		attempt := m.currentAttempt()
+		return []*core.Event{{
+			Type: core.EventModelRequest, EventID: lifecycleEventID(requestID, fmt.Sprintf("attempt:%d:rerouted:%s", attempt, toModel)), TurnID: m.turnID,
+			Status: "rerouted", Usage: &core.TurnUsage{Model: toModel, RequestID: requestID, RequestedModel: m.requestedModel, ResolvedModel: toModel, Attempt: attempt},
+			Metadata: metadata,
+		}}, false, nil
+	case "error":
+		err := codexNotificationError(params)
+		willRetry := codexBool(params["willRetry"])
+		attempt := m.currentAttempt()
+		requestID := m.currentModelRequestID()
+		metadata := m.metadata("attempt_failed")
+		metadata["will_retry"] = fmt.Sprintf("%t", willRetry)
+		events := []*core.Event{{
+			Type: core.EventModelResponse, EventID: lifecycleEventID(requestID, fmt.Sprintf("attempt:%d:failed", attempt)), TurnID: m.turnID,
+			Status: "failed", Err: err, Usage: &core.TurnUsage{
+				Model: m.resolvedModel, RequestID: requestID, RequestedModel: m.requestedModel, ResolvedModel: m.resolvedModel, Attempt: attempt,
+			}, Metadata: metadata,
+		}}
+		if willRetry {
+			m.retryAttempt = attempt + 1
+			events = append(events, &core.Event{
+				Type: core.EventModelRequest, EventID: lifecycleEventID(requestID, fmt.Sprintf("attempt:%d:start", m.retryAttempt)), TurnID: m.turnID,
+				Status: "retrying", Usage: &core.TurnUsage{
+					Model: m.resolvedModel, RequestID: requestID, RequestedModel: m.requestedModel, ResolvedModel: m.resolvedModel, Attempt: m.retryAttempt,
+				}, Metadata: m.metadata("retry_started"),
+			})
+			return events, false, nil
+		}
+		return events, false, err
 	case "turn/completed":
 		turn := nestedMap(params, "turn")
-		if firstString(turn, "status") == "failed" {
-			return nil, true, fmt.Errorf("%s", codexValue(turn["error"]))
+		if turnID := firstString(turn, "id"); turnID != "" {
+			m.turnID = turnID
+		}
+		status := firstString(turn, "status")
+		duration := codexInt64(turn["durationMs"])
+		if status == "failed" {
+			err := codexTurnError(turn)
+			return []*core.Event{{
+				Type: core.EventModelResponse, EventID: lifecycleEventID(m.turnID, "failed"), TurnID: m.turnID,
+				Status: status, DurationMs: duration, Err: err, Metadata: m.metadata("completed"),
+			}}, true, err
 		}
 		if m.answer != "" {
-			return []*core.Event{{Type: core.EventFinal, Text: m.answer, Final: true}}, true, nil
+			return []*core.Event{{
+				Type: core.EventFinal, EventID: lifecycleEventID(m.turnID, "final"), TurnID: m.turnID,
+				Text: m.answer, Final: true, Status: status, DurationMs: duration, Metadata: m.metadata("completed"),
+			}}, true, nil
 		}
-		return nil, true, nil
+		return []*core.Event{{
+			Type: core.EventModelResponse, EventID: lifecycleEventID(m.turnID, "completed"), TurnID: m.turnID,
+			Status: status, DurationMs: duration, Metadata: m.metadata("completed"),
+		}}, true, nil
 	}
 	// Raw reasoning deltas are intentionally not rendered. Codex's supported
 	// reasoning summary above is designed for user-visible progress; raw model
@@ -728,35 +914,138 @@ func (m *codexEventMapper) mapNotification(method string, params map[string]any)
 	return nil, false, nil
 }
 
-func codexToolStart(item map[string]any) *core.Event {
-	typ := firstString(item, "type")
-	var name, input string
-	switch typ {
-	case "commandExecution":
-		name, input = "执行命令", codexValue(item["command"])
-	case "mcpToolCall":
-		name = strings.Trim(strings.Join([]string{firstString(item, "server"), firstString(item, "tool")}, ":"), ":")
-		if name == "" {
-			name = "MCP 工具"
-		}
-		input = codexValue(firstNonNil(item["arguments"], item["input"]))
-	case "webSearch":
-		name, input = "网页搜索", codexValue(firstNonNil(item["query"], item["queries"]))
-	case "fileChange":
-		name, input = "修改文件", codexValue(firstNonNil(item["changes"], item["patch"]))
-	case "dynamicToolCall":
-		name, input = firstString(item, "tool"), codexValue(firstNonNil(item["arguments"], item["input"]))
-		if name == "" {
-			name = "动态工具"
-		}
-	default:
-		return nil
+func (m *codexEventMapper) updateContext(params map[string]any) {
+	if threadID := firstString(params, "threadId"); threadID != "" {
+		m.threadID = threadID
 	}
-	return &core.Event{Type: core.EventToolUse, ToolName: name, ToolInput: truncateCodex(input, 600)}
+	if turnID := firstString(params, "turnId"); turnID != "" {
+		m.turnID = turnID
+	}
 }
 
-func codexToolResult(item map[string]any) (string, bool) {
+func (m *codexEventMapper) modelRequestEvent() *core.Event {
+	if m.requestEmitted || m.turnID == "" {
+		return nil
+	}
+	m.requestEmitted = true
+	m.retryAttempt = 1
+	requestID := m.currentModelRequestID()
+	return &core.Event{
+		Type: core.EventModelRequest, EventID: lifecycleEventID(requestID, "attempt:1:start"), TurnID: m.turnID, Status: "in_progress",
+		Usage: &core.TurnUsage{
+			Model: m.resolvedModel, RequestID: requestID, RequestedModel: m.requestedModel, ResolvedModel: m.resolvedModel, Attempt: 1,
+		},
+		Metadata: m.metadata("started"),
+	}
+}
+
+func (m *codexEventMapper) metadata(lifecycle string) map[string]string {
+	metadata := map[string]string{
+		"runtime":   "codex",
+		"transport": "app-server",
+		"coverage":  "native",
+		"lifecycle": lifecycle,
+	}
+	if m.threadID != "" {
+		metadata["thread_id"] = m.threadID
+	}
+	return metadata
+}
+
+func (m *codexEventMapper) decorateItemEvent(event *core.Event, itemID, lifecycle string, duration int64) {
+	event.EventID = lifecycleEventID(itemID, lifecycle)
+	event.TurnID = m.turnID
+	event.ItemID = itemID
+	event.ToolCallID = itemID
+	event.DurationMs = duration
+	event.Metadata = m.metadata(lifecycle)
+}
+
+func (m *codexEventMapper) toolUpdateEvent(itemID, lifecycle, input, result string) *core.Event {
+	return &core.Event{
+		Type: core.EventToolUse, TurnID: m.turnID, ItemID: itemID, ToolCallID: itemID,
+		ToolInputRaw: input, ToolResultRaw: result, Status: "in_progress", Metadata: m.metadata(lifecycle),
+	}
+}
+
+func (m *codexEventMapper) tokenUsageEvent(params map[string]any) *core.Event {
+	tokenUsage := nestedMap(params, "tokenUsage")
+	totalMap := nestedMap(tokenUsage, "total")
+	lastMap := nestedMap(tokenUsage, "last")
+	current := codexTokenUsageFromMap(totalMap)
+	last := codexTokenUsageFromMap(lastMap)
+	if current.isZero() && !last.isZero() {
+		current = m.lastUsage.add(last)
+	}
+	delta := current.deltaFrom(m.lastUsage)
+	// A resumed thread starts with no in-memory baseline. Its first cumulative
+	// total includes historic turns, while `last` is only the current request.
+	if m.lastUsage.isZero() && !last.isZero() {
+		delta = last
+	}
+	m.lastUsage = current
+	if delta.isZero() {
+		return nil
+	}
+	m.usageEvents++
+	resolved := m.resolvedModel
+	if resolved == "" {
+		resolved = m.requestedModel
+	}
+	requestID := m.modelRequestID(m.usageEvents)
+	attempt := m.currentAttempt()
+	m.retryAttempt = 1
+	return &core.Event{
+		Type: core.EventModelResponse, EventID: lifecycleEventID(requestID, fmt.Sprintf("usage:%d", m.usageEvents)), TurnID: requestID,
+		Status: "completed",
+		Usage: &core.TurnUsage{
+			Model: resolved, RequestID: requestID, RequestedModel: m.requestedModel, ResolvedModel: resolved,
+			InputTokens: codexUncachedInput(delta.InputTokens, delta.CachedInputTokens), OutputTokens: delta.OutputTokens, CacheReadTokens: delta.CachedInputTokens,
+			ReasoningTokens: delta.ReasoningOutputTokens, TotalTokens: delta.total(), Cumulative: false, Attempt: attempt,
+		},
+		Metadata: m.metadata("usage_delta"),
+	}
+}
+
+func (m *codexEventMapper) currentAttempt() int {
+	if m.retryAttempt < 1 {
+		return 1
+	}
+	return m.retryAttempt
+}
+
+func (m *codexEventMapper) currentModelRequestID() string {
+	return m.modelRequestID(m.usageEvents + 1)
+}
+
+func (m *codexEventMapper) modelRequestID(index int) string {
+	if m.turnID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:model:%d", m.turnID, index)
+}
+
+func codexToolStart(item map[string]any) *core.Event {
+	name, input, ok := codexToolDescriptor(item)
+	if !ok {
+		return nil
+	}
+	status := firstString(item, "status")
+	if status == "" {
+		status = "in_progress"
+	}
+	return &core.Event{
+		Type: core.EventToolUse, ToolName: name, ToolInput: truncateCodex(input, 600), ToolInputRaw: input, Status: status,
+	}
+}
+
+func codexToolResult(item map[string]any) *core.Event {
 	typ := firstString(item, "type")
+	_, _, ok := codexToolDescriptor(item)
+	if !ok {
+		return nil
+	}
+	var result string
 	switch typ {
 	case "commandExecution":
 		parts := make([]string, 0, 2)
@@ -769,16 +1058,176 @@ func codexToolResult(item map[string]any) (string, bool) {
 		if len(parts) == 0 {
 			parts = append(parts, firstString(item, "status"))
 		}
-		return truncateCodex(strings.Join(parts, " · "), 800), true
-	case "mcpToolCall", "webSearch", "fileChange", "dynamicToolCall":
-		result := codexValue(firstNonNil(item["result"], item["output"], item["status"]))
+		result = strings.Join(parts, " · ")
+	case "mcpToolCall", "webSearch", "fileChange", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity", "imageView", "imageGeneration", "sleep":
+		result = codexValue(firstNonNil(item["result"], item["output"], item["aggregatedOutput"], item["contentItems"], item["agentsStates"], item["status"]))
 		if result == "" {
 			result = "完成"
 		}
-		return truncateCodex(result, 800), true
-	default:
-		return "", false
 	}
+	status := firstString(item, "status")
+	if status == "" {
+		status = "completed"
+	}
+	return &core.Event{
+		Type: core.EventToolUse, ToolResult: truncateCodex(result, 800),
+		ToolResultRaw: codexValue(item), Status: status, Err: codexItemError(item),
+	}
+}
+
+func codexToolDescriptor(item map[string]any) (name, input string, ok bool) {
+	switch firstString(item, "type") {
+	case "commandExecution":
+		return "执行命令", codexValue(item["command"]), true
+	case "mcpToolCall":
+		name = strings.Trim(strings.Join([]string{firstString(item, "server"), firstString(item, "tool")}, ":"), ":")
+		if name == "" {
+			name = "MCP 工具"
+		}
+		return name, codexValue(firstNonNil(item["arguments"], item["input"])), true
+	case "webSearch":
+		return "网页搜索", codexValue(firstNonNil(item["query"], item["queries"])), true
+	case "fileChange":
+		return "修改文件", codexValue(firstNonNil(item["changes"], item["patch"])), true
+	case "dynamicToolCall":
+		name = firstString(item, "tool")
+		if name == "" {
+			name = "动态工具"
+		}
+		return name, codexValue(firstNonNil(item["arguments"], item["input"])), true
+	case "collabAgentToolCall":
+		name = firstString(item, "tool")
+		if name == "" {
+			name = "协作代理"
+		}
+		return name, codexValue(firstNonNil(item["prompt"], item["receiverThreadIds"])), true
+	case "subAgentActivity":
+		return "子代理活动", codexValue(map[string]any{"agentPath": item["agentPath"], "agentThreadId": item["agentThreadId"], "kind": item["kind"]}), true
+	case "imageView":
+		return "查看图片", codexValue(item["path"]), true
+	case "imageGeneration":
+		return "生成图片", codexValue(firstNonNil(item["revisedPrompt"], item["prompt"])), true
+	case "sleep":
+		return "等待", codexValue(item["durationMs"]), true
+	default:
+		return "", "", false
+	}
+}
+
+func codexItemError(item map[string]any) error {
+	status := strings.ToLower(firstString(item, "status"))
+	if status != "failed" && status != "declined" {
+		return nil
+	}
+	detail := firstString(nestedMap(item, "error"), "message")
+	if detail == "" {
+		detail = codexValue(firstNonNil(item["error"], item["result"], item["status"]))
+	}
+	return fmt.Errorf("codex tool %s: %s", status, detail)
+}
+
+func codexTurnError(turn map[string]any) error {
+	detail := firstString(nestedMap(turn, "error"), "message")
+	if detail == "" {
+		detail = codexValue(turn["error"])
+	}
+	if detail == "" {
+		detail = "turn failed"
+	}
+	return fmt.Errorf("%s", detail)
+}
+
+func codexNotificationError(params map[string]any) error {
+	detail := firstString(nestedMap(params, "error"), "message")
+	if detail == "" {
+		detail = codexValue(params["error"])
+	}
+	if detail == "" {
+		detail = "model request failed"
+	}
+	return fmt.Errorf("%s", detail)
+}
+
+func lifecycleEventID(id, lifecycle string) string {
+	if id == "" {
+		return ""
+	}
+	return id + ":" + lifecycle
+}
+
+type codexTokenUsage struct {
+	InputTokens           int64
+	CachedInputTokens     int64
+	OutputTokens          int64
+	ReasoningOutputTokens int64
+	TotalTokens           int64
+}
+
+func codexTokenUsageFromMap(value map[string]any) codexTokenUsage {
+	return codexTokenUsage{
+		InputTokens: codexInt64(value["inputTokens"]), CachedInputTokens: codexInt64(value["cachedInputTokens"]),
+		OutputTokens: codexInt64(value["outputTokens"]), ReasoningOutputTokens: codexInt64(value["reasoningOutputTokens"]),
+		TotalTokens: codexInt64(value["totalTokens"]),
+	}
+}
+
+func (u codexTokenUsage) isZero() bool {
+	return u.InputTokens == 0 && u.CachedInputTokens == 0 && u.OutputTokens == 0 && u.ReasoningOutputTokens == 0 && u.TotalTokens == 0
+}
+
+func (u codexTokenUsage) total() int64 {
+	if u.TotalTokens != 0 {
+		return u.TotalTokens
+	}
+	return u.InputTokens + u.OutputTokens
+}
+
+func (u codexTokenUsage) add(other codexTokenUsage) codexTokenUsage {
+	return codexTokenUsage{
+		InputTokens: u.InputTokens + other.InputTokens, CachedInputTokens: u.CachedInputTokens + other.CachedInputTokens,
+		OutputTokens: u.OutputTokens + other.OutputTokens, ReasoningOutputTokens: u.ReasoningOutputTokens + other.ReasoningOutputTokens,
+		TotalTokens: u.TotalTokens + other.TotalTokens,
+	}
+}
+
+func (u codexTokenUsage) deltaFrom(previous codexTokenUsage) codexTokenUsage {
+	if u.InputTokens < previous.InputTokens || u.CachedInputTokens < previous.CachedInputTokens ||
+		u.OutputTokens < previous.OutputTokens || u.ReasoningOutputTokens < previous.ReasoningOutputTokens || u.TotalTokens < previous.TotalTokens {
+		return u
+	}
+	return codexTokenUsage{
+		InputTokens: u.InputTokens - previous.InputTokens, CachedInputTokens: u.CachedInputTokens - previous.CachedInputTokens,
+		OutputTokens: u.OutputTokens - previous.OutputTokens, ReasoningOutputTokens: u.ReasoningOutputTokens - previous.ReasoningOutputTokens,
+		TotalTokens: u.TotalTokens - previous.TotalTokens,
+	}
+}
+
+func codexInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		out, _ := typed.Int64()
+		return out
+	default:
+		return 0
+	}
+}
+
+func codexBool(value any) bool {
+	out, _ := value.(bool)
+	return out
+}
+
+func codexUncachedInput(input, cached int64) int64 {
+	if input <= cached {
+		return 0
+	}
+	return input - cached
 }
 
 func rpcID(message map[string]any) (int, bool) {

@@ -76,27 +76,44 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	if agent == nil {
 		return "", fmt.Errorf("trigger %q has no agent to run (bind an agent or a channel with an agent)", tr.Name)
 	}
+	data["runtime_id"] = opts.RuntimeID
+	if agent != nil {
+		data["agent_name"] = agent.Name()
+	}
 
 	// Reuse the channel's per-chat session unless the trigger asks for a
 	// fresh one (cc-connect session_mode semantics).
 	reuse := tr.SessionMode != SessionModeNewPerRun && rt != nil && rt.agent != nil && tr.ChatID != ""
 	var sess AgentSession
 	var conv *Conversation
+	var created bool
 	var err error
 	if reuse {
-		sess, conv, _, err = rt.session(ctx, tr.ChatID, "")
+		sess, conv, created, err = rt.session(ctx, tr.ChatID, "")
 	} else {
 		workDir, err = e.initializeWorkspace(ctx, opts, workDir)
 		if err != nil {
 			return "", fmt.Errorf("start session: %w", err)
 		}
-		sess, err = agent.StartSession(ctx, workDir)
+		sess, err = e.startAgentSession(ctx, agent, workDir, nil)
 		if err == nil {
-			defer func() { _ = sess.Close(context.Background()) }()
+			data["session_id"] = sessionObservationID(sess)
+			e.emit(ctx, HookSessionStarted, data)
+			defer func() {
+				e.emit(context.Background(), HookSessionEnded, data)
+				_ = sess.Close(context.Background())
+			}()
 		}
 	}
 	if err != nil {
 		return "", fmt.Errorf("start session: %w", err)
+	}
+	data["session_id"] = sessionObservationID(sess)
+	if conv != nil {
+		data["conversation_id"] = conv.ID
+	}
+	if reuse && created {
+		e.emit(ctx, HookSessionStarted, data)
 	}
 
 	result, err := e.streamTurn(ctx, sess, prompt, nil, data)

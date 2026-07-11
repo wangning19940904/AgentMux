@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -42,10 +44,42 @@ type Hook struct {
 	URL     string
 }
 
-// HookRunner fires configured hooks asynchronously.
+const (
+	hookWorkerCount = 4
+	hookQueueSize   = 256
+)
+
+type hookJob struct {
+	ctx   context.Context
+	hook  Hook
+	data  map[string]string
+	start time.Time
+}
+
+// HookRun describes one completed legacy shell/HTTP hook. Observability can
+// attach a listener without changing the existing hook configuration API.
+type HookRun struct {
+	Event     HookEvent
+	Type      string
+	StartedAt time.Time
+	Duration  time.Duration
+	Data      map[string]string
+	Err       error
+}
+
+// HookRunObserver receives completed hook attempts. It must return quickly;
+// HookRunner invokes it outside its queue lock.
+type HookRunObserver func(HookRun)
+
+// HookRunner fires configured hooks asynchronously through a bounded worker
+// pool. Hook overload is fail-open: agent execution is never blocked.
 type HookRunner struct {
-	log   *slog.Logger
-	hooks []Hook
+	log      *slog.Logger
+	hooks    []Hook
+	queue    chan hookJob
+	start    sync.Once
+	mu       sync.RWMutex
+	observer HookRunObserver
 }
 
 // NewHookRunner builds a runner from the configured hooks.
@@ -53,7 +87,34 @@ func NewHookRunner(log *slog.Logger, hooks []Hook) *HookRunner {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &HookRunner{log: log, hooks: hooks}
+	r := &HookRunner{log: log, hooks: hooks, queue: make(chan hookJob, hookQueueSize)}
+	r.ensureWorkers()
+	return r
+}
+
+func (r *HookRunner) ensureWorkers() {
+	if r == nil {
+		return
+	}
+	r.start.Do(func() {
+		for range hookWorkerCount {
+			go func() {
+				for job := range r.queue {
+					r.run(job)
+				}
+			}()
+		}
+	})
+}
+
+// SetObserver attaches an optional completion listener.
+func (r *HookRunner) SetObserver(observer HookRunObserver) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.observer = observer
+	r.mu.Unlock()
 }
 
 // Fire dispatches all hooks matching event. Non-blocking.
@@ -65,14 +126,29 @@ func (r *HookRunner) Fire(ctx context.Context, event HookEvent, data map[string]
 		if h.Event != event {
 			continue
 		}
-		h := h
-		go r.run(ctx, h, data)
+		copyData := cloneHookData(data)
+		job := hookJob{ctx: context.WithoutCancel(ctx), hook: h, data: copyData, start: time.Now().UTC()}
+		select {
+		case r.queue <- job:
+		default:
+			r.log.Warn("hook queue full; dropping observation action", "event", event, "type", h.Type)
+		}
 	}
 }
 
-func (r *HookRunner) run(ctx context.Context, h Hook, data map[string]string) {
-	if err := RunHookAction(ctx, h.Type, h.Command, h.URL, data); err != nil {
-		r.log.Error("hook failed", "event", h.Event, "type", h.Type, "err", err)
+func (r *HookRunner) run(job hookJob) {
+	err := RunHookAction(job.ctx, job.hook.Type, job.hook.Command, job.hook.URL, job.data)
+	if err != nil {
+		r.log.Error("hook failed", "event", job.hook.Event, "type", job.hook.Type, "err", err)
+	}
+	r.mu.RLock()
+	observer := r.observer
+	r.mu.RUnlock()
+	if observer != nil {
+		observer(HookRun{
+			Event: job.hook.Event, Type: job.hook.Type, StartedAt: job.start,
+			Duration: time.Since(job.start), Data: cloneHookData(job.data), Err: err,
+		})
 	}
 }
 
@@ -84,8 +160,13 @@ func RunHookAction(ctx context.Context, typ, command, url string, data map[strin
 	defer cancel()
 	switch typ {
 	case ActionShell:
+		body, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("shell body: %w", err)
+		}
 		cmd := exec.CommandContext(ctx, "sh", "-c", command)
-		cmd.Env = hookEnv(data)
+		cmd.Env = append(os.Environ(), hookEnv(data)...)
+		cmd.Stdin = bytes.NewReader(body)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("shell: %w (output: %s)", err, string(out))
 		}
@@ -115,6 +196,14 @@ func RunHookAction(ctx context.Context, typ, command, url string, data map[strin
 	default:
 		return fmt.Errorf("unknown hook action type %q", typ)
 	}
+}
+
+func cloneHookData(data map[string]string) map[string]string {
+	out := make(map[string]string, len(data))
+	for k, v := range data {
+		out[k] = v
+	}
+	return out
 }
 
 func hookEnv(data map[string]string) []string {

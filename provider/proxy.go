@@ -67,6 +67,10 @@ type ProxyServer struct {
 
 	client   *http.Client
 	breakers sync.Map // provider id -> *breaker
+
+	traceMu       sync.RWMutex
+	traceObserver func(context.Context, core.ProxyTrace, []byte, []byte) error
+	traceCost     func(core.ProxyTrace) float64
 }
 
 // NewProxyServer builds the local routing server (not yet listening).
@@ -90,6 +94,40 @@ func NewProxyServer(log *slog.Logger, st *store.Store, addr string) *ProxyServer
 			},
 		},
 	}
+}
+
+// SetTraceObserver attaches the live observability bridge. Request/response
+// bodies are bounded captures and must be redacted/encrypted by the observer.
+func (s *ProxyServer) SetTraceObserver(observer func(context.Context, core.ProxyTrace, []byte, []byte) error) {
+	s.traceMu.Lock()
+	s.traceObserver = observer
+	s.traceMu.Unlock()
+}
+
+func (s *ProxyServer) SetTraceCostEstimator(estimator func(core.ProxyTrace) float64) {
+	s.traceMu.Lock()
+	s.traceCost = estimator
+	s.traceMu.Unlock()
+}
+
+func (s *ProxyServer) estimateTraceCost(trace core.ProxyTrace) float64 {
+	s.traceMu.RLock()
+	estimator := s.traceCost
+	s.traceMu.RUnlock()
+	if estimator == nil {
+		return 0
+	}
+	return estimator(trace)
+}
+
+func (s *ProxyServer) observeTrace(ctx context.Context, trace core.ProxyTrace, requestBody, responseBody []byte) error {
+	s.traceMu.RLock()
+	observer := s.traceObserver
+	s.traceMu.RUnlock()
+	if observer == nil {
+		return nil
+	}
+	return observer(ctx, trace, requestBody, responseBody)
 }
 
 // Start begins listening; it is idempotent.
@@ -538,7 +576,7 @@ func (s *ProxyServer) codexModelsPassthrough(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer resp.Body.Close()
-	relayResponse(w, resp)
+	_ = relayResponse(w, resp)
 }
 
 // ---- Gemini CLI path ----
@@ -602,7 +640,7 @@ func copyProxyHeaders(dst, src http.Header) {
 }
 
 // relayResponse streams an upstream response to the client verbatim.
-func relayResponse(w http.ResponseWriter, resp *http.Response) {
+func relayResponse(w http.ResponseWriter, resp *http.Response) error {
 	for k, vs := range resp.Header {
 		lk := strings.ToLower(k)
 		if lk == "connection" || lk == "transfer-encoding" || lk == "keep-alive" {
@@ -619,14 +657,17 @@ func relayResponse(w http.ResponseWriter, resp *http.Response) {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
+				return werr
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
 		if err != nil {
-			return
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
 	}
 }

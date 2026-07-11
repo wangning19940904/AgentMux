@@ -96,11 +96,15 @@ func (s *session) NativeSessionID() string {
 // Send runs one turn and streams events.
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
 	out := make(chan *core.Event, 16)
+	requestedModel := s.CurrentModel()
 	args := s.args(text)
 
 	cmd := exec.CommandContext(ctx, claudeBinary(), args...)
 	cmd.Dir = s.workDir
-	cmd.Env = buildEnv(s.agent.env)
+	cmd.Env = withObservationTelemetry(
+		withObservationTraceparent(buildEnv(s.agent.env), core.ObservationTraceparent(ctx)),
+		core.ObservationChildTelemetryFromContext(ctx),
+	)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -114,7 +118,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		defer close(out)
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-		m := &streamMapper{}
+		m := &streamMapper{requestedModel: requestedModel}
 		for sc.Scan() {
 			line := sc.Bytes()
 			if sid := parseSessionID(line); sid != "" {
@@ -174,6 +178,7 @@ type streamLine struct {
 	Subtype   string `json:"subtype"`
 	Result    string `json:"result"`
 	SessionID string `json:"session_id"`
+	UUID      string `json:"uuid"`
 	Event     struct {
 		Type  string `json:"type"`
 		Delta struct {
@@ -199,12 +204,14 @@ type streamLine struct {
 // blocks (whose Content is the tool's output, either a string or an array of
 // {type,text} parts).
 type streamContent struct {
-	Type    string          `json:"type"`
-	Text    string          `json:"text"`
-	Name    string          `json:"name"`
-	Input   json.RawMessage `json:"input"`
-	IsError bool            `json:"is_error"`
-	Content json.RawMessage `json:"content"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	ToolUseID string          `json:"tool_use_id"`
+	Text      string          `json:"text"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // streamMapper turns Claude Code stream-json lines into core.Events while
@@ -212,7 +219,8 @@ type streamContent struct {
 // EventOutput carrying the full accumulated text so far, which lets in-place
 // renderers (Feishu streaming card) grow the reply as the model types.
 type streamMapper struct {
-	buf string
+	buf            string
+	requestedModel string
 }
 
 func (m *streamMapper) map_(b []byte) []*core.Event {
@@ -235,11 +243,21 @@ func (m *streamMapper) map_(b []byte) []*core.Event {
 		var evs []*core.Event
 		for _, c := range l.Message.Content {
 			if c.Type == "tool_result" {
+				status := "completed"
+				if c.IsError {
+					status = "failed"
+				}
 				evs = append(evs, &core.Event{
-					Type:       core.EventToolUse,
-					ToolResult: summarizeToolResult(c.Content),
-					Final:      false,
-					Err:        toolResultErr(c.IsError),
+					Type:          core.EventToolUse,
+					EventID:       claudeLifecycleEventID(c.ToolUseID, "completed", l.UUID),
+					ItemID:        c.ToolUseID,
+					ToolCallID:    c.ToolUseID,
+					ToolResult:    summarizeToolResult(c.Content),
+					ToolResultRaw: string(c.Content),
+					Status:        status,
+					Final:         false,
+					Err:           toolResultErr(c.IsError),
+					Metadata:      claudeEventMetadata("completed"),
 				})
 			}
 		}
@@ -267,9 +285,15 @@ func (m *streamMapper) mapAssistant(l streamLine) []*core.Event {
 			text += c.Text
 		case "tool_use":
 			evs = append(evs, &core.Event{
-				Type:      core.EventToolUse,
-				ToolName:  c.Name,
-				ToolInput: summarizeToolInput(c.Input),
+				Type:         core.EventToolUse,
+				EventID:      claudeLifecycleEventID(c.ID, "started", l.UUID),
+				ItemID:       c.ID,
+				ToolCallID:   c.ID,
+				ToolName:     c.Name,
+				ToolInput:    summarizeToolInput(c.Input),
+				ToolInputRaw: string(c.Input),
+				Status:       "in_progress",
+				Metadata:     claudeEventMetadata("started"),
 			})
 		}
 	}
@@ -281,19 +305,55 @@ func (m *streamMapper) mapAssistant(l streamLine) []*core.Event {
 	// Only emit an output event when this message actually carried text; a
 	// tool-only assistant turn should not blank the accumulated answer.
 	if text != "" || len(evs) == 0 {
-		ev := &core.Event{Type: core.EventOutput, Text: m.buf}
-		if l.Message.Model != "" {
-			ev.Usage = &core.TurnUsage{
+		evs = append(evs, &core.Event{Type: core.EventOutput, Text: m.buf})
+	}
+	if hasClaudeUsage(l) {
+		u := l.Message.Usage
+		total := u.InputTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+		evs = append(evs, &core.Event{
+			Type:    core.EventModelResponse,
+			EventID: claudeLifecycleEventID(l.UUID, "response", ""),
+			Status:  "completed",
+			Usage: &core.TurnUsage{
 				Model:            l.Message.Model,
-				InputTokens:      l.Message.Usage.InputTokens,
-				OutputTokens:     l.Message.Usage.OutputTokens,
-				CacheReadTokens:  l.Message.Usage.CacheReadInputTokens,
-				CacheWriteTokens: l.Message.Usage.CacheCreationInputTokens,
-			}
-		}
-		evs = append(evs, ev)
+				RequestID:        l.UUID,
+				RequestedModel:   m.requestedModel,
+				ResolvedModel:    l.Message.Model,
+				InputTokens:      u.InputTokens,
+				OutputTokens:     u.OutputTokens,
+				CacheReadTokens:  u.CacheReadInputTokens,
+				CacheWriteTokens: u.CacheCreationInputTokens,
+				TotalTokens:      total,
+			},
+			Metadata: claudeEventMetadata("response"),
+		})
 	}
 	return evs
+}
+
+func hasClaudeUsage(l streamLine) bool {
+	u := l.Message.Usage
+	return l.Message.Model != "" || u.InputTokens != 0 || u.OutputTokens != 0 ||
+		u.CacheReadInputTokens != 0 || u.CacheCreationInputTokens != 0
+}
+
+func claudeLifecycleEventID(toolID, lifecycle, fallback string) string {
+	if toolID == "" {
+		toolID = fallback
+	}
+	if toolID == "" {
+		return ""
+	}
+	return toolID + ":" + lifecycle
+}
+
+func claudeEventMetadata(lifecycle string) map[string]string {
+	return map[string]string{
+		"runtime":   "claude-code",
+		"transport": "stream-json",
+		"coverage":  "native_stream",
+		"lifecycle": lifecycle,
+	}
 }
 
 func toolResultErr(isErr bool) error {
@@ -326,6 +386,69 @@ func buildEnv(extra map[string]string) []string {
 	}
 	for k, v := range extra {
 		filtered = append(filtered, fmt.Sprintf("%s=%s", k, v))
+	}
+	return filtered
+}
+
+func withObservationTraceparent(env []string, traceparent string) []string {
+	if traceparent == "" {
+		return env
+	}
+	filtered := make([]string, 0, len(env)+1)
+	for _, value := range env {
+		if strings.HasPrefix(value, "TRACEPARENT=") {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	return append(filtered, "TRACEPARENT="+traceparent)
+}
+
+func withObservationTelemetry(env []string, telemetry core.ObservationChildTelemetry) []string {
+	if telemetry.Endpoint == "" || telemetry.Token == "" {
+		return env
+	}
+	content := "0"
+	if telemetry.CaptureContent {
+		content = "1"
+	}
+	resource := []string{
+		"service.namespace=agentnexus", "agentnexus.runtime=claude",
+		"agentnexus.parent_trace_id=" + telemetry.TraceID,
+		"agentnexus.parent_span_id=" + telemetry.ParentSpanID,
+		"agentnexus.turn_id=" + telemetry.TurnID,
+		"agentnexus.session_id=" + telemetry.SessionID,
+		"agentnexus.agent_id=" + telemetry.AgentID,
+	}
+	overrides := map[string]string{
+		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",
+		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+		"OTEL_TRACES_EXPORTER":                "otlp",
+		"OTEL_LOGS_EXPORTER":                  "none",
+		"OTEL_METRICS_EXPORTER":               "none",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":         "http/json",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":         strings.TrimRight(telemetry.Endpoint, "/"),
+		"OTEL_EXPORTER_OTLP_HEADERS":          "Authorization=Bearer " + telemetry.Token,
+		"OTEL_TRACES_EXPORT_INTERVAL":         "1000",
+		"OTEL_RESOURCE_ATTRIBUTES":            strings.Join(resource, ","),
+		"OTEL_LOG_USER_PROMPTS":               content,
+		"OTEL_LOG_ASSISTANT_RESPONSES":        content,
+		"OTEL_LOG_TOOL_DETAILS":               content,
+		"OTEL_LOG_TOOL_CONTENT":               content,
+		// Raw API bodies contain the full conversation. Public prompt/response
+		// and tool content are already available through the narrower gates.
+		"OTEL_LOG_RAW_API_BODIES": "0",
+	}
+	filtered := make([]string, 0, len(env)+len(overrides))
+	for _, value := range env {
+		key, _, _ := strings.Cut(value, "=")
+		if _, replaced := overrides[key]; replaced {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	for key, value := range overrides {
+		filtered = append(filtered, key+"="+value)
 	}
 	return filtered
 }

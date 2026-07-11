@@ -35,6 +35,7 @@ type Server struct {
 	guard     core.Guard
 	workspace core.WorkspaceInitializer
 	sessions  *sessionstore.Service
+	obs       *observabilityRuntime
 	mux       *http.ServeMux
 	httpSrv   *http.Server
 }
@@ -137,6 +138,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /channel-avatar", s.handleChannelAvatar)
 	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
 	s.registerModuleRoutes()
+	s.registerObservabilityRoutes()
 	s.registerWeb(s.mux)
 }
 
@@ -162,6 +164,18 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // withAuth enforces the bridge token on /api/ routes when the bridge is on.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isObservabilityPath(r.URL.Path) {
+			s.applyObservabilityCORS(w, r)
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if !s.authorizeObservabilityRequest(w, r) {
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")

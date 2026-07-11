@@ -53,12 +53,12 @@ func init() {
 	// iFlow CLI.
 	register("iflow", "iflow", false, func(p, _, _ string) []string {
 		return []string{"-i", "-r", "-o", p}
-	}, cliagent.PlainTextMapper, true)
+	}, partialPlainTextMapper, true)
 
 	// Kimi CLI.
 	register("kimi", "kimi", false, func(p, _, _ string) []string {
 		return []string{"-p", p}
-	}, cliagent.PlainTextMapper, true)
+	}, partialPlainTextMapper, true)
 }
 
 func cursorArgs(prompt, _, model string) []string {
@@ -83,8 +83,23 @@ func jsonTextMapper(line []byte) *core.Event {
 			if final {
 				t = core.EventFinal
 			}
-			return &core.Event{Type: t, Text: v, Final: final}
+			return &core.Event{Type: t, Text: v, Final: final, Metadata: partialCLIMetadata()}
 		}
 	}
 	return nil
+}
+
+func partialPlainTextMapper(line []byte) *core.Event {
+	event := cliagent.PlainTextMapper(line)
+	if event != nil {
+		event.Metadata = partialCLIMetadata()
+	}
+	return event
+}
+
+func partialCLIMetadata() map[string]string {
+	return map[string]string{
+		"transport": "generic-cli",
+		"coverage":  "partial",
+	}
 }

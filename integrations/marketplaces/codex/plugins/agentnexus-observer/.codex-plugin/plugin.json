@@ -1,0 +1,30 @@
+{
+  "name": "agentnexus-observer",
+  "version": "0.1.0",
+  "description": "Additive lifecycle hooks that send Codex activity to the local AgentNexus observability collector.",
+  "author": {
+    "name": "AgentNexus"
+  },
+  "homepage": "https://github.com/agentnexus/agentnexus",
+  "repository": "https://github.com/agentnexus/agentnexus",
+  "license": "Apache-2.0",
+  "keywords": [
+    "observability",
+    "tracing",
+    "hooks"
+  ],
+  "interface": {
+    "displayName": "AgentNexus Observer",
+    "shortDescription": "Send Codex lifecycle events to AgentNexus",
+    "longDescription": "Adds fail-open lifecycle hooks for local AgentNexus tracing. It does not replace or rewrite hooks installed by other plugins.",
+    "developerName": "AgentNexus",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/agentnexus/agentnexus",
+    "defaultPrompt": [
+      "Show my recent AgentNexus traces"
+    ]
+  }
+}

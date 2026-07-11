@@ -15,6 +15,7 @@ CLI 名称:`agent-nexus`(短别名 `anx`)。
 | IM 连接 | **AgentNexus Connect** | `platform/` |
 | Agent 路由 | **AgentNexus Router** | `agent/` |
 | Token 统计 | **AgentNexus Ledger** | `usage/` |
+| Trace 与优化建议 | **AgentNexus Observability** | `observability/` |
 | 统一 Memory | **AgentNexus Memory** | `memory/` |
 | Skills 管理 | **AgentNexus Skills** | `skills/` |
 | MCP 管理 | **AgentNexus MCP Registry** | `mcp/` |
@@ -25,6 +26,7 @@ CLI 名称:`agent-nexus`(短别名 `anx`)。
 - **Router** — 支持 Claude Code、Codex、Cursor、Gemini、Qoder、OpenCode、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移。
 - **渠道 & 触发** — 渠道是绑定 Agent 的实时 IM 连接(飞书/Telegram/钉钉/Slack/Discord/Webhook),控制台可增删改与启停/重启并显示运行状态;触发统一承载三类自动化:定时任务(robfig/cron,标准 5 段表达式)、入站 Webhook(`POST /hook/{id}`,自带 token 鉴权)、生命周期事件回调(`message.received`/`cron.triggered`/`error` 等 → Shell 或 HTTP)。定时/Webhook 触发把 Prompt 发给绑定 Agent 并将结果推回渠道会话,支持 `reuse`/`new_per_run` 会话模式。
 - **Ledger** — 读取 Claude/Codex/Cursor/Gemini 的本地会话日志,基于 LiteLLM 价格数据计费,按天/周/月/会话/5 小时块出账,并能通过 SSH 采集远程机器用量。
+- **Observability** — 用统一 Trace 串联 Agent Turn、模型请求、重试、工具、Hook 与渠道回复；融合内部事件、Claude/Codex 原生 OTel、Proxy 和增量 Transcript，并生成只读优化建议。
 - **Memory** — 跨 Agent 与跨会话的统一记忆层(检索、写入、共享上下文)。
 - **Skills** — 统一发现、安装与管理 Agent Skills。
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
@@ -42,6 +44,8 @@ clients (CLI / WebUI / Wails / menubar)
    ├── agent/       Router:agent adapters (claudecode, codex, cursor, gemini, ...)
    ├── provider/    provider mgmt + presets + failover proxy + live-config writer
    ├── usage/       Ledger:parsers + pricing + aggregation + SSH collector
+   ├── observability/ encrypted recorder + OTLP + transcript + insights
+   ├── integrations/ Claude/Codex native observer plugins + ownership doctor
    ├── memory/      Memory:统一记忆 store 与检索
    ├── skills/      Skills:Agent Skills 发现与管理
    ├── mcp/         MCP Registry:MCP server 注册与下发
@@ -78,7 +82,10 @@ make release
 - `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
 - `[bridge]` 暴露 HTTP send API;**启用时必须设置 token**。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
+- `[observability]` 默认启用；完整内容先脱敏、分块压缩并以 AES-256-GCM 加密，默认保留 30 天，详细元数据保留 180 天。每个 `[[observability.exporters]]` 独立配置 OTLP 队列，`include_content` 默认关闭。
 - `${ENV_VAR}` 占位符从环境变量展开。
+
+Console 的 **Observability → Integrations** 可预览、安装、修复或卸载原生 `agentnexus-observer`。安装始终通过 Claude/Codex 自身的 plugin CLI；Codex 安装后保持 `pending_trust`，需在 `/hooks` 手动审核。AgentNexus 不覆盖 Flux Island、CC Switch 或其他同名/漂移资源。
 
 ## CLI
 
@@ -117,13 +124,20 @@ POST /api/v1/triggers                # 新建/更新触发(校验 cron 表达式
 DELETE /api/v1/triggers?id=          # 删除触发
 POST /api/v1/triggers/run?id=        # 立即执行一次触发
 POST /hook/{id}                      # 入站 Webhook 触发端点(token 鉴权,payload 附加到 prompt)
+
+GET  /api/v1/observability/traces              # Trace 列表与筛选
+GET  /api/v1/observability/traces/{trace_id}   # Span/Event 时间线与授权解密内容
+GET  /api/v1/observability/insights            # 仅建议的优化洞察
+GET  /api/v1/observability/settings            # 保留期、密钥与 Exporter 状态
+GET  /api/v1/observability/integrations        # Plugin/OTel/Transcript/Proxy Doctor
+POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall|doctor}
 ```
 
 ## 构建
 
 | 目标 | 命令 | 说明 |
 | --- | --- | --- |
-| CLI (host) | `make build` | 占位 WebUI |
+| CLI (host) | `make build` | 同时构建 `anx` 与 fail-open 的 `agentnexus-hook` |
 | CLI + WebUI | `make release` | `-tags embedweb`,嵌入 `web/dist` |
 | 全平台 | `make cross` | Linux/macOS/Windows, amd64/arm64 |
 | 桌面应用 | `make desktop` | 需要 Wails v2 工具链 |
@@ -146,6 +160,8 @@ POST /hook/{id}                      # 入站 Webhook 触发端点(token 鉴权,
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
 - Provider API key 在 SQLite 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
 - SSH 采集器为本地工具便利使用 `InsecureIgnoreHostKey`;在不可信网络中使用前请固定 host key。
+- Observability 内容不会明文写入 SQLite：已知 Secret、Authorization、Cookie、API Key 与隐藏 reasoning 在持久化前删除；macOS 主密钥位于 Keychain，其他平台未显式配置安全密钥时自动退化为 metadata-only。
+- Console 的敏感 Trace API 使用 loopback 一次性 nonce 换取 SameSite HttpOnly 会话；原生 Hook/OTLP ingest 使用独立随机本地 token。OTLP Exporter 默认只发送元数据。
 
 ## License
 
