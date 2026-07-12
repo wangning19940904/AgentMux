@@ -95,9 +95,15 @@ func attachRuntime(ctx context.Context, cfg *config.Config, st *store.Store, srv
 			eng.SetUsageSink(usageEngine.Record)
 		}
 		srv.SetObservability(cfg.Observability, observationRuntime.Recorder, observationRuntime.Insights, nativeManager, observationRuntime.Ingest)
-		if runtimeErr := observationRuntime.Start(ctx); runtimeErr != nil {
-			return nil, nil, runtimeErr
-		}
+		// Start runs heavy DB-bound initialization (legacy import, daily
+		// aggregation, insight materialization). On large stores this can take
+		// tens of seconds while it contends for the single SQLite connection, so
+		// run it off the startup path to let the HTTP server bind immediately.
+		go func() {
+			if runtimeErr := observationRuntime.Start(ctx); runtimeErr != nil && ctx.Err() == nil {
+				logger.Warn("observability runtime start failed", "err", runtimeErr)
+			}
+		}()
 	}
 	connectSvc := core.NewConnectService(logger, eng, st)
 	srv.SetSender(eng)

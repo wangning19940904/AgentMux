@@ -1,6 +1,7 @@
 # Binaries
 /anx
 /agent-nexus
+/agentnexus-hook
 /dist/
 macos-menubar/AgentNexusMenuBar
 desktop/build/

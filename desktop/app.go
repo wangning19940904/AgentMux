@@ -75,9 +75,13 @@ func (a *App) startup(ctx context.Context) {
 				nativeManager = manager
 			}
 			srv.SetObservability(cfg.Observability, runtimeValue.Recorder, runtimeValue.Insights, nativeManager, runtimeValue.Ingest)
-			if runtimeErr := runtimeValue.Start(a.ctx); runtimeErr != nil {
-				log.Warn("start observability runtime", "err", runtimeErr)
-			}
+			// Heavy DB-bound initialization; run off the startup path so the
+			// desktop HTTP API binds immediately even on large stores.
+			go func() {
+				if runtimeErr := runtimeValue.Start(a.ctx); runtimeErr != nil && a.ctx.Err() == nil {
+					log.Warn("start observability runtime", "err", runtimeErr)
+				}
+			}()
 		}
 	}
 	if eng, err := server.BuildEngine(log, cfg, initializer); err != nil {

@@ -161,12 +161,40 @@ export interface SourceStat {
   cost_usd: number;
 }
 
+export interface AgentStat {
+  agent: string;
+  tokens: number;
+  cost_usd: number;
+}
+
+export interface RuntimeStat {
+  runtime: string;
+  tokens: number;
+  cost_usd: number;
+}
+
 export interface UsageReport {
   period: string;
   totals: UsageTotals;
   buckets: UsageBucket[];
   by_model: ModelStat[];
   by_source: SourceStat[];
+  by_agent?: AgentStat[];
+  by_runtime?: RuntimeStat[];
+}
+
+export interface MenubarSettings {
+  icon_theme: string;
+  icon_stages: string[];
+  icon_metric: string;
+  cost_thresholds: number[];
+  show_messages: boolean;
+  show_tokens: boolean;
+  show_cost: boolean;
+  show_cny: boolean;
+  cny_rate: number;
+  breakdowns: string[];
+  top_n: number;
 }
 
 export interface Status {
@@ -746,6 +774,16 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(apiPath(path), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
 async function postChecked<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "POST",
@@ -940,6 +978,9 @@ export const api = {
     postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind }),
   usage: (period: string) =>
     get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
+  menubarSettings: () => get<MenubarSettings>("/api/v1/menubar/settings"),
+  saveMenubarSettings: (settings: MenubarSettings) =>
+    put<MenubarSettings>("/api/v1/menubar/settings", settings),
 
   // AgentNexus Observability
   observationOverview: () => observationGet<ObservationOverview>("/api/v1/observability/overview"),

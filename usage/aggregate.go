@@ -9,11 +9,13 @@ import (
 
 // Report is the aggregated usage view returned to clients.
 type Report struct {
-	Period   string       `json:"period"`
-	Totals   Totals       `json:"totals"`
-	Buckets  []Bucket     `json:"buckets"`
-	ByModel  []ModelStat  `json:"by_model"`
-	BySource []SourceStat `json:"by_source"`
+	Period    string        `json:"period"`
+	Totals    Totals        `json:"totals"`
+	Buckets   []Bucket      `json:"buckets"`
+	ByModel   []ModelStat   `json:"by_model"`
+	BySource  []SourceStat  `json:"by_source"`
+	ByAgent   []AgentStat   `json:"by_agent,omitempty"`
+	ByRuntime []RuntimeStat `json:"by_runtime,omitempty"`
 }
 
 // Totals are grand totals across all records.
@@ -37,6 +39,7 @@ type ModelStat struct {
 	Model   string  `json:"model"`
 	Tokens  int64   `json:"tokens"`
 	CostUSD float64 `json:"cost_usd"`
+	Records int     `json:"records"`
 }
 
 // SourceStat aggregates by data source.
@@ -44,22 +47,44 @@ type SourceStat struct {
 	Source  string  `json:"source"`
 	Tokens  int64   `json:"tokens"`
 	CostUSD float64 `json:"cost_usd"`
+	Records int     `json:"records"`
+}
+
+// AgentStat aggregates by agent (the project/agent id on each record).
+type AgentStat struct {
+	Agent   string  `json:"agent"`
+	Tokens  int64   `json:"tokens"`
+	CostUSD float64 `json:"cost_usd"`
+	Records int     `json:"records"`
+}
+
+// RuntimeStat aggregates by runtime/framework (claude, codex, ...).
+type RuntimeStat struct {
+	Runtime string  `json:"runtime"`
+	Tokens  int64   `json:"tokens"`
+	CostUSD float64 `json:"cost_usd"`
+	Records int     `json:"records"`
 }
 
 // Aggregate buckets records by the requested period.
 func Aggregate(period string, recs []core.UsageRecord) *Report {
 	r := &Report{
-		Period:   period,
-		Buckets:  []Bucket{},
-		ByModel:  []ModelStat{},
-		BySource: []SourceStat{},
+		Period:    period,
+		Buckets:   []Bucket{},
+		ByModel:   []ModelStat{},
+		BySource:  []SourceStat{},
+		ByAgent:   []AgentStat{},
+		ByRuntime: []RuntimeStat{},
 	}
 	bucketMap := map[string]*Totals{}
 	modelMap := map[string]*ModelStat{}
 	sourceMap := map[string]*SourceStat{}
+	agentMap := map[string]*AgentStat{}
+	runtimeMap := map[string]*RuntimeStat{}
 
 	for _, rec := range recs {
 		addTotals(&r.Totals, rec)
+		recCount := recordCount(rec)
 
 		key := bucketKey(period, rec)
 		bt := bucketMap[key]
@@ -76,6 +101,7 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		}
 		ms.Tokens += totalTokens(rec)
 		ms.CostUSD += rec.CostUSD
+		ms.Records += recCount
 
 		ss := sourceMap[rec.Source]
 		if ss == nil {
@@ -84,6 +110,36 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		}
 		ss.Tokens += totalTokens(rec)
 		ss.CostUSD += rec.CostUSD
+		ss.Records += recCount
+
+		agentKey := rec.Project
+		if agentKey == "" {
+			agentKey = "unknown"
+		}
+		as := agentMap[agentKey]
+		if as == nil {
+			as = &AgentStat{Agent: agentKey}
+			agentMap[agentKey] = as
+		}
+		as.Tokens += totalTokens(rec)
+		as.CostUSD += rec.CostUSD
+		as.Records += recCount
+
+		runtimeKey := rec.RuntimeID
+		if runtimeKey == "" {
+			runtimeKey = rec.Source
+		}
+		if runtimeKey == "" {
+			runtimeKey = "unknown"
+		}
+		rs := runtimeMap[runtimeKey]
+		if rs == nil {
+			rs = &RuntimeStat{Runtime: runtimeKey}
+			runtimeMap[runtimeKey] = rs
+		}
+		rs.Tokens += totalTokens(rec)
+		rs.CostUSD += rec.CostUSD
+		rs.Records += recCount
 	}
 
 	for k, t := range bucketMap {
@@ -98,6 +154,14 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		r.BySource = append(r.BySource, *ss)
 	}
 	sort.Slice(r.BySource, func(i, j int) bool { return r.BySource[i].CostUSD > r.BySource[j].CostUSD })
+	for _, as := range agentMap {
+		r.ByAgent = append(r.ByAgent, *as)
+	}
+	sort.Slice(r.ByAgent, func(i, j int) bool { return r.ByAgent[i].CostUSD > r.ByAgent[j].CostUSD })
+	for _, rs := range runtimeMap {
+		r.ByRuntime = append(r.ByRuntime, *rs)
+	}
+	sort.Slice(r.ByRuntime, func(i, j int) bool { return r.ByRuntime[i].CostUSD > r.ByRuntime[j].CostUSD })
 	return r
 }
 
@@ -116,6 +180,16 @@ func addTotals(t *Totals, rec core.UsageRecord) {
 
 func totalTokens(rec core.UsageRecord) int64 {
 	return rec.InputTokens + rec.OutputTokens + rec.CacheReadTokens + rec.CacheWriteTokens
+}
+
+// recordCount mirrors addTotals: a record represents at least one message,
+// but may carry an explicit request count.
+func recordCount(rec core.UsageRecord) int {
+	requests := rec.Requests
+	if requests <= 0 {
+		requests = 1
+	}
+	return int(requests)
 }
 
 func bucketKey(period string, rec core.UsageRecord) string {

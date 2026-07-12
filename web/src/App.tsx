@@ -18,6 +18,7 @@ import {
   Moon,
   Network,
   PanelLeft,
+  PanelTop,
   Search,
   MessageSquareText,
   Settings,
@@ -41,6 +42,7 @@ import { MCPPanel } from "./panels/MCPPanel";
 import { ToolsPanel } from "./panels/ToolsPanel";
 import { GuardPanel } from "./panels/GuardPanel";
 import { SessionsPanel } from "./panels/SessionsPanel";
+import { MenuBarPanel } from "./panels/MenuBarPanel";
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 
 type Tab =
@@ -51,6 +53,7 @@ type Tab =
   | "frameworks"
   | "observability"
   | "usage"
+  | "menubar"
   | "providers"
   | "gateway"
   | "memory"
@@ -68,6 +71,7 @@ const TABS: { id: Tab; labelKey: string; icon: typeof LayoutGrid }[] = [
   { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
   { id: "observability", labelKey: "nav.observability", icon: Activity },
   { id: "usage", labelKey: "nav.usage", icon: Gauge },
+  { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
   { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
   { id: "memory", labelKey: "nav.memory", icon: Brain },
   { id: "skills", labelKey: "nav.skills", icon: Bot },
@@ -282,6 +286,7 @@ function Shell({
             {tab === "frameworks" && <FrameworksPanel />}
             {tab === "observability" && <ObservabilityPanel />}
             {tab === "usage" && <UsagePanel />}
+            {tab === "menubar" && <MenuBarPanel />}
             {tab === "sessions" && <SessionsPanel />}
             {tab === "providers" && <ProvidersPanel />}
             {tab === "gateway" && <GatewayPanel />}

@@ -124,6 +124,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
 	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
+	s.mux.HandleFunc("GET /api/v1/menubar/settings", s.handleMenubarSettingsGet)
+	s.mux.HandleFunc("PUT /api/v1/menubar/settings", s.handleMenubarSettingsPut)
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
 	s.mux.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
 	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
