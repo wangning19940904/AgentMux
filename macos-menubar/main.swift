@@ -123,6 +123,7 @@ struct MenubarSettings: Decodable {
     var icon_stages: [String]
     var icon_metric: String
     var cost_thresholds: [Double]
+    var show_status_icon: Bool
     var show_messages: Bool
     var show_tokens: Bool
     var show_cost: Bool
@@ -133,7 +134,7 @@ struct MenubarSettings: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case icon_theme, icon_stages, icon_metric, cost_thresholds
-        case show_messages, show_tokens, show_cost, show_cny
+        case show_status_icon, show_messages, show_tokens, show_cost, show_cny
         case cny_rate, breakdowns, top_n
     }
 
@@ -144,6 +145,7 @@ struct MenubarSettings: Decodable {
         icon_stages = try c.decodeIfPresent([String].self, forKey: .icon_stages) ?? d.icon_stages
         icon_metric = try c.decodeIfPresent(String.self, forKey: .icon_metric) ?? d.icon_metric
         cost_thresholds = try c.decodeIfPresent([Double].self, forKey: .cost_thresholds) ?? d.cost_thresholds
+        show_status_icon = try c.decodeIfPresent(Bool.self, forKey: .show_status_icon) ?? d.show_status_icon
         show_messages = try c.decodeIfPresent(Bool.self, forKey: .show_messages) ?? d.show_messages
         show_tokens = try c.decodeIfPresent(Bool.self, forKey: .show_tokens) ?? d.show_tokens
         show_cost = try c.decodeIfPresent(Bool.self, forKey: .show_cost) ?? d.show_cost
@@ -154,10 +156,11 @@ struct MenubarSettings: Decodable {
     }
 
     private init(theme: String, stages: [String], metric: String, thresholds: [Double],
-                 messages: Bool, tokens: Bool, cost: Bool, cny: Bool,
+                 statusIcon: Bool, messages: Bool, tokens: Bool, cost: Bool, cny: Bool,
                  rate: Double, breakdowns: [String], topN: Int) {
         icon_theme = theme; icon_stages = stages; icon_metric = metric
-        cost_thresholds = thresholds; show_messages = messages; show_tokens = tokens
+        cost_thresholds = thresholds; show_status_icon = statusIcon
+        show_messages = messages; show_tokens = tokens
         show_cost = cost; show_cny = cny; cny_rate = rate
         self.breakdowns = breakdowns; top_n = topN
     }
@@ -165,7 +168,7 @@ struct MenubarSettings: Decodable {
     static let defaults = MenubarSettings(
         theme: "flame", stages: [], metric: "cost",
         thresholds: [0.01, 1, 10, 100],
-        messages: true, tokens: true, cost: true, cny: true,
+        statusIcon: false, messages: false, tokens: false, cost: false, cny: false,
         rate: 7.2, breakdowns: ["model", "runtime", "date"], topN: 3)
 }
 

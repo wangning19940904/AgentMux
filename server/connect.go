@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,13 +23,21 @@ func (s *Server) SetConnect(svc *core.ConnectService) { s.connect = svc }
 // apiChannel is a channel plus live status and display enrichment.
 type apiChannel struct {
 	core.Channel
-	AgentName         string `json:"agent_name,omitempty"`
-	BotName           string `json:"bot_name,omitempty"`
-	BotAvatarURL      string `json:"bot_avatar_url,omitempty"`
-	BotAvatarProxyURL string `json:"bot_avatar_proxy_url,omitempty"`
-	BotOpenID         string `json:"bot_open_id,omitempty"`
-	State             string `json:"state,omitempty"`
-	Error             string `json:"error,omitempty"`
+	AgentName         string                       `json:"agent_name,omitempty"`
+	BotName           string                       `json:"bot_name,omitempty"`
+	BotAvatarURL      string                       `json:"bot_avatar_url,omitempty"`
+	BotAvatarProxyURL string                       `json:"bot_avatar_proxy_url,omitempty"`
+	BotOpenID         string                       `json:"bot_open_id,omitempty"`
+	State             string                       `json:"state,omitempty"`
+	Connected         bool                         `json:"connected"`
+	Error             string                       `json:"error,omitempty"`
+	StartedAt         *time.Time                   `json:"started_at,omitempty"`
+	ConnectedAt       *time.Time                   `json:"connected_at,omitempty"`
+	LastCheckedAt     *time.Time                   `json:"last_checked_at,omitempty"`
+	LastHeartbeatAt   *time.Time                   `json:"last_heartbeat_at,omitempty"`
+	LastEventAt       *time.Time                   `json:"last_event_at,omitempty"`
+	LastInboundAt     *time.Time                   `json:"last_inbound_at,omitempty"`
+	CodexCapability   *core.CodexControlCapability `json:"codex_control_capability,omitempty"`
 }
 
 // apiTrigger is a trigger plus display enrichment.
@@ -61,6 +70,11 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		botInfo := s.lookupChannelBotInfo(r.Context(), ch)
 		ch.Config = redactStringMap(ch.Config)
 		item := apiChannel{Channel: ch, AgentName: agentNames[ch.AgentID]}
+		if s.connect != nil {
+			if capability, ok := s.connect.ChannelCodexControlCapability(ch.ID); ok {
+				item.CodexCapability = &capability
+			}
+		}
 		if botInfo != nil {
 			item.BotName = botInfo.Name
 			item.BotAvatarURL = botInfo.AvatarURL
@@ -71,13 +85,27 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		}
 		if st, ok := statuses[ch.ID]; ok {
 			item.State = st.State
+			item.Connected = st.Connected
 			item.Error = st.Error
+			item.StartedAt = nonZeroTime(st.StartedAt)
+			item.ConnectedAt = nonZeroTime(st.ConnectedAt)
+			item.LastCheckedAt = nonZeroTime(st.LastCheckedAt)
+			item.LastHeartbeatAt = nonZeroTime(st.LastHeartbeatAt)
+			item.LastEventAt = nonZeroTime(st.LastEventAt)
+			item.LastInboundAt = nonZeroTime(st.LastInboundAt)
 		} else if ch.Enabled {
 			item.State = "pending"
 		}
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func nonZeroTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	return &value
 }
 
 func channelAvatarProxyURL(r *http.Request, channelID string) string {
@@ -516,6 +544,35 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 	if err := normalizeChannelConfig(ch); err != nil {
 		return err
 	}
+	if core.CodexRemoteControlEnabled(*ch) {
+		if ch.AgentID == "" {
+			return fmt.Errorf("Codex remote control requires a bound Agent")
+		}
+		agent, err := s.st.GetAgentInstance(ctx, ch.AgentID)
+		if err != nil {
+			return err
+		}
+		if agent == nil || agent.RuntimeID != "codex" {
+			return fmt.Errorf("Codex remote control requires a Codex Agent")
+		}
+		allowed := cleanIDList(ch.Config[core.ChannelConfigAllowedUserIDs])
+		admins := cleanIDList(ch.Config[core.ChannelConfigAdminUserIDs])
+		if allowed == "" && admins == "" {
+			return fmt.Errorf("Codex remote control requires at least one allowed or admin user ID")
+		}
+		ch.Config[core.ChannelConfigAllowedUserIDs] = allowed
+		ch.Config[core.ChannelConfigAdminUserIDs] = admins
+		maxQueue, err := boundedChannelInt(ch.Config[core.ChannelConfigCodexMaxQueue], core.DefaultCodexMaxQueue, 1, 100)
+		if err != nil {
+			return fmt.Errorf("invalid codex_max_queue: %w", err)
+		}
+		timeout, err := boundedChannelInt(ch.Config[core.ChannelConfigCodexTurnTimeout], core.DefaultCodexTurnTimeoutMinutes, 1, 240)
+		if err != nil {
+			return fmt.Errorf("invalid codex_turn_timeout_minutes: %w", err)
+		}
+		ch.Config[core.ChannelConfigCodexMaxQueue] = strconv.Itoa(maxQueue)
+		ch.Config[core.ChannelConfigCodexTurnTimeout] = strconv.Itoa(timeout)
+	}
 	if ch.CreatedAt.IsZero() {
 		ch.CreatedAt = now
 	}
@@ -579,6 +636,34 @@ func cleanCommaList(raw string) string {
 		}
 	}
 	return strings.Join(cleaned, ",")
+}
+
+func cleanIDList(raw string) string {
+	values := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\t' || r == ' '
+	})
+	seen := map[string]bool{}
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			cleaned = append(cleaned, value)
+		}
+	}
+	return strings.Join(cleaned, ",")
+}
+
+func boundedChannelInt(raw string, fallback, min, max int) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < min || value > max {
+		return 0, fmt.Errorf("must be an integer between %d and %d", min, max)
+	}
+	return value, nil
 }
 
 func (s *Server) normalizeTrigger(ctx context.Context, tr *core.Trigger) error {

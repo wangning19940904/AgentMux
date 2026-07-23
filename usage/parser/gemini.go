@@ -49,6 +49,9 @@ func (c *geminiCollector) Collect(ctx context.Context, since time.Time) ([]core.
 		if d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
+		if skipUnmodified(d, since) {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -89,7 +89,12 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	var created bool
 	var err error
 	if reuse {
-		sess, conv, created, err = rt.session(ctx, tr.ChatID, "")
+		sess, conv, created, err = rt.session(ctx, &Message{
+			ChatID:          tr.ChatID,
+			ConversationKey: "chat:" + tr.ChatID,
+			ChannelID:       tr.ChannelID,
+			Origin:          OriginCron,
+		})
 	} else {
 		workDir, err = e.initializeWorkspace(ctx, opts, workDir)
 		if err != nil {

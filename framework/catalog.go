@@ -41,6 +41,27 @@ type Spec struct {
 	Packages []string `json:"packages,omitempty"`
 	// Bin is the executable name for a CLI framework.
 	Bin string `json:"bin,omitempty"`
+	// VersionArgs are passed to Bin to read an installed CLI version.
+	VersionArgs []string `json:"-"`
+	// NPMPackage is the registry package used to resolve the latest CLI version.
+	NPMPackage string `json:"-"`
+	// InstallCommand is the catalog-owned command used when a CLI is not
+	// distributed through npm. Callers can select a framework, but cannot
+	// provide or alter the command that is executed.
+	InstallCommand []string `json:"-"`
+	// InstallSupported reports whether this framework can be installed from the
+	// Console. InstallRequiresNPM lets the UI disable that action when the host
+	// prerequisites are missing.
+	InstallSupported   bool `json:"install_supported"`
+	InstallRequiresNPM bool `json:"install_requires_npm"`
+	// LatestURL is an official text endpoint whose response contains the latest
+	// CLI version. It is used for CLIs that are not distributed through npm.
+	LatestURL string `json:"-"`
+	// UpdateCommand is the catalog-owned command used to update an installed CLI.
+	UpdateCommand []string `json:"-"`
+	// UpdateSupported reports whether this framework can be checked and updated
+	// from the Console.
+	UpdateSupported bool `json:"update_supported"`
 	// EnvRequired lists environment variables the framework needs at runtime.
 	EnvRequired []string `json:"env_required,omitempty"`
 	// Supported is false for frameworks that are catalogued but not yet
@@ -54,48 +75,75 @@ type Spec struct {
 var catalog = []Spec{
 	{
 		Kind: "claudecode", Display: "Claude Code", KindType: KindCLI,
-		Bin: "claude", EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
+		Bin: "claude", VersionArgs: []string{"--version"},
+		NPMPackage: "@anthropic-ai/claude-code", UpdateCommand: []string{"claude", "update"},
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
 		Note: "Anthropic Claude Code CLI",
 	},
 	{
 		Kind: "codex", Display: "Codex", KindType: KindCLI,
-		Bin: "codex", EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
+		Bin: "codex", VersionArgs: []string{"--version"},
+		NPMPackage: "@openai/codex", UpdateCommand: []string{"codex", "update"},
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
 		Note: "OpenAI Codex CLI",
 	},
 	{
 		Kind: "cursor", Display: "Cursor Agent", KindType: KindCLI,
-		Bin: "cursor-agent", Supported: true, Note: "Cursor Agent CLI",
+		Bin: "cursor-agent", VersionArgs: []string{"--version"},
+		InstallCommand:   []string{"bash", "-c", "curl https://cursor.com/install -fsS | bash"},
+		InstallSupported: true,
+		LatestURL:        "https://cursor.com/install", UpdateCommand: []string{"cursor-agent", "update"},
+		UpdateSupported: true, Supported: true, Note: "Cursor Agent CLI",
 	},
 	{
 		Kind: "gemini", Display: "Gemini CLI", KindType: KindCLI,
-		Bin: "gemini", EnvRequired: []string{"GEMINI_API_KEY"}, Supported: true,
+		Bin: "gemini", VersionArgs: []string{"--version"},
+		NPMPackage: "@google/gemini-cli", UpdateCommand: []string{"npm", "install", "-g", "@google/gemini-cli@latest"},
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		EnvRequired: []string{"GEMINI_API_KEY"}, Supported: true,
 		Note: "Google Gemini CLI",
 	},
 	{
 		Kind: "qoder", Display: "Qoder", KindType: KindCLI,
-		Bin: "qodercli", Supported: true, Note: "Qoder CLI",
+		Bin: "qodercli", VersionArgs: []string{"--version"},
+		NPMPackage: "@qoder-ai/qodercli", UpdateCommand: []string{"qodercli", "update"},
+		InstallSupported: true, InstallRequiresNPM: true,
+		UpdateSupported: true, Supported: true, Note: "Qoder CLI",
 	},
 	{
 		Kind: "opencode", Display: "OpenCode", KindType: KindCLI,
-		Bin: "opencode", Supported: true, Note: "OpenCode CLI",
+		Bin: "opencode", VersionArgs: []string{"--version"},
+		NPMPackage: "opencode-ai", UpdateCommand: []string{"opencode", "upgrade"},
+		InstallSupported: true, InstallRequiresNPM: true,
+		UpdateSupported: true, Supported: true, Note: "OpenCode CLI",
 	},
 	{
 		Kind: "iflow", Display: "iFlow", KindType: KindCLI,
-		Bin: "iflow", Supported: true, Note: "iFlow CLI",
+		Bin: "iflow", VersionArgs: []string{"--version"},
+		NPMPackage: "@iflow-ai/iflow-cli", UpdateCommand: []string{"npm", "install", "-g", "@iflow-ai/iflow-cli@latest"},
+		InstallSupported: true, InstallRequiresNPM: true,
+		UpdateSupported: true, Supported: true, Note: "iFlow CLI",
 	},
 	{
 		Kind: "kimi", Display: "Kimi", KindType: KindCLI,
-		Bin: "kimi", Supported: true, Note: "Kimi CLI",
+		Bin: "kimi", VersionArgs: []string{"--version"},
+		NPMPackage: "@moonshot-ai/kimi-code", UpdateCommand: []string{"npm", "install", "-g", "@moonshot-ai/kimi-code@latest"},
+		InstallSupported: true, InstallRequiresNPM: true,
+		UpdateSupported: true, Supported: true, Note: "Kimi Code CLI",
 	},
 	{
 		Kind: "claude-agent-sdk", Display: "Claude Agent SDK", KindType: KindSDK,
 		Language: "node", Packages: []string{"@anthropic-ai/claude-agent-sdk"},
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
 		EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
 		Note: "Anthropic Agent SDK (Node) hosted by the sidecar worker",
 	},
 	{
 		Kind: "openai-agents", Display: "OpenAI Agents SDK", KindType: KindSDK,
 		Language: "node", Packages: []string{"@openai/agents", "zod"},
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
 		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
 		Note: "OpenAI Agents SDK (Node) hosted by the sidecar worker",
 	},

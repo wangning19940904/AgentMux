@@ -23,9 +23,9 @@ import {
   MessageSquareText,
   Settings,
   ShieldCheck,
+  Sparkles,
   Sun,
   TerminalSquare,
-  Wrench,
   Workflow,
 } from "lucide-react";
 import { ProvidersPanel } from "./panels/ProvidersPanel";
@@ -39,7 +39,6 @@ import { OverviewPanel } from "./panels/OverviewPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
 import { SkillsPanel } from "./panels/SkillsPanel";
 import { MCPPanel } from "./panels/MCPPanel";
-import { ToolsPanel } from "./panels/ToolsPanel";
 import { GuardPanel } from "./panels/GuardPanel";
 import { SessionsPanel } from "./panels/SessionsPanel";
 import { MenuBarPanel } from "./panels/MenuBarPanel";
@@ -49,7 +48,6 @@ type Tab =
   | "overview"
   | "agents"
   | "connect"
-  | "tools"
   | "frameworks"
   | "observability"
   | "usage"
@@ -62,23 +60,54 @@ type Tab =
   | "mcp"
   | "guard";
 
-const TABS: { id: Tab; labelKey: string; icon: typeof LayoutGrid }[] = [
-  { id: "overview", labelKey: "nav.overview", icon: LayoutGrid },
-  { id: "agents", labelKey: "nav.agents", icon: Bot },
-  { id: "connect", labelKey: "nav.connect", icon: Cable },
-  { id: "tools", labelKey: "nav.tools", icon: Wrench },
-  { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
-  { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
-  { id: "observability", labelKey: "nav.observability", icon: Activity },
-  { id: "usage", labelKey: "nav.usage", icon: Gauge },
-  { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
-  { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
-  { id: "memory", labelKey: "nav.memory", icon: Brain },
-  { id: "skills", labelKey: "nav.skills", icon: Bot },
-  { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
-  { id: "guard", labelKey: "nav.guard", icon: ShieldCheck },
-  { id: "providers", labelKey: "nav.providers", icon: DatabaseZap },
+type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
+type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
+
+const OVERVIEW_ITEM: NavItem = { id: "overview", labelKey: "nav.overview", icon: LayoutGrid };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "agents",
+    labelKey: "nav.group.agents",
+    icon: Bot,
+    items: [
+      { id: "agents", labelKey: "nav.agents", icon: Bot },
+      { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
+      { id: "skills", labelKey: "nav.skills", icon: Sparkles },
+      { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
+      { id: "memory", labelKey: "nav.memory", icon: Brain },
+      { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
+    ],
+  },
+  {
+    id: "connectivity",
+    labelKey: "nav.group.connectivity",
+    icon: Cable,
+    items: [
+      { id: "connect", labelKey: "nav.connect", icon: Cable },
+      { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
+      { id: "providers", labelKey: "nav.providers", icon: DatabaseZap },
+    ],
+  },
+  {
+    id: "operations",
+    labelKey: "nav.group.operations",
+    icon: Activity,
+    items: [
+      { id: "observability", labelKey: "nav.observability", icon: Activity },
+      { id: "usage", labelKey: "nav.usage", icon: Gauge },
+      { id: "guard", labelKey: "nav.guard", icon: ShieldCheck },
+    ],
+  },
+  {
+    id: "system",
+    labelKey: "nav.group.system",
+    icon: PanelTop,
+    items: [{ id: "menubar", labelKey: "nav.menubar", icon: PanelTop }],
+  },
 ];
+
+const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -105,6 +134,7 @@ function initialThemeMode(): ThemeMode {
 
 function tabFromHash(): Tab | null {
   const value = window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0];
+  if (value === "tools") return "skills";
   return TABS.some((item) => item.id === value) ? value as Tab : null;
 }
 
@@ -185,6 +215,23 @@ function Shell({
 }) {
   const { t } = useI18n();
   const active = useMemo(() => TABS.find((item) => item.id === tab) ?? TABS[0], [tab]);
+  const groupOfActive = useMemo(
+    () => NAV_GROUPS.find((group) => group.items.some((item) => item.id === tab))?.id ?? null,
+    [tab],
+  );
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(NAV_GROUPS.map((group) => [group.id, true])),
+  );
+
+  useEffect(() => {
+    if (groupOfActive) {
+      setOpenGroups((current) => (current[groupOfActive] ? current : { ...current, [groupOfActive]: true }));
+    }
+  }, [groupOfActive]);
+
+  function toggleGroup(id: string) {
+    setOpenGroups((current) => ({ ...current, [id]: !current[id] }));
+  }
 
   return (
     <div className="app-shell">
@@ -200,18 +247,49 @@ function Shell({
         </div>
 
         <nav className="nav" aria-label="Primary">
-          {TABS.map((item) => {
-            const Icon = item.icon;
+          <button
+            className={`nav-item${tab === OVERVIEW_ITEM.id ? " active" : ""}`}
+            onClick={() => setTab(OVERVIEW_ITEM.id)}
+            title={t(OVERVIEW_ITEM.labelKey)}
+          >
+            <LayoutGrid size={18} />
+            <span>{t(OVERVIEW_ITEM.labelKey)}</span>
+          </button>
+
+          {NAV_GROUPS.map((group) => {
+            const GroupIcon = group.icon;
+            const isOpen = openGroups[group.id];
+            const hasActive = group.items.some((item) => item.id === tab);
             return (
-              <button
-                key={item.id}
-                className={tab === item.id ? "active" : ""}
-                onClick={() => setTab(item.id)}
-                title={t(item.labelKey)}
-              >
-                <Icon size={18} />
-                <span>{t(item.labelKey)}</span>
-              </button>
+              <div key={group.id} className="nav-group">
+                <button
+                  className={`nav-group-header${hasActive && !isOpen ? " has-active" : ""}`}
+                  onClick={() => toggleGroup(group.id)}
+                  aria-expanded={isOpen}
+                >
+                  <GroupIcon size={16} />
+                  <span>{t(group.labelKey)}</span>
+                  <ChevronDown size={15} className={`nav-chevron${isOpen ? " open" : ""}`} />
+                </button>
+                {isOpen && (
+                  <div className="nav-group-items">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          key={item.id}
+                          className={`nav-item nav-subitem${tab === item.id ? " active" : ""}`}
+                          onClick={() => setTab(item.id)}
+                          title={t(item.labelKey)}
+                        >
+                          <Icon size={17} />
+                          <span>{t(item.labelKey)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </nav>
@@ -282,7 +360,6 @@ function Shell({
             {tab === "overview" && <OverviewPanel />}
             {tab === "agents" && <AgentsPanel />}
             {tab === "connect" && <ConnectPanel />}
-            {tab === "tools" && <ToolsPanel />}
             {tab === "frameworks" && <FrameworksPanel />}
             {tab === "observability" && <ObservabilityPanel />}
             {tab === "usage" && <UsagePanel />}

@@ -42,6 +42,7 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		cfg = config.Default()
 	}
+	a.setAPITarget(cfg.Server.Addr)
 	st, err := store.Open(store.DefaultPath())
 	if err != nil {
 		log.Error("open store", "err", err)

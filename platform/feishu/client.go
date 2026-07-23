@@ -48,3 +48,17 @@ type clientAPI interface {
 	// Close releases the connection.
 	Close() error
 }
+
+// threadReplyClient is implemented by the real Feishu/Lark client. Keeping it
+// optional preserves lightweight test clients while allowing production
+// replies and streaming cards to remain inside the originating topic.
+type threadReplyClient interface {
+	ReplyText(ctx context.Context, messageID, text string) (replyMessageID string, err error)
+	ReplyCard(ctx context.Context, messageID, text string, done, failed bool) (replyMessageID string, err error)
+	BeginStreamCardReply(ctx context.Context, messageID string) (cardID string, err error)
+}
+
+type interactionCardClient interface {
+	SendAgentInteractionCard(ctx context.Context, msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) (messageID string, err error)
+	UpdateAgentInteractionCard(ctx context.Context, messageID string, interaction core.ChannelInteraction, outcome string) error
+}

@@ -47,7 +47,10 @@ type Engine struct {
 	inbound                 chan *Message
 	workspace               WorkspaceInitializer
 	conversations           ConversationStore
+	channelControl          ChannelControlStore
 	runtimeSettingsDefaults RuntimeSettingsDefaultStore
+	remoteWorkMu            sync.Mutex
+	remoteWorkLocks         map[string]*sync.Mutex
 	msgLog                  *MessageLogger
 }
 
@@ -57,12 +60,13 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		log = slog.Default()
 	}
 	return &Engine{
-		log:      log,
-		hooks:    hooks,
-		sinks:    map[uint64]EventSink{},
-		projects: map[string]*projectRuntime{},
-		channels: map[string]*channelRuntime{},
-		inbound:  make(chan *Message, 256),
+		log:             log,
+		hooks:           hooks,
+		sinks:           map[uint64]EventSink{},
+		projects:        map[string]*projectRuntime{},
+		channels:        map[string]*channelRuntime{},
+		inbound:         make(chan *Message, 256),
+		remoteWorkLocks: map[string]*sync.Mutex{},
 	}
 }
 
@@ -113,6 +117,9 @@ func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
 // fall back to purely in-memory sessions keyed by chatID.
 func (e *Engine) SetConversationStore(cs ConversationStore) {
 	e.conversations = cs
+	if control, ok := cs.(ChannelControlStore); ok {
+		e.channelControl = control
+	}
 }
 
 // RuntimeSettingsDefaultStore persists Agent-level defaults selected from a
@@ -129,6 +136,9 @@ func (e *Engine) SetRuntimeSettingsDefaultStore(store RuntimeSettingsDefaultStor
 // It copies data per consumer so the caller's map is never mutated and async
 // sinks cannot observe a later event's fields (both share nothing).
 func (e *Engine) emit(ctx context.Context, event HookEvent, data map[string]string) {
+	if event == HookError {
+		e.markRemoteTaskError(data)
+	}
 	if e.ObservationBus() != nil {
 		ensureObservationData(data)
 	}
@@ -213,19 +223,40 @@ func (e *Engine) Start(ctx context.Context) error {
 
 // eventData builds the hook/event payload for a message.
 func eventData(msg *Message) map[string]string {
-	return map[string]string{
-		"text":          msg.Text,
-		"platform":      msg.Platform,
-		"project":       msg.Project,
-		"channel_id":    msg.ChannelID,
-		"chat_id":       msg.ChatID,
-		"chat_type":     msg.ChatType,
-		"user_id":       msg.UserID,
-		"user_name":     msg.UserName,
-		"mentioned_bot": fmt.Sprintf("%t", msg.MentionedBot),
-		"mention_all":   fmt.Sprintf("%t", msg.MentionAll),
-		"origin":        msg.Origin,
+	data := map[string]string{
+		"text":             msg.Text,
+		"platform":         msg.Platform,
+		"project":          msg.Project,
+		"channel_id":       msg.ChannelID,
+		"chat_id":          msg.ChatID,
+		"chat_type":        msg.ChatType,
+		"root_id":          msg.RootID,
+		"parent_id":        msg.ParentID,
+		"thread_id":        msg.ThreadID,
+		"conversation_key": msg.ConversationKey,
+		"user_id":          msg.UserID,
+		"user_name":        msg.UserName,
+		"mentioned_bot":    fmt.Sprintf("%t", msg.MentionedBot),
+		"mention_all":      fmt.Sprintf("%t", msg.MentionAll),
+		"origin":           msg.Origin,
 	}
+	if callback := msg.Callback; callback != nil {
+		data["event_type"] = callback.Type
+		data["event_id"] = msg.ID
+		data["message_id"] = callback.MessageID
+		data["operator_id"] = msg.UserID
+		data["host"] = callback.Host
+		data["action_tag"] = callback.ActionTag
+		data["action_name"] = callback.ActionName
+		data["action_value"] = callback.ActionValue
+		data["form_value"] = callback.FormValue
+		data["input_value"] = callback.InputValue
+		data["option"] = callback.Option
+		data["options"] = callback.Options
+		data["checked"] = fmt.Sprintf("%t", callback.Checked)
+		data["timezone"] = callback.Timezone
+	}
+	return data
 }
 
 func withError(data map[string]string, err error) map[string]string {
@@ -239,6 +270,10 @@ func withError(data map[string]string, err error) map[string]string {
 
 // handle routes a single inbound message to its runtime's agent session.
 func (e *Engine) handle(ctx context.Context, msg *Message) {
+	if msg == nil {
+		return
+	}
+	msg.ConversationKey = ResolveConversationKey(msg)
 	if msg.ChannelID != "" {
 		rt := e.channelRuntime(msg.ChannelID)
 		if rt == nil {
@@ -249,7 +284,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
 			return
 		}
-		if !rt.acceptsMessage(msg) {
+		if !msg.LogOnly && !rt.acceptsMessage(msg) {
 			e.log.Info("channel message ignored by reply scope",
 				"channel_id", msg.ChannelID,
 				"platform", msg.Platform,
@@ -265,6 +300,9 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		if err := e.msgLog.Log(msg.ChannelID, data); err != nil {
 			e.log.Warn("write channel message log", "channel_id", msg.ChannelID, "err", err)
 		}
+	}
+	if msg.LogOnly {
+		return
 	}
 
 	e.emit(ctx, HookMessageReceived, data)
@@ -287,7 +325,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		return
 	}
 
-	sess, conv, created, err := pr.session(ctx, msg.ChatID, msg.ChatType)
+	sess, conv, created, err := pr.session(ctx, msg.ChatID, msg.ChatType, msg.ConversationKey)
 	if err != nil {
 		e.log.Error("start session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -345,7 +383,7 @@ func (e *Engine) streamTurn(ctx context.Context, sess AgentSession, text string,
 		return "", err
 	}
 
-	return e.consumeTurn(ctx, events, reply, data)
+	return e.consumeTurn(ctx, sess, events, reply, data)
 }
 
 func (e *Engine) handleRuntimeSettingsCommand(sess AgentSession, text string, reply func(string), picker func(RuntimeSettingsPickerState) bool, legacyPicker func(ModelPickerState) bool) bool {
@@ -510,12 +548,17 @@ func modelPickerState(models ModelSwitchingSession) ModelPickerState {
 // consumeTurn drains a session event channel, forwarding textual output through
 // reply (deduplicated) and surfacing errors. It returns the last answer text
 // and the first error event.
-func (e *Engine) consumeTurn(ctx context.Context, events <-chan *Event, reply func(string), data map[string]string) (string, error) {
+func (e *Engine) consumeTurn(ctx context.Context, sess AgentSession, events <-chan *Event, reply func(string), data map[string]string) (string, error) {
 	var lastText string
 	var lastReply string
 	var firstErr error
 	for ev := range events {
+		e.updateRemoteTaskFromEvent(data, ev)
 		switch ev.Type {
+		case EventPermission:
+			if !e.dispatchAgentInteraction(ctx, ev, data) {
+				e.declineAgentInteraction(ctx, sess, ev)
+			}
 		case EventToolUse:
 			// This path posts a new message per event, so only surface the
 			// tool invocation itself (not results) as a compact progress note.
@@ -569,12 +612,12 @@ func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier,
 				}
 			}
 		}
-		e.consumeTurn(ctx, events, reply, data)
+		e.consumeTurn(ctx, sess, events, reply, data)
 		return
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
-	e.driveReplyStream(ctx, stream, events, data)
+	e.driveReplyStream(ctx, sess, stream, events, data)
 }
 
 // streamTurnCard drives a single turn onto a StreamReplier, rendering the whole
@@ -603,20 +646,34 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 				}
 			}
 		}
-		e.consumeTurn(ctx, events, reply, data)
+		e.consumeTurn(ctx, sess, events, reply, data)
 		return
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
-	e.driveReplyStream(ctx, stream, events, data)
+	e.driveReplyStream(ctx, sess, stream, events, data)
 }
 
-func (e *Engine) driveReplyStream(ctx context.Context, stream ReplyStream, events <-chan *Event, data map[string]string) {
+func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream ReplyStream, events <-chan *Event, data map[string]string) {
 	var answer, thinking, rendered string
 	var failed bool
 	var tools toolProgress
 	for ev := range events {
+		e.updateRemoteTaskFromEvent(data, ev)
 		switch ev.Type {
+		case EventPermission:
+			if !e.dispatchAgentInteraction(ctx, ev, data) {
+				e.declineAgentInteraction(ctx, sess, ev)
+			} else {
+				thinking = "等待审批或补充信息…"
+				body := tools.render(thinking, answer, false)
+				if body != rendered {
+					if err := stream.Update(ctx, body, false, false); err != nil {
+						e.log.Error("stream update", "err", err)
+					}
+					rendered = body
+				}
+			}
 		case EventThinking:
 			if ev.Text == "" {
 				continue
@@ -766,7 +823,7 @@ func (e *Engine) handleProjectConversationCommand(ctx context.Context, pr *proje
 	if !isConversationCommand(msg.Text) {
 		return false
 	}
-	e.resetConversation(ctx, pr.scope(), msg.ChatID, msg.ChatType, pr.workspace.AgentID, pr.dropSession)
+	e.resetConversation(ctx, pr.scope(), msg.ChatID, msg.ChatType, ResolveConversationKey(msg), pr.workspace.AgentID, pr.dropSession)
 	e.replyAll(ctx, pr, msg, conversationResetReply)
 	return true
 }
@@ -807,14 +864,18 @@ func isConversationCommand(text string) bool {
 	}
 }
 
-func (e *Engine) resetConversation(ctx context.Context, scope, chatID, chatType, agentID string, dropSession func(context.Context, string)) {
-	cacheKey := chatID
+func (e *Engine) resetConversation(ctx context.Context, scope, chatID, chatType, conversationKey, agentID string, dropSession func(context.Context, string)) {
+	cacheKey := conversationKey
+	if cacheKey == "" {
+		cacheKey = "chat:" + chatID
+	}
 	if e.conversations != nil {
 		conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
-			Scope:    scope,
-			ChatID:   chatID,
-			ChatType: chatType,
-			AgentID:  agentID,
+			Scope:           scope,
+			ConversationKey: conversationKey,
+			ChatID:          chatID,
+			ChatType:        chatType,
+			AgentID:         agentID,
 		})
 		if err != nil {
 			e.log.Warn("resolve conversation for command", "scope", scope, "chat_id", chatID, "err", err)
@@ -830,15 +891,18 @@ func (e *Engine) resetConversation(ctx context.Context, scope, chatID, chatType,
 	}
 }
 
-func (pr *projectRuntime) session(ctx context.Context, chatID, chatType string) (AgentSession, *Conversation, bool, error) {
+func (pr *projectRuntime) session(ctx context.Context, chatID, chatType, conversationKey string) (AgentSession, *Conversation, bool, error) {
 	if pr.agent == nil {
 		return nil, nil, false, fmt.Errorf("project %q has no agent", pr.name)
 	}
-	conv, workDir, err := pr.owner.prepareConversation(ctx, pr.scope(), chatID, chatType, pr.workspace, pr.workDir)
+	conv, workDir, err := pr.owner.prepareConversation(ctx, pr.scope(), chatID, chatType, conversationKey, pr.workspace, pr.workDir)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	cacheKey := chatID
+	cacheKey := conversationKey
+	if cacheKey == "" {
+		cacheKey = "chat:" + chatID
+	}
 	if conv != nil {
 		cacheKey = conv.ID
 	}
@@ -860,7 +924,7 @@ func (pr *projectRuntime) session(ctx context.Context, chatID, chatType string) 
 // (scope, chatID) and prepares its isolated working directory. When no
 // conversation store is attached it returns a nil conversation and the
 // initialized fallback work dir, preserving the legacy chatID-keyed behavior.
-func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatType string, ws WorkspaceInitOptions, fallbackWorkDir string) (*Conversation, string, error) {
+func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatType, conversationKey string, ws WorkspaceInitOptions, fallbackWorkDir string) (*Conversation, string, error) {
 	if e.conversations == nil {
 		workDir, err := e.initializeWorkspace(ctx, ws, fallbackWorkDir)
 		return nil, workDir, err
@@ -870,16 +934,20 @@ func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatTyp
 	if baseWorkDir == "" {
 		baseWorkDir = fallbackWorkDir
 	}
-	cwd, err := conversationCwd(conversationBaseDir(baseWorkDir), ws.AgentID, scope, chatID)
+	if conversationKey == "" {
+		conversationKey = "chat:" + chatID
+	}
+	cwd, err := conversationCwd(conversationBaseDir(baseWorkDir), ws.AgentID, scope, conversationKey)
 	if err != nil {
 		return nil, "", err
 	}
 	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
-		Scope:    scope,
-		ChatID:   chatID,
-		ChatType: chatType,
-		AgentID:  ws.AgentID,
-		WorkDir:  cwd,
+		Scope:           scope,
+		ConversationKey: conversationKey,
+		ChatID:          chatID,
+		ChatType:        chatType,
+		AgentID:         ws.AgentID,
+		WorkDir:         cwd,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve conversation: %w", err)

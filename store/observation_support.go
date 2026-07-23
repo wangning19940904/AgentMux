@@ -49,7 +49,7 @@ func (s *Store) EnqueueObservationExport(ctx context.Context, exporter string, e
 	digest := sha256.Sum256([]byte(exporter + "\x00" + envelope.EventID))
 	id := "export_" + hex.EncodeToString(digest[:16])
 	now := observationTime(time.Now().UTC())
-	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO observation_export_outbox
+	_, err = s.writer.ExecContext(ctx, `INSERT OR IGNORE INTO observation_export_outbox
 		(id,exporter,event_id,trace_id,envelope_json,include_content,status,attempts,next_attempt_at,last_error,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,'pending',0,'','',?,?)`, id, exporter, envelope.EventID, envelope.TraceID, string(raw), includeContent, now, now)
 	return err
@@ -62,7 +62,7 @@ func (s *Store) TrimObservationExportQueue(ctx context.Context, exporter string,
 	if maximum <= 0 {
 		maximum = 10000
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE observation_export_outbox SET status='discarded',
+	_, err := s.writer.ExecContext(ctx, `UPDATE observation_export_outbox SET status='discarded',
 		last_error='export queue capacity exceeded',updated_at=? WHERE id IN (
 			SELECT id FROM observation_export_outbox WHERE exporter=? AND status IN ('pending','retry')
 			ORDER BY created_at DESC,id DESC LIMIT -1 OFFSET ?
@@ -105,7 +105,7 @@ func (s *Store) ListPendingObservationExports(ctx context.Context, exporter stri
 }
 
 func (s *Store) CompleteObservationExport(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE observation_export_outbox SET status='sent',last_error='',updated_at=? WHERE id=?`, observationTime(time.Now().UTC()), id)
+	result, err := s.writer.ExecContext(ctx, `UPDATE observation_export_outbox SET status='sent',last_error='',updated_at=? WHERE id=?`, observationTime(time.Now().UTC()), id)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (s *Store) RetryObservationExport(ctx context.Context, id string, failure e
 	if failure != nil {
 		message = failure.Error()
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE observation_export_outbox
+	result, err := s.writer.ExecContext(ctx, `UPDATE observation_export_outbox
 		SET status='retry',attempts=attempts+1,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?`,
 		observationTime(nextAttempt), message, observationTime(time.Now().UTC()), id)
 	if err != nil {
@@ -171,7 +171,7 @@ func (s *Store) UpsertObservationInsight(ctx context.Context, insight Observatio
 	// value rather than allowing an optimization to become self-applying.
 	insight.OnlySuggestion = true
 	related := marshalObservationJSON(insight.RelatedTraceIDs)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO observation_insights
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO observation_insights
 		(id,rule_id,agent_id,trace_id,severity,status,title,summary,suggestion,sample_size,confidence,estimated_token_savings,
 		estimated_cost_savings_usd,related_trace_ids,only_suggestion,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -200,7 +200,7 @@ func (s *Store) ResolveObservationInsightsExcept(ctx context.Context, activeIDs 
 		}
 		query += " AND id NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	_, err := s.db.ExecContext(ctx, query, args...)
+	_, err := s.writer.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -292,7 +292,7 @@ func (s *Store) ClaimObservationIntegrationOwnership(ctx context.Context, owners
 	if ownership.UpdatedAt.IsZero() {
 		ownership.UpdatedAt = now
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO observation_integration_ownership
+	_, err = s.writer.ExecContext(ctx, `INSERT INTO observation_integration_ownership
 		(install_id,host,scope,resource_key,version,sha256,handler_fingerprint,target_path,before_hash,after_hash,metadata,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(install_id,resource_key) DO UPDATE SET version=excluded.version,
 		sha256=excluded.sha256,handler_fingerprint=excluded.handler_fingerprint,target_path=excluded.target_path,
@@ -343,7 +343,7 @@ func (s *Store) ListObservationIntegrationOwnership(ctx context.Context, host, s
 // DeleteObservationIntegrationOwnership deletes only when the install ID and
 // expected handler fingerprint still match. Drift is preserved and reported.
 func (s *Store) DeleteObservationIntegrationOwnership(ctx context.Context, installID, resourceKey, expectedFingerprint string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM observation_integration_ownership
+	result, err := s.writer.ExecContext(ctx, `DELETE FROM observation_integration_ownership
 		WHERE install_id=? AND resource_key=? AND handler_fingerprint=?`, installID, resourceKey, expectedFingerprint)
 	if err != nil {
 		return false, err
@@ -374,7 +374,7 @@ func (s *Store) AcquireObservationResourceLease(ctx context.Context, resourceKey
 	now := time.Now().UTC()
 	lease := &ObservationResourceLease{ResourceKey: resourceKey, OwnerID: ownerID, InstallID: installID,
 		LeaseToken: randomObservationLeaseToken(), AcquiredAt: now, ExpiresAt: now.Add(ttl), Metadata: metadata}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO observation_resource_leases
+	result, err := s.writer.ExecContext(ctx, `INSERT INTO observation_resource_leases
 		(resource_key,owner_id,install_id,lease_token,acquired_at,expires_at,metadata) VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(resource_key) DO UPDATE SET owner_id=excluded.owner_id,install_id=excluded.install_id,
 		lease_token=excluded.lease_token,acquired_at=excluded.acquired_at,expires_at=excluded.expires_at,metadata=excluded.metadata
@@ -391,7 +391,7 @@ func (s *Store) AcquireObservationResourceLease(ctx context.Context, resourceKey
 }
 
 func (s *Store) ReleaseObservationResourceLease(ctx context.Context, resourceKey, leaseToken string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM observation_resource_leases WHERE resource_key=? AND lease_token=?`, resourceKey, leaseToken)
+	result, err := s.writer.ExecContext(ctx, `DELETE FROM observation_resource_leases WHERE resource_key=? AND lease_token=?`, resourceKey, leaseToken)
 	if err != nil {
 		return false, err
 	}
@@ -404,7 +404,7 @@ func (s *Store) RenewObservationResourceLease(ctx context.Context, resourceKey, 
 		ttl = 30 * time.Second
 	}
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `UPDATE observation_resource_leases SET expires_at=?
+	result, err := s.writer.ExecContext(ctx, `UPDATE observation_resource_leases SET expires_at=?
 		WHERE resource_key=? AND lease_token=? AND expires_at>?`, observationTime(now.Add(ttl)), resourceKey, leaseToken, observationTime(now))
 	if err != nil {
 		return false, err

@@ -185,6 +185,62 @@ button:disabled {
   font-weight: 690;
 }
 
+.nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  margin-top: 6px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nav-group-header:hover {
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+}
+
+.nav-group-header.has-active {
+  color: var(--accent-strong);
+}
+
+.nav-group-header span {
+  flex: 1;
+}
+
+.nav-chevron {
+  transition: transform 0.18s ease;
+  opacity: 0.7;
+}
+
+.nav-chevron.open {
+  transform: rotate(180deg);
+}
+
+.nav-group-items {
+  display: grid;
+  gap: 3px;
+  padding-left: 10px;
+}
+
+.nav-subitem {
+  min-height: 38px;
+}
+
 .sidebar-tools {
   display: grid;
   gap: 2px;
@@ -750,6 +806,18 @@ code {
   color: var(--amber);
   background: var(--amber-soft);
   border-color: color-mix(in srgb, var(--amber) 25%, var(--border));
+}
+
+.channel-health-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.channel-health-meta {
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .provider-name,
@@ -2185,6 +2253,7 @@ textarea:focus {
 .menubar-preview-chip {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   padding: 6px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -2193,6 +2262,12 @@ textarea:focus {
   font-size: 14px;
   font-weight: 600;
   white-space: pre;
+}
+
+.menubar-preview-logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
 }
 
 .menubar-stages {
@@ -2376,6 +2451,57 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.session-channel-control {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+}
+
+.session-channel-bind {
+  flex-wrap: wrap;
+}
+
+.session-conversation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.session-conversation-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) minmax(180px, 1fr) auto auto minmax(120px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.session-conversation-row > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+@media (max-width: 900px) {
+  .session-conversation-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.session-interaction {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-subtle, rgba(127, 127, 127, 0.06));
+}
+
+.session-interaction pre {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .session-detail {
@@ -2752,19 +2878,36 @@ textarea:focus {
   }
 
   .nav {
-    display: grid;
-    grid-template-columns: repeat(10, 1fr);
+    display: flex;
+    align-items: center;
     height: 100%;
     gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
-  .nav button {
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-group,
+  .nav-group-items {
+    display: contents;
+  }
+
+  .nav-group-header {
+    display: none;
+  }
+
+  .nav-item {
+    flex: 0 0 44px;
     justify-content: center;
     min-height: 44px;
+    margin: 0;
     padding: 0;
   }
 
-  .nav button span {
+  .nav-item span {
     display: none;
   }
 
@@ -2970,6 +3113,11 @@ textarea:focus {
   flex: 1;
 }
 
+.framework-type {
+  font-weight: 760;
+  letter-spacing: 0.05em;
+}
+
 .framework-note {
   color: var(--muted);
   font-size: 13px;
@@ -2986,6 +3134,22 @@ textarea:focus {
   margin-top: auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.framework-card-foot .action {
+  min-width: 108px;
+  margin-left: auto;
+}
+
+.framework-card-foot .cli-status-stack {
+  flex-basis: 100%;
+}
+
+.version-badge {
+  color: var(--text-soft);
 }
 
 .framework-cli-hint {
@@ -4267,8 +4431,17 @@ textarea:focus {
     display: none;
   }
 
-  .sidebar .nav button {
+  .sidebar .nav .nav-item {
     flex: 0 0 44px;
+  }
+
+  .sidebar .nav .nav-group,
+  .sidebar .nav .nav-group-items {
+    display: contents;
+  }
+
+  .sidebar .nav .nav-group-header {
+    display: none;
   }
 
   .observability-hero {

@@ -16,7 +16,7 @@ import (
 func (s *Store) PutMemory(ctx context.Context, e *core.MemoryEntry) error {
 	tags := strings.Join(e.Tags, ",")
 	meta, _ := json.Marshal(e.Meta)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO memory_entries
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO memory_entries
 		(id,scope,content,tags,meta,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,content=excluded.content,
@@ -76,7 +76,7 @@ func (s *Store) SearchMemory(ctx context.Context, scope, query string, limit int
 
 // DeleteMemory removes a memory entry by id.
 func (s *Store) DeleteMemory(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM memory_entries WHERE id=?`, id)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM memory_entries WHERE id=?`, id)
 	return err
 }
 
@@ -137,7 +137,7 @@ func (s *Store) UpsertMCPServer(ctx context.Context, m *core.MCPServer) error {
 	if m.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO mcp_servers
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO mcp_servers
 		(name,transport,command,args,url,env,enabled) VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET transport=excluded.transport,command=excluded.command,
 		args=excluded.args,url=excluded.url,env=excluded.env,enabled=excluded.enabled`,
@@ -147,7 +147,7 @@ func (s *Store) UpsertMCPServer(ctx context.Context, m *core.MCPServer) error {
 
 // DeleteMCPServer removes an MCP server by name.
 func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM mcp_servers WHERE name=?`, name)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM mcp_servers WHERE name=?`, name)
 	return err
 }
 
@@ -185,7 +185,7 @@ func (s *Store) ListGuardPolicies(ctx context.Context) ([]GuardPolicy, error) {
 
 // UpsertGuardPolicy inserts or updates a guard policy.
 func (s *Store) UpsertGuardPolicy(ctx context.Context, p *GuardPolicy) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO guard_policies
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO guard_policies
 		(id,tool,action,decision,priority) VALUES (?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET tool=excluded.tool,action=excluded.action,
 		decision=excluded.decision,priority=excluded.priority`,
@@ -195,6 +195,6 @@ func (s *Store) UpsertGuardPolicy(ctx context.Context, p *GuardPolicy) error {
 
 // DeleteGuardPolicy removes a guard policy by id.
 func (s *Store) DeleteGuardPolicy(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM guard_policies WHERE id=?`, id)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM guard_policies WHERE id=?`, id)
 	return err
 }

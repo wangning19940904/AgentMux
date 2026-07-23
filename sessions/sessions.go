@@ -166,6 +166,36 @@ func (s *Service) Resume(ctx context.Context, req ResumeRequest) (ResumeResult, 
 	return res, nil
 }
 
+// OpenCodexThread opens the exact native Codex thread on macOS. Other
+// platforms receive a truthful CLI fallback and never report a successful
+// desktop launch.
+func (s *Service) OpenCodexThread(ctx context.Context, threadID string) (ResumeResult, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ResumeResult{}, errors.New("Codex thread id is required")
+	}
+	for _, r := range threadID {
+		if !(r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			return ResumeResult{}, fmt.Errorf("invalid Codex thread id %q", threadID)
+		}
+	}
+	command := "codex resume " + shellToken(threadID)
+	result := ResumeResult{
+		OK: true, ThreadID: threadID, Command: command,
+		StatusMessage: "Codex desktop deep link is unavailable; use the resume command",
+	}
+	if runtime.GOOS != "darwin" {
+		return result, nil
+	}
+	deepLink := "codex://threads/" + threadID
+	if err := exec.CommandContext(ctx, "open", deepLink).Run(); err != nil {
+		return result, fmt.Errorf("open Codex thread: %w", err)
+	}
+	result.Opened = true
+	result.StatusMessage = "opened in Codex App"
+	return result, nil
+}
+
 // Delete removes a file-backed session after verifying it lives below a known scanner root.
 func (s *Service) Delete(ctx context.Context, req ResumeRequest) error {
 	if req.SourcePath == "" {
@@ -671,7 +701,9 @@ type CodexAppClient struct {
 }
 
 func (c *CodexAppClient) List(ctx context.Context) ([]Meta, error) {
-	raw, err := c.call(ctx, "thread/list", map[string]any{})
+	raw, err := c.call(ctx, "thread/list", map[string]any{
+		"limit": 100, "archived": false, "sortKey": "recency_at", "sortDirection": "desc",
+	})
 	if err != nil {
 		return nil, err
 	}

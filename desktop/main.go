@@ -20,6 +20,12 @@ import (
 	"context"
 	"embed"
 	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -38,7 +44,8 @@ func main() {
 		Height:            720,
 		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:     assets,
+			Middleware: app.assetServerMiddleware,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
@@ -65,6 +72,54 @@ type App struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	menubar *menuBarProcess
+
+	// The WebView talks to /api on its own wails.localhost origin. Wails hands
+	// those requests to apiProxy, which reaches the in-process loopback daemon
+	// from Go. Keeping HTTP out of WebKit avoids macOS mixed-content/ATS failures
+	// that otherwise surface in the UI as the opaque "TypeError: Load failed".
+	apiTarget atomic.Value // *url.URL
+	apiProxy  *httputil.ReverseProxy
 }
 
-func newApp() *App { return &App{} }
+func newApp() *App {
+	app := &App{}
+	app.apiTarget.Store(desktopAPITarget("127.0.0.1:8765"))
+	app.apiProxy = &httputil.ReverseProxy{
+		Director: func(request *http.Request) {
+			target := app.apiTarget.Load().(*url.URL)
+			request.URL.Scheme = target.Scheme
+			request.URL.Host = target.Host
+			request.Host = target.Host
+		},
+		ErrorHandler: func(response http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(response, "desktop API is starting", http.StatusServiceUnavailable)
+		},
+	}
+	return app
+}
+
+func (a *App) assetServerMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api" || strings.HasPrefix(request.URL.Path, "/api/") {
+			a.apiProxy.ServeHTTP(response, request)
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
+}
+
+func (a *App) setAPITarget(addr string) {
+	a.apiTarget.Store(desktopAPITarget(addr))
+}
+
+func desktopAPITarget(addr string) *url.URL {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || port == "" {
+		host, port = "127.0.0.1", "8765"
+	}
+	switch strings.Trim(host, "[]") {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return &url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}
+}

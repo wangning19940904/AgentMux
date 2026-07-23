@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +72,11 @@ func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 	if err := recorder.Observe(ctx, duplicate); err != nil {
 		t.Fatal(err)
 	}
+	// Content-bearing replay must be rejected before allocating another
+	// encrypted payload.
+	if err := recorder.Observe(ctx, start); err != nil {
+		t.Fatal(err)
+	}
 
 	trace, err := store.GetObservationTrace(ctx, traceID)
 	if err != nil {
@@ -99,6 +106,17 @@ func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 	if bytes.Count(plaintext, []byte("[REDACTED]")) < 3 {
 		t.Fatalf("payload redactions missing: %s", plaintext)
 	}
+	var payloads, orphanPayloads int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observation_payloads`).Scan(&payloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM observation_payloads p WHERE NOT EXISTS
+		(SELECT 1 FROM observation_events e WHERE e.payload_id=p.payload_id)`).Scan(&orphanPayloads); err != nil {
+		t.Fatal(err)
+	}
+	if payloads != 1 || orphanPayloads != 0 {
+		t.Fatalf("payloads = %d, orphans = %d; replay leaked encrypted content", payloads, orphanPayloads)
+	}
 
 	var wrapped []byte
 	if err := store.db.QueryRow(`SELECT wrapped_key FROM observation_data_keys WHERE key_id='2026-07-11'`).Scan(&wrapped); err != nil {
@@ -120,6 +138,140 @@ func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 				t.Fatalf("database file %s contains plaintext secret %q", candidate, secret)
 			}
 		}
+	}
+}
+
+func TestConcurrentObservationReplayDoesNotLeakPayloads(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "concurrent-replay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	recorder, err := NewObservationRecorder(st, ObservationRecorderOptions{
+		CaptureContent: true, MasterKey: bytes.Repeat([]byte{0x25}, 32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := core.ObservationEnvelope{
+		EventID: "same-event", DedupeKey: "same-dedupe", TraceID: "same-trace", SpanID: "same-span", Kind: "agent.turn",
+		Content: &core.ObservationContent{Data: bytes.Repeat([]byte("content"), 1024)},
+	}
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- recorder.Observe(context.Background(), envelope)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var events, payloads, chunks int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payloads`).Scan(&payloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payload_chunks`).Scan(&chunks); err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 || payloads != 1 || chunks != 1 {
+		t.Fatalf("events=%d payloads=%d chunks=%d, want one durable copy", events, payloads, chunks)
+	}
+}
+
+func TestObservationCleanupRemovesOrphansInBatches(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "orphan-cleanup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC)
+	created := observationTime(now.Add(-2 * time.Hour))
+	expires := observationTime(now.Add(24 * time.Hour))
+	want := observationCleanupBatchSize + 17
+	tx, err := st.writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range want {
+		id := "orphan-" + strconv.Itoa(index)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO observation_payloads
+			(payload_id,key_id,content_type,compression,encryption,nonce,ciphertext,sha256,original_bytes,stored_bytes,redacted,created_at,expires_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, "2026-07-21", "text/plain", "gzip-chunks", "AES-256-GCM",
+			[]byte{}, []byte{}, "digest", 1, 1, false, created, expires); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO observation_payload_chunks
+			(payload_id,chunk_index,nonce,ciphertext,original_bytes,stored_bytes) VALUES(?,?,?,?,?,?)`,
+			id, 0, []byte{1}, []byte{2}, 1, 1); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := st.CleanupObservationRetention(ctx, now, 180*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Payloads != int64(want) {
+		t.Fatalf("cleaned payloads = %d, want %d", result.Payloads, want)
+	}
+	var payloads, chunks int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payloads`).Scan(&payloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payload_chunks`).Scan(&chunks); err != nil {
+		t.Fatal(err)
+	}
+	if payloads != 0 || chunks != 0 {
+		t.Fatalf("payloads=%d chunks=%d after cleanup", payloads, chunks)
+	}
+}
+
+func TestObservationOrphanLookupUsesPayloadIndex(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "orphan-plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	rows, err := st.db.Query(`EXPLAIN QUERY PLAN SELECT payload_id FROM observation_payloads WHERE `+
+		observationOrphanPayloadPredicate+` ORDER BY created_at LIMIT ?`, observationTime(time.Now()), observationCleanupBatchSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.String(), "idx_observation_events_payload") {
+		t.Fatalf("orphan lookup does not use payload index:\n%s", plan.String())
 	}
 }
 
@@ -335,6 +487,64 @@ func TestObservationPayloadIsCompressedAndEncryptedInChunks(t *testing.T) {
 	}
 	if contentType != "application/octet-stream" || !bytes.Equal(decoded, payload) {
 		t.Fatal("chunked payload round-trip mismatch")
+	}
+}
+
+func TestObservationTranscriptSourceReferenceAvoidsPayloadCopyAndStillRedacts(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "source-ref.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	recorder, err := NewObservationRecorder(st, ObservationRecorderOptions{
+		CaptureContent: true, MasterKey: bytes.Repeat([]byte{7}, 32), KnownSecrets: []string{"local-secret"},
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := core.ObservationContent{ContentType: "application/json", Data: []byte(`{"output":"local-secret"}`)}
+	recorder.SetPayloadSourceResolver(func(context.Context, core.ObservationPayloadRef) ([]core.ObservationContent, error) {
+		return []core.ObservationContent{content}, nil
+	})
+	envelope := core.ObservationEnvelope{
+		EventID: "source-event", TraceID: "source-trace", SpanID: "source-span", Time: now,
+		Kind: "tool.call", Source: "transcript",
+		Content: &core.ObservationContent{
+			ContentType: content.ContentType, Data: content.Data,
+			Source: &core.ObservationContentSource{
+				Storage: core.ObservationPayloadStorageTranscriptFile, Path: filepath.Join(t.TempDir(), "rollout.jsonl"),
+				Offset: 42, Length: 128, SHA256: strings.Repeat("a", 64), Runtime: "codex", Class: "active",
+			},
+		},
+	}
+	secured, err := recorder.Record(context.Background(), envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secured.PayloadRef == nil || secured.PayloadRef.Storage != core.ObservationPayloadStorageTranscriptFile || secured.PayloadRef.StoredBytes != 0 {
+		t.Fatalf("source payload ref = %+v", secured.PayloadRef)
+	}
+	if secured.PayloadRef.SourceContentSHA256 == "" || secured.PayloadRef.ContentSHA256 != "" {
+		t.Fatalf("new source reference should defer redaction to expansion: %+v", secured.PayloadRef)
+	}
+	var payloads, chunks int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payloads`).Scan(&payloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM observation_payload_chunks`).Scan(&chunks); err != nil {
+		t.Fatal(err)
+	}
+	if payloads != 0 || chunks != 0 {
+		t.Fatalf("source reference copied payload into SQLite: payloads=%d chunks=%d", payloads, chunks)
+	}
+	decoded, contentType, err := recorder.ReadEnvelopePayload(context.Background(), secured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "application/json" || bytes.Contains(decoded, []byte("local-secret")) || !bytes.Contains(decoded, []byte("[REDACTED]")) {
+		t.Fatalf("source payload was not safely materialized: %s", decoded)
 	}
 }
 

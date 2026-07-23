@@ -126,12 +126,33 @@ func TestImportLegacyObservationsIsIdempotentAndCorrelates(t *testing.T) {
 		t.Fatalf("legacy event count = %d, want 3", eventCount)
 	}
 	usageTraceID := usageTrace.TraceID
+	var usageUpdatedAt string
+	if err := st.db.QueryRowContext(ctx, `SELECT updated_at FROM observation_traces WHERE trace_id=?`, usageTraceID).Scan(&usageUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM settings WHERE key IN (?,?)`, legacyUsageImportCursorKey, legacyProxyImportCursorKey); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := st.ImportLegacyObservations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered != (LegacyObservationImportResult{UsageScanned: 1, ProxyScanned: 1}) {
+		t.Fatalf("cursor recovery import = %+v", recovered)
+	}
+	var usageUpdatedAfterRecovery string
+	if err := st.db.QueryRowContext(ctx, `SELECT updated_at FROM observation_traces WHERE trace_id=?`, usageTraceID).Scan(&usageUpdatedAfterRecovery); err != nil {
+		t.Fatal(err)
+	}
+	if usageUpdatedAfterRecovery != usageUpdatedAt {
+		t.Fatalf("already imported usage was replayed: updated_at %q -> %q", usageUpdatedAt, usageUpdatedAfterRecovery)
+	}
 
 	second, err := st.ImportLegacyObservations(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second != (LegacyObservationImportResult{UsageScanned: 1, ProxyScanned: 1}) {
+	if second != (LegacyObservationImportResult{}) {
 		t.Fatalf("second import = %+v", second)
 	}
 	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_events WHERE source IN ('legacy_usage','legacy_proxy')`).Scan(&eventCount); err != nil {
@@ -143,6 +164,23 @@ func TestImportLegacyObservationsIsIdempotentAndCorrelates(t *testing.T) {
 	usageTraces, err = st.ListObservationTraces(ctx, ObservationTraceFilter{Source: "legacy_usage", Limit: 10})
 	if err != nil || len(usageTraces) != 1 || usageTraces[0].TraceID != usageTraceID {
 		t.Fatalf("stable usage trace = %+v, err=%v", usageTraces, err)
+	}
+
+	if err := st.UpsertUsage(ctx, []core.UsageRecord{{
+		Source: "codex", SessionID: "session-legacy", RequestID: "usage-request-2", Project: agent.WorkDir,
+		Model: "gpt-5", Timestamp: ended.Add(time.Second), InputTokens: 10, OutputTokens: 2,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	third, err := st.ImportLegacyObservations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third != (LegacyObservationImportResult{UsageScanned: 1, UsageImported: 1}) {
+		t.Fatalf("incremental import = %+v", third)
+	}
+	if fourth, err := st.ImportLegacyObservations(ctx); err != nil || fourth != (LegacyObservationImportResult{}) {
+		t.Fatalf("incremental import replay = %+v, err=%v", fourth, err)
 	}
 }
 

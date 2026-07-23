@@ -297,7 +297,7 @@ func (s *Server) handleObservationTrace(w http.ResponseWriter, r *http.Request) 
 	for _, event := range events {
 		detail := observationEventDetail{ObservationEnvelope: event}
 		if event.PayloadRef != nil && s.obs != nil && s.obs.recorder != nil {
-			content, contentType, readErr := s.obs.recorder.ReadPayload(r.Context(), event.PayloadRef.ID)
+			content, contentType, readErr := s.obs.recorder.ReadEnvelopePayload(r.Context(), event)
 			if readErr == nil {
 				detail.Content = decodeObservationContent(content, contentType)
 				if index, ok := spanIndex[event.SpanID]; ok {

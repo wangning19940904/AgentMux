@@ -113,6 +113,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_observation_events_dedupe ON observation_e
 CREATE INDEX IF NOT EXISTS idx_observation_events_trace_sequence ON observation_events(trace_id, sequence, timestamp);
 CREATE INDEX IF NOT EXISTS idx_observation_events_span_time ON observation_events(span_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_observation_events_source_time ON observation_events(source, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_observation_events_payload ON observation_events(payload_id) WHERE payload_id <> '';
 
 CREATE TABLE IF NOT EXISTS observation_data_keys (
 	key_id TEXT PRIMARY KEY,
@@ -251,7 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_observation_resource_leases_expiry ON observation
 `
 
 func (s *Store) migrateObservations() error {
-	_, err := s.db.Exec(observationSchema)
+	_, err := s.writer.Exec(observationSchema)
 	return err
 }
 
@@ -327,14 +328,22 @@ type ObservationTraceFilter struct {
 // RecordObservation idempotently records one envelope and refreshes its span
 // and trace summaries. EventID and DedupeKey are both honored for replay.
 func (s *Store) RecordObservation(ctx context.Context, envelope core.ObservationEnvelope) error {
+	_, err := s.recordObservation(ctx, envelope)
+	return err
+}
+
+// recordObservation reports whether this call inserted the durable event. The
+// distinction lets the encrypted-content recorder reclaim a just-created
+// payload when an at-least-once replay loses the dedupe race.
+func (s *Store) recordObservation(ctx context.Context, envelope core.ObservationEnvelope) (bool, error) {
 	envelope.Content = nil
 	envelope.Normalize()
 	if err := envelope.Validate(); err != nil {
-		return err
+		return false, err
 	}
 	envelopeJSON, err := json.Marshal(envelope)
 	if err != nil {
-		return fmt.Errorf("marshal observation envelope: %w", err)
+		return false, fmt.Errorf("marshal observation envelope: %w", err)
 	}
 	provenanceJSON := marshalObservationJSON(envelope.Provenance)
 	errorJSON := marshalObservationJSON(envelope.Error)
@@ -364,9 +373,9 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 		duration = envelope.Tool.DurationMillis
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
@@ -377,14 +386,14 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 		envelope.ParentSpanID, envelope.Sequence, timestamp, envelope.Kind, envelope.Name, envelope.Lifecycle,
 		envelope.Source, envelope.Quality, envelope.Status, payloadID, string(envelopeJSON), now)
 	if err != nil {
-		return fmt.Errorf("insert observation event: %w", err)
+		return false, fmt.Errorf("insert observation event: %w", err)
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if inserted == 0 {
-		return nil
+		return false, nil
 	}
 
 	_, err = tx.ExecContext(ctx, `
@@ -426,7 +435,7 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.ReasoningTokens,
 		usage.ToolTokens, usage.TotalTokens, usage.CostUSD, attributesJSON, now, now)
 	if err != nil {
-		return fmt.Errorf("upsert observation trace: %w", err)
+		return false, fmt.Errorf("upsert observation trace: %w", err)
 	}
 
 	_, err = tx.ExecContext(ctx, `
@@ -473,12 +482,12 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, usage.ReasoningTokens,
 		usage.ToolTokens, usage.TotalTokens, usage.CostUSD, attributesJSON, now, now)
 	if err != nil {
-		return fmt.Errorf("upsert observation span: %w", err)
+		return false, fmt.Errorf("upsert observation span: %w", err)
 	}
 
 	traceUsage, hasModelUsage, err := observationTraceUsageTx(ctx, tx, envelope.TraceID)
 	if err != nil {
-		return fmt.Errorf("materialize observation trace usage: %w", err)
+		return false, fmt.Errorf("materialize observation trace usage: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE observation_traces SET
@@ -501,9 +510,28 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 		hasModelUsage, traceUsage.TotalTokens, hasModelUsage, traceUsage.CostUSD,
 		now, envelope.TraceID)
 	if err != nil {
-		return fmt.Errorf("refresh observation trace: %w", err)
+		return false, fmt.Errorf("refresh observation trace: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) observationEventRecorded(ctx context.Context, eventID, dedupeKey string) (bool, error) {
+	query := `SELECT 1 FROM observation_events WHERE event_id=?`
+	args := []any{eventID}
+	if strings.TrimSpace(dedupeKey) != "" {
+		query += ` OR dedupe_key=?`
+		args = append(args, dedupeKey)
+	}
+	query += ` LIMIT 1`
+	var found int
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // observationTraceUsageTx applies the same request/attempt source selection as
@@ -726,7 +754,7 @@ func (s *Store) UpsertObservationIngestCursor(ctx context.Context, cursor Observ
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO observation_ingest_cursors
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO observation_ingest_cursors
 		(source,resource,cursor,message_id,file_identity,byte_offset,observed_at,updated_at) VALUES(?,?,?,?,?,?,?,?)
 		ON CONFLICT(source,resource) DO UPDATE SET cursor=excluded.cursor,message_id=excluded.message_id,
 		file_identity=excluded.file_identity,byte_offset=excluded.byte_offset,observed_at=excluded.observed_at,updated_at=excluded.updated_at`,

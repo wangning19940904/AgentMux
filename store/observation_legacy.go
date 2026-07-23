@@ -25,6 +25,12 @@ type LegacyObservationImportResult struct {
 	ProxyImported int `json:"proxy_imported"`
 }
 
+const (
+	legacyObservationImportBatchSize = 512
+	legacyUsageImportCursorKey       = "observation:legacy_usage_rowid"
+	legacyProxyImportCursorKey       = "observation:legacy_proxy_rowid"
+)
+
 // ImportLegacyObservations backfills the pre-observability usage_records and
 // proxy_traces tables into ObservationEnvelope v1. It deliberately leaves the
 // source rows untouched so the old Usage and Gateway APIs remain compatible.
@@ -41,78 +47,134 @@ func (s *Store) ImportLegacyObservations(ctx context.Context) (LegacyObservation
 		return result, fmt.Errorf("load legacy observation correlations: %w", err)
 	}
 
-	usageRows, err := s.loadLegacyUsageRows(ctx)
+	usageCursor, err := s.legacyObservationImportCursor(ctx, legacyUsageImportCursorKey)
 	if err != nil {
-		return result, fmt.Errorf("load legacy usage rows: %w", err)
+		return result, err
 	}
-	result.UsageScanned = len(usageRows)
-	for _, row := range usageRows {
-		if row.TraceID != "" {
-			exists, err := s.observationTraceExists(ctx, row.TraceID)
-			if err != nil {
-				return result, err
+	for {
+		usageRows, err := s.loadLegacyUsageRowsAfter(ctx, usageCursor, legacyObservationImportBatchSize)
+		if err != nil {
+			return result, fmt.Errorf("load legacy usage rows: %w", err)
+		}
+		if len(usageRows) == 0 {
+			break
+		}
+		for _, row := range usageRows {
+			result.UsageScanned++
+			if row.TraceID != "" {
+				exists, err := s.observationTraceExists(ctx, row.TraceID)
+				if err != nil {
+					return result, err
+				}
+				if exists {
+					continue
+				}
 			}
-			if exists {
+			terminalEventID := legacyEventID("usage.end", row.identity())
+			alreadyImported, err := s.observationEventExists(ctx, terminalEventID)
+			if err != nil {
+				return result, fmt.Errorf("check legacy usage %q: %w", row.identity(), err)
+			}
+			if alreadyImported {
 				continue
 			}
-		}
-		terminalEventID := legacyEventID("usage.end", row.identity())
-		alreadyImported, err := s.observationEventExists(ctx, terminalEventID)
-		if err != nil {
-			return result, fmt.Errorf("check legacy usage %q: %w", row.identity(), err)
-		}
-		envelope := row.envelope(correlations)
-		spanID, err := s.resolveLegacyModelSpanID(ctx, envelope.TraceID, row.RequestID, 0, envelope.SpanID)
-		if err != nil {
-			return result, fmt.Errorf("correlate legacy usage %q: %w", row.identity(), err)
-		}
-		envelope.SpanID = spanID
-		if err := s.RecordObservation(ctx, envelope); err != nil {
-			return result, fmt.Errorf("record legacy usage %q: %w", row.identity(), err)
-		}
-		if !alreadyImported {
+			envelope := row.envelope(correlations)
+			spanID, err := s.resolveLegacyModelSpanID(ctx, envelope.TraceID, row.RequestID, 0, envelope.SpanID)
+			if err != nil {
+				return result, fmt.Errorf("correlate legacy usage %q: %w", row.identity(), err)
+			}
+			envelope.SpanID = spanID
+			if err := s.RecordObservation(ctx, envelope); err != nil {
+				return result, fmt.Errorf("record legacy usage %q: %w", row.identity(), err)
+			}
 			result.UsageImported++
+			// Persist expensive work immediately. Already-imported rows are cheap
+			// and checkpointed once per batch below, but a restart must not replay
+			// a newly materialized observation from the beginning of the batch.
+			if err := s.saveLegacyObservationImportCursor(ctx, legacyUsageImportCursorKey, row.RowID); err != nil {
+				return result, err
+			}
+		}
+		usageCursor = usageRows[len(usageRows)-1].RowID
+		if err := s.saveLegacyObservationImportCursor(ctx, legacyUsageImportCursorKey, usageCursor); err != nil {
+			return result, err
 		}
 	}
 
-	proxyRows, err := s.loadLegacyProxyRows(ctx)
+	proxyCursor, err := s.legacyObservationImportCursor(ctx, legacyProxyImportCursorKey)
 	if err != nil {
-		return result, fmt.Errorf("load legacy proxy rows: %w", err)
+		return result, err
 	}
-	result.ProxyScanned = len(proxyRows)
-	for _, row := range proxyRows {
-		if row.TraceID != "" {
-			exists, err := s.observationTraceExists(ctx, row.TraceID)
-			if err != nil {
-				return result, err
+	for {
+		proxyRows, err := s.loadLegacyProxyRowsAfter(ctx, proxyCursor, legacyObservationImportBatchSize)
+		if err != nil {
+			return result, fmt.Errorf("load legacy proxy rows: %w", err)
+		}
+		if len(proxyRows) == 0 {
+			break
+		}
+		for _, row := range proxyRows {
+			result.ProxyScanned++
+			if row.TraceID != "" {
+				exists, err := s.observationTraceExists(ctx, row.TraceID)
+				if err != nil {
+					return result, err
+				}
+				if exists {
+					continue
+				}
 			}
-			if exists {
+			terminalEventID := legacyEventID("proxy.end", row.identity())
+			alreadyImported, err := s.observationEventExists(ctx, terminalEventID)
+			if err != nil {
+				return result, fmt.Errorf("check legacy proxy %q: %w", row.identity(), err)
+			}
+			if alreadyImported {
 				continue
 			}
-		}
-		terminalEventID := legacyEventID("proxy.end", row.identity())
-		alreadyImported, err := s.observationEventExists(ctx, terminalEventID)
-		if err != nil {
-			return result, fmt.Errorf("check legacy proxy %q: %w", row.identity(), err)
-		}
-		start, end := row.envelopes(correlations)
-		spanID, err := s.resolveLegacyModelSpanID(ctx, end.TraceID, row.RequestID, row.Attempt, end.SpanID)
-		if err != nil {
-			return result, fmt.Errorf("correlate legacy proxy %q: %w", row.identity(), err)
-		}
-		start.SpanID = spanID
-		end.SpanID = spanID
-		if err := s.RecordObservation(ctx, start); err != nil {
-			return result, fmt.Errorf("record legacy proxy start %q: %w", row.identity(), err)
-		}
-		if err := s.RecordObservation(ctx, end); err != nil {
-			return result, fmt.Errorf("record legacy proxy end %q: %w", row.identity(), err)
-		}
-		if !alreadyImported {
+			start, end := row.envelopes(correlations)
+			spanID, err := s.resolveLegacyModelSpanID(ctx, end.TraceID, row.RequestID, row.Attempt, end.SpanID)
+			if err != nil {
+				return result, fmt.Errorf("correlate legacy proxy %q: %w", row.identity(), err)
+			}
+			start.SpanID = spanID
+			end.SpanID = spanID
+			if err := s.RecordObservation(ctx, start); err != nil {
+				return result, fmt.Errorf("record legacy proxy start %q: %w", row.identity(), err)
+			}
+			if err := s.RecordObservation(ctx, end); err != nil {
+				return result, fmt.Errorf("record legacy proxy end %q: %w", row.identity(), err)
+			}
 			result.ProxyImported++
+			if err := s.saveLegacyObservationImportCursor(ctx, legacyProxyImportCursorKey, row.RowID); err != nil {
+				return result, err
+			}
+		}
+		proxyCursor = proxyRows[len(proxyRows)-1].RowID
+		if err := s.saveLegacyObservationImportCursor(ctx, legacyProxyImportCursorKey, proxyCursor); err != nil {
+			return result, err
 		}
 	}
 	return result, nil
+}
+
+func (s *Store) legacyObservationImportCursor(ctx context.Context, key string) (int64, error) {
+	value, ok, err := s.GetSetting(ctx, key)
+	if err != nil || !ok {
+		return 0, err
+	}
+	cursor, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || cursor < 0 {
+		return 0, nil
+	}
+	return cursor, nil
+}
+
+func (s *Store) saveLegacyObservationImportCursor(ctx context.Context, key string, cursor int64) error {
+	if err := s.SetSetting(ctx, key, strconv.FormatInt(cursor, 10)); err != nil {
+		return fmt.Errorf("save legacy observation cursor %q: %w", key, err)
+	}
+	return nil
 }
 
 // SecureLegacyProxyErrors migrates pre-observability proxy error detail into
@@ -166,7 +228,7 @@ func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.Observa
 				return secured, err
 			}
 		}
-		result, err := s.db.ExecContext(ctx, `UPDATE proxy_traces SET error='Legacy proxy request failed' WHERE id=? AND error=?`, row.ID, row.Error)
+		result, err := s.writer.ExecContext(ctx, `UPDATE proxy_traces SET error='Legacy proxy request failed' WHERE id=? AND error=?`, row.ID, row.Error)
 		if err != nil {
 			return secured, err
 		}
@@ -177,6 +239,7 @@ func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.Observa
 }
 
 type legacyUsageRow struct {
+	RowID            int64
 	Source           string
 	SessionID        string
 	ConversationID   string
@@ -197,13 +260,23 @@ type legacyUsageRow struct {
 }
 
 func (s *Store) loadLegacyUsageRows(ctx context.Context) ([]legacyUsageRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT
+	return s.loadLegacyUsageRowsAfter(ctx, 0, 0)
+}
+
+func (s *Store) loadLegacyUsageRowsAfter(ctx context.Context, after int64, limit int) ([]legacyUsageRow, error) {
+	query := `SELECT rowid,
 		COALESCE(source,''),COALESCE(session_id,''),COALESCE(conversation_id,''),COALESCE(trace_id,''),
 		COALESCE(turn_id,''),COALESCE(request_id,''),COALESCE(runtime_id,''),COALESCE(project,''),
 		COALESCE(model,''),COALESCE(timestamp,''),COALESCE(input_tokens,0),COALESCE(output_tokens,0),
 		COALESCE(cache_read_tokens,0),COALESCE(cache_write_tokens,0),COALESCE(tool,''),
 		COALESCE(cost_usd,0),COALESCE(host,'')
-		FROM usage_records ORDER BY timestamp,source,session_id,host`)
+		FROM usage_records WHERE rowid>? ORDER BY rowid`
+	args := []any{after}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +284,7 @@ func (s *Store) loadLegacyUsageRows(ctx context.Context) ([]legacyUsageRow, erro
 	var result []legacyUsageRow
 	for rows.Next() {
 		var row legacyUsageRow
-		if err := rows.Scan(&row.Source, &row.SessionID, &row.ConversationID, &row.TraceID,
+		if err := rows.Scan(&row.RowID, &row.Source, &row.SessionID, &row.ConversationID, &row.TraceID,
 			&row.TurnID, &row.RequestID, &row.RuntimeID, &row.Project, &row.Model, &row.TimestampRaw,
 			&row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens,
 			&row.Tool, &row.CostUSD, &row.Host); err != nil {
@@ -291,6 +364,7 @@ func (r legacyUsageRow) envelope(c legacyCorrelationIndex) core.ObservationEnvel
 }
 
 type legacyProxyRow struct {
+	RowID            int64
 	ID               string
 	RequestID        string
 	TraceID          string
@@ -323,7 +397,11 @@ type legacyProxyRow struct {
 }
 
 func (s *Store) loadLegacyProxyRows(ctx context.Context) ([]legacyProxyRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT
+	return s.loadLegacyProxyRowsAfter(ctx, 0, 0)
+}
+
+func (s *Store) loadLegacyProxyRowsAfter(ctx context.Context, after int64, limit int) ([]legacyProxyRow, error) {
+	query := `SELECT rowid,
 		COALESCE(id,''),COALESCE(request_id,''),COALESCE(trace_id,''),COALESCE(attempt,0),
 		COALESCE(parent_attempt_id,''),COALESCE(timestamp,''),COALESCE(started_at,''),COALESCE(tool,''),
 		COALESCE(provider_id,''),COALESCE(provider_name,''),COALESCE(client_protocol,''),
@@ -333,7 +411,13 @@ func (s *Store) loadLegacyProxyRows(ctx context.Context) ([]legacyProxyRow, erro
 		COALESCE(finish_reason,''),COALESCE(input_tokens,0),COALESCE(output_tokens,0),
 		COALESCE(cache_read_tokens,0),COALESCE(cache_write_tokens,0),COALESCE(request_bytes,0),
 		COALESCE(response_bytes,0)
-		FROM proxy_traces ORDER BY timestamp,id`)
+		FROM proxy_traces WHERE rowid>? ORDER BY rowid`
+	args := []any{after}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +426,7 @@ func (s *Store) loadLegacyProxyRows(ctx context.Context) ([]legacyProxyRow, erro
 	for rows.Next() {
 		var row legacyProxyRow
 		var success, streamComplete int
-		if err := rows.Scan(&row.ID, &row.RequestID, &row.TraceID, &row.Attempt, &row.ParentAttemptID,
+		if err := rows.Scan(&row.RowID, &row.ID, &row.RequestID, &row.TraceID, &row.Attempt, &row.ParentAttemptID,
 			&row.TimestampRaw, &row.StartedAtRaw, &row.Tool, &row.ProviderID, &row.ProviderName,
 			&row.ClientProtocol, &row.UpstreamProtocol, &row.ClientModel, &row.UpstreamModel,
 			&row.StatusCode, &success, &row.Error, &row.SessionID, &row.ProjectDir,

@@ -53,7 +53,7 @@ func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) 
 	if a.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_instances
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO agent_instances
 		(id,name,runtime_id,work_dir,system_prompt,provider_tool,provider_id,memory_scope,
 		 default_model,default_reasoning_effort,default_service_tier,env,channel_bindings,schedules,mcp_servers,skills,clis,enabled,source,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -74,7 +74,7 @@ func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) 
 
 // DeleteAgentInstance removes a console-managed Agent instance.
 func (s *Store) DeleteAgentInstance(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM agent_instances WHERE id=?`, id)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM agent_instances WHERE id=?`, id)
 	return err
 }
 
@@ -82,7 +82,7 @@ func (s *Store) DeleteAgentInstance(ctx context.Context, id string) error {
 // It intentionally does not touch active in-memory sessions: defaults apply
 // only when future conversations create a new session.
 func (s *Store) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings core.RuntimeSettings) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE agent_instances
+	_, err := s.writer.ExecContext(ctx, `UPDATE agent_instances
 		SET default_model=?, default_reasoning_effort=?, default_service_tier=?, updated_at=?
 		WHERE id=?`, settings.Model, settings.ReasoningEffort, settings.ServiceTier,
 		time.Now().Format(time.RFC3339Nano), id)

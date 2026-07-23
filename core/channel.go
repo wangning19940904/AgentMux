@@ -23,17 +23,26 @@ type Channel struct {
 
 // ChannelStatus reports the live state of a channel attached to the Engine.
 type ChannelStatus struct {
-	ChannelID string    `json:"channel_id"`
-	State     string    `json:"state"` // running, error, stopped
-	Error     string    `json:"error,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
+	ChannelID       string    `json:"channel_id"`
+	State           string    `json:"state"` // starting, running, reconnecting, degraded, error, stopped
+	Connected       bool      `json:"connected"`
+	Error           string    `json:"error,omitempty"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	ConnectedAt     time.Time `json:"connected_at,omitempty"`
+	LastCheckedAt   time.Time `json:"last_checked_at,omitempty"`
+	LastHeartbeatAt time.Time `json:"last_heartbeat_at,omitempty"`
+	LastEventAt     time.Time `json:"last_event_at,omitempty"`
+	LastInboundAt   time.Time `json:"last_inbound_at,omitempty"`
 }
 
 // Channel runtime states.
 const (
-	ChannelStateRunning = "running"
-	ChannelStateError   = "error"
-	ChannelStateStopped = "stopped"
+	ChannelStateStarting     = "starting"
+	ChannelStateRunning      = "running"
+	ChannelStateReconnecting = "reconnecting"
+	ChannelStateDegraded     = "degraded"
+	ChannelStateError        = "error"
+	ChannelStateStopped      = "stopped"
 )
 
 // Feishu/Lark channel config keys.

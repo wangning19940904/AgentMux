@@ -11,6 +11,8 @@ import (
 
 const channelMessageDedupTTL = 10 * time.Minute
 
+var channelHealthCheckInterval = 15 * time.Second
+
 // channelRuntime holds one live console-managed channel: the platform
 // connection, the bound agent and its per-chat sessions.
 type channelRuntime struct {
@@ -22,30 +24,79 @@ type channelRuntime struct {
 	workspace       WorkspaceInitOptions
 	defaultSettings RuntimeSettings
 	cancel          context.CancelFunc
+	runCtx          context.Context
 
-	mu       sync.Mutex
-	sessions map[string]AgentSession // chatID -> session
-	seen     map[string]time.Time
-	state    string
-	errMsg   string
-	started  time.Time
+	mu              sync.Mutex
+	sessions        map[string]AgentSession // chatID -> session
+	seen            map[string]time.Time
+	state           string
+	errMsg          string
+	started         time.Time
+	connected       bool
+	connectedAt     time.Time
+	lastCheckedAt   time.Time
+	lastHeartbeatAt time.Time
+	lastEventAt     time.Time
+	lastInboundAt   time.Time
+	terminal        bool
+
+	controlMu    sync.Mutex
+	controlTasks map[string]*channelControlState
+	clearConfirm map[string]time.Time
+	threadLists  map[string][]NativeThread
 }
 
 func (rt *channelRuntime) setState(state, errMsg string) {
 	rt.mu.Lock()
 	rt.state = state
 	rt.errMsg = errMsg
+	rt.connected = false
+	rt.terminal = true
 	rt.mu.Unlock()
+}
+
+func (rt *channelRuntime) applyHealth(health PlatformHealth) (previous string, changed bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.terminal {
+		return rt.state, false
+	}
+	previous = rt.state
+	state := health.State
+	switch state {
+	case ChannelStateStarting, ChannelStateRunning, ChannelStateReconnecting, ChannelStateDegraded, ChannelStateError:
+	default:
+		if health.Connected {
+			state = ChannelStateRunning
+		} else {
+			state = ChannelStateDegraded
+		}
+	}
+	rt.state = state
+	rt.connected = health.Connected
+	rt.errMsg = health.Error
+	rt.connectedAt = health.ConnectedAt
+	rt.lastCheckedAt = health.CheckedAt
+	rt.lastHeartbeatAt = health.LastHeartbeatAt
+	rt.lastEventAt = health.LastEventAt
+	rt.lastInboundAt = health.LastInboundAt
+	return previous, previous != state
 }
 
 func (rt *channelRuntime) status() ChannelStatus {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	return ChannelStatus{
-		ChannelID: rt.channel.ID,
-		State:     rt.state,
-		Error:     rt.errMsg,
-		StartedAt: rt.started,
+		ChannelID:       rt.channel.ID,
+		State:           rt.state,
+		Connected:       rt.connected,
+		Error:           rt.errMsg,
+		StartedAt:       rt.started,
+		ConnectedAt:     rt.connectedAt,
+		LastCheckedAt:   rt.lastCheckedAt,
+		LastHeartbeatAt: rt.lastHeartbeatAt,
+		LastEventAt:     rt.lastEventAt,
+		LastInboundAt:   rt.lastInboundAt,
 	}
 }
 
@@ -67,19 +118,23 @@ func (rt *channelRuntime) scope() string { return "channel:" + rt.channel.ID }
 // session returns the agent session for chatID, creating one when needed. It
 // also returns the durable conversation (nil when no conversation store is
 // attached) so callers can persist turn activity and native session ids.
-func (rt *channelRuntime) session(ctx context.Context, chatID, chatType string) (AgentSession, *Conversation, bool, error) {
+func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSession, *Conversation, bool, error) {
 	if rt.agent == nil {
 		return nil, nil, false, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
+	}
+	if msg == nil {
+		return nil, nil, false, fmt.Errorf("channel message is required")
 	}
 	opts := rt.workspace
 	if opts.WorkDir == "" {
 		opts.WorkDir = rt.workDir
 	}
-	conv, workDir, err := rt.owner.prepareConversation(ctx, rt.scope(), chatID, chatType, opts, rt.workDir)
+	conversationKey := ResolveConversationKey(msg)
+	conv, workDir, err := rt.owner.prepareConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, conversationKey, opts, rt.workDir)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	cacheKey := chatID
+	cacheKey := conversationKey
 	if conv != nil {
 		cacheKey = conv.ID
 	}
@@ -200,6 +255,8 @@ func (rt *channelRuntime) close(ctx context.Context) {
 	platform := rt.platform
 	agent := rt.agent
 	rt.state = ChannelStateStopped
+	rt.connected = false
+	rt.terminal = true
 	rt.mu.Unlock()
 	for cacheKey, s := range sessions {
 		data := map[string]string{
@@ -247,6 +304,9 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		defaultSettings: opts.RuntimeDefaults,
 		sessions:        map[string]AgentSession{},
 		seen:            map[string]time.Time{},
+		controlTasks:    map[string]*channelControlState{},
+		clearConfirm:    map[string]time.Time{},
+		threadLists:     map[string][]NativeThread{},
 		state:           ChannelStateRunning,
 		started:         time.Now(),
 	}
@@ -266,9 +326,16 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		return err
 	}
 	rt.platform = plat
+	if _, ok := plat.(PlatformHealthReporter); ok {
+		rt.state = ChannelStateStarting
+		rt.connected = false
+	} else {
+		rt.connected = true
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	rt.cancel = cancel
+	rt.runCtx = runCtx
 
 	e.mu.Lock()
 	e.channels[ch.ID] = rt
@@ -309,9 +376,57 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 			rt.setState(ChannelStateStopped, "")
 		}
 	}()
+	if reporter, ok := plat.(PlatformHealthReporter); ok {
+		go e.monitorChannelHealth(runCtx, rt, reporter)
+	}
+	e.recoverRemoteTasks(rt)
 
 	e.log.Info("channel attached", "channel", ch.Name, "type", ch.Type)
 	return nil
+}
+
+func (e *Engine) monitorChannelHealth(ctx context.Context, rt *channelRuntime, reporter PlatformHealthReporter) {
+	check := func() {
+		health := reporter.ChannelHealth()
+		if health.CheckedAt.IsZero() {
+			health.CheckedAt = time.Now()
+		}
+		previous, changed := rt.applyHealth(health)
+		if !changed {
+			return
+		}
+		state := rt.status().State
+		unhealthy := state == ChannelStateReconnecting || state == ChannelStateDegraded || state == ChannelStateError
+		if unhealthy {
+			errMsg := health.Error
+			if errMsg == "" {
+				errMsg = "channel connection is " + state
+			}
+			e.log.Warn("channel health warning", "channel", rt.channel.Name, "type", rt.channel.Type, "state", state, "err", errMsg)
+			e.emit(context.Background(), HookError, map[string]string{
+				"channel_id": rt.channel.ID,
+				"channel":    rt.channel.Name,
+				"platform":   rt.channel.Type,
+				"origin":     "channel_health",
+				"state":      state,
+				"error":      errMsg,
+			})
+		} else if state == ChannelStateRunning && previous != ChannelStateRunning {
+			e.log.Info("channel health recovered", "channel", rt.channel.Name, "type", rt.channel.Type)
+		}
+	}
+
+	check()
+	ticker := time.NewTicker(channelHealthCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }
 
 // DetachChannel stops and removes a channel runtime. No-op when absent.
@@ -350,6 +465,18 @@ func (e *Engine) ChannelStatuses() []ChannelStatus {
 	return out
 }
 
+func (e *Engine) ChannelCodexControlCapability(channelID string) (CodexControlCapability, bool) {
+	rt := e.channelRuntime(channelID)
+	if rt == nil || rt.agent == nil {
+		return CodexControlCapability{}, false
+	}
+	reporter, ok := rt.agent.(CodexControlCapabilityReporter)
+	if !ok {
+		return CodexControlCapability{}, false
+	}
+	return reporter.CodexControlCapability(), true
+}
+
 func (e *Engine) channelRuntime(id string) *channelRuntime {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -363,7 +490,7 @@ func (e *Engine) duplicateChannelMessage(msg *Message) bool {
 
 // handleChannelMessage routes an inbound message from an attached channel to
 // the bound agent and streams responses back through the channel's platform.
-func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data map[string]string) {
+func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, data map[string]string) {
 	rt := e.channelRuntime(msg.ChannelID)
 	if rt == nil {
 		e.log.Warn("no runtime for channel message", "channel_id", msg.ChannelID)
@@ -381,7 +508,7 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
 	}
 
-	sess, conv, created, err := rt.session(ctx, msg.ChatID, msg.ChatType)
+	sess, conv, created, err := rt.session(ctx, msg)
 	if err != nil {
 		e.log.Error("start channel session", "channel", rt.channel.Name, "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -399,6 +526,8 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	if conv != nil {
 		data["conversation_id"] = conv.ID
 	}
+	rt.attachRemoteSession(ResolveConversationKey(msg), sess, conv)
+	rt.decorateRemoteTaskData(ResolveConversationKey(msg), data)
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
 	}
@@ -456,25 +585,32 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		return
 	}
 
+	agentMsg := channelMessageForAgent(rt.channel, msg)
 	mode, ok := channelReplyMode(rt.channel)
+	if rt.remoteControlEnabled() && data["task_id"] != "" && isFeishuLikeChannel(rt.channel.Type) {
+		// Codex remote-control tasks always use one durable status card in
+		// Feishu/Lark. The classic reply_mode remains unchanged for ordinary
+		// channels and runtime/model control messages.
+		mode, ok = ReplyModeStreamCard, true
+	}
 	if !ok {
 		e.log.Warn("unknown channel reply mode, falling back to stream_message", "channel", rt.channel.Name, "mode", rt.channel.Config[ChannelConfigReplyMode])
 	}
 	if mode == ReplyModeStreamCard {
 		if sr, ok := rt.platform.(StreamReplier); ok {
-			e.streamTurnCard(ctx, sr, sess, msg, data)
+			e.streamTurnCard(ctx, sr, sess, agentMsg, data)
 			e.emit(ctx, HookMessageSent, data)
 			return
 		}
 		e.log.Warn("channel reply mode stream_card not supported, falling back to stream_message", "channel", rt.channel.Name, "type", rt.channel.Type)
 	}
 	if mr, ok := rt.platform.(StreamMessageReplier); ok {
-		e.streamTurnMessage(ctx, mr, sess, msg, data)
+		e.streamTurnMessage(ctx, mr, sess, agentMsg, data)
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
 
-	_, _ = e.streamTurn(ctx, sess, msg.Text, func(text string) {
+	_, _ = e.streamTurn(ctx, sess, agentMsg.Text, func(text string) {
 		if err := rt.platform.Reply(ctx, msg, text); err != nil {
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
 		}
@@ -523,7 +659,7 @@ func (e *Engine) handleConversationCommand(ctx context.Context, rt *channelRunti
 	if !isConversationCommand(msg.Text) {
 		return false
 	}
-	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, rt.workspace.AgentID, rt.dropSession)
+	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, ResolveConversationKey(msg), rt.workspace.AgentID, rt.dropSession)
 	if replyErr := rt.platform.Reply(ctx, msg, conversationResetReply); replyErr != nil {
 		e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
 	}

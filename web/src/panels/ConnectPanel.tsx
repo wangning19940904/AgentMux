@@ -34,6 +34,11 @@ const FEISHU_DEFAULTS = {
   reply_mode: "stream_message",
   ack_reaction_enabled: "true",
   ack_reaction_emojis: "OK,THUMBSUP,MUSCLE,THANKS",
+  codex_control_enabled: "false",
+  allowed_user_ids: "",
+  admin_user_ids: "",
+  codex_max_queue: "20",
+  codex_turn_timeout_minutes: "20",
 };
 
 const FEISHU_REPLY_SCOPES = [
@@ -77,6 +82,14 @@ const EVENT_OPTIONS = [
   "cron.triggered",
   "webhook.triggered",
   "permission.requested",
+  "task.queued",
+  "task.started",
+  "task.steered",
+  "task.controller_changed",
+  "task.interrupted",
+  "task.completed",
+  "interaction.resolved",
+  "thread.bound",
   "error",
 ];
 
@@ -108,12 +121,21 @@ export function ConnectPanel() {
   const agentOptions = (agents.data ?? []).filter((a) => !a.id.startsWith("config:"));
   const platformOptions = platforms.data ?? [];
 
+  useEffect(() => {
+    const timer = window.setInterval(() => channels.reload(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [channels.reload]);
+
   const metrics = useMemo(() => {
     const running = channelItems.filter((c) => c.state === "running").length;
-    const failed = channelItems.filter((c) => c.state === "error").length;
+    const failed = channelItems.filter((c) => ["reconnecting", "degraded", "error"].includes(c.state ?? "")).length;
     const cron = triggerItems.filter((tr) => tr.kind === "cron" && tr.enabled).length;
     return { running, failed, cron };
   }, [channelItems, triggerItems]);
+
+  const unhealthyChannels = channelItems.filter(
+    (channel) => channel.enabled && ["reconnecting", "degraded", "error"].includes(channel.state ?? ""),
+  );
 
   async function run(action: string, fn: () => Promise<unknown>, doneMessage: string) {
     setBusy(action);
@@ -176,6 +198,15 @@ export function ConnectPanel() {
 
       {notice && <div className={`session-notice ${/failed|error|invalid|required|unknown/i.test(notice) ? "error" : ""}`}>{notice}</div>}
 
+      {unhealthyChannels.length > 0 && (
+        <div className="session-notice error channel-health-alert" role="alert">
+          <strong>{t("connect.healthAlertTitle")}</strong>
+          <span>
+            {unhealthyChannels.map((channel) => channel.bot_name || channel.name).join(", ")} · {t("connect.healthAlertHint")}
+          </span>
+        </div>
+      )}
+
       {tab === "channels" && (
         <div className="surface">
           <div className="surface-header">
@@ -201,7 +232,7 @@ export function ConnectPanel() {
                 draft={channelDraft}
                 setDraft={setChannelDraft}
                 platforms={platformOptions.length > 0 ? platformOptions : Object.keys(CHANNEL_FIELDS)}
-                agents={agentOptions.map((a) => ({ id: a.id, name: a.name }))}
+                agents={agentOptions.map((a) => ({ id: a.id, name: a.name, runtime_id: a.runtime_id }))}
                 busy={busy === "save-channel"}
                 onSave={() => channelDraft && saveChannel(channelDraft)}
                 onAutoSave={(draft) => saveChannel(draft)}
@@ -303,6 +334,12 @@ function stateBadge(state: string | undefined, enabled: boolean, t: (key: string
   switch (state) {
     case "running":
       return { className: "success", label: t("connect.stateRunning") };
+    case "starting":
+      return { className: "warning", label: t("connect.stateStarting") };
+    case "reconnecting":
+      return { className: "warning", label: t("connect.stateReconnecting") };
+    case "degraded":
+      return { className: "danger", label: t("connect.stateDegraded") };
     case "error":
       return { className: "danger", label: t("connect.stateError") };
     case "pending":
@@ -337,6 +374,10 @@ function ChannelCard({
   ]
     .filter(Boolean)
     .join(" · ");
+  const healthTimes = [
+    channel.last_heartbeat_at ? `${t("connect.lastHeartbeat")}: ${formatChannelTime(channel.last_heartbeat_at)}` : "",
+    channel.last_inbound_at ? `${t("connect.lastInbound")}: ${formatChannelTime(channel.last_inbound_at)}` : "",
+  ].filter(Boolean);
   return (
     <div className="route-card">
       <div className="agent-list-main">
@@ -351,6 +392,7 @@ function ChannelCard({
         </span>
       </div>
       {channel.error && <div className="session-notice error">{channel.error}</div>}
+      {healthTimes.length > 0 && <div className="channel-health-meta">{healthTimes.join(" · ")}</div>}
       <div className="table-actions">
         <button className="ghost-action" onClick={onEdit}>
           <Pencil size={14} />
@@ -376,6 +418,11 @@ function ChannelCard({
   );
 }
 
+function formatChannelTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 function ChannelEditor({
   draft,
   setDraft,
@@ -389,7 +436,7 @@ function ChannelEditor({
   draft: Partial<Channel>;
   setDraft: Dispatch<SetStateAction<Partial<Channel> | null>>;
   platforms: string[];
-  agents: { id: string; name: string }[];
+  agents: { id: string; name: string; runtime_id: string }[];
   busy: boolean;
   onSave: () => void;
   onAutoSave: (draft: Partial<Channel>) => Promise<void>;
@@ -398,6 +445,8 @@ function ChannelEditor({
   const { t } = useI18n();
   const fields = CHANNEL_FIELDS[draft.type ?? ""] ?? [];
   const isFeishuLike = draft.type === "feishu" || draft.type === "lark";
+  const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
+  const isCodexAgent = selectedAgent?.runtime_id === "codex";
   const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
   const draftRef = useRef<Partial<Channel>>(draft);
   const [setup, setSetup] = useState<{ phase: FeishuSetupPhase; qrUrl: string; error: string }>({
@@ -522,7 +571,16 @@ function ChannelEditor({
         </label>
         <label className="field">
           <span>{t("connect.boundAgent")}</span>
-          <select value={draft.agent_id ?? ""} onChange={(e) => update({ agent_id: e.target.value })}>
+          <select
+            value={draft.agent_id ?? ""}
+            onChange={(e) => {
+              const agentID = e.target.value;
+              const runtimeID = agents.find((agent) => agent.id === agentID)?.runtime_id;
+              const config = { ...(draft.config ?? {}) };
+              if (runtimeID !== "codex") config.codex_control_enabled = "false";
+              update({ agent_id: agentID, config });
+            }}
+          >
             <option value="">{t("connect.noAgent")}</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
@@ -553,7 +611,7 @@ function ChannelEditor({
             onStart={startFeishuSetup}
             onReset={resetSetup}
           />
-          <FeishuChannelOptions draft={draft} updateConfig={updateConfig} />
+          <FeishuChannelOptions draft={draft} updateConfig={updateConfig} codexAgent={isCodexAgent} />
         </>
       )}
       <div className="table-actions">
@@ -578,14 +636,17 @@ function ChannelEditor({
 function FeishuChannelOptions({
   draft,
   updateConfig,
+  codexAgent,
 }: {
   draft: Partial<Channel>;
   updateConfig: (key: string, value: string) => void;
+  codexAgent: boolean;
 }) {
   const { t } = useI18n();
   const config = draft.config ?? {};
   const replyMode = configValue(config, "reply_mode", FEISHU_DEFAULTS.reply_mode);
   const ackEnabled = configValue(config, "ack_reaction_enabled", FEISHU_DEFAULTS.ack_reaction_enabled) !== "false";
+  const codexControl = configValue(config, "codex_control_enabled", FEISHU_DEFAULTS.codex_control_enabled) === "true";
 
   return (
     <div className="channel-options">
@@ -603,6 +664,71 @@ function FeishuChannelOptions({
             ))}
           </select>
         </label>
+        {codexAgent && (
+          <label className="switch-row channel-option-toggle">
+            <span>
+              <strong>{t("connect.codexControl")}</strong>
+              <small>{t("connect.codexControlHint")}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={codexControl}
+              onChange={(e) => updateConfig("codex_control_enabled", e.target.checked ? "true" : "false")}
+            />
+          </label>
+        )}
+        {codexAgent && codexControl && (
+          <>
+            <div className="field">
+              <span>{t("connect.codexCapability")}</span>
+              <small>
+                {draft.codex_control_capability?.state === "ready"
+                  ? t("connect.codexCapabilityReady")
+                  : draft.codex_control_capability?.state === "unavailable"
+                    ? `${t("connect.codexCapabilityUnavailable")} ${draft.codex_control_capability.error ?? ""}`
+                    : draft.codex_control_capability?.state === "disconnected"
+                      ? t("connect.codexCapabilityDisconnected")
+                      : t("connect.codexCapabilityPending")}
+              </small>
+            </div>
+            <label className="field">
+              <span>{t("connect.codexAllowedUsers")}</span>
+              <input
+                value={configValue(config, "allowed_user_ids", FEISHU_DEFAULTS.allowed_user_ids)}
+                onChange={(e) => updateConfig("allowed_user_ids", e.target.value)}
+                placeholder="ou_xxx, ou_yyy"
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.codexAdminUsers")}</span>
+              <input
+                value={configValue(config, "admin_user_ids", FEISHU_DEFAULTS.admin_user_ids)}
+                onChange={(e) => updateConfig("admin_user_ids", e.target.value)}
+                placeholder="ou_xxx"
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.codexMaxQueue")}</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={configValue(config, "codex_max_queue", FEISHU_DEFAULTS.codex_max_queue)}
+                onChange={(e) => updateConfig("codex_max_queue", e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.codexTurnTimeout")}</span>
+              <input
+                type="number"
+                min={1}
+                max={240}
+                value={configValue(config, "codex_turn_timeout_minutes", FEISHU_DEFAULTS.codex_turn_timeout_minutes)}
+                onChange={(e) => updateConfig("codex_turn_timeout_minutes", e.target.value)}
+              />
+            </label>
+          </>
+        )}
         <label className="field">
           <span>{t("connect.replyMode")}</span>
           <select value={replyMode} onChange={(e) => updateConfig("reply_mode", e.target.value)}>
@@ -724,6 +850,7 @@ function configValue(config: Record<string, string>, key: string, fallback: stri
 
 function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollResponse): Partial<Channel> {
   const platform = res.platform ?? draft.type ?? "feishu";
+  const ownerID = res.owner_open_id ?? "";
   return {
     ...draft,
     name: (draft.name ?? "").trim() || `${platformLabel(platform)} Bot`,
@@ -734,8 +861,18 @@ function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollRespon
       ...(draft.config ?? {}),
       app_id: res.app_id ?? "",
       app_secret: res.app_secret ?? "",
+      allowed_user_ids: mergeChannelUserIDs(draft.config?.allowed_user_ids ?? "", ownerID),
+      admin_user_ids: mergeChannelUserIDs(draft.config?.admin_user_ids ?? "", ownerID),
     },
   };
+}
+
+function mergeChannelUserIDs(existing: string, added: string) {
+  const values = `${existing},${added}`
+    .split(/[\s,;]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return Array.from(new Set(values)).join(",");
 }
 
 function platformLabel(platform: string) {

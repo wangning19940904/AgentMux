@@ -45,8 +45,9 @@ const (
 
 // ObservationEnvelope is the canonical event shared by the in-process bus,
 // SQLite recorder, native hook ingest, transcript backfill, and exporters.
-// Content is process-local only and is never serialized; recorders must redact,
-// compress, and encrypt it before assigning PayloadRef.
+// Content is process-local only and is never serialized. Recorders either
+// redact, compress, and encrypt it or replace transcript-backed content with a
+// verified local-file PayloadRef.
 type ObservationEnvelope struct {
 	Version string `json:"version"`
 
@@ -131,13 +132,44 @@ type ObservationUsage struct {
 }
 
 type ObservationPayloadRef struct {
-	ID            string    `json:"id"`
-	ContentType   string    `json:"content_type,omitempty"`
-	KeyID         string    `json:"key_id,omitempty"`
-	OriginalBytes int64     `json:"original_bytes,omitempty"`
-	StoredBytes   int64     `json:"stored_bytes,omitempty"`
-	Redacted      bool      `json:"redacted"`
-	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+	ID             string    `json:"id"`
+	Storage        string    `json:"storage,omitempty"`
+	ContentType    string    `json:"content_type,omitempty"`
+	KeyID          string    `json:"key_id,omitempty"`
+	OriginalBytes  int64     `json:"original_bytes,omitempty"`
+	StoredBytes    int64     `json:"stored_bytes,omitempty"`
+	Redacted       bool      `json:"redacted"`
+	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	SourcePath     string    `json:"source_path,omitempty"`
+	SourceOffset   int64     `json:"source_offset,omitempty"`
+	SourceLength   int64     `json:"source_length,omitempty"`
+	SourceIdentity string    `json:"source_identity,omitempty"`
+	SourceSHA256   string    `json:"source_sha256,omitempty"`
+	SourceRuntime  string    `json:"source_runtime,omitempty"`
+	SourceClass    string    `json:"source_class,omitempty"`
+	// SourceContentSHA256 identifies the exact public-content candidate inside
+	// the source JSONL record before redaction. New file references use it so
+	// ingest remains cheap; redaction is applied only when content is expanded.
+	SourceContentSHA256 string `json:"source_content_sha256,omitempty"`
+	// ContentSHA256 is the post-redaction checksum retained for references
+	// migrated from legacy encrypted SQLite payloads.
+	ContentSHA256 string `json:"content_sha256,omitempty"`
+}
+
+const ObservationPayloadStorageTranscriptFile = "transcript_file"
+
+// ObservationContentSource points at the stable JSONL record from which an
+// ephemeral content value was derived. It is process-local until the recorder
+// verifies and promotes it into an ObservationPayloadRef.
+type ObservationContentSource struct {
+	Storage  string
+	Path     string
+	Offset   int64
+	Length   int64
+	Identity string
+	SHA256   string
+	Runtime  string
+	Class    string
 }
 
 // ObservationContent is ephemeral input for a secure recorder. KnownSecrets
@@ -146,6 +178,7 @@ type ObservationContent struct {
 	ContentType  string
 	Data         []byte
 	KnownSecrets []string
+	Source       *ObservationContentSource
 }
 
 // Normalize fills safe defaults and IDs. It never changes an already supplied

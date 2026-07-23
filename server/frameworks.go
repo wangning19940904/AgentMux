@@ -39,7 +39,8 @@ func (s *Server) handleFrameworksList(w http.ResponseWriter, r *http.Request) {
 }
 
 type frameworkInstallRequest struct {
-	Kind string `json:"kind"`
+	Kind   string `json:"kind"`
+	Action string `json:"action"`
 }
 
 func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +55,19 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	res := framework.Install(r.Context(), kind)
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		action = "install"
+	}
+	var res framework.InstallResult
+	switch action {
+	case "install":
+		res = framework.Install(r.Context(), kind)
+	case "update":
+		res = framework.Update(r.Context(), kind)
+	default:
+		res = framework.InstallResult{Kind: kind, Action: action, Error: "action must be install or update"}
+	}
 	if !res.OK {
 		// Surface the install log/error but keep a 200 envelope so the client
 		// can render the log; the ok flag conveys success.
@@ -68,4 +81,18 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 	sdkagent.Register()
 
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleFrameworkCheck(w http.ResponseWriter, r *http.Request) {
+	var req frameworkInstallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "framework kind is required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, framework.CheckUpdate(r.Context(), kind))
 }

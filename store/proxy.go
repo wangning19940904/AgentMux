@@ -90,7 +90,7 @@ func (s *Store) SetProxyToolConfig(ctx context.Context, cfg ProxyToolConfig) err
 	if cfg.AutoFailover {
 		autoFailover = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_config
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO proxy_config
 		(tool,enabled,auto_failover,max_retries,failure_threshold,cooldown_seconds)
 		VALUES (?,?,?,?,?,?)
 		ON CONFLICT(tool) DO UPDATE SET enabled=excluded.enabled,
@@ -102,7 +102,7 @@ func (s *Store) SetProxyToolConfig(ctx context.Context, cfg ProxyToolConfig) err
 
 // SaveLiveBackup stores the pre-takeover live config blob for a tool.
 func (s *Store) SaveLiveBackup(ctx context.Context, tool, blob string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_live_backup(tool,original_config,backed_up_at)
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO proxy_live_backup(tool,original_config,backed_up_at)
 		VALUES (?,?,?) ON CONFLICT(tool) DO UPDATE SET original_config=excluded.original_config,
 		backed_up_at=excluded.backed_up_at`, tool, blob, time.Now().Format(time.RFC3339))
 	return err
@@ -124,7 +124,7 @@ func (s *Store) GetLiveBackup(ctx context.Context, tool string) (string, bool, e
 
 // DeleteLiveBackup removes a tool's live backup after restore.
 func (s *Store) DeleteLiveBackup(ctx context.Context, tool string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM proxy_live_backup WHERE tool=?`, tool)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM proxy_live_backup WHERE tool=?`, tool)
 	return err
 }
 
@@ -148,7 +148,7 @@ func (s *Store) InsertProxyTrace(ctx context.Context, trace core.ProxyTrace) err
 	if !trace.StartedAt.IsZero() {
 		startedAt = trace.StartedAt.Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_traces
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO proxy_traces
 		(id,request_id,trace_id,parent_span_id,attempt,parent_attempt_id,timestamp,started_at,tool,
 		 provider_id,provider_name,client_protocol,upstream_protocol,client_model,
 		 upstream_model,status_code,success,error,session_id,project_dir,ttft_ms,
@@ -200,7 +200,10 @@ func (s *Store) QueryProxyTraces(ctx context.Context, tool, sessionID string, li
 	q += " ORDER BY timestamp DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	// Proxy handlers persist their trace immediately after relaying the response.
+	// Reading through the serialized writer preserves read-after-write ordering
+	// for callers that query as soon as the client body completes.
+	rows, err := s.writer.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -314,6 +314,85 @@ func TestCodexAppServerMapperUsesLastUsageAsResumeBaseline(t *testing.T) {
 	}
 }
 
+func TestCodexInteractionMappingAndHighRiskPolicy(t *testing.T) {
+	session := &codexSession{pendingInteractions: map[string]codexPendingInteraction{}}
+	interaction, ok := session.captureServerInteraction(9, "item/commandExecution/requestApproval", map[string]any{
+		"params": map[string]any{
+			"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1",
+			"command": "git push origin main", "cwd": "/work/project",
+		},
+	})
+	if !ok || interaction.Kind != core.AgentInteractionCommandApproval || !interaction.HighRisk {
+		t.Fatalf("interaction = %+v, ok=%t", interaction, ok)
+	}
+	pending := session.pendingInteractions[interaction.ID]
+	if _, err := codexInteractionResult(pending.method, pending.params, core.AgentInteractionResponse{Decision: "acceptForSession"}); err == nil {
+		t.Fatal("high-risk command accepted for session")
+	}
+	result, err := codexInteractionResult(pending.method, pending.params, core.AgentInteractionResponse{Decision: "accept"})
+	if err != nil || result.(map[string]any)["decision"] != "accept" {
+		t.Fatalf("allow once result=%+v err=%v", result, err)
+	}
+	if !codexHighRiskInteraction(&core.AgentInteraction{
+		Kind: core.AgentInteractionFileChangeApproval,
+		RawParams: map[string]any{
+			"changes": []any{map[string]any{"type": "delete", "path": "important.txt"}},
+		},
+	}) {
+		t.Fatal("file deletion was not classified as high risk")
+	}
+}
+
+func TestCodexWorkDirMatchingIsCanonicalAndRejectsMissingMetadata(t *testing.T) {
+	root := t.TempDir()
+	if !sameCodexWorkDir(root, root+"/.") {
+		t.Fatal("canonical equivalent work directories did not match")
+	}
+	if sameCodexWorkDir("", root) || sameCodexWorkDir(root, t.TempDir()) {
+		t.Fatal("missing or different work directory matched")
+	}
+}
+
+func TestCodexRequestUserInputResponsePreservesQuestionCorrelation(t *testing.T) {
+	params := map[string]any{"questions": []any{
+		map[string]any{"id": "choice", "header": "Mode", "question": "Which?", "options": []any{
+			map[string]any{"label": "Safe", "description": "Use safe mode"},
+		}},
+		map[string]any{"id": "secret", "header": "Token", "question": "Enter token", "isSecret": true},
+	}}
+	result, err := codexInteractionResult("item/tool/requestUserInput", params, core.AgentInteractionResponse{
+		Answers: map[string][]string{"choice": {"Safe"}, "secret": {"local-value"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := result.(map[string]any)["answers"].(map[string]any)
+	if len(answers) != 2 {
+		t.Fatalf("answers = %+v", answers)
+	}
+}
+
+func TestSharedCodexClientRoutesByThread(t *testing.T) {
+	client := &codexAppClient{
+		sessions: map[string]*codexSession{}, pending: map[int]chan codexRPCResponse{},
+		done: make(chan struct{}),
+	}
+	session := &codexSession{inbox: make(chan map[string]any, 1)}
+	client.sessions["thread-1"] = session
+	client.routeServerMessage(map[string]any{
+		"jsonrpc": "2.0", "method": "turn/started",
+		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1"}},
+	})
+	select {
+	case message := <-session.inbox:
+		if message["method"] != "turn/started" {
+			t.Fatalf("message = %+v", message)
+		}
+	default:
+		t.Fatal("thread notification was not routed")
+	}
+}
+
 func TestGenericCLIEventsDeclarePartialCoverage(t *testing.T) {
 	for name, event := range map[string]*core.Event{
 		"json":  jsonTextMapper([]byte(`{"text":"hello"}`)),

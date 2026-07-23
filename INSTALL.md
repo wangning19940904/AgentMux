@@ -61,8 +61,9 @@ The desktop shell starts the daemon in-process and renders the same WebUI.
 make menubar        # produces macos-menubar/AgentNexusMenuBar
 ```
 
-Run it after starting the daemon (`anx serve`). It polls
-`/api/v1/usage` and shows today's estimated cost in the menu bar.
+Run it after starting the daemon (`anx serve`). It shows only the AgentNexus
+logo by default; the Menu Bar settings page can opt into the animated status
+icon, estimated cost, token counts, and message count.
 
 ## Sign & notarize (macOS distribution)
 

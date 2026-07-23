@@ -28,8 +28,9 @@ func WorkerPath() string {
 }
 
 // EnsureSidecar materializes the embedded sidecar sources into SidecarDir,
-// writing any file that is missing or whose contents differ. Existing
-// node_modules and package-lock.json are left untouched.
+// writing any source file that is missing or whose contents differ. Existing
+// package.json, package-lock.json, and node_modules are left untouched so npm
+// dependencies installed for one SDK are not discarded while managing another.
 func EnsureSidecar() error {
 	dir := SidecarDir()
 	if err := os.MkdirAll(filepath.Join(dir, "adapters"), 0o755); err != nil {
@@ -47,6 +48,11 @@ func EnsureSidecar() error {
 			return err
 		}
 		dest := filepath.Join(dir, filepath.FromSlash(path))
+		if path == "package.json" {
+			if _, err := os.Stat(dest); err == nil {
+				return nil
+			}
+		}
 		if existing, err := os.ReadFile(dest); err == nil && string(existing) == string(data) {
 			return nil
 		}

@@ -69,6 +69,12 @@ var cliCatalog = []CLISpec{
 		UpdateCommand:  []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
 		Note:           "ByteDance internal developer CLI.",
 	},
+	{
+		ID: "opencli", Name: "OpenCLI", Bin: "opencli", Package: "@jackwener/opencli",
+		InstallCommand: []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
+		UpdateCommand:  []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
+		Note:           "AI-native runtime and CLI hub that turns websites and browser sessions into command-line tools.",
+	},
 }
 
 // CLICatalog returns the managed CLI catalog.

@@ -1,35 +1,91 @@
-import { useState } from "react";
-import { Boxes, CheckCircle2, Download, Package, TerminalSquare, TriangleAlert } from "lucide-react";
-import { api, Framework, FrameworkInstallResult } from "../api";
+import { useEffect, useState } from "react";
+import { CheckCircle2, Download, Package, RefreshCw, TriangleAlert } from "lucide-react";
+import { api, Framework, FrameworkInstallResult, FrameworkUpdateCheck } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 export function FrameworksPanel() {
   const { t } = useI18n();
   const frameworks = useAsync(() => api.frameworks(), []);
-  const [busyKind, setBusyKind] = useState("");
+  const [busy, setBusy] = useState<Record<string, "install" | "update" | "check">>({});
+  const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<FrameworkInstallResult | null>(null);
 
   const prereqs = frameworks.data?.prereqs;
   const items = frameworks.data?.frameworks ?? [];
-  const sdkItems = items.filter((item) => item.spec.kind_type === "sdk");
-  const cliItems = items.filter((item) => item.spec.kind_type === "cli");
+  const sortedItems = [...items].sort((left, right) => Number(right.installed) - Number(left.installed));
   const installedCount = items.filter((item) => item.installed).length;
 
-  async function install(kind: string) {
-    setBusyKind(kind);
+  useEffect(() => {
+    items.forEach((item) => {
+      const kind = item.spec.kind;
+      if (!item.spec.update_supported || !item.spec.supported || !item.installed || checks[kind] || busy[kind]) return;
+      void checkUpdate(kind, true);
+    });
+  }, [items, busy, checks]);
+
+  function markBusy(kind: string, action: "install" | "update" | "check") {
+    setBusy((current) => ({ ...current, [kind]: action }));
+  }
+
+  function clearBusy(kind: string) {
+    setBusy((current) => {
+      const next = { ...current };
+      delete next[kind];
+      return next;
+    });
+  }
+
+  function forgetCheck(kind: string) {
+    setChecks((current) => {
+      const next = { ...current };
+      delete next[kind];
+      return next;
+    });
+  }
+
+  async function checkUpdate(kind: string, silent = false) {
+    markBusy(kind, "check");
+    if (!silent) {
+      setNotice("");
+      setResult(null);
+    }
+    try {
+      const res = await api.checkFrameworkUpdate(kind);
+      setChecks((current) => ({ ...current, [kind]: res }));
+      if (!silent) {
+        if (res.error) setNotice(`${t("tools.updateCheckFailed")}: ${res.error}`);
+        else if (res.update_available) setNotice(`${t("tools.updateAvailable")}: ${res.current_version || "?"} -> ${res.latest_version || "?"}`);
+        else setNotice(t("tools.upToDate"));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setChecks((current) => ({
+        ...current,
+        [kind]: { kind, installed: true, update_available: false, error: message },
+      }));
+      if (!silent) setNotice(`${t("tools.updateCheckFailed")}: ${message}`);
+    } finally {
+      clearBusy(kind);
+    }
+  }
+
+  async function install(kind: string, action: "install" | "update") {
+    markBusy(kind, action);
     setNotice("");
     setResult(null);
+    if (action === "install") forgetCheck(kind);
     try {
-      const res = await api.installFramework(kind);
+      const res = await api.installFramework(kind, action);
       setResult(res);
       setNotice(res.ok ? t("frameworks.installed") : res.error || t("frameworks.installFailed"));
-      frameworks.reload();
+      await frameworks.reload();
+      forgetCheck(kind);
     } catch (err) {
-      setNotice(String(err));
+      setNotice(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusyKind("");
+      clearBusy(kind);
     }
   }
 
@@ -70,33 +126,23 @@ export function FrameworksPanel() {
 
       <section className="surface">
         <div className="surface-header">
-          <h2>{t("frameworks.sdkTitle")}</h2>
-          <Boxes size={16} />
+          <h2>{t("frameworks.catalogTitle")}</h2>
+          <span className="pill on">{items.length}</span>
         </div>
         {frameworks.error && <div className="surface-body error">{frameworks.error}</div>}
         <div className="surface-body framework-grid">
-          {sdkItems.map((item) => (
+          {sortedItems.map((item) => (
             <FrameworkCard
               key={item.spec.kind}
               item={item}
-              busy={busyKind === item.spec.kind}
-              disabled={Boolean(nodeMissing) || !item.spec.supported}
-              onInstall={() => install(item.spec.kind)}
+              busy={busy[item.spec.kind]}
+              check={checks[item.spec.kind]}
+              disabled={(item.spec.install_requires_npm && Boolean(nodeMissing)) || !item.spec.supported}
+              onCheck={() => checkUpdate(item.spec.kind)}
+              onInstall={(action) => install(item.spec.kind, action)}
             />
           ))}
-          {sdkItems.length === 0 && <div className="empty-state">{t("frameworks.empty")}</div>}
-        </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("frameworks.cliTitle")}</h2>
-          <TerminalSquare size={16} />
-        </div>
-        <div className="surface-body framework-grid">
-          {cliItems.map((item) => (
-            <FrameworkCard key={item.spec.kind} item={item} busy={false} disabled cli />
-          ))}
+          {sortedItems.length === 0 && <div className="empty-state">{t("frameworks.empty")}</div>}
         </div>
       </section>
 
@@ -118,18 +164,36 @@ export function FrameworksPanel() {
 function FrameworkCard({
   item,
   busy,
+  check,
   disabled,
-  cli,
+  onCheck,
   onInstall,
 }: {
   item: Framework;
-  busy: boolean;
+  busy?: "install" | "update" | "check";
+  check?: FrameworkUpdateCheck;
   disabled: boolean;
-  cli?: boolean;
-  onInstall?: () => void;
+  onCheck?: () => void;
+  onInstall?: (action: "install" | "update") => void;
 }) {
   const { t } = useI18n();
   const { spec } = item;
+  const cli = spec.kind_type === "cli";
+  const hasUpdate = Boolean(check?.update_available);
+  const action: "install" | "update" | "check" = item.installed ? (hasUpdate ? "update" : "check") : "install";
+  const updateStatus = frameworkUpdateStatusLabel(check, t);
+  const updateStatusClass = check?.error || check?.update_available ? "warning" : "success";
+  const showAction = spec.supported && (item.installed ? spec.update_supported : spec.install_supported);
+  const buttonLabel =
+    busy === "check"
+      ? t("tools.checkingUpdate")
+      : busy
+        ? t("frameworks.installing")
+        : action === "install"
+          ? t("frameworks.install")
+          : action === "update"
+            ? t("tools.update")
+            : t("tools.checkUpdate");
 
   return (
     <div className={`framework-card${item.installed ? " installed" : ""}`}>
@@ -141,7 +205,7 @@ function FrameworkCard({
           <strong>{spec.display}</strong>
           <span className="muted mono">{spec.kind}</span>
         </div>
-        {spec.language && <span className="pill">{spec.language}</span>}
+        <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
       </div>
 
       {spec.note && <p className="framework-note">{spec.note}</p>}
@@ -155,23 +219,36 @@ function FrameworkCard({
       )}
 
       <div className="framework-card-foot">
-        {item.installed ? (
-          <span className="status-badge success">
-            <CheckCircle2 size={14} />
-            {item.version ? `v${item.version}` : t("frameworks.installed")}
-            {item.registered && <span className="muted"> · {t("frameworks.routable")}</span>}
-          </span>
-        ) : !spec.supported ? (
-          <span className="status-badge">{t("frameworks.comingSoon")}</span>
-        ) : cli ? (
-          <span className="status-badge">
-            <span className="status-dot" />
-            {t("frameworks.notDetected")}
-          </span>
-        ) : (
-          <button className="action" disabled={disabled || busy} onClick={onInstall}>
-            <Download size={14} />
-            {busy ? t("frameworks.installing") : t("frameworks.install")}
+        <span className="cli-status-stack">
+          {item.installed ? (
+            <span className="status-badge success">
+              <CheckCircle2 size={14} />
+              {t("frameworks.installed")}
+              {item.registered && <span className="muted"> · {t("frameworks.routable")}</span>}
+            </span>
+          ) : !spec.supported ? (
+            <span className="status-badge">{t("frameworks.comingSoon")}</span>
+          ) : (
+            <span className="status-badge">
+              <span className="status-dot" />
+              {t("frameworks.notDetected")}
+            </span>
+          )}
+          {item.installed && item.version && (
+            <span className="status-badge version-badge mono">{t("frameworks.currentVersion")} · v{item.version}</span>
+          )}
+          {item.installed && updateStatus && (
+            <span className={`status-badge ${updateStatusClass}`}>{updateStatus}</span>
+          )}
+        </span>
+        {showAction && (
+          <button
+            className="action"
+            disabled={disabled || Boolean(busy)}
+            onClick={() => (action === "check" ? onCheck?.() : onInstall?.(action))}
+          >
+            {busy === "check" || action === "check" ? <RefreshCw size={14} /> : <Download size={14} />}
+            {buttonLabel}
           </button>
         )}
       </div>
@@ -180,4 +257,11 @@ function FrameworkCard({
       )}
     </div>
   );
+}
+
+function frameworkUpdateStatusLabel(check: FrameworkUpdateCheck | undefined, t: (key: string) => string) {
+  if (!check) return "";
+  if (check.error) return t("tools.updateCheckFailed");
+  if (check.update_available) return `${t("frameworks.latestVersion")} · v${check.latest_version || "?"}`;
+  return t("tools.upToDate");
 }

@@ -2,13 +2,14 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
 // Conversation is a first-class, persisted chat thread with an agent. It is
 // the durable counterpart of the in-memory AgentSession: a single agent talks
 // to many chats (different DMs, different groups), and each such chat is one
-// Conversation. Conversations are located by (Scope, ChatID) and survive
+// Conversation. Conversations are located by (Scope, ConversationKey) and survive
 // process restarts so context can be resumed.
 //
 // Scope namespaces a chat to the runtime that owns it:
@@ -20,12 +21,13 @@ import (
 // each DM has its own chat id.
 type Conversation struct {
 	ID string `json:"id"`
-	// Scope + ChatID form the natural key used to find or create a
-	// conversation for an inbound message.
-	Scope    string `json:"scope"`
-	ChatID   string `json:"chat_id"`
-	ChatType string `json:"chat_type,omitempty"`
-	AgentID  string `json:"agent_id,omitempty"`
+	// Scope + ConversationKey form the natural key used to find or create a
+	// conversation. ChatID remains the physical reply destination.
+	Scope           string `json:"scope"`
+	ConversationKey string `json:"conversation_key"`
+	ChatID          string `json:"chat_id"`
+	ChatType        string `json:"chat_type,omitempty"`
+	AgentID         string `json:"agent_id,omitempty"`
 	// WorkDir is this conversation's isolated working directory (sandbox).
 	WorkDir string `json:"work_dir,omitempty"`
 	// NativeSessionID is the agent-native resume handle (e.g. Claude Code's
@@ -40,6 +42,45 @@ type Conversation struct {
 	// are skipped when finding the active conversation for a chat, so the next
 	// message opens a fresh one (implements /new and /clear).
 	EndedAt time.Time `json:"ended_at,omitempty"`
+}
+
+// ResolveConversationKey normalizes a transport message into a durable
+// conversation identity. Explicit keys from callbacks win because they retain
+// topic identity even when the callback payload omits root/thread fields.
+func ResolveConversationKey(msg *Message) string {
+	if msg == nil {
+		return ""
+	}
+	if key := strings.TrimSpace(msg.ConversationKey); key != "" {
+		return key
+	}
+	chatID := strings.TrimSpace(msg.ChatID)
+	if isDirectChatType(msg.ChatType) {
+		return "chat:" + chatID
+	}
+	if threadID := strings.TrimSpace(msg.ThreadID); threadID != "" {
+		return "thread:" + threadID
+	}
+	if rootID := strings.TrimSpace(msg.RootID); rootID != "" {
+		return "root:" + rootID
+	}
+	// Only Feishu/Lark model an otherwise-unthreaded top-level group message
+	// as the root of a durable topic. Other adapters keep their legacy
+	// per-chat behavior unless they provide RootID or ThreadID explicitly.
+	if msg.ID != "" && !isDirectChatType(msg.ChatType) &&
+		(strings.EqualFold(msg.Platform, "feishu") || strings.EqualFold(msg.Platform, "lark")) {
+		return "root:" + msg.ID
+	}
+	return "chat:" + chatID
+}
+
+func isDirectChatType(chatType string) bool {
+	switch strings.ToLower(strings.TrimSpace(chatType)) {
+	case "p2p", "private", "direct", "dm":
+		return true
+	default:
+		return false
+	}
 }
 
 // ConversationStore is the persistence surface for conversations. Implemented

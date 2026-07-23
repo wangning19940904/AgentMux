@@ -1,16 +1,16 @@
 package cliagents
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentnexus/agentnexus/core"
 )
@@ -18,8 +18,8 @@ import (
 // Codex's app-server is the transport used by the Codex desktop app. It is
 // materially richer than `codex exec --json`: it exposes token deltas,
 // reasoning summaries, tool lifecycle events, and the signed-in account's
-// own model catalog. Keeping one app-server process per AgentSession also
-// gives channel conversations a real native Codex thread.
+// own model catalog. One long-lived stdio process is shared by every session
+// of a Codex Agent and multiplexes independent native threads and turns.
 
 func registerCodex() {
 	core.RegisterAgent("codex", func(cfg map[string]any) (core.Agent, error) {
@@ -35,10 +35,14 @@ type codexAgent struct {
 	supportedReasoningEfforts []string
 	supportedServiceTiers     []string
 	env                       map[string]string
+	clientMu                  sync.Mutex
+	client                    *codexAppClient
+	capabilityState           string
+	capabilityError           string
 }
 
 func newCodexAgent(cfg map[string]any) *codexAgent {
-	a := &codexAgent{}
+	a := &codexAgent{capabilityState: "not_probed"}
 	if value, ok := cfg["system_prompt"].(string); ok {
 		a.systemPrompt = value
 	}
@@ -71,22 +75,161 @@ func (a *codexAgent) StartSessionResume(ctx context.Context, workDir, resumeID s
 	return newCodexSession(ctx, a, workDir, resumeID)
 }
 
-func (a *codexAgent) ListSessions(context.Context) ([]string, error) { return nil, nil }
-func (a *codexAgent) Stop(context.Context) error                     { return nil }
+func (a *codexAgent) ListSessions(ctx context.Context) ([]string, error) {
+	a.clientMu.Lock()
+	client := a.client
+	a.clientMu.Unlock()
+	if client == nil || client.isClosed() {
+		return nil, nil
+	}
+	result, err := client.call(ctx, "thread/list", map[string]any{"limit": 100, "archived": false})
+	if err != nil {
+		return nil, err
+	}
+	rows, _ := result["data"].([]any)
+	ids := make([]string, 0, len(rows))
+	for _, raw := range rows {
+		thread, _ := raw.(map[string]any)
+		if id := firstString(thread, "id", "threadId"); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (a *codexAgent) ListNativeThreads(ctx context.Context, workDir string) ([]core.NativeThread, error) {
+	client, err := a.appClient(ctx, workDir)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.call(ctx, "thread/list", map[string]any{
+		"limit": 100, "archived": false, "cwd": workDir,
+		"sortKey": "recency_at", "sortDirection": "desc",
+	})
+	if err != nil {
+		return nil, err
+	}
+	rows, _ := result["data"].([]any)
+	out := make([]core.NativeThread, 0, len(rows))
+	for _, raw := range rows {
+		thread, _ := raw.(map[string]any)
+		id := firstString(thread, "id", "threadId")
+		if id == "" {
+			continue
+		}
+		threadWorkDir := firstString(thread, "cwd")
+		if !sameCodexWorkDir(threadWorkDir, workDir) {
+			continue
+		}
+		out = append(out, core.NativeThread{
+			ID: id, Title: firstString(thread, "name", "title"),
+			Preview: firstString(thread, "preview"), WorkDir: threadWorkDir,
+		})
+	}
+	return out, nil
+}
+
+func sameCodexWorkDir(left, right string) bool {
+	canonical := func(value string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return ""
+		}
+		if absolute, err := filepath.Abs(value); err == nil {
+			value = absolute
+		}
+		value = filepath.Clean(value)
+		if resolved, err := filepath.EvalSymlinks(value); err == nil {
+			value = resolved
+		}
+		return value
+	}
+	return canonical(left) != "" && canonical(left) == canonical(right)
+}
+
+func (a *codexAgent) OpenNativeThread(ctx context.Context, threadID string) (bool, string, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false, "", fmt.Errorf("Codex thread id is required")
+	}
+	for _, r := range threadID {
+		if !(r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			return false, "", fmt.Errorf("invalid Codex thread id %q", threadID)
+		}
+	}
+	fallback := "codex resume " + threadID
+	if runtime.GOOS != "darwin" {
+		return false, fallback, nil
+	}
+	if err := exec.CommandContext(ctx, "open", "codex://threads/"+threadID).Run(); err != nil {
+		return false, fallback, fmt.Errorf("open Codex thread: %w", err)
+	}
+	return true, fallback, nil
+}
+
+func (a *codexAgent) CodexControlCapability() core.CodexControlCapability {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	state := a.capabilityState
+	if state == "" {
+		state = "not_probed"
+	}
+	if a.client != nil && a.client.isClosed() {
+		state = "disconnected"
+	}
+	return core.CodexControlCapability{
+		State: state, Error: a.capabilityError, Experimental: true,
+		Threads: true, Steer: true, Interrupt: true, Interactions: true,
+		DeepLink: runtime.GOOS == "darwin",
+	}
+}
+
+func (a *codexAgent) Stop(context.Context) error {
+	a.clientMu.Lock()
+	client := a.client
+	a.client = nil
+	a.clientMu.Unlock()
+	if client != nil {
+		return client.close()
+	}
+	return nil
+}
+
+func (a *codexAgent) appClient(ctx context.Context, workDir string) (*codexAppClient, error) {
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	if a.client != nil && !a.client.isClosed() {
+		return a.client, nil
+	}
+	client, err := newCodexAppClient(ctx, a, workDir)
+	if err != nil {
+		a.client = nil
+		a.capabilityState = "unavailable"
+		a.capabilityError = err.Error()
+		return nil, err
+	}
+	a.client = client
+	a.capabilityState = "ready"
+	a.capabilityError = ""
+	return client, nil
+}
 
 type codexSession struct {
 	agent   *codexAgent
 	workDir string
+	client  *codexAppClient
+	inbox   chan map[string]any
 
-	mu       sync.Mutex
-	turnMu   sync.Mutex
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	reader   *bufio.Reader
-	stderr   bytes.Buffer
-	closed   bool
-	nextID   int
-	threadID string
+	mu                  sync.Mutex
+	turnMu              sync.Mutex
+	closed              bool
+	threadID            string
+	activeTurnID        string
+	activeTurn          bool
+	freshThread         bool
+	threadNamed         bool
+	interactionPrefix   string
+	pendingInteractions map[string]codexPendingInteraction
 	// usageTotal tracks the app-server's thread-cumulative counters across
 	// turns. runTurn is serialized by turnMu, so it needs no separate lock.
 	usageTotal codexTokenUsage
@@ -117,9 +260,16 @@ func newCodexSession(ctx context.Context, agent *codexAgent, workDir, resumeID s
 		supportedReasoningEfforts: append([]string(nil), agent.supportedReasoningEfforts...),
 		supportedServiceTiers:     append([]string(nil), agent.supportedServiceTiers...),
 		modelReasoningEfforts:     map[string][]string{},
-		nextID:                    1,
+		pendingInteractions:       map[string]codexPendingInteraction{},
+		interactionPrefix:         core.NewChannelControlID("app"),
+		inbox:                     make(chan map[string]any, 256),
 	}
-	if err := s.start(ctx, resumeID); err != nil {
+	client, err := agent.appClient(ctx, workDir)
+	if err != nil {
+		return nil, err
+	}
+	s.client = client
+	if err := s.startShared(ctx, resumeID); err != nil {
 		_ = s.Close(context.Background())
 		return nil, err
 	}
@@ -283,75 +433,41 @@ func (s *codexSession) ResetRuntimeSetting(setting core.RuntimeSetting) error {
 	return nil
 }
 
-func (s *codexSession) start(ctx context.Context, resumeID string) error {
-	name := "codex"
-	if path, err := exec.LookPath(name); err == nil {
-		name = path
-	}
-	cmd := exec.Command(name, codexAppServerArgs(ctx)...)
-	cmd.Dir = s.workDir
-	cmd.Env = codexBuildEnv(s.agent.env)
-	cmd.Stderr = &s.stderr
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	s.cmd = cmd
-	s.stdin = stdin
-	s.reader = bufio.NewReader(stdout)
-
-	if _, err := s.call(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]string{"name": "AgentNexus", "version": "0.1.0"},
-	}); err != nil {
-		return s.withStderr(err)
-	}
-	if err := s.notify("initialized", map[string]any{}); err != nil {
-		return err
-	}
+func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 	if err := s.loadNativeModels(ctx); err != nil {
 		return s.withStderr(err)
 	}
-
+	var result map[string]any
+	var err error
 	if resumeID != "" {
-		result, err := s.call(ctx, "thread/resume", map[string]any{"threadId": resumeID})
+		result, err = s.call(ctx, "thread/resume", map[string]any{"threadId": resumeID})
 		if err != nil {
 			return unavailableCodexThreadError(s.withStderr(err))
 		}
-		s.threadID = firstString(nestedMap(result, "thread"), "id", "threadId")
-		if s.threadID == "" {
-			s.threadID = firstString(result, "id", "threadId")
+	} else {
+		s.freshThread = true
+		params := map[string]any{"cwd": s.workDir}
+		if prompt := strings.TrimSpace(s.agent.systemPrompt); prompt != "" {
+			params["developerInstructions"] = prompt
 		}
-		if s.threadID == "" {
-			return fmt.Errorf("codex app-server resumed a thread without an id")
+		if model := s.DefaultModel(); model != "" {
+			params["model"] = model
 		}
-		return nil
+		result, err = s.call(ctx, "thread/start", params)
+		if err != nil {
+			return s.withStderr(err)
+		}
 	}
-
-	params := map[string]any{"cwd": s.workDir}
-	if prompt := strings.TrimSpace(s.agent.systemPrompt); prompt != "" {
-		params["developerInstructions"] = prompt
+	threadID := firstString(nestedMap(result, "thread"), "id", "threadId")
+	if threadID == "" {
+		threadID = firstString(result, "id", "threadId")
 	}
-	if model := s.DefaultModel(); model != "" {
-		params["model"] = model
+	if threadID == "" {
+		return fmt.Errorf("codex app-server returned a thread without an id")
 	}
-	result, err := s.call(ctx, "thread/start", params)
-	if err != nil {
-		return s.withStderr(err)
-	}
-	s.threadID = firstString(nestedMap(result, "thread"), "id", "threadId")
-	if s.threadID == "" {
-		return fmt.Errorf("codex app-server started a thread without an id")
-	}
-	// The app-server resolves the actual runtime default after it reads the
-	// local Codex config and signed-in account. Prefer that over a catalog
-	// generic default so /model matches the user's Codex CLI state exactly.
+	s.mu.Lock()
+	s.threadID = threadID
+	s.mu.Unlock()
 	if s.DefaultModel() == "" {
 		if model := firstString(result, "model"); model != "" {
 			s.modelMu.Lock()
@@ -359,7 +475,7 @@ func (s *codexSession) start(ctx context.Context, resumeID string) error {
 			s.modelMu.Unlock()
 		}
 	}
-	return nil
+	return s.client.register(threadID, s)
 }
 
 func codexAppServerArgs(ctx context.Context) []string {
@@ -521,12 +637,19 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 	defer s.turnMu.Unlock()
 
 	s.mu.Lock()
-	requestID := s.nextID
-	s.nextID++
+	s.activeTurn = true
+	s.activeTurnID = ""
 	threadID := s.threadID
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.activeTurn = false
+		s.activeTurnID = ""
+		s.mu.Unlock()
+	}()
 	params := s.turnStartParams(threadID, text)
-	if err := s.request(requestID, "turn/start", params); err != nil {
+	result, err := s.call(ctx, "turn/start", params)
+	if err != nil {
 		out <- &core.Event{Type: core.EventError, Err: s.withStderr(err)}
 		return
 	}
@@ -540,35 +663,53 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 		itemStarted:    map[string]int64{},
 	}
 	defer func() { s.usageTotal = mapper.lastUsage }()
+	turn := nestedMap(result, "turn")
+	if turnID := firstString(turn, "id"); turnID != "" {
+		mapper.turnID = turnID
+		s.setActiveTurnID(turnID)
+	}
+	if event := mapper.modelRequestEvent(); event != nil {
+		out <- event
+	}
+	s.nameFreshThread(ctx, text)
 	for {
-		message, err := s.readMessage()
-		if err != nil {
-			out <- &core.Event{Type: core.EventError, Err: s.withStderr(err)}
+		var message map[string]any
+		select {
+		case message = <-s.inbox:
+		case <-ctx.Done():
+			if turnID := s.ActiveTurnID(); turnID != "" {
+				interruptCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, _ = s.client.call(interruptCtx, "turn/interrupt", map[string]any{
+					"threadId": threadID, "turnId": turnID,
+				})
+				cancel()
+			}
+			out <- &core.Event{Type: core.EventError, Err: ctx.Err()}
 			return
-		}
-		if id, ok := rpcID(message); ok && id == requestID {
-			if rpcErr := rpcError(message); rpcErr != nil {
-				out <- &core.Event{Type: core.EventError, Err: rpcErr}
-				return
-			}
-			result, _ := message["result"].(map[string]any)
-			turn := nestedMap(result, "turn")
-			if turnID := firstString(turn, "id"); turnID != "" {
-				mapper.turnID = turnID
-			}
-			if event := mapper.modelRequestEvent(); event != nil {
-				out <- event
-			}
-			continue // turn/start acknowledgement; stream notifications follow.
+		case <-s.client.done:
+			out <- &core.Event{Type: core.EventError, Err: s.withStderr(fmt.Errorf("codex app-server stopped"))}
+			return
 		}
 		if method, _ := message["method"].(string); method != "" {
 			if id, ok := rpcID(message); ok {
-				// Channels are non-interactive. Returning decline keeps the Codex
-				// turn progressing instead of leaving it permanently blocked.
-				_ = s.respondToServerRequest(id, method)
+				if interaction, ok := s.captureServerInteraction(id, method, message); ok {
+					out <- &core.Event{
+						Type:        core.EventPermission,
+						TurnID:      interaction.TurnID,
+						ItemID:      interaction.ItemID,
+						Interaction: interaction,
+					}
+				} else {
+					// Unknown client-side capabilities are always declined so a
+					// newer app-server cannot leave a channel turn blocked.
+					_ = s.respondToServerRequest(id, method)
+				}
 				continue
 			}
 			params, _ := message["params"].(map[string]any)
+			if turnID := codexTurnID(params); turnID != "" {
+				s.setActiveTurnID(turnID)
+			}
 			events, done, turnErr := mapper.mapNotification(method, params)
 			for _, event := range events {
 				out <- event
@@ -581,6 +722,29 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 			}
 		}
 	}
+}
+
+func (s *codexSession) nameFreshThread(ctx context.Context, text string) {
+	s.mu.Lock()
+	if !s.freshThread || s.threadNamed {
+		s.mu.Unlock()
+		return
+	}
+	s.threadNamed = true
+	threadID := s.threadID
+	s.mu.Unlock()
+	title := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+	title = strings.Join(strings.Fields(title), " ")
+	runes := []rune(title)
+	if len(runes) > 80 {
+		title = string(runes[:80])
+	}
+	if title == "" {
+		return
+	}
+	nameCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, _ = s.client.call(nameCtx, "thread/name/set", map[string]any{"threadId": threadID, "name": title})
+	cancel()
 }
 
 func (s *codexSession) turnStartParams(threadID, text string) map[string]any {
@@ -604,7 +768,89 @@ func (s *codexSession) turnStartParams(threadID, text string) map[string]any {
 	return params
 }
 
-func (s *codexSession) RespondPermission(context.Context, bool) error { return nil }
+func (s *codexSession) ActiveTurnID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeTurnID
+}
+
+func (s *codexSession) setActiveTurnID(turnID string) {
+	if turnID == "" {
+		return
+	}
+	s.mu.Lock()
+	s.activeTurnID = turnID
+	s.mu.Unlock()
+}
+
+func (s *codexSession) Steer(ctx context.Context, text string) error {
+	turnID := s.ActiveTurnID()
+	if turnID == "" {
+		return fmt.Errorf("codex turn is not active")
+	}
+	return s.controlCall(ctx, "turn/steer", map[string]any{
+		"threadId":       s.NativeSessionID(),
+		"expectedTurnId": turnID,
+		"input":          []map[string]string{{"type": "text", "text": text}},
+	})
+}
+
+func (s *codexSession) Interrupt(ctx context.Context) error {
+	turnID := s.ActiveTurnID()
+	if turnID == "" {
+		return fmt.Errorf("codex turn is not active")
+	}
+	return s.controlCall(ctx, "turn/interrupt", map[string]any{
+		"threadId": s.NativeSessionID(),
+		"turnId":   turnID,
+	})
+}
+
+func (s *codexSession) controlCall(ctx context.Context, method string, params any) error {
+	s.mu.Lock()
+	if s.closed || !s.activeTurn {
+		s.mu.Unlock()
+		return fmt.Errorf("codex turn is not active")
+	}
+	s.mu.Unlock()
+	_, err := s.client.call(ctx, method, params)
+	return err
+}
+
+func (s *codexSession) RespondPermission(ctx context.Context, allow bool) error {
+	s.mu.Lock()
+	var id string
+	for candidate := range s.pendingInteractions {
+		id = candidate
+		break
+	}
+	s.mu.Unlock()
+	if id == "" {
+		return fmt.Errorf("no pending Codex permission request")
+	}
+	decision := "decline"
+	if allow {
+		decision = "accept"
+	}
+	return s.ResolveInteraction(ctx, id, core.AgentInteractionResponse{Decision: decision})
+}
+
+func (s *codexSession) ResolveInteraction(_ context.Context, interactionID string, response core.AgentInteractionResponse) error {
+	s.mu.Lock()
+	pending, ok := s.pendingInteractions[interactionID]
+	if ok {
+		delete(s.pendingInteractions, interactionID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("Codex interaction %q is not pending", interactionID)
+	}
+	result, err := codexInteractionResult(pending.method, pending.params, response)
+	if err != nil {
+		return err
+	}
+	return s.writeMessage(map[string]any{"jsonrpc": "2.0", "id": pending.rpcID, "result": result})
+}
 
 func (s *codexSession) Close(context.Context) error {
 	s.mu.Lock()
@@ -613,94 +859,217 @@ func (s *codexSession) Close(context.Context) error {
 		return nil
 	}
 	s.closed = true
-	stdin, cmd := s.stdin, s.cmd
+	threadID := s.threadID
+	client := s.client
 	s.mu.Unlock()
-	if stdin != nil {
-		_ = stdin.Close()
-	}
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+	if client != nil {
+		client.unregister(threadID, s)
 	}
 	return nil
 }
 
-func (s *codexSession) call(_ context.Context, method string, params any) (map[string]any, error) {
-	s.mu.Lock()
-	id := s.nextID
-	s.nextID++
-	s.mu.Unlock()
-	if err := s.request(id, method, params); err != nil {
-		return nil, err
+func (s *codexSession) call(ctx context.Context, method string, params any) (map[string]any, error) {
+	if s.client == nil {
+		return nil, fmt.Errorf("codex app-server is unavailable")
 	}
-	for {
-		message, err := s.readMessage()
-		if err != nil {
-			return nil, err
-		}
-		gotID, ok := rpcID(message)
-		if !ok || gotID != id {
-			continue
-		}
-		if rpcErr := rpcError(message); rpcErr != nil {
-			return nil, rpcErr
-		}
-		result, _ := message["result"].(map[string]any)
-		return result, nil
-	}
-}
-
-func (s *codexSession) request(id int, method string, params any) error {
-	return s.writeMessage(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-}
-
-func (s *codexSession) notify(method string, params any) error {
-	return s.writeMessage(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+	return s.client.call(ctx, method, params)
 }
 
 func (s *codexSession) respondToServerRequest(id int, method string) error {
-	params := any(map[string]string{"decision": "decline"})
-	if method == "permissions/requestApproval" {
-		params = map[string]string{"permissions": "none"}
+	result := any(map[string]string{"decision": "decline"})
+	switch method {
+	case "item/permissions/requestApproval", "permissions/requestApproval":
+		result = map[string]any{"permissions": map[string]any{}, "scope": "turn"}
+	case "item/tool/requestUserInput":
+		result = map[string]any{"answers": map[string]any{}}
 	}
-	return s.writeMessage(map[string]any{"jsonrpc": "2.0", "id": id, "result": params})
+	return s.writeMessage(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+type codexPendingInteraction struct {
+	rpcID  int
+	method string
+	params map[string]any
+}
+
+func (s *codexSession) captureServerInteraction(id int, method string, message map[string]any) (*core.AgentInteraction, bool) {
+	params, _ := message["params"].(map[string]any)
+	kind := core.AgentInteractionKind("")
+	title := ""
+	switch method {
+	case "item/commandExecution/requestApproval":
+		kind = core.AgentInteractionCommandApproval
+		title = "命令执行审批"
+	case "item/fileChange/requestApproval":
+		kind = core.AgentInteractionFileChangeApproval
+		title = "文件修改审批"
+	case "item/permissions/requestApproval", "permissions/requestApproval":
+		kind = core.AgentInteractionPermissionApproval
+		title = "权限申请"
+	case "item/tool/requestUserInput":
+		kind = core.AgentInteractionUserInput
+		title = "需要补充信息"
+	default:
+		return nil, false
+	}
+	threadID := firstString(params, "threadId")
+	turnID := firstString(params, "turnId")
+	itemID := firstString(params, "itemId")
+	prefix := s.interactionPrefix
+	if prefix == "" {
+		prefix = "session"
+	}
+	interactionID := fmt.Sprintf("codex-%s-%s-%d", prefix, threadID, id)
+	interaction := &core.AgentInteraction{
+		ID:        interactionID,
+		Kind:      kind,
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		ItemID:    itemID,
+		Title:     title,
+		Command:   firstString(params, "command"),
+		Cwd:       firstString(params, "cwd"),
+		Reason:    firstString(params, "reason"),
+		RawParams: params,
+	}
+	interaction.HighRisk = codexHighRiskInteraction(interaction)
+	if kind == core.AgentInteractionPermissionApproval {
+		interaction.Description = codexValue(params["permissions"])
+	}
+	if kind == core.AgentInteractionUserInput {
+		interaction.AutoResolutionMs = int64(numberValue(params["autoResolutionMs"]))
+		interaction.Questions = codexInteractionQuestions(params["questions"])
+	}
+	s.mu.Lock()
+	s.pendingInteractions[interactionID] = codexPendingInteraction{rpcID: id, method: method, params: params}
+	s.mu.Unlock()
+	return interaction, true
+}
+
+func codexInteractionQuestions(raw any) []core.InteractionQuestion {
+	values, _ := raw.([]any)
+	out := make([]core.InteractionQuestion, 0, len(values))
+	for _, value := range values {
+		question, _ := value.(map[string]any)
+		item := core.InteractionQuestion{
+			ID:       firstString(question, "id"),
+			Header:   firstString(question, "header"),
+			Question: firstString(question, "question"),
+			Secret:   boolValue(question["isSecret"]),
+			Other:    boolValue(question["isOther"]),
+		}
+		options, _ := question["options"].([]any)
+		for _, rawOption := range options {
+			option, _ := rawOption.(map[string]any)
+			if label := firstString(option, "label"); label != "" {
+				item.Options = append(item.Options, core.InteractionOption{
+					Label: label, Description: firstString(option, "description"),
+				})
+			}
+		}
+		if item.ID != "" && item.Question != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func codexInteractionResult(method string, params map[string]any, response core.AgentInteractionResponse) (any, error) {
+	decision := strings.TrimSpace(response.Decision)
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		switch decision {
+		case "accept", "acceptForSession", "decline", "cancel":
+		default:
+			return nil, fmt.Errorf("unsupported Codex approval decision %q", decision)
+		}
+		if decision == "acceptForSession" {
+			interaction := &core.AgentInteraction{
+				Kind:     core.AgentInteractionCommandApproval,
+				Command:  firstString(params, "command"),
+				Cwd:      firstString(params, "cwd"),
+				HighRisk: false,
+			}
+			if method == "item/fileChange/requestApproval" {
+				interaction.Kind = core.AgentInteractionFileChangeApproval
+				interaction.Reason = firstString(params, "reason")
+				interaction.RawParams = params
+			}
+			if codexHighRiskInteraction(interaction) {
+				return nil, fmt.Errorf("high-risk actions cannot be approved for the session")
+			}
+		}
+		return map[string]any{"decision": decision}, nil
+	case "item/permissions/requestApproval", "permissions/requestApproval":
+		if decision == "decline" || decision == "cancel" || decision == "" {
+			return map[string]any{"permissions": map[string]any{}, "scope": "turn"}, nil
+		}
+		if decision != "accept" && decision != "acceptForSession" {
+			return nil, fmt.Errorf("unsupported Codex permission decision %q", decision)
+		}
+		scope := "turn"
+		if decision == "acceptForSession" {
+			scope = "session"
+		}
+		return map[string]any{"permissions": params["permissions"], "scope": scope}, nil
+	case "item/tool/requestUserInput":
+		answers := map[string]any{}
+		for _, question := range codexInteractionQuestions(params["questions"]) {
+			values := response.Answers[question.ID]
+			answers[question.ID] = map[string]any{"answers": values}
+		}
+		return map[string]any{"answers": answers}, nil
+	default:
+		return nil, fmt.Errorf("unsupported Codex interaction method %q", method)
+	}
+}
+
+func codexHighRiskInteraction(interaction *core.AgentInteraction) bool {
+	if interaction == nil {
+		return false
+	}
+	if interaction.Kind == core.AgentInteractionPermissionApproval {
+		return true
+	}
+	if interaction.Kind == core.AgentInteractionFileChangeApproval {
+		reason := strings.ToLower(interaction.Reason)
+		raw := strings.ToLower(codexValue(interaction.RawParams))
+		return strings.Contains(reason, "outside") || strings.Contains(reason, "root") ||
+			strings.Contains(reason, "grant") || strings.Contains(reason, "delete") ||
+			strings.Contains(reason, "remove") || strings.Contains(raw, `"delete"`) ||
+			strings.Contains(raw, `"deleted"`) || strings.Contains(raw, `"remove"`)
+	}
+	command := strings.ToLower(strings.TrimSpace(interaction.Command))
+	for _, marker := range []string{
+		"git commit", "git push", "gh pr create", "deploy", "publish", "release",
+		"rm ", "rmdir ", "git clean", "git reset --hard", "sudo ", "curl ", "wget ", "ssh ", "scp ", "mail ", "send ",
+	} {
+		if strings.Contains(command, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexTurnID(params map[string]any) string {
+	if id := firstString(params, "turnId"); id != "" {
+		return id
+	}
+	return firstString(nestedMap(params, "turn"), "id", "turnId")
 }
 
 func (s *codexSession) writeMessage(message map[string]any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.stdin == nil {
-		return fmt.Errorf("codex app-server is closed")
+	if s.client == nil {
+		return fmt.Errorf("codex app-server is unavailable")
 	}
-	data, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
-	_, err = s.stdin.Write(append(data, '\n'))
-	return err
-}
-
-func (s *codexSession) readMessage() (map[string]any, error) {
-	line, err := s.reader.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	var message map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &message); err != nil {
-		return nil, err
-	}
-	return message, nil
+	return s.client.writeMessage(message)
 }
 
 func (s *codexSession) withStderr(err error) error {
-	detail := strings.TrimSpace(s.stderr.String())
-	if detail == "" {
+	if s.client == nil {
 		return err
 	}
-	if len(detail) > 16*1024 {
-		detail = detail[len(detail)-16*1024:]
-	}
-	return fmt.Errorf("%s (%w)", detail, err)
+	return s.client.withStderr(err)
 }
 
 func codexBuildEnv(extra map[string]string) []string {
@@ -1289,6 +1658,35 @@ func codexValue(value any) string {
 			return ""
 		}
 		return strings.TrimSpace(string(data))
+	}
+}
+
+func boolValue(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+func numberValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		n, _ := typed.Float64()
+		return n
+	default:
+		return 0
 	}
 }
 

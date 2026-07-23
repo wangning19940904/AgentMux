@@ -152,6 +152,18 @@ func (c *ConnectService) ChannelStatuses() []ChannelStatus {
 	return c.eng.ChannelStatuses()
 }
 
+func (c *ConnectService) ChannelCodexControlCapability(channelID string) (CodexControlCapability, bool) {
+	return c.eng.ChannelCodexControlCapability(channelID)
+}
+
+func (c *ConnectService) BindChannelConversation(ctx context.Context, channelID, conversationID, threadID string) error {
+	return c.eng.BindChannelConversation(ctx, channelID, conversationID, threadID)
+}
+
+func (c *ConnectService) ResolveChannelInteractionLocal(ctx context.Context, action AgentInteractionAction) error {
+	return c.eng.ResolveChannelInteractionLocal(ctx, action)
+}
+
 // RunTriggerNow executes a trigger asynchronously (manual run: fires even
 // when the trigger is disabled). input is appended to the prompt, e.g. a
 // webhook payload.
