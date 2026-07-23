@@ -108,3 +108,41 @@ func TestCodexCollectorKeepsLegacyTopLevelTokenCount(t *testing.T) {
 		t.Fatalf("legacy records = %#v", records)
 	}
 }
+
+func TestCodexCollectorSkipsFilesOlderThanSince(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions", "2026", "06", "01")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"token_count","timestamp":"2026-06-01T10:00:00Z","model":"gpt-5","token_count":{"input_tokens":12,"output_tokens":3,"cached_input_tokens":4}}`
+	path := filepath.Join(sessions, "rollout-old.jsonl")
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Stamp the file well before the incremental window.
+	old := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	collector, _ := NewCollector("codex", root, nil)
+
+	// A since after the file's mtime must skip it entirely (no records).
+	since := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	skipped, err := collector.Collect(context.Background(), since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("file older than since must be skipped: %#v", skipped)
+	}
+
+	// A zero since (full scan) still reads it.
+	full, err := collector.Collect(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 1 {
+		t.Fatalf("full scan must read the file: %#v", full)
+	}
+}

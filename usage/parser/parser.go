@@ -6,6 +6,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/agentnexus/agentnexus/core"
@@ -33,6 +34,21 @@ func NewCollector(source, root string, paths map[string]string) (core.UsageColle
 // sinceOK reports whether ts passes the since filter (zero since = all).
 func sinceOK(ts, since time.Time) bool {
 	return since.IsZero() || !ts.Before(since)
+}
+
+// skipUnmodified reports whether a file can be skipped without opening it: when
+// an incremental collect (non-zero since) meets a file last modified before the
+// window, none of its lines can satisfy sinceOK. This avoids re-parsing the
+// entire session history (tens of GB of Codex rollouts) on every 30s tick.
+func skipUnmodified(d os.DirEntry, since time.Time) bool {
+	if since.IsZero() {
+		return false
+	}
+	info, err := d.Info()
+	if err != nil {
+		return false
+	}
+	return info.ModTime().Before(since)
 }
 
 var _ = context.Background

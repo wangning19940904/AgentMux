@@ -106,11 +106,15 @@ func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
 		t.Fatal("proxy should be running after takeover")
 	}
 	env := envOf(t, readJSON(t, settingsPath))
-	if env["ANTHROPIC_BASE_URL"] != svc.Proxy().BaseURL() {
-		t.Fatalf("base url = %v want %v", env["ANTHROPIC_BASE_URL"], svc.Proxy().BaseURL())
+	wantClaudeURL := svc.Proxy().BaseURL() + "/claude"
+	if env["ANTHROPIC_BASE_URL"] != wantClaudeURL {
+		t.Fatalf("base url = %v want %v", env["ANTHROPIC_BASE_URL"], wantClaudeURL)
 	}
 	if env["ANTHROPIC_AUTH_TOKEN"] != ProxyManagedToken {
 		t.Fatalf("token = %v", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+	if env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] != "1" {
+		t.Fatalf("gateway model discovery = %v", env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
 	}
 	if _, exists, _ := st.GetLiveBackup(ctx, "claudecode"); !exists {
 		t.Fatal("live backup missing")
@@ -122,7 +126,7 @@ func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	env = envOf(t, readJSON(t, settingsPath))
-	if env["ANTHROPIC_BASE_URL"] != svc.Proxy().BaseURL() {
+	if env["ANTHROPIC_BASE_URL"] != wantClaudeURL {
 		t.Fatalf("hot switch rewrote live config: %v", env["ANTHROPIC_BASE_URL"])
 	}
 	id, ok, _ := st.ActiveProviderID(ctx, "claudecode")
@@ -627,10 +631,14 @@ func TestSwitchRouteWithLocalTakeoverAllowsConvertingFormats(t *testing.T) {
 	}
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	env := envOf(t, readJSON(t, settingsPath))
-	if env["ANTHROPIC_BASE_URL"] != svc.Proxy().BaseURL() {
-		t.Fatalf("base url = %v want %v", env["ANTHROPIC_BASE_URL"], svc.Proxy().BaseURL())
+	wantClaudeURL := svc.Proxy().BaseURL() + "/claude"
+	if env["ANTHROPIC_BASE_URL"] != wantClaudeURL {
+		t.Fatalf("base url = %v want %v", env["ANTHROPIC_BASE_URL"], wantClaudeURL)
 	}
 	if env["ANTHROPIC_AUTH_TOKEN"] != ProxyManagedToken {
 		t.Fatalf("token = %v", env["ANTHROPIC_AUTH_TOKEN"])
+	}
+	if env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] != "1" {
+		t.Fatalf("gateway model discovery = %v", env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
 	}
 }

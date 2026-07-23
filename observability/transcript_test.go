@@ -334,6 +334,154 @@ func TestTranscriptTailerStoresOnlyPublicReasoningSummary(t *testing.T) {
 	}
 }
 
+func TestTranscriptTailerSkipsUnchangedFiles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	bus := core.NewObservationBus()
+	bus.Subscribe("noop", func(context.Context, core.ObservationEnvelope) error { return nil })
+
+	mainPath := filepath.Join(home, ".claude", "projects", "-tmp", "main.jsonl")
+	writeJSONL(t, mainPath, claudeUser("u1", "session", now.Add(-time.Hour), "prompt"))
+
+	tailer := NewTranscriptTailer(slog.Default(), st, bus, TranscriptTailerOptions{Home: home, Now: func() time.Time { return now }})
+	first, err := tailer.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.FilesDiscovered != 1 || first.FilesRead != 1 {
+		t.Fatalf("first scan should read the file: %+v", first)
+	}
+
+	// Nothing changed on disk: the file must be discovered but not re-opened.
+	second, err := tailer.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.FilesDiscovered != 1 || second.FilesRead != 0 {
+		t.Fatalf("unchanged file should be skipped, not re-read: %+v", second)
+	}
+
+	// A new append bumps size/mtime, so the file is scanned again.
+	appendJSONL(t, mainPath, map[string]any{
+		"type": "assistant", "uuid": "a1", "requestId": "r1", "sessionId": "session",
+		"timestamp": now.Add(-30 * time.Minute).Format(time.RFC3339Nano),
+		"message":   map[string]any{"role": "assistant", "id": "m1", "model": "claude-sonnet", "stop_reason": "end_turn", "content": []any{map[string]any{"type": "text", "text": "answer"}}, "usage": map[string]any{"input_tokens": 10, "output_tokens": 2}},
+	})
+	third, err := tailer.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.FilesRead != 1 {
+		t.Fatalf("appended file should be re-read: %+v", third)
+	}
+}
+
+func TestTranscriptTailerDurableCursorSkipsReplayAfterRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	bus := core.NewObservationBus()
+	captured := &capturedObservations{}
+	bus.Subscribe("capture", captured.observe)
+
+	mainPath := filepath.Join(home, ".claude", "projects", "-tmp", "main.jsonl")
+	writeJSONL(t, mainPath, map[string]any{
+		"type": "assistant", "uuid": "a1", "requestId": "r1", "sessionId": "s",
+		"timestamp": now.Add(-time.Hour).Format(time.RFC3339Nano),
+		"message":   map[string]any{"role": "assistant", "id": "m1", "model": "claude-sonnet", "stop_reason": "end_turn", "content": []any{map[string]any{"type": "text", "text": "answer"}}, "usage": map[string]any{"input_tokens": 10, "output_tokens": 2}},
+	})
+
+	first := NewTranscriptTailer(slog.Default(), st, bus, TranscriptTailerOptions{Home: home, Now: func() time.Time { return now }})
+	if r, err := first.Scan(ctx); err != nil || r.EventsPublished == 0 {
+		t.Fatalf("initial scan should publish: result=%+v err=%v", r, err)
+	}
+
+	// Simulate a process restart: a brand-new tailer has an empty in-memory
+	// fingerprint, so only the durable cursor can prevent a full replay.
+	captured.reset()
+	restarted := NewTranscriptTailer(slog.Default(), st, bus, TranscriptTailerOptions{Home: home, Now: func() time.Time { return now }})
+	second, err := restarted.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.EventsPublished != 0 || len(captured.snapshot()) != 0 {
+		t.Fatalf("fully-consumed file must not replay after restart: result=%+v events=%d", second, len(captured.snapshot()))
+	}
+	if second.LinesRead != 0 {
+		t.Fatalf("fully-consumed file must not be re-read line by line: %+v", second)
+	}
+}
+
+func TestTranscriptTailerCheckpointsLargeFileAfterPartialFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	home := t.TempDir()
+	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	path := filepath.Join(home, ".claude", "projects", "-tmp", "large.jsonl")
+	lines := make([]map[string]any, 300)
+	for index := range lines {
+		lines[index] = claudeUser(fmt.Sprintf("checkpoint-%03d", index), "checkpoint-session", now.Add(-time.Minute), "prompt")
+	}
+	writeJSONL(t, path, lines...)
+
+	failedBus := core.NewObservationBus()
+	published := 0
+	failedBus.Subscribe("fail-after-checkpoint", func(context.Context, core.ObservationEnvelope) error {
+		published++
+		if published == 280 {
+			return fmt.Errorf("injected observation failure")
+		}
+		return nil
+	})
+	first := NewTranscriptTailer(slog.Default(), st, failedBus, TranscriptTailerOptions{Home: home, Now: func() time.Time { return now }})
+	if _, err := first.Scan(ctx); err == nil {
+		t.Fatal("expected injected scan failure")
+	}
+	cursor, err := st.GetObservationIngestCursor(ctx, "transcript:claude", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor == nil || cursor.ByteOffset <= 0 || cursor.ByteOffset >= info.Size() {
+		t.Fatalf("partial scan did not persist a bounded checkpoint: cursor=%+v size=%d", cursor, info.Size())
+	}
+
+	recoveredBus := core.NewObservationBus()
+	recoveredBus.Subscribe("noop", func(context.Context, core.ObservationEnvelope) error { return nil })
+	restarted := NewTranscriptTailer(slog.Default(), st, recoveredBus, TranscriptTailerOptions{Home: home, Now: func() time.Time { return now }})
+	recovered, err := restarted.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.LinesRead <= 0 || recovered.LinesRead > transcriptCursorCheckpointLines {
+		t.Fatalf("restart replayed more than one checkpoint window: %+v", recovered)
+	}
+	if recovered.EventsPublished != recovered.LinesRead {
+		t.Fatalf("recovered events/lines mismatch: %+v", recovered)
+	}
+}
+
 func claudeUser(id, session string, timestamp time.Time, content string) map[string]any {
 	return map[string]any{
 		"type": "user", "uuid": id, "promptId": id + "-turn", "sessionId": session,

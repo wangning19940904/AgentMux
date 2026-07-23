@@ -510,3 +510,49 @@ func TestParseHookInput(t *testing.T) {
 		t.Fatalf("empty = %q", got)
 	}
 }
+
+func TestCodexRemoteControlChannelValidation(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	for _, agent := range []*core.AgentInstance{
+		{ID: "agent-codex", Name: "Codex", RuntimeID: "codex", Enabled: true},
+		{ID: "agent-other", Name: "Other", RuntimeID: "claudecode", Enabled: true},
+	} {
+		if err := st.UpsertAgentInstance(ctx, agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	channel := core.Channel{
+		Name: "Remote Codex", Type: "feishu", AgentID: "agent-codex",
+		Config: map[string]string{
+			"app_id": "cli_test", "app_secret": "secret",
+			core.ChannelConfigCodexControlEnabled: "true",
+		},
+	}
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "allowed or admin") {
+		t.Fatalf("missing whitelist: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	channel.AgentID = "agent-other"
+	channel.Config[core.ChannelConfigAllowedUserIDs] = "ou_member"
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Codex Agent") {
+		t.Fatalf("wrong runtime: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	channel.AgentID = "agent-codex"
+	channel.Config[core.ChannelConfigAdminUserIDs] = "ou_admin"
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid remote control channel: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var saved core.Channel
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Config[core.ChannelConfigCodexMaxQueue] != "20" ||
+		saved.Config[core.ChannelConfigCodexTurnTimeout] != "20" {
+		t.Fatalf("remote control defaults = %+v", saved.Config)
+	}
+}

@@ -27,6 +27,8 @@ const (
 	defaultTranscriptContentBackfill  = 30 * 24 * time.Hour
 	defaultTranscriptMetadataBackfill = 180 * 24 * time.Hour
 	maxTranscriptLineBytes            = 64 << 20
+	transcriptCursorCheckpointLines   = 256
+	transcriptCursorCheckpointBytes   = 8 << 20
 )
 
 // TranscriptTailerOptions controls local transcript discovery and retention.
@@ -64,12 +66,27 @@ type TranscriptTailer struct {
 	metadataBackfill time.Duration
 	now              func() time.Time
 	scanMu           sync.Mutex
+	trustedPaths     sync.Map
+	// scanned fingerprints the last mtime/size seen per file so unchanged
+	// files are skipped without opening them. Guarded by scanMu.
+	scanned map[string]transcriptFileState
 }
 
 type transcriptFile struct {
 	Runtime string
 	Class   string
 	Path    string
+	ModTime time.Time
+	Size    int64
+}
+
+// transcriptFileState is the last-scanned fingerprint used to skip unchanged
+// files. Codex keeps hundreds of large rollout files (tens of GB total); without
+// this short-circuit every poll re-opened and re-hashed all of them, pinning a
+// CPU core and starving the shared SQLite connection.
+type transcriptFileState struct {
+	ModTime time.Time
+	Size    int64
 }
 
 type transcriptCursorState struct {
@@ -162,10 +179,31 @@ func (t *TranscriptTailer) Scan(ctx context.Context) (TranscriptScanResult, erro
 		return result, err
 	}
 	result.FilesDiscovered = len(files)
+	if t.scanned == nil {
+		t.scanned = make(map[string]transcriptFileState, len(files))
+	}
+	seen := make(map[string]struct{}, len(files))
 	var errs []error
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(errs, err)...)
+		}
+		seen[file.Path] = struct{}{}
+		// Skip files whose mtime and size are unchanged since the last scan.
+		// The durable DB cursor already prevents re-emitting old lines, but
+		// this avoids opening and re-hashing hundreds of large rollout files
+		// on every poll when nothing has been appended.
+		if prev, ok := t.scanned[file.Path]; ok && prev.Size == file.Size && prev.ModTime.Equal(file.ModTime) {
+			continue
+		}
+		// A file last written before the metadata backfill window holds only
+		// lines older than retention; scanFile would skip every one of them.
+		// Skip opening it so the first cold start does not parse gigabytes of
+		// ancient session history line by line. Fingerprint it so a later mtime
+		// bump (an append) still gets picked up.
+		if !file.ModTime.IsZero() && file.ModTime.Before(t.now().UTC().Add(-t.metadataBackfill)) {
+			t.scanned[file.Path] = transcriptFileState{ModTime: file.ModTime, Size: file.Size}
+			continue
 		}
 		partial, err := t.scanFile(ctx, file)
 		result.FilesRead += partial.FilesRead
@@ -174,6 +212,17 @@ func (t *TranscriptTailer) Scan(ctx context.Context) (TranscriptScanResult, erro
 		result.OldLinesSkipped += partial.OldLinesSkipped
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", file.Path, err))
+			continue
+		}
+		if !file.ModTime.IsZero() {
+			t.scanned[file.Path] = transcriptFileState{ModTime: file.ModTime, Size: file.Size}
+		}
+	}
+	// Drop fingerprints for files that disappeared so the map cannot grow
+	// without bound as sessions are rotated or archived.
+	for path := range t.scanned {
+		if _, ok := seen[path]; !ok {
+			delete(t.scanned, path)
 		}
 	}
 	return result, errors.Join(errs...)
@@ -201,7 +250,12 @@ func (t *TranscriptTailer) discover() ([]transcriptFile, error) {
 			if absErr != nil {
 				return absErr
 			}
-			files = append(files, transcriptFile{Runtime: runtime, Class: itemClass, Path: filepath.Clean(absolute)})
+			file := transcriptFile{Runtime: runtime, Class: itemClass, Path: filepath.Clean(absolute)}
+			if info, infoErr := entry.Info(); infoErr == nil {
+				file.ModTime = info.ModTime()
+				file.Size = info.Size()
+			}
+			files = append(files, file)
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
@@ -266,6 +320,15 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 		_ = json.Unmarshal([]byte(cursor.Cursor), &state)
 		offset = cursor.ByteOffset
 		lastMessageID = cursor.MessageID
+		// Durable fast-path: a matching file identity that is already consumed
+		// to EOF has no new lines. Return before seeking/scanning/publishing so
+		// a restart (which clears the in-memory fingerprint) does not replay the
+		// entire history back through the observation pipeline. Republishing old
+		// lines is pure waste: each one re-runs the per-trace usage aggregation
+		// against the multi-GB store, which pinned a CPU core indefinitely.
+		if cursor.FileIdentity == identity && offset == info.Size() {
+			return result, nil
+		}
 	}
 	reset := cursor != nil && (cursor.FileIdentity != identity || info.Size() < offset)
 	if reset {
@@ -290,6 +353,32 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 	reader := bufio.NewReaderSize(file, 256<<10)
 	currentOffset := offset
 	observedAt := time.Time{}
+	lastCheckpointOffset := offset
+	linesSinceCheckpoint := 0
+	checkpoint := func(force bool) error {
+		if !force && linesSinceCheckpoint < transcriptCursorCheckpointLines &&
+			currentOffset-lastCheckpointOffset < transcriptCursorCheckpointBytes {
+			return nil
+		}
+		encodedState, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		checkpointObservedAt := observedAt
+		if checkpointObservedAt.IsZero() {
+			checkpointObservedAt = info.ModTime().UTC()
+		}
+		if err := t.store.UpsertObservationIngestCursor(ctx, store.ObservationIngestCursor{
+			Source: "transcript:" + item.Runtime, Resource: resource, Cursor: string(encodedState),
+			MessageID: lastMessageID, FileIdentity: identity, ByteOffset: currentOffset,
+			ObservedAt: checkpointObservedAt, UpdatedAt: t.now().UTC(),
+		}); err != nil {
+			return err
+		}
+		lastCheckpointOffset = currentOffset
+		linesSinceCheckpoint = 0
+		return nil
+	}
 	for {
 		lineStart := currentOffset
 		line, readErr := reader.ReadBytes('\n')
@@ -309,8 +398,12 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 		}
 		currentOffset += int64(len(line))
 		result.LinesRead++
+		linesSinceCheckpoint++
 		trimmed := bytes.TrimSpace(line)
 		if len(trimmed) == 0 {
+			if err := checkpoint(false); err != nil {
+				return result, err
+			}
 			continue
 		}
 		var envelopes []core.ObservationEnvelope
@@ -321,6 +414,17 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 		} else {
 			envelopes, messageID, timestamp = t.parseCodexLine(item, trimmed, lineStart, info.ModTime(), &state)
 		}
+		sourceDigest := sha256.Sum256(trimmed)
+		for index := range envelopes {
+			if envelopes[index].Content == nil {
+				continue
+			}
+			envelopes[index].Content.Source = &core.ObservationContentSource{
+				Storage: core.ObservationPayloadStorageTranscriptFile,
+				Path:    item.Path, Offset: lineStart, Length: int64(len(line)), Identity: identity,
+				SHA256: hex.EncodeToString(sourceDigest[:]), Runtime: item.Runtime, Class: item.Class,
+			}
+		}
 		if !timestamp.IsZero() {
 			observedAt = timestamp
 		}
@@ -329,6 +433,9 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 		}
 		if timestamp.Before(t.now().UTC().Add(-t.metadataBackfill)) {
 			result.OldLinesSkipped++
+			if err := checkpoint(false); err != nil {
+				return result, err
+			}
 			continue
 		}
 		for _, envelope := range envelopes {
@@ -342,19 +449,11 @@ func (t *TranscriptTailer) scanFile(ctx context.Context, item transcriptFile) (T
 			}
 			result.EventsPublished++
 		}
+		if err := checkpoint(false); err != nil {
+			return result, err
+		}
 	}
-	encodedState, err := json.Marshal(state)
-	if err != nil {
-		return result, err
-	}
-	if observedAt.IsZero() {
-		observedAt = info.ModTime().UTC()
-	}
-	if err := t.store.UpsertObservationIngestCursor(ctx, store.ObservationIngestCursor{
-		Source: "transcript:" + item.Runtime, Resource: resource, Cursor: string(encodedState),
-		MessageID: lastMessageID, FileIdentity: identity, ByteOffset: currentOffset,
-		ObservedAt: observedAt, UpdatedAt: t.now().UTC(),
-	}); err != nil {
+	if err := checkpoint(true); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -371,6 +470,216 @@ func transcriptFileIdentity(file *os.File) (string, error) {
 	}
 	digest := sha256.Sum256(bytes.TrimSpace(line))
 	return hex.EncodeToString(digest[:]), nil
+}
+
+// ResolvePayloadSource materializes the public content candidates derived from
+// one trusted transcript JSONL record. The recorder performs secret redaction
+// and selects the candidate matching the persisted content checksum.
+func (t *TranscriptTailer) ResolvePayloadSource(ctx context.Context, ref core.ObservationPayloadRef) ([]core.ObservationContent, error) {
+	if t == nil {
+		return nil, errors.New("transcript tailer unavailable")
+	}
+	if ref.Storage != core.ObservationPayloadStorageTranscriptFile {
+		return nil, fmt.Errorf("unsupported observation payload source %q", ref.Storage)
+	}
+	path, err := t.trustedTranscriptPath(ref.SourceRuntime, ref.SourcePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	line, err := readTranscriptRecord(path, ref.SourceOffset, ref.SourceLength)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimSpace(line)
+	digest := sha256.Sum256(trimmed)
+	if !strings.EqualFold(hex.EncodeToString(digest[:]), ref.SourceSHA256) {
+		return nil, errors.New("transcript source record checksum mismatch")
+	}
+	candidates := transcriptContentCandidates(ref.SourceRuntime, ref.SourceClass, trimmed)
+	if len(candidates) == 0 {
+		return nil, errors.New("transcript source record has no public content")
+	}
+	return candidates, nil
+}
+
+func (t *TranscriptTailer) trustedTranscriptPath(runtime, sourcePath string) (string, error) {
+	if !filepath.IsAbs(sourcePath) {
+		return "", errors.New("transcript source path must be absolute")
+	}
+	cacheKey := runtime + "\x00" + filepath.Clean(sourcePath)
+	if cached, ok := t.trustedPaths.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
+	var roots []string
+	switch runtime {
+	case "claude":
+		roots = []string{filepath.Join(t.claudeHome, "projects")}
+	case "codex":
+		roots = []string{filepath.Join(t.codexHome, "sessions"), filepath.Join(t.codexHome, "archived_sessions")}
+	default:
+		return "", fmt.Errorf("unsupported transcript runtime %q", runtime)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(filepath.Clean(sourcePath))
+	if err != nil {
+		return "", fmt.Errorf("resolve transcript source path: %w", err)
+	}
+	for _, root := range roots {
+		resolvedRoot, rootErr := filepath.EvalSymlinks(filepath.Clean(root))
+		if rootErr != nil {
+			continue
+		}
+		relative, relErr := filepath.Rel(resolvedRoot, resolvedPath)
+		if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			t.trustedPaths.Store(cacheKey, resolvedPath)
+			return resolvedPath, nil
+		}
+	}
+	return "", errors.New("transcript source path is outside trusted roots")
+}
+
+// BuildPayloadSource reconstructs a source reference for a legacy transcript
+// event whose path and byte offset were already persisted in envelope metadata.
+func (t *TranscriptTailer) BuildPayloadSource(ctx context.Context, envelope core.ObservationEnvelope) (*core.ObservationContentSource, error) {
+	if t == nil {
+		return nil, errors.New("transcript tailer unavailable")
+	}
+	path := mapString(envelope.Attributes, "transcript_path")
+	runtime := mapString(envelope.Attributes, "runtime")
+	if runtime == "" {
+		runtime = envelope.RuntimeID
+	}
+	class := mapString(envelope.Attributes, "transcript_class")
+	trustedPath, err := t.trustedTranscriptPath(runtime, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	line, err := readTranscriptRecord(trustedPath, envelope.Sequence, 0)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimSpace(line)
+	digest := sha256.Sum256(trimmed)
+	return &core.ObservationContentSource{
+		Storage: core.ObservationPayloadStorageTranscriptFile,
+		Path:    trustedPath, Offset: envelope.Sequence, Length: int64(len(line)),
+		SHA256: hex.EncodeToString(digest[:]), Runtime: runtime, Class: class,
+	}, nil
+}
+
+func readTranscriptRecord(path string, offset, length int64) ([]byte, error) {
+	if offset < 0 || length < 0 || length > maxTranscriptLineBytes {
+		return nil, errors.New("invalid transcript source byte range")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || offset > info.Size() || length > info.Size()-offset {
+		return nil, errors.New("transcript source byte range is unavailable")
+	}
+	if length == 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+		line, err := bufio.NewReaderSize(file, 256<<10).ReadBytes('\n')
+		if len(line) > maxTranscriptLineBytes {
+			return nil, fmt.Errorf("transcript line exceeds %d bytes", maxTranscriptLineBytes)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return line, nil
+	}
+	line := make([]byte, int(length))
+	if _, err := file.ReadAt(line, offset); err != nil {
+		return nil, err
+	}
+	return line, nil
+}
+
+func transcriptContentCandidates(runtime, class string, line []byte) []core.ObservationContent {
+	var raw map[string]any
+	if json.Unmarshal(line, &raw) != nil {
+		return nil
+	}
+	var candidates []core.ObservationContent
+	appendCandidate := func(value any) {
+		if value == nil {
+			return
+		}
+		if content := jsonObservationContent(value); content != nil {
+			candidates = append(candidates, *content)
+		}
+	}
+	if runtime == "claude" {
+		if class == "workflow" {
+			if result := raw["result"]; result != nil {
+				appendCandidate(result)
+			}
+		}
+		message := mapObject(raw, "message")
+		typeName := mapString(raw, "type")
+		role := firstNonBlank(mapString(message, "role"), typeName)
+		if typeName == "user" && !claudeOnlyToolResults(message["content"]) {
+			appendCandidate(claudePublicContent(message["content"], false))
+		}
+		if typeName == "assistant" || role == "assistant" {
+			appendCandidate(claudePublicContent(message["content"], true))
+		}
+		for _, block := range mapArray(message["content"]) {
+			switch mapString(block, "type") {
+			case "tool_use":
+				if input := block["input"]; input != nil {
+					appendCandidate(input)
+				}
+			case "tool_result":
+				if output := block["content"]; output != nil {
+					appendCandidate(output)
+				}
+			}
+		}
+		return candidates
+	}
+	if runtime != "codex" {
+		return nil
+	}
+	typeName := mapString(raw, "type")
+	payload := mapObject(raw, "payload")
+	payloadType := mapString(payload, "type")
+	if typeName == "event_msg" && payloadType == "user_message" {
+		appendCandidate(firstNonNil(payload["message"], payload["text"]))
+	}
+	if typeName == "event_msg" && (payloadType == "task_complete" || payloadType == "task_completed" || payloadType == "turn_completed") {
+		appendCandidate(firstNonNil(payload["last_agent_message"], payload["message"]))
+	}
+	if typeName != "response_item" {
+		return candidates
+	}
+	switch payloadType {
+	case "function_call", "custom_tool_call", "computer_call":
+		appendCandidate(firstNonNil(payload["arguments"], payload["input"], payload["action"]))
+	case "function_call_output", "custom_tool_call_output", "computer_call_output":
+		appendCandidate(firstNonNil(payload["output"], payload["result"]))
+	case "message":
+		role := mapString(payload, "role")
+		if role == "assistant" || role == "user" {
+			appendCandidate(codexPublicMessageContent(payload["content"]))
+		}
+	case "reasoning":
+		appendCandidate(payload["summary"])
+	}
+	return candidates
 }
 
 func findTranscriptMessage(file *os.File, runtime, wanted string) (int64, bool, error) {

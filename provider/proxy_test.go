@@ -47,6 +47,27 @@ func postJSON(t *testing.T, url string, body map[string]any) (*http.Response, []
 	return resp, data
 }
 
+func getJSON(t *testing.T, url string, headers map[string]string) (*http.Response, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return resp, body
+}
+
 func latestTrace(t *testing.T, st *store.Store, tool string) core.ProxyTrace {
 	t.Helper()
 	traces, err := st.QueryProxyTraces(context.Background(), tool, "", 1)
@@ -135,6 +156,128 @@ func TestProxyAnthropicPassthroughInjectsAuth(t *testing.T) {
 	if trace.ClientProtocol != "anthropic" || trace.UpstreamProtocol != "anthropic" {
 		t.Fatalf("trace protocols = %+v", trace)
 	}
+}
+
+func TestProxyClaudeCodeModelsFollowActiveRouteAndSelectedModel(t *testing.T) {
+	ctx := context.Background()
+	var gotModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotModel, _ = body["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_models","type":"message","content":[]}`))
+	}))
+	defer upstream.Close()
+
+	proxy, st := newTestProxy(t)
+	provider := &core.Provider{
+		ID: "catalog", Name: "Catalog", BaseURL: upstream.URL, Model: "catalog-default",
+		Meta: core.ProviderMeta{
+			APIFormat:       "anthropic",
+			SupportedModels: []string{"catalog-default", "catalog-fast", "opensource/glm5.2", "claude-native", "catalog-fast"},
+		},
+	}
+	if err := st.UpsertProvider(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProviderRoute(ctx, core.ProviderRoute{
+		Tool:       "claudecode",
+		ProviderID: provider.ID,
+		Meta: core.ProviderMeta{
+			ClaudeSonnetModel: "catalog-sonnet",
+			ClaudeDesktopModels: []core.ClaudeDesktopModel{
+				{ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", UpstreamModel: "catalog-fast"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCatalog := func(path string, headers map[string]string, wantIDs, wantNames []string) {
+		t.Helper()
+		resp, body := getJSON(t, proxy.BaseURL()+path, headers)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d body=%v", path, resp.StatusCode, body)
+		}
+		raw, _ := body["data"].([]any)
+		gotIDs := make([]string, 0, len(raw))
+		gotNames := make([]string, 0, len(raw))
+		for _, item := range raw {
+			entry, _ := item.(map[string]any)
+			gotIDs = append(gotIDs, stringValue(entry["id"]))
+			gotNames = append(gotNames, stringValue(entry["display_name"]))
+		}
+		if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
+			t.Fatalf("GET %s model ids = %v want %v", path, gotIDs, wantIDs)
+		}
+		if strings.Join(gotNames, ",") != strings.Join(wantNames, ",") {
+			t.Fatalf("GET %s model names = %v want %v", path, gotNames, wantNames)
+		}
+	}
+	wantIDs := []string{"claude-sonnet-5", "claude-catalog-default", "claude-catalog-fast", "claude-opensource/glm5.2", "claude-claude-native"}
+	wantNames := []string{"Claude Sonnet 5", "catalog-default", "catalog-fast", "opensource/glm5.2", "claude-native"}
+	assertCatalog("/claude/v1/models", nil, wantIDs, wantNames)
+	// Legacy root takeover configs are dispatched by Anthropic request headers.
+	assertCatalog("/v1/models", map[string]string{"anthropic-version": "2023-06-01"}, wantIDs, wantNames)
+
+	resp, data := postJSON(t, proxy.BaseURL()+"/claude/v1/messages", map[string]any{
+		"model": "claude-catalog-fast", "max_tokens": 10,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotModel != "catalog-fast" {
+		t.Fatalf("selected alias was not mapped to provider model: got %q", gotModel)
+	}
+
+	resp, data = postJSON(t, proxy.BaseURL()+"/claude/v1/messages", map[string]any{
+		"model": "claude-sonnet-5", "max_tokens": 10,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotModel != "catalog-fast" {
+		t.Fatalf("configured route alias was not mapped to provider model: got %q", gotModel)
+	}
+
+	resp, data = postJSON(t, proxy.BaseURL()+"/claude/v1/messages", map[string]any{
+		"model": "claude-opensource/glm5.2", "max_tokens": 10,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotModel != "opensource/glm5.2" {
+		t.Fatalf("provider model containing a slash was not mapped: got %q", gotModel)
+	}
+
+	resp, data = postJSON(t, proxy.BaseURL()+"/claude/v1/messages", map[string]any{
+		"model": "claude-claude-native", "max_tokens": 10,
+		"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, data)
+	}
+	if gotModel != "claude-native" {
+		t.Fatalf("already-prefixed provider model was not mapped: got %q", gotModel)
+	}
+
+	other := &core.Provider{
+		ID: "other-catalog", Name: "Other Catalog", Model: "other-default",
+		Meta: core.ProviderMeta{APIFormat: "anthropic", SupportedModels: []string{"other-fast"}},
+	}
+	if err := st.UpsertProvider(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProviderRoute(ctx, core.ProviderRoute{Tool: "claudecode", ProviderID: other.ID}); err != nil {
+		t.Fatal(err)
+	}
+	assertCatalog("/claude/v1/models", nil,
+		[]string{"claude-other-default", "claude-other-fast"},
+		[]string{"other-default", "other-fast"})
 }
 
 func TestProxyReportsMissingProviderAPIKeyEnv(t *testing.T) {

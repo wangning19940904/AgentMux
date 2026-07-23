@@ -17,14 +17,22 @@ import (
 type HookEvent string
 
 const (
-	HookMessageReceived  HookEvent = "message.received"
-	HookMessageSent      HookEvent = "message.sent"
-	HookSessionStarted   HookEvent = "session.started"
-	HookSessionEnded     HookEvent = "session.ended"
-	HookCronTriggered    HookEvent = "cron.triggered"
-	HookWebhookTriggered HookEvent = "webhook.triggered"
-	HookPermission       HookEvent = "permission.requested"
-	HookError            HookEvent = "error"
+	HookMessageReceived     HookEvent = "message.received"
+	HookMessageSent         HookEvent = "message.sent"
+	HookSessionStarted      HookEvent = "session.started"
+	HookSessionEnded        HookEvent = "session.ended"
+	HookCronTriggered       HookEvent = "cron.triggered"
+	HookWebhookTriggered    HookEvent = "webhook.triggered"
+	HookPermission          HookEvent = "permission.requested"
+	HookTaskQueued          HookEvent = "task.queued"
+	HookTaskStarted         HookEvent = "task.started"
+	HookTaskSteered         HookEvent = "task.steered"
+	HookTaskTakenOver       HookEvent = "task.controller_changed"
+	HookTaskInterrupted     HookEvent = "task.interrupted"
+	HookTaskCompleted       HookEvent = "task.completed"
+	HookInteractionResolved HookEvent = "interaction.resolved"
+	HookThreadBound         HookEvent = "thread.bound"
+	HookError               HookEvent = "error"
 )
 
 // HookEvents lists all lifecycle events, for UIs that offer a picker.
@@ -32,7 +40,9 @@ func HookEvents() []HookEvent {
 	return []HookEvent{
 		HookMessageReceived, HookMessageSent, HookSessionStarted,
 		HookSessionEnded, HookCronTriggered, HookWebhookTriggered,
-		HookPermission, HookError,
+		HookPermission, HookTaskQueued, HookTaskStarted, HookTaskSteered, HookTaskTakenOver,
+		HookTaskInterrupted, HookTaskCompleted, HookInteractionResolved,
+		HookThreadBound, HookError,
 	}
 }
 

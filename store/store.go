@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,9 +15,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store wraps a SQLite database connection.
+// Store uses separate SQLite pools for reads and writes. SQLite permits many
+// concurrent readers in WAL mode but still has exactly one writer. Routing all
+// writes through a one-connection pool lets database/sql queue them fairly
+// instead of allowing several in-process connections to repeatedly race for
+// SQLite's write lock and eventually surface SQLITE_BUSY.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	writer *sql.DB
 }
 
 // DefaultPath returns ~/.agentnexus/agentnexus.db.
@@ -30,20 +36,44 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	writer, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
+		return nil, fmt.Errorf("open db writer: %w", err)
 	}
-	db.SetMaxOpenConns(1) // serialize writes, avoids races (cc-switch approach)
-	s := &Store{db: db}
+	writer.SetMaxOpenConns(1)
+	writer.SetMaxIdleConns(1)
+
+	// journal_mode is established by the single writer connection above. Do not
+	// repeat that write-affecting PRAGMA whenever a reader connection opens.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(30000)")
+	if err != nil {
+		_ = writer.Close()
+		return nil, fmt.Errorf("open db reader: %w", err)
+	}
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	s := &Store{db: db, writer: writer}
 	if err := s.migrate(); err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	var readerErr, writerErr error
+	if s.db != nil {
+		readerErr = s.db.Close()
+	}
+	if s.writer != nil {
+		writerErr = s.writer.Close()
+	}
+	return errors.Join(readerErr, writerErr)
+}
 
 func (s *Store) migrate() error {
 	const schema = `
@@ -202,6 +232,7 @@ CREATE TABLE IF NOT EXISTS triggers (
 CREATE TABLE IF NOT EXISTS conversations (
 	id TEXT PRIMARY KEY,
 	scope TEXT NOT NULL,
+	conversation_key TEXT,
 	chat_id TEXT NOT NULL,
 	chat_type TEXT,
 	agent_id TEXT,
@@ -215,9 +246,51 @@ CREATE TABLE IF NOT EXISTS conversations (
 	ended_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
-	ON conversations(scope, chat_id) WHERE ended_at IS NULL OR ended_at = '';`
-	if _, err := s.db.Exec(schema); err != nil {
+CREATE TABLE IF NOT EXISTS channel_tasks (
+	id TEXT PRIMARY KEY,
+	channel_id TEXT NOT NULL,
+	conversation_id TEXT,
+	conversation_key TEXT NOT NULL,
+	chat_id TEXT,
+	message_id TEXT,
+	chat_type TEXT,
+	root_id TEXT,
+	thread_id TEXT,
+	user_id TEXT,
+	controller_id TEXT,
+	native_thread_id TEXT,
+	turn_id TEXT,
+	status TEXT NOT NULL,
+	error TEXT,
+	prompt TEXT,
+	created_at TEXT,
+	started_at TEXT,
+	finished_at TEXT,
+	updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_tasks_conversation
+	ON channel_tasks(channel_id, conversation_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_channel_tasks_status
+	ON channel_tasks(channel_id, status, created_at);
+CREATE TABLE IF NOT EXISTS channel_interactions (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	channel_id TEXT NOT NULL,
+	conversation_id TEXT,
+	conversation_key TEXT NOT NULL,
+	controller_id TEXT,
+	nonce TEXT NOT NULL,
+	message_id TEXT,
+	status TEXT NOT NULL,
+	request TEXT NOT NULL,
+	created_at TEXT,
+	expires_at TEXT,
+	resolved_at TEXT,
+	resolved_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_channel_interactions_pending
+	ON channel_interactions(channel_id, conversation_key, status, created_at);`
+	if _, err := s.writer.Exec(schema); err != nil {
 		return err
 	}
 	for _, col := range []struct {
@@ -249,6 +322,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("conversations", "conversation_key", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("channel_interactions", "message_id", "TEXT"); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{"message_id", "TEXT"},
+		{"chat_type", "TEXT"},
+		{"root_id", "TEXT"},
+		{"thread_id", "TEXT"},
+	} {
+		if err := s.ensureColumn("channel_tasks", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	if _, err := s.writer.Exec(`UPDATE conversations
+		SET conversation_key=CASE
+			WHEN chat_id LIKE 'chat:%' OR chat_id LIKE 'thread:%' OR chat_id LIKE 'root:%' THEN chat_id
+			ELSE 'chat:' || chat_id
+		END
+		WHERE conversation_key IS NULL OR conversation_key=''`); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(`DROP INDEX IF EXISTS idx_conversations_active`); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
+		ON conversations(scope, conversation_key) WHERE ended_at IS NULL OR ended_at = ''`); err != nil {
+		return err
+	}
 	for _, col := range []struct {
 		name string
 		def  string
@@ -263,7 +370,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 			return err
 		}
 	}
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request
+	if _, err := s.writer.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request
 		ON usage_records(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>''`); err != nil {
 		return err
 	}
@@ -300,7 +407,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
 }
 
 func (s *Store) ensureColumn(table, name, def string) error {
-	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	rows, err := s.writer.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
 	}
@@ -320,13 +427,13 @@ func (s *Store) ensureColumn(table, name, def string) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + def)
+	_, err = s.writer.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + def)
 	return err
 }
 
 // SetSetting stores a key/value setting.
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writer.ExecContext(ctx,
 		`INSERT INTO settings(key,value) VALUES(?,?)
 		 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
@@ -347,7 +454,7 @@ func (s *Store) GetSetting(ctx context.Context, key string) (value string, ok bo
 
 // UpsertUsage inserts usage records, ignoring duplicates by primary key.
 func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

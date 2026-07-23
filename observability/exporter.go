@@ -145,7 +145,7 @@ func (s *ExporterService) exportOne(ctx context.Context, exporter config.Observa
 	var contentType string
 	if exporter.IncludeContent && item.Envelope.PayloadRef != nil && s.recorder != nil {
 		var err error
-		content, contentType, err = s.recorder.ReadPayload(ctx, item.Envelope.PayloadRef.ID)
+		content, contentType, err = s.recorder.ReadEnvelopePayload(ctx, item.Envelope)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("read opted-in payload: %w", err)
 		}

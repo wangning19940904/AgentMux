@@ -68,6 +68,9 @@ func (c *codexCollector) Collect(ctx context.Context, since time.Time) ([]core.U
 		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
+		if skipUnmodified(d, since) {
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -54,7 +54,7 @@ func (s *Store) UpsertTrigger(ctx context.Context, tr *core.Trigger) error {
 	if !tr.LastRun.IsZero() {
 		lastRun = tr.LastRun.Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO triggers
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO triggers
 		(id,name,kind,agent_id,channel_id,chat_id,cron_expr,prompt,event,action_type,
 		 action_target,token,session_mode,enabled,last_run,last_status,last_error,
 		 created_at,updated_at)
@@ -74,7 +74,7 @@ func (s *Store) UpsertTrigger(ctx context.Context, tr *core.Trigger) error {
 
 // UpdateTriggerRun records the outcome of one trigger execution.
 func (s *Store) UpdateTriggerRun(ctx context.Context, id string, lastRun time.Time, status, errMsg string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writer.ExecContext(ctx,
 		`UPDATE triggers SET last_run=?, last_status=?, last_error=? WHERE id=?`,
 		lastRun.Format(time.RFC3339Nano), status, errMsg, id)
 	return err
@@ -82,7 +82,7 @@ func (s *Store) UpdateTriggerRun(ctx context.Context, id string, lastRun time.Ti
 
 // DeleteTrigger removes a trigger.
 func (s *Store) DeleteTrigger(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM triggers WHERE id=?`, id)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM triggers WHERE id=?`, id)
 	return err
 }
 

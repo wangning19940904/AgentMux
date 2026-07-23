@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// toolProgressCollapseThreshold is the number of tool steps beyond which the
-// progress section is collapsed behind a summary line to keep the card compact.
-const toolProgressCollapseThreshold = 3
+// progressPreviewRunes keeps the live card useful without letting accumulated
+// reasoning dominate the answer on narrow mobile screens.
+const progressPreviewRunes = 120
 
 // toolStep records one tool invocation and, once known, a short result summary.
 type toolStep struct {
@@ -15,13 +15,13 @@ type toolStep struct {
 	name   string
 	input  string
 	result string
+	done   bool
 	failed bool
 }
 
 // toolProgress accumulates the tool steps of a single agent turn and renders
-// them, together with the user-visible reasoning summary and answer text, into one markdown blob that the
-// streaming card / message updates in place. When there are many steps the
-// rendering collapses older ones behind a summary so the card stays readable.
+// them, together with the user-visible reasoning summary and answer text, into
+// one compact markdown blob that the streaming card / message updates in place.
 type toolProgress struct {
 	steps []toolStep
 }
@@ -56,14 +56,16 @@ func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 		for i := range t.steps {
 			if t.steps[i].id == id {
 				t.steps[i].result = result
+				t.steps[i].done = true
 				t.steps[i].failed = failed
 				return
 			}
 		}
 	}
 	for i := len(t.steps) - 1; i >= 0; i-- {
-		if t.steps[i].result == "" && !t.steps[i].failed {
+		if !t.steps[i].done {
 			t.steps[i].result = result
+			t.steps[i].done = true
 			t.steps[i].failed = failed
 			return
 		}
@@ -73,11 +75,11 @@ func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 // empty reports whether any tool step has been recorded.
 func (t *toolProgress) empty() bool { return len(t.steps) == 0 }
 
-// render returns the full card body: a reasoning summary, tool-progress
-// section (collapsed when long), and answer text. done controls whether the
-// section headers read as in-progress or finished. When no progress is
-// available it returns answer unchanged so plain conversations look exactly as
-// before.
+// render returns the full card body with the answer first and execution context
+// reduced to compact summaries below it. Raw commands, tool results, and the
+// full reasoning stream remain available in logs/observability instead of
+// crowding the chat card. When no progress is available it returns answer
+// unchanged so plain conversations look exactly as before.
 func (t *toolProgress) render(thinking, answer string, done bool) string {
 	thinking = strings.TrimSpace(thinking)
 	if len(t.steps) == 0 && thinking == "" {
@@ -85,81 +87,72 @@ func (t *toolProgress) render(thinking, answer string, done bool) string {
 	}
 
 	var b strings.Builder
+	if strings.TrimSpace(answer) != "" {
+		b.WriteString(answer)
+		b.WriteString("\n\n---\n")
+	}
+
 	if thinking != "" {
 		b.WriteString(renderThinkingSummary(thinking, done))
-		b.WriteString("\n")
 	}
 
 	if len(t.steps) > 0 {
-		header := fmt.Sprintf("🔧 工具执行 (%d)", len(t.steps))
-		if !done {
-			header += " · 进行中…"
+		if thinking != "" {
+			b.WriteString("\n")
 		}
-
-		// Collapse older steps once the list grows long: show a summary line plus
-		// only the most recent steps in full.
-		visibleFrom := 0
-		if len(t.steps) > toolProgressCollapseThreshold {
-			visibleFrom = len(t.steps) - toolProgressCollapseThreshold
-		}
-
-		b.WriteString("**")
-		b.WriteString(header)
-		b.WriteString("**\n")
-		if visibleFrom > 0 {
-			b.WriteString(fmt.Sprintf("<font color=grey>…已折叠前 %d 个步骤</font>\n", visibleFrom))
-		}
-		for i := visibleFrom; i < len(t.steps); i++ {
-			b.WriteString(renderToolStep(i+1, t.steps[i]))
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("\n---\n")
-
-	if strings.TrimSpace(answer) != "" {
-		b.WriteString(answer)
+		b.WriteString(renderToolSummary(t.steps, done))
 	}
 	return b.String()
 }
 
 // renderThinkingSummary keeps user-visible reasoning summaries visually
-// secondary to the answer. Feishu's streaming card supports Markdown quotes
-// and grey font tags, whereas a font-size override is not part of its Markdown
-// surface. Prefix every line so multi-paragraph summaries remain one quote.
+// secondary to the answer. Only the latest compact preview is rendered; the
+// accumulated summary is intentionally kept out of the card.
 func renderThinkingSummary(thinking string, done bool) string {
-	header := "💭 思考摘要"
+	header := "💭 思考摘要（已折叠）"
 	if !done {
 		header += " · 进行中…"
 	}
 
-	var b strings.Builder
-	b.WriteString("> <font color=grey>")
-	b.WriteString(header)
-	b.WriteString("</font>\n")
-	for _, line := range strings.Split(thinking, "\n") {
-		b.WriteString("> <font color=grey>")
-		b.WriteString(line)
-		b.WriteString("</font>\n")
-	}
-	return b.String()
+	preview := compactProgressText(thinking, progressPreviewRunes, true)
+	return fmt.Sprintf("> <font color=grey>%s</font>\n> <font color=grey>最新：%s</font>", header, preview)
 }
 
-// renderToolStep renders one numbered step line with an optional result.
-func renderToolStep(n int, s toolStep) string {
-	icon := "▹"
-	if s.result != "" || s.failed {
-		icon = "✓"
+// renderToolSummary replaces raw command lines and output with a fixed-height
+// overview. The latest tool name provides orientation without leaking a large
+// invocation into the card.
+func renderToolSummary(steps []toolStep, done bool) string {
+	succeeded, failed, running := 0, 0, 0
+	for _, step := range steps {
+		switch {
+		case step.failed:
+			failed++
+		case step.done:
+			succeeded++
+		default:
+			running++
+		}
 	}
-	if s.failed {
-		icon = "✗"
+	header := fmt.Sprintf("🔧 工具执行 (%d，详情已折叠)", len(steps))
+	if !done {
+		header += " · 进行中…"
 	}
-	line := fmt.Sprintf("%s `%s`", icon, s.name)
-	if s.input != "" {
-		line += " " + s.input
+	latest := compactProgressText(steps[len(steps)-1].name, 40, false)
+	counts := fmt.Sprintf("✓ %d · ✗ %d · ⏳ %d · 最近：%s", succeeded, failed, running, latest)
+	return fmt.Sprintf("> <font color=grey>%s</font>\n> <font color=grey>%s</font>", header, counts)
+}
+
+func compactProgressText(value string, limit int, keepEnd bool) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
 	}
-	out := line + "\n"
-	if s.result != "" {
-		out += fmt.Sprintf("<font color=grey>  ↳ %s</font>\n", s.result)
+	if limit <= 1 {
+		return "…"
 	}
-	return out
+	if keepEnd {
+		return "…" + string(runes[len(runes)-limit+1:])
+	}
+	return string(runes[:limit-1]) + "…"
 }

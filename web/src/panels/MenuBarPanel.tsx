@@ -70,7 +70,8 @@ export function MenuBarPanel() {
       : settings.icon_metric === "messages"
       ? "128"
       : "$18,019.74";
-  const previewParts: string[] = [stages[stages.length - 1]];
+  const previewParts: string[] = [];
+  if (settings.show_status_icon) previewParts.push(stages[stages.length - 1]);
   if (settings.show_cost) previewParts.push("$18.0K");
   if (settings.show_tokens) previewParts.push("1.20B/90.71M");
   if (settings.show_messages) previewParts.push("128");
@@ -90,7 +91,10 @@ export function MenuBarPanel() {
         </div>
         <div className="surface-body">
           <div className="menubar-preview">
-            <span className="menubar-preview-chip">{previewParts.join("  ")}</span>
+            <span className="menubar-preview-chip">
+              <img className="menubar-preview-logo" src="/favicon.svg" alt={t("menubar.logo")} />
+              {previewParts.length > 0 && <span>{previewParts.join("  ")}</span>}
+            </span>
             {status === "saved" && <span className="muted">{t("menubar.saved")}</span>}
             {status === "error" && <span className="error">{t("menubar.saveError")}</span>}
           </div>
@@ -160,6 +164,14 @@ export function MenuBarPanel() {
           <h2>{t("menubar.display")}</h2>
         </div>
         <div className="surface-body">
+          <label className="switch-row">
+            <span>{t("menubar.showStatusIcon")}</span>
+            <input
+              type="checkbox"
+              checked={settings.show_status_icon}
+              onChange={(e) => update({ show_status_icon: e.target.checked })}
+            />
+          </label>
           <label className="switch-row">
             <span>{t("menubar.showMessages")}</span>
             <input

@@ -119,14 +119,27 @@ func proxyUsageSource(tool string) string {
 	}
 }
 
+// usageCollectCheckpointKey persists the timestamp of the last completed
+// collection so a restart resumes incrementally instead of re-parsing the full
+// backfill window (tens of GB of session files) on every cold start.
+const usageCollectCheckpointKey = "usage:last_collect_at"
+
 // Start keeps legacy transcript-backed usage materialized without requiring a
 // manual `anx usage collect`. Live request records are inserted independently.
+//
+// The initial collection resumes from a persisted checkpoint (minus a small
+// overlap) when one exists, so only the first run on a fresh store pays the
+// full backfill cost. Subsequent restarts collect just what changed while the
+// daemon was down.
 func (e *Engine) Start(ctx context.Context, backfill time.Duration) {
 	if backfill <= 0 {
 		backfill = 30 * 24 * time.Hour
 	}
-	if err := e.Collect(ctx, time.Now().UTC().Add(-backfill)); err != nil && ctx.Err() == nil {
+	since := e.initialCollectSince(ctx, backfill)
+	if err := e.Collect(ctx, since); err != nil && ctx.Err() == nil {
 		e.log.Warn("initial usage collection failed", "err", err)
+	} else if err == nil {
+		e.saveCollectCheckpoint(ctx)
 	}
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -139,8 +152,43 @@ func (e *Engine) Start(ctx context.Context, backfill time.Duration) {
 			// key make this idempotent while tolerating late transcript writes.
 			if err := e.Collect(ctx, now.UTC().Add(-2*time.Minute)); err != nil && ctx.Err() == nil {
 				e.log.Warn("incremental usage collection failed", "err", err)
+			} else if err == nil {
+				e.saveCollectCheckpoint(ctx)
 			}
 		}
+	}
+}
+
+// initialCollectSince resolves the start time for the first collection: the
+// persisted checkpoint minus a one-hour overlap when available, otherwise the
+// full backfill window. The checkpoint is clamped so it can never widen the
+// window beyond backfill.
+func (e *Engine) initialCollectSince(ctx context.Context, backfill time.Duration) time.Time {
+	full := time.Now().UTC().Add(-backfill)
+	if e.st == nil {
+		return full
+	}
+	value, ok, err := e.st.GetSetting(ctx, usageCollectCheckpointKey)
+	if err != nil || !ok {
+		return full
+	}
+	checkpoint, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return full
+	}
+	resume := checkpoint.Add(-time.Hour)
+	if resume.Before(full) {
+		return full
+	}
+	return resume
+}
+
+func (e *Engine) saveCollectCheckpoint(ctx context.Context) {
+	if e.st == nil {
+		return
+	}
+	if err := e.st.SetSetting(ctx, usageCollectCheckpointKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil && ctx.Err() == nil {
+		e.log.Warn("persist usage collect checkpoint failed", "err", err)
 	}
 }
 
@@ -155,13 +203,21 @@ func (e *Engine) price(recs []core.UsageRecord) {
 	}
 }
 
+// reportDetailWindowDays bounds how far back a report reads request-level
+// observation spans. Older days are served from the compact
+// observation_daily_usage rollup so a report never rescans the entire span
+// table (which grows without bound and starved the single write connection,
+// stalling every DB-backed API until requests timed out with "Load failed").
+const reportDetailWindowDays = 2
+
 // Report aggregates persisted usage into the requested period view.
+//
+// Recent days (within reportDetailWindowDays) are read at request granularity
+// from observation spans so today's numbers stay live; everything older is
+// read from the pre-materialized daily rollup. This keeps the query bounded to
+// a few thousand recent spans instead of the full history.
 func (e *Engine) Report(ctx context.Context, period string, since time.Time) (*Report, error) {
-	detailDays := e.cfg.Observability.DetailRetentionDays
-	if detailDays <= 0 {
-		detailDays = 180
-	}
-	detailStart := time.Now().UTC().Add(-time.Duration(detailDays) * 24 * time.Hour).Truncate(24 * time.Hour).Add(24 * time.Hour)
+	detailStart := time.Now().UTC().Add(-reportDetailWindowDays * 24 * time.Hour).Truncate(24 * time.Hour)
 	daily, err := e.st.QueryObservationDailyUsage(ctx, since, detailStart)
 	if err != nil {
 		return nil, err

@@ -81,8 +81,9 @@ func liveAlreadyProxied(files []string) bool {
 }
 
 // writeClaudeTakeoverConfig rewrites ~/.claude/settings.json to point at the
-// proxy: base URL -> proxy, credential -> placeholder, model overrides
-// cleared (the proxy maps tiers per provider).
+// proxy: base URL -> the Claude-specific proxy prefix, credential ->
+// placeholder, model overrides cleared (the proxy maps tiers per provider),
+// and gateway model discovery enabled so /model follows the active route.
 func writeClaudeTakeoverConfig(home string, p *core.Provider, proxyBaseURL string) error {
 	path := filepath.Join(claudeConfigDir(home, p), "settings.json")
 	existing := readJSONObject(path)
@@ -94,8 +95,9 @@ func writeClaudeTakeoverConfig(home string, p *core.Provider, proxyBaseURL strin
 	for _, k := range managedClaudeEnvKeys {
 		delete(env, k)
 	}
-	env["ANTHROPIC_BASE_URL"] = proxyBaseURL
+	env["ANTHROPIC_BASE_URL"] = strings.TrimRight(proxyBaseURL, "/") + "/claude"
 	env[authKey] = ProxyManagedToken
+	env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
 	existing["env"] = env
 	return writeJSONObject(path, existing)
 }

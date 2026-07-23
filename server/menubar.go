@@ -25,10 +25,11 @@ type MenubarSettings struct {
 	// onto the 5-step icon ladder.
 	CostThresholds []float64 `json:"cost_thresholds,omitempty"`
 
-	ShowMessages bool `json:"show_messages"`
-	ShowTokens   bool `json:"show_tokens"`
-	ShowCost     bool `json:"show_cost"`
-	ShowCNY      bool `json:"show_cny"`
+	ShowStatusIcon bool `json:"show_status_icon"`
+	ShowMessages   bool `json:"show_messages"`
+	ShowTokens     bool `json:"show_tokens"`
+	ShowCost       bool `json:"show_cost"`
+	ShowCNY        bool `json:"show_cny"`
 
 	// CNYRate is the fixed USD->CNY exchange rate for the ¥ display.
 	CNYRate float64 `json:"cny_rate"`
@@ -47,10 +48,13 @@ func defaultMenubarSettings() MenubarSettings {
 		IconTheme:      "flame",
 		IconMetric:     "cost",
 		CostThresholds: []float64{0.01, 1, 10, 100},
-		ShowMessages:   true,
-		ShowTokens:     true,
-		ShowCost:       true,
-		ShowCNY:        true,
+		// Keep the macOS menu bar compact by default. The app logo is always
+		// visible; users can opt into each additional status item separately.
+		ShowStatusIcon: false,
+		ShowMessages:   false,
+		ShowTokens:     false,
+		ShowCost:       false,
+		ShowCNY:        false,
 		CNYRate:        7.2,
 		Breakdowns:     []string{"model", "runtime", "date"},
 		TopN:           3,

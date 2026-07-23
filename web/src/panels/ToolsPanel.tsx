@@ -1,6 +1,13 @@
-import { Bot, CheckCircle2, Download, Package, RefreshCw, Search, ShieldCheck, TerminalSquare, TriangleAlert } from "lucide-react";
+import { Bot, CheckCircle2, Download, RefreshCw, Search, ShieldCheck, TerminalSquare, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, CLIInstallResult, CLIManagedTool, CLIUpdateCheck, Framework, MarketplaceSkill, Skill } from "../api";
+import {
+  api,
+  CLIInstallResult,
+  CLIManagedTool,
+  CLIUpdateCheck,
+  MarketplaceSkill,
+  Skill,
+} from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -19,7 +26,6 @@ export function ToolsPanel() {
 
   const data = tools.data;
   const cli = data?.cli ?? [];
-  const frameworks = data?.frameworks ?? [];
   const skills = data?.skills ?? [];
   const mcp = data?.mcp ?? [];
   const market = marketplace.data ?? data?.marketplace ?? [];
@@ -162,21 +168,6 @@ export function ToolsPanel() {
       <section className="surface">
         <div className="surface-header">
           <div>
-            <h2>{t("tools.agentRuntimeTitle")}</h2>
-            <p className="subtle-copy">{t("tools.agentRuntimeSubtitle")}</p>
-          </div>
-          <TerminalSquare size={16} />
-        </div>
-        <div className="surface-body tools-grid">
-          {frameworks.map((item) => (
-            <FrameworkToolCard key={item.spec.kind} item={item} t={t} />
-          ))}
-        </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <div>
             <h2>{t("tools.marketTitle")}</h2>
             <p className="subtle-copy">{t("tools.marketSubtitle")}</p>
           </div>
@@ -282,7 +273,7 @@ function CLIManagedCard({
           : action === "update"
             ? t("tools.update")
             : t("tools.checkUpdate");
-  const updateStatus = cliUpdateStatusLabel(check, t);
+  const updateStatus = updateStatusLabel(check, t);
   const updateStatusClass = check?.error ? "warning" : check?.update_available ? "warning" : "success";
   return (
     <article className="tool-card">
@@ -317,35 +308,14 @@ function CLIManagedCard({
   );
 }
 
-function cliUpdateStatusLabel(check: CLIUpdateCheck | undefined, t: (key: string) => string) {
+function updateStatusLabel(
+  check: { error?: string; update_available: boolean; latest_version?: string } | undefined,
+  t: (key: string) => string,
+) {
   if (!check) return "";
   if (check.error) return t("tools.updateCheckFailed");
   if (check.update_available) return `${t("tools.updateAvailable")} ${check.latest_version || ""}`.trim();
   return t("tools.upToDate");
-}
-
-function FrameworkToolCard({ item, t }: { item: Framework; t: (key: string) => string }) {
-  return (
-    <article className="tool-card">
-      <div className="tool-card-head">
-        <span className="provider-icon">
-          <Package size={16} />
-        </span>
-        <span>
-          <strong>{item.spec.display}</strong>
-          <small className="mono">{item.spec.kind}</small>
-        </span>
-      </div>
-      <p>{item.spec.note || item.spec.bin || item.spec.language}</p>
-      <div className="tool-card-foot">
-        <span className={`status-badge ${item.installed ? "success" : ""}`}>
-          <span className="status-dot" />
-          {item.installed ? item.version || t("frameworks.installed") : t("frameworks.notDetected")}
-        </span>
-        {item.registered && <span className="pill">{t("frameworks.routable")}</span>}
-      </div>
-    </article>
-  );
 }
 
 function MarketplaceCard({

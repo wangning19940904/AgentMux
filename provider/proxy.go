@@ -33,6 +33,12 @@ const ProxyManagedToken = "PROXY_MANAGED"
 // 127.0.0.1:15721; AgentNexus claims a nearby port).
 const DefaultProxyAddr = "127.0.0.1:15733"
 
+// claudeCodeModelPrefix makes every provider model eligible for Claude Code's
+// gateway discovery filter. Claude Code only adds ids beginning with
+// "claude" or "anthropic" to /model, so the proxy exposes a prefixed alias
+// and maps it back to the provider's original id before forwarding.
+const claudeCodeModelPrefix = "claude-"
+
 // breaker is a minimal circuit breaker per provider id.
 type breaker struct {
 	failures atomic.Int32
@@ -212,6 +218,7 @@ func (s *ProxyServer) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /claude/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		s.handleAnthropicMessages(w, r, "claudecode", nil)
 	})
+	mux.HandleFunc("GET /claude/v1/models", s.handleClaudeCodeModels)
 	// Claude Desktop gateway (token-authenticated, model-route mapped).
 	mux.HandleFunc("GET /claude-desktop/v1/models", s.handleClaudeDesktopModels)
 	mux.HandleFunc("POST /claude-desktop/v1/messages", s.handleClaudeDesktopMessages)
@@ -228,9 +235,7 @@ func (s *ProxyServer) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /responses", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCodex(w, r, "/responses")
 	})
-	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
-		s.handleCodex(w, r, "/models")
-	})
+	mux.HandleFunc("GET /v1/models", s.handleRootModels)
 	mux.HandleFunc("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		s.handleCodex(w, r, "/models")
 	})
@@ -358,12 +363,156 @@ func (s *ProxyServer) handleAnthropicMessages(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// upstreamModelFor picks the upstream model for converted requests: tier
-// mapping first, then the provider default model, then the client model.
+// handleRootModels preserves compatibility with takeover configs written
+// before Claude Code received its dedicated /claude prefix. New Claude
+// configs use /claude/v1/models, while Codex continues to use /v1/models.
+func (s *ProxyServer) handleRootModels(w http.ResponseWriter, r *http.Request) {
+	if looksLikeClaudeModelsRequest(r) {
+		s.handleClaudeCodeModels(w, r)
+		return
+	}
+	s.handleCodex(w, r, "/models")
+}
+
+func looksLikeClaudeModelsRequest(r *http.Request) bool {
+	if strings.TrimSpace(r.Header.Get("anthropic-version")) != "" ||
+		strings.TrimSpace(r.Header.Get("x-api-key")) != "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(r.UserAgent()), "claude")
+}
+
+// handleClaudeCodeModels exposes the active route's configured model catalog
+// in Anthropic's Models API shape. Claude Code consumes this endpoint when
+// CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY is enabled.
+func (s *ProxyServer) handleClaudeCodeModels(w http.ResponseWriter, r *http.Request) {
+	chain, _ := s.providerChain(r.Context(), "claudecode")
+	if len(chain) == 0 {
+		writeAnthropicError(w, http.StatusBadGateway, "api_error", "no provider routed for claudecode")
+		return
+	}
+	routes := claudeCodeModelRoutes(chain[0])
+	data := make([]any, 0, len(routes))
+	for _, route := range routes {
+		data = append(data, map[string]any{
+			"id":           route.ID,
+			"type":         "model",
+			"display_name": route.DisplayName,
+			"created_at":   "2025-01-01T00:00:00Z",
+		})
+	}
+	var firstID, lastID any
+	if len(routes) > 0 {
+		firstID = routes[0].ID
+		lastID = routes[len(routes)-1].ID
+	}
+	writeProxyJSON(w, http.StatusOK, map[string]any{
+		"data": data, "has_more": false, "first_id": firstID, "last_id": lastID,
+	})
+}
+
+type claudeCodeModelRoute struct {
+	ID            string
+	DisplayName   string
+	UpstreamModel string
+}
+
+func claudeCodeModelRoutes(p *core.Provider) []claudeCodeModelRoute {
+	if p == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	models := claudeCodeModelOptions(p)
+	routes := make([]claudeCodeModelRoute, 0, len(p.Meta.ClaudeDesktopModels)+len(models))
+	add := func(route claudeCodeModelRoute) {
+		route.ID = strings.TrimSpace(route.ID)
+		route.UpstreamModel = strings.TrimSpace(route.UpstreamModel)
+		if route.ID == "" || route.UpstreamModel == "" || seen[strings.ToLower(route.ID)] {
+			return
+		}
+		if route.DisplayName == "" {
+			route.DisplayName = route.ID
+		}
+		seen[strings.ToLower(route.ID)] = true
+		routes = append(routes, route)
+	}
+	// The route editor stores friendly Claude aliases in the shared model-map
+	// shape. Honor those aliases for Claude Code as well as Claude Desktop so a
+	// saved route is not merely decorative.
+	for _, model := range p.Meta.ClaudeDesktopModels {
+		id := model.ID
+		if id == "" {
+			id = model.Name
+		}
+		upstream := model.UpstreamModel
+		if upstream == "" {
+			upstream = mapClaudeTierModel(id, p)
+		}
+		display := model.DisplayName
+		if display == "" {
+			display = id
+		}
+		add(claudeCodeModelRoute{ID: id, DisplayName: display, UpstreamModel: upstream})
+	}
+	for _, model := range models {
+		add(claudeCodeModelRoute{
+			ID:            claudeCodeModelPrefix + model,
+			DisplayName:   model,
+			UpstreamModel: model,
+		})
+	}
+	return routes
+}
+
+func claudeCodeUpstreamModel(p *core.Provider, clientModel string) (string, bool) {
+	alias := strings.TrimSpace(clientModel)
+	if strings.HasSuffix(strings.ToLower(alias), "[1m]") {
+		alias = strings.TrimSpace(alias[:len(alias)-len("[1m]")])
+	}
+	for _, route := range claudeCodeModelRoutes(p) {
+		if strings.EqualFold(route.ID, alias) {
+			return route.UpstreamModel, true
+		}
+	}
+	return "", false
+}
+
+func claudeCodeModelOptions(p *core.Provider) []string {
+	if p == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	models := make([]string, 0, len(p.Meta.SupportedModels)+1)
+	add := func(model string) {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			return
+		}
+		seen[model] = true
+		models = append(models, model)
+	}
+	for _, model := range core.ProviderModelOptions(p) {
+		add(model)
+	}
+	return models
+}
+
+// upstreamModelFor picks the upstream model for converted requests: a
+// discovered Claude Code alias first, then tier mapping, then an explicitly
+// advertised provider model, the provider default model, and finally the
+// client model.
 func upstreamModelFor(p *core.Provider, clientModel string) string {
+	if upstream, ok := claudeCodeUpstreamModel(p, clientModel); ok {
+		return upstream
+	}
 	mapped := mapClaudeTierModel(clientModel, p)
 	if mapped != clientModel {
 		return mapped
+	}
+	for _, model := range claudeCodeModelOptions(p) {
+		if model == clientModel {
+			return clientModel
+		}
 	}
 	if p.Model != "" {
 		return p.Model

@@ -1,10 +1,14 @@
 package framework
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 )
 
 // Status is the runtime state of a framework: whether it is installed and, for
@@ -26,6 +30,8 @@ type Prereqs struct {
 	NPM     bool   `json:"npm"`
 	NPMPath string `json:"npm_path,omitempty"`
 }
+
+var processPathMu sync.Mutex
 
 // DetectPrereqs probes for node and npm on PATH.
 func DetectPrereqs() Prereqs {
@@ -49,8 +55,28 @@ func Detect(s Spec, pre Prereqs) Status {
 		if s.Bin == "" {
 			return st
 		}
-		if _, err := exec.LookPath(s.Bin); err == nil {
-			st.Installed = true
+		binary, err := resolveCLIExecutable(s.Bin)
+		if err != nil {
+			return st
+		}
+		st.Installed = true
+		args := s.VersionArgs
+		if len(args) == 0 {
+			args = []string{"--version"}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+		if err != nil {
+			st.Detail = strings.TrimSpace(string(out))
+			if st.Detail == "" {
+				st.Detail = err.Error()
+			}
+			return st
+		}
+		st.Version = normalizeSDKVersion(string(out))
+		if st.Version == "" {
+			st.Detail = "version command returned no recognizable version"
 		}
 	case KindSDK:
 		if s.Language == "node" {
@@ -63,6 +89,41 @@ func Detect(s Spec, pre Prereqs) Status {
 		}
 	}
 	return st
+}
+
+// resolveCLIExecutable also recognizes the standard user-local bin directory
+// used by native installers such as Cursor. Adding that directory to the
+// current process PATH makes a freshly installed CLI immediately routable
+// without requiring the daemon to restart.
+func resolveCLIExecutable(bin string) (string, error) {
+	if path, err := exec.LookPath(bin); err == nil {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", exec.ErrNotFound
+	}
+	candidate := filepath.Join(home, ".local", "bin", bin)
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return "", exec.ErrNotFound
+	}
+
+	processPathMu.Lock()
+	defer processPathMu.Unlock()
+	dir := filepath.Dir(candidate)
+	pathValue := os.Getenv("PATH")
+	for _, existing := range filepath.SplitList(pathValue) {
+		if filepath.Clean(existing) == filepath.Clean(dir) {
+			return candidate, nil
+		}
+	}
+	if pathValue == "" {
+		_ = os.Setenv("PATH", dir)
+	} else {
+		_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+pathValue)
+	}
+	return candidate, nil
 }
 
 // DetectAll returns the status of every framework in the catalog.

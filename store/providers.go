@@ -86,7 +86,7 @@ func (s *Store) UpsertProvider(ctx context.Context, p *core.Provider) error {
 	if p.InFailoverQueue {
 		inQueue = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO providers
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO providers
 		(id,name,preset,category,base_url,api_key_env,model,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,
@@ -106,14 +106,14 @@ func (s *Store) SetFailoverQueue(ctx context.Context, id string, inQueue bool, s
 	if inQueue {
 		v = 1
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.writer.ExecContext(ctx,
 		`UPDATE providers SET in_failover_queue=?, sort_index=? WHERE id=?`, v, sortIndex, id)
 	return err
 }
 
 // DeleteProvider removes a provider by id.
 func (s *Store) DeleteProvider(ctx context.Context, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 
 // SetActiveProvider marks provider id active for a tool (and flips enabled flags).
 func (s *Store) SetActiveProvider(ctx context.Context, tool, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (s *Store) SetActiveProvider(ctx context.Context, tool, id string) error {
 // SetActiveProviderRoute marks provider id active for a tool and writes the
 // route-owned metadata for that binding.
 func (s *Store) SetActiveProviderRoute(ctx context.Context, route core.ProviderRoute) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func (s *Store) SetActiveProviderRoute(ctx context.Context, route core.ProviderR
 // ClearActiveProvider removes the active route for one tool and recomputes
 // provider enabled flags from the remaining active routes.
 func (s *Store) ClearActiveProvider(ctx context.Context, tool string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

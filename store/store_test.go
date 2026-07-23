@@ -2,12 +2,102 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/agentnexus/agentnexus/core"
 )
+
+func TestReadsRemainAvailableDuringWriteTransaction(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "concurrent-read.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	if err := st.UpsertAgentInstance(ctx, &core.AgentInstance{
+		ID: "agent-readable", Name: "Readable", RuntimeID: "codex", Enabled: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if st.writer.Stats().MaxOpenConnections != 1 {
+		t.Fatalf("writer connections = %d, want 1", st.writer.Stats().MaxOpenConnections)
+	}
+	if st.db.Stats().MaxOpenConnections <= 1 {
+		t.Fatalf("reader connections = %d, want a concurrent pool", st.db.Stats().MaxOpenConnections)
+	}
+	tx, err := st.writer.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES('held-write','1')`); err != nil {
+		t.Fatal(err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	items, err := st.ListAgentInstances(readCtx)
+	if err != nil {
+		t.Fatalf("read blocked behind write transaction: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "agent-readable" {
+		t.Fatalf("agents = %+v", items)
+	}
+}
+
+func TestConversationCreationSurvivesConcurrentStoreWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-writers.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	stores := []*Store{first, second}
+	const callers = 24
+	ids := make(chan string, callers)
+	errs := make(chan error, callers)
+	var group sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			conversation, _, err := stores[index%len(stores)].GetOrCreateConversation(context.Background(), core.Conversation{
+				Scope: "channel:shared", ChatID: "chat-shared", ChatType: "group", AgentID: "agent-shared",
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- conversation.ID
+		}(index)
+	}
+	group.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent conversation creation: %v", err)
+	}
+	var expected string
+	for id := range ids {
+		if expected == "" {
+			expected = id
+		}
+		if id != expected {
+			t.Fatalf("conversation IDs diverged: got %q want %q", id, expected)
+		}
+	}
+}
 
 func TestProviderCRUDAndActive(t *testing.T) {
 	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
@@ -320,5 +410,69 @@ func TestConversationLifecycle(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("all conversations = %d, want 3", len(all))
+	}
+}
+
+func TestConversationIdentityUsesConversationKeyWithinOneChat(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "conversation-key.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	first, created, err := st.GetOrCreateConversation(ctx, core.Conversation{
+		Scope: "channel:c1", ConversationKey: "thread:one", ChatID: "same-chat",
+	})
+	if err != nil || !created {
+		t.Fatalf("first = %+v created=%t err=%v", first, created, err)
+	}
+	second, created, err := st.GetOrCreateConversation(ctx, core.Conversation{
+		Scope: "channel:c1", ConversationKey: "thread:two", ChatID: "same-chat",
+	})
+	if err != nil || !created || second.ID == first.ID {
+		t.Fatalf("second = %+v created=%t err=%v", second, created, err)
+	}
+	reused, created, err := st.GetOrCreateConversation(ctx, core.Conversation{
+		Scope: "channel:c1", ConversationKey: "thread:one", ChatID: "same-chat",
+	})
+	if err != nil || created || reused.ID != first.ID {
+		t.Fatalf("reused = %+v created=%t err=%v", reused, created, err)
+	}
+}
+
+func TestConversationMigrationBackfillsConversationKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-conversations.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE conversations (
+		id TEXT PRIMARY KEY, scope TEXT NOT NULL, chat_id TEXT NOT NULL, chat_type TEXT,
+		agent_id TEXT, work_dir TEXT, native_session_id TEXT, title TEXT,
+		message_count INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
+		last_active_at TEXT, ended_at TEXT
+	);
+	CREATE UNIQUE INDEX idx_conversations_active
+		ON conversations(scope, chat_id) WHERE ended_at IS NULL OR ended_at='';
+	INSERT INTO conversations (id,scope,chat_id,ended_at) VALUES ('legacy-1','channel:c1','oc_legacy','');`)
+	if err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	conversations, err := st.ListConversations(context.Background(), "channel:c1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conversations) != 1 || conversations[0].ConversationKey != "chat:oc_legacy" {
+		t.Fatalf("migrated conversations = %+v", conversations)
 	}
 }

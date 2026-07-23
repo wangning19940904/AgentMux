@@ -2,10 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -513,6 +515,57 @@ func TestChannelMessageDeduplicatesMessageID(t *testing.T) {
 	}
 }
 
+func TestChannelLogOnlyCallbackIsLoggedWithoutAgentDispatch(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	logRoot := t.TempDir()
+	eng.SetMessageLogger(NewMessageLogger(logRoot))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake")
+	restore := stubPlatformFactory(t, "fake-callback-log", plat)
+	defer restore()
+
+	agent := &fakeAgent{}
+	ch := Channel{ID: "c1", Name: "ops", Type: "fake-callback-log", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{
+		ID: "evt-choice", ChatID: "chat-1", UserID: "ou_actor", Platform: "feishu", LogOnly: true,
+		Callback: &CallbackEvent{
+			Type: "card.action.trigger", MessageID: "om_card", Host: "im_message", ActionTag: "button",
+			ActionName: "choiceA", ActionValue: `{"choice":"option_a","label":"方案 A"}`,
+		},
+	})
+
+	path := eng.MessageLogger().ChannelLogPath("c1")
+	var record map[string]string
+	waitFor(t, "callback log", func() bool {
+		b, err := os.ReadFile(path)
+		if err != nil || len(b) == 0 {
+			return false
+		}
+		return json.Unmarshal(b, &record) == nil
+	})
+	if record["event_type"] != "card.action.trigger" || record["event_id"] != "evt-choice" || record["message_id"] != "om_card" || record["action_value"] != `{"choice":"option_a","label":"方案 A"}` {
+		t.Fatalf("callback log = %+v", record)
+	}
+	time.Sleep(100 * time.Millisecond)
+	agent.mu.Lock()
+	sessions := agent.sessions
+	turns := append([]string(nil), agent.turns...)
+	agent.mu.Unlock()
+	plat.mu.Lock()
+	replies := len(plat.replies)
+	plat.mu.Unlock()
+	if sessions != 0 || len(turns) != 0 || replies != 0 {
+		t.Fatalf("log-only callback dispatched: sessions=%d turns=%v replies=%d", sessions, turns, replies)
+	}
+}
+
 func TestChannelModelCommandSwitchesSessionModelWithoutSendingTurn(t *testing.T) {
 	eng := NewEngine(nil, NewHookRunner(nil, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -947,6 +1000,47 @@ func TestChannelMessageDefaultsToStreamingMessage(t *testing.T) {
 	}
 }
 
+func TestCodexRemoteControlForcesOneFeishuStatusCard(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newStreamingPlatform("feishu")
+	restore := stubPlatformFactory(t, "feishu", plat)
+	defer restore()
+
+	ch := Channel{
+		ID: "codex-remote", Name: "Codex remote", Type: "feishu", Enabled: true, UpdatedAt: time.Now(),
+		Config: map[string]string{
+			ChannelConfigReplyMode:           ReplyModeStreamMessage,
+			ChannelConfigCodexControlEnabled: "true",
+			ChannelConfigAllowedUserIDs:      "member",
+		},
+	}
+	if err := eng.AttachChannel(ctx, ch, &remoteControlTestAgent{}, t.TempDir(),
+		WorkspaceInitOptions{RuntimeID: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{
+		ID: "om_remote", ChatID: "oc_dm", ChatType: "p2p",
+		UserID: "member", Text: "hello", Platform: "feishu",
+	})
+	waitFor(t, "remote status card finalize", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return plat.cardDoneCalls == 1
+	})
+	plat.mu.Lock()
+	cardDoneCalls := plat.cardDoneCalls
+	messageDoneCalls := plat.messageDoneCalls
+	plat.mu.Unlock()
+	if cardDoneCalls != 1 || messageDoneCalls != 0 {
+		t.Fatalf("card done=%d message done=%d", cardDoneCalls, messageDoneCalls)
+	}
+}
+
 func TestFeishuLikeChannelReplyScopeFiltersMessages(t *testing.T) {
 	eng := NewEngine(nil, NewHookRunner(nil, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1050,8 +1144,8 @@ func TestFeishuLikeChannelAckReactionLifecycle(t *testing.T) {
 	if len(deleted) != 1 || deleted[0] != "reaction-1" {
 		t.Fatalf("deleted reactions = %+v, want [reaction-1]", deleted)
 	}
-	if messageDoneText != "echo: hello" {
-		t.Fatalf("final message text = %q", messageDoneText)
+	if !strings.Contains(messageDoneText, `"text":"hello"`) {
+		t.Fatalf("final message text does not contain injected user text: %q", messageDoneText)
 	}
 }
 
@@ -1088,8 +1182,8 @@ func TestFeishuLikeChannelAckReactionErrorDoesNotBlockReply(t *testing.T) {
 	if added != 0 || deleted != 0 {
 		t.Fatalf("reaction lifecycle = added %d deleted %d, want no stored reaction", added, deleted)
 	}
-	if messageDoneText != "echo: hello" {
-		t.Fatalf("final message text = %q", messageDoneText)
+	if !strings.Contains(messageDoneText, `"text":"hello"`) {
+		t.Fatalf("final message text does not contain injected user text: %q", messageDoneText)
 	}
 }
 

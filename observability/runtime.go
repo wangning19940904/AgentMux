@@ -31,6 +31,14 @@ type Runtime struct {
 	IngestToken string
 }
 
+// Daily reports read the last two days from detailed spans. Refresh one extra
+// day so the boundary can roll over without a full-history scan at startup.
+const observationDailyRefreshWindow = 3 * 24 * time.Hour
+
+func observationDailyRefreshSince(now time.Time) time.Time {
+	return now.UTC().Add(-observationDailyRefreshWindow).Truncate(24 * time.Hour)
+}
+
 func LocalOTLPEndpoint(serverAddr string) string {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(serverAddr))
 	if err != nil {
@@ -72,16 +80,18 @@ func NewRuntime(log *slog.Logger, cfg config.ObservabilityConfig, st *store.Stor
 	bus.Subscribe("sqlite-recorder-and-export-outbox", pipeline.Observe)
 	ingest := NewIngestService(log, bus, home, token)
 	bus.Subscribe("native-session-trace-correlation", ingest.ObserveCorrelation)
+	transcript := NewTranscriptTailer(log, st, bus, TranscriptTailerOptions{
+		Home:             home,
+		ContentBackfill:  time.Duration(cfg.ContentRetentionDays) * 24 * time.Hour,
+		MetadataBackfill: time.Duration(cfg.BackfillDays) * 24 * time.Hour,
+	})
+	recorder.SetPayloadSourceResolver(transcript.ResolvePayloadSource)
 	return &Runtime{
 		Log: log, Config: cfg, Bus: bus, Store: st, Recorder: recorder,
 		Exporters: exporters, Pipeline: pipeline, Insights: NewInsightEngine(st),
 		Ingest:      ingest,
 		IngestToken: token,
-		Transcript: NewTranscriptTailer(log, st, bus, TranscriptTailerOptions{
-			Home:             home,
-			ContentBackfill:  time.Duration(cfg.ContentRetentionDays) * 24 * time.Hour,
-			MetadataBackfill: time.Duration(cfg.BackfillDays) * 24 * time.Hour,
-		}),
+		Transcript:  transcript,
 	}, nil
 }
 
@@ -138,7 +148,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	go r.Transcript.Start(ctx)
 	if r.Store != nil {
-		if err := r.Store.MaterializeObservationDailyUsage(ctx); err != nil {
+		if err := r.Store.MaterializeObservationDailyUsageSince(ctx, observationDailyRefreshSince(time.Now())); err != nil {
 			r.Log.Warn("initial observation daily aggregation failed", "err", err)
 		}
 	}
@@ -167,7 +177,7 @@ func (r *Runtime) maintenance(ctx context.Context) {
 			}
 		case now := <-cleanupTicker.C:
 			if r.Store != nil {
-				if err := r.Store.MaterializeObservationDailyUsage(ctx); err != nil && ctx.Err() == nil {
+				if err := r.Store.MaterializeObservationDailyUsageSince(ctx, observationDailyRefreshSince(now)); err != nil && ctx.Err() == nil {
 					r.Log.Warn("observation daily aggregation failed", "err", err)
 				}
 			}

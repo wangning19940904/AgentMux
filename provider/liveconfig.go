@@ -65,6 +65,7 @@ var managedClaudeEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_AUTH_TOKEN",
 	"ANTHROPIC_API_KEY",
+	"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
 	"ANTHROPIC_MODEL",
 	"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	"ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -153,6 +154,10 @@ func writeClaudeConfig(home string, p, prev *core.Provider) error {
 	// official preset has an empty env) lets OAuth login keep working.
 	if p.BaseURL != "" && !strings.EqualFold(strings.TrimRight(p.BaseURL, "/"), defaultAnthropicBaseURL) {
 		env["ANTHROPIC_BASE_URL"] = p.BaseURL
+		// Claude Code can populate /model from a third-party gateway's
+		// Anthropic-compatible GET /v1/models endpoint. Direct mode talks to
+		// the provider itself, so discovery reflects the provider's live list.
+		env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
 	}
 	if key := providerAPIKey(p); key != "" {
 		if claudeAuthScheme(p) == "api_key" {

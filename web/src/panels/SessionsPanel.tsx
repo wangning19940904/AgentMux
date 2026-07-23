@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Clipboard, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
+import { Activity, Clipboard, ExternalLink, Link2, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
 import { AgentSession, ProxyTrace, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -24,7 +24,19 @@ export function SessionsPanel() {
   const [selectedID, setSelectedID] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [bindChannelID, setBindChannelID] = useState("");
+  const [bindConversationID, setBindConversationID] = useState("");
+  const [localAnswers, setLocalAnswers] = useState<Record<string, string>>({});
   const sessions = useAsync(() => api.sessions(provider, surface), [provider, surface]);
+  const channels = useAsync(() => api.channels(), []);
+  const channelConversations = useAsync(
+    () => (bindChannelID ? api.channelConversations(bindChannelID) : Promise.resolve([])),
+    [bindChannelID]
+  );
+  const pendingInteractions = useAsync(
+    () => (bindChannelID ? api.channelInteractions(bindChannelID, bindConversationID) : Promise.resolve([])),
+    [bindChannelID, bindConversationID]
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -93,6 +105,46 @@ export function SessionsPanel() {
       setSelectedID("");
       sessions.reload();
       setNotice(t("sessions.deleted"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openCodex() {
+    if (!selected?.session_id) return;
+    setBusy("open-codex");
+    try {
+      const result = await api.openCodexThread(selected.session_id);
+      if (!result.opened && result.command) await copy(result.command);
+      setNotice(result.status_message || result.command || t("sessions.resumeReady"));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function bindCodex() {
+    if (!selected?.session_id || !bindChannelID || !bindConversationID) return;
+    setBusy("bind-codex");
+    try {
+      await api.bindChannelConversation(bindChannelID, bindConversationID, selected.session_id);
+      setNotice(t("sessions.channelBound"));
+      channelConversations.reload();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function respondInteraction(interactionID: string, nonce: string, decision: string, questionIDs: string[]) {
+    if (decision === "acceptForSession" && !window.confirm(t("sessions.allowSessionConfirm"))) return;
+    setBusy(`interaction-${interactionID}`);
+    try {
+      const answers: Record<string, string[]> = {};
+      for (const questionID of questionIDs) {
+        answers[questionID] = [localAnswers[`${interactionID}:${questionID}`] ?? ""];
+      }
+      await api.respondChannelInteraction(interactionID, nonce, decision, answers);
+      setNotice(t("sessions.interactionResolved"));
+      pendingInteractions.reload();
     } finally {
       setBusy("");
     }
@@ -178,6 +230,12 @@ export function SessionsPanel() {
                       <Play size={15} />
                       {t("sessions.resume")}
                     </button>
+                    {selected.provider_id === "codex" && (
+                      <button className="ghost-action" disabled={busy === "open-codex"} onClick={openCodex} title={t("sessions.openCodex")}>
+                        <ExternalLink size={15} />
+                        {t("sessions.openCodex")}
+                      </button>
+                    )}
                     {selected.file_backed && (
                       <button className="ghost-action" disabled={busy === "terminal"} onClick={() => resume(true)} title={t("sessions.terminal")}>
                         <TerminalSquare size={15} />
@@ -198,6 +256,133 @@ export function SessionsPanel() {
                   <span>{formatDate(selected.created_at, language)}</span>
                   <span>{selected.message_count}{selected.messages_partial ? "+" : ""} {t("sessions.messages")}</span>
                 </div>
+
+                {selected.provider_id === "codex" && selected.surface === "app-server" && (
+                  <div className="session-channel-control">
+                    <div className="control-row session-channel-bind">
+                      <Link2 size={15} />
+                      <select
+                        value={bindChannelID}
+                        onChange={(event) => {
+                          setBindChannelID(event.target.value);
+                          setBindConversationID("");
+                        }}
+                      >
+                        <option value="">{t("sessions.selectChannel")}</option>
+                        {(channels.data ?? [])
+                          .filter((channel) => channel.config?.codex_control_enabled === "true")
+                          .map((channel) => (
+                            <option key={channel.id} value={channel.id}>{channel.bot_name || channel.name}</option>
+                          ))}
+                      </select>
+                      <select value={bindConversationID} onChange={(event) => setBindConversationID(event.target.value)}>
+                        <option value="">{t("sessions.selectConversation")}</option>
+                        {(channelConversations.data ?? []).map((conversation) => (
+                          <option key={conversation.id} value={conversation.id}>
+                            {conversation.title || conversation.conversation_key}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="ghost-action"
+                        disabled={!bindConversationID || busy === "bind-codex"}
+                        onClick={bindCodex}
+                      >
+                        {t("sessions.bindChannel")}
+                      </button>
+                    </div>
+                    {bindChannelID && (
+                      <div className="session-conversation-list">
+                        {(channelConversations.data ?? []).map((conversation) => (
+                          <div className="session-conversation-row" key={conversation.id}>
+                            <span>
+                              <strong>{conversation.thread_title || conversation.title || conversation.conversation_key}</strong>
+                              <small>{conversation.conversation_key}</small>
+                            </span>
+                            <span className="mono">{conversation.native_session_id || t("sessions.unboundThread")}</span>
+                            <span className="pill">{conversation.active_task?.status || t("sessions.idle")}</span>
+                            <span>{t("sessions.queued")}: {conversation.queued_tasks}</span>
+                            {conversation.controller_id && <span>{t("sessions.controller")}: {conversation.controller_id}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {(pendingInteractions.data ?? []).map((interaction) => {
+                      const questions = interaction.request.questions ?? [];
+                      return (
+                        <div className="session-interaction" key={interaction.id}>
+                          <strong>{interaction.request.title || t("sessions.pendingInteraction")}</strong>
+                          {interaction.request.command && <pre>{interaction.request.command}</pre>}
+                          {interaction.request.reason && <p>{interaction.request.reason}</p>}
+                          {questions.map((question) => (
+                            <label className="field" key={question.id}>
+                              <span>{question.header || question.question}</span>
+                              {question.options?.length ? (
+                                <select
+                                  value={localAnswers[`${interaction.id}:${question.id}`] ?? ""}
+                                  onChange={(event) => setLocalAnswers((current) => ({
+                                    ...current,
+                                    [`${interaction.id}:${question.id}`]: event.target.value,
+                                  }))}
+                                >
+                                  <option value="">{question.question}</option>
+                                  {question.options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}
+                                </select>
+                              ) : (
+                                <input
+                                  type={question.secret ? "password" : "text"}
+                                  autoComplete={question.secret ? "new-password" : undefined}
+                                  value={localAnswers[`${interaction.id}:${question.id}`] ?? ""}
+                                  onChange={(event) => setLocalAnswers((current) => ({
+                                    ...current,
+                                    [`${interaction.id}:${question.id}`]: event.target.value,
+                                  }))}
+                                />
+                              )}
+                            </label>
+                          ))}
+                          <div className="control-row">
+                            {questions.length > 0 ? (
+                              <button
+                                className="action"
+                                disabled={busy === `interaction-${interaction.id}`}
+                                onClick={() => respondInteraction(interaction.id, interaction.nonce, "", questions.map((question) => question.id))}
+                              >
+                                {t("common.save")}
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  className="action"
+                                  disabled={busy === `interaction-${interaction.id}`}
+                                  onClick={() => respondInteraction(interaction.id, interaction.nonce, "accept", [])}
+                                >
+                                  {t("sessions.allowOnce")}
+                                </button>
+                                {!interaction.request.high_risk && (
+                                  <button
+                                    className="ghost-action"
+                                    disabled={busy === `interaction-${interaction.id}`}
+                                    onClick={() => respondInteraction(interaction.id, interaction.nonce, "acceptForSession", [])}
+                                  >
+                                    {t("sessions.allowSession")}
+                                  </button>
+                                )}
+                                <button
+                                  className="ghost-action danger-action"
+                                  disabled={busy === `interaction-${interaction.id}`}
+                                  onClick={() => respondInteraction(interaction.id, interaction.nonce, "decline", [])}
+                                >
+                                  {t("sessions.decline")}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <RouteTracePanel
                   error={sessionTraces.error || recentTraces.error}

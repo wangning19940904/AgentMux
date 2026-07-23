@@ -46,7 +46,7 @@ func (s *Store) UpsertChannel(ctx context.Context, ch *core.Channel) error {
 	if ch.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO channels
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO channels
 		(id,name,type,agent_id,config,enabled,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,
@@ -59,7 +59,7 @@ func (s *Store) UpsertChannel(ctx context.Context, ch *core.Channel) error {
 
 // DeleteChannel removes a channel.
 func (s *Store) DeleteChannel(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM channels WHERE id=?`, id)
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM channels WHERE id=?`, id)
 	return err
 }
 

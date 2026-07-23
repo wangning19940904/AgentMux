@@ -2,8 +2,6 @@
 // daemon's HTTP API so the same React UI serves both the WebUI and the Wails
 // desktop shell.
 
-const DESKTOP_API_BASE = "http://127.0.0.1:8765";
-
 declare global {
   interface Window {
     go?: {
@@ -16,20 +14,11 @@ declare global {
   }
 }
 
-function apiBase() {
-  const host = window.location.hostname;
-  const protocol = window.location.protocol;
-  const isBrowserDev = (host === "127.0.0.1" || host === "localhost") && window.location.port === "5173";
-  const isServerWeb = (host === "127.0.0.1" || host === "localhost") && window.location.port === "8765";
-  const isDesktop =
-    protocol === "wails:" ||
-    host === "wails.localhost" ||
-    (!isBrowserDev && !isServerWeb && typeof window.go !== "undefined");
-  return isDesktop ? DESKTOP_API_BASE : "";
-}
-
 function apiPath(path: string) {
-  return `${apiBase()}${path}`;
+  // All clients use same-origin API requests. Vite proxies them in development,
+  // the Go web server handles them in a browser, and the Wails asset middleware
+  // proxies them inside the desktop process without exposing HTTP to WebKit.
+  return path;
 }
 
 export interface Provider {
@@ -188,6 +177,7 @@ export interface MenubarSettings {
   icon_stages: string[];
   icon_metric: string;
   cost_thresholds: number[];
+  show_status_icon: boolean;
   show_messages: boolean;
   show_tokens: boolean;
   show_cost: boolean;
@@ -258,9 +248,91 @@ export interface Channel {
   config?: Record<string, string>;
   enabled: boolean;
   state?: string;
+  connected?: boolean;
   error?: string;
+  started_at?: string;
+  connected_at?: string;
+  last_checked_at?: string;
+  last_heartbeat_at?: string;
+  last_event_at?: string;
+  last_inbound_at?: string;
+  codex_control_capability?: {
+    state: string;
+    error?: string;
+    experimental_api: boolean;
+    threads: boolean;
+    steer: boolean;
+    interrupt: boolean;
+    interactions: boolean;
+    deep_link: boolean;
+  };
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ChannelTask {
+  id: string;
+  channel_id: string;
+  conversation_id?: string;
+  conversation_key: string;
+  chat_id: string;
+  user_id: string;
+  controller_id: string;
+  native_thread_id?: string;
+  turn_id?: string;
+  status: string;
+  error?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  updated_at: string;
+}
+
+export interface ChannelConversation {
+  id: string;
+  scope: string;
+  conversation_key: string;
+  chat_id: string;
+  chat_type?: string;
+  agent_id?: string;
+  work_dir?: string;
+  native_session_id?: string;
+  thread_title?: string;
+  title?: string;
+  message_count: number;
+  active_task?: ChannelTask;
+  queued_tasks: number;
+  controller_id?: string;
+}
+
+export interface ChannelInteraction {
+  id: string;
+  task_id: string;
+  channel_id: string;
+  conversation_id?: string;
+  conversation_key: string;
+  controller_id: string;
+  nonce: string;
+  status: string;
+  request: {
+    id: string;
+    kind: string;
+    title?: string;
+    description?: string;
+    command?: string;
+    cwd?: string;
+    reason?: string;
+    high_risk?: boolean;
+    questions?: Array<{
+      id: string;
+      header?: string;
+      question: string;
+      secret?: boolean;
+      options?: Array<{ label: string; description?: string }>;
+    }>;
+  };
+  created_at: string;
+  expires_at?: string;
 }
 
 export interface FeishuSetupBeginResponse {
@@ -350,6 +422,9 @@ export interface FrameworkSpec {
   language?: string;
   packages?: string[];
   bin?: string;
+  install_supported: boolean;
+  install_requires_npm: boolean;
+  update_supported: boolean;
   env_required?: string[];
   supported: boolean;
   note?: string;
@@ -377,10 +452,22 @@ export interface FrameworksResponse {
 
 export interface FrameworkInstallResult {
   kind: string;
+  action: "install" | "update";
   ok: boolean;
   command?: string;
   log?: string;
   version?: string;
+  error?: string;
+}
+
+export interface FrameworkUpdateCheck {
+  kind: string;
+  display?: string;
+  installed: boolean;
+  current_version?: string;
+  latest_version?: string;
+  update_available: boolean;
+  checked_at?: string;
   error?: string;
 }
 
@@ -516,12 +603,22 @@ export interface ObservationUsage {
 
 export interface ObservationPayloadRef {
   id: string;
+  storage?: string;
   content_type?: string;
   key_id?: string;
   original_bytes?: number;
   stored_bytes?: number;
   redacted?: boolean;
   expires_at?: string;
+  source_path?: string;
+  source_offset?: number;
+  source_length?: number;
+  source_identity?: string;
+  source_sha256?: string;
+  source_runtime?: string;
+  source_class?: string;
+  source_content_sha256?: string;
+  content_sha256?: string;
 }
 
 export interface ObservationTrace {
@@ -810,14 +907,10 @@ async function ensureObservationSession(): Promise<void> {
     if (!nonceResponse.ok) throw new Error(`observability nonce: ${nonceResponse.status}`);
     const noncePayload = (await nonceResponse.json()) as { nonce?: string };
     if (!noncePayload.nonce) throw new Error("observability nonce missing");
-    const desktop = apiBase() !== "";
     const sessionResponse = await fetch(apiPath("/api/v1/observability/session"), {
       method: "POST",
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(desktop ? { "X-AgentNexus-Desktop": "1" } : {}),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nonce: noncePayload.nonce }),
     });
     const sessionPayload = (await sessionResponse.json().catch(() => ({}))) as {
@@ -974,8 +1067,10 @@ export const api = {
 
   // AgentNexus Frameworks: detect & install agent frameworks
   frameworks: () => get<FrameworksResponse>("/api/v1/frameworks"),
-  installFramework: (kind: string) =>
-    postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind }),
+  installFramework: (kind: string, action: "install" | "update" = "install") =>
+    postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
+  checkFrameworkUpdate: (kind: string) =>
+    post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
   usage: (period: string) =>
     get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
   menubarSettings: () => get<MenubarSettings>("/api/v1/menubar/settings"),
@@ -1037,6 +1132,41 @@ export const api = {
   deleteChannel: (id: string) => del<{ ok: boolean }>(`/api/v1/channels?id=${encodeURIComponent(id)}`),
   restartChannel: (id: string) =>
     postChecked<{ ok: boolean }>(`/api/v1/channels/restart?id=${encodeURIComponent(id)}`, {}),
+  channelConversations: (channelID: string) =>
+    get<ChannelConversation[] | null>(
+      `/api/v1/channel-conversations?channel_id=${encodeURIComponent(channelID)}`
+    ),
+  bindChannelConversation: (channelID: string, conversationID: string, threadID: string) =>
+    postChecked<{ ok: boolean; thread_id: string }>("/api/v1/channel-conversations/bind", {
+      channel_id: channelID,
+      conversation_id: conversationID,
+      thread_id: threadID,
+    }),
+  openCodexThread: (threadID: string) =>
+    postChecked<{ ok: boolean; thread_id: string; command?: string; opened?: boolean; status_message?: string }>(
+      "/api/v1/channel-conversations/open",
+      { thread_id: threadID }
+    ),
+  channelTasks: (channelID = "", conversationID = "") =>
+    get<ChannelTask[] | null>(
+      `/api/v1/channel-tasks?channel_id=${encodeURIComponent(channelID)}&conversation_id=${encodeURIComponent(conversationID)}`
+    ),
+  channelInteractions: (channelID = "", conversationID = "") =>
+    get<ChannelInteraction[] | null>(
+      `/api/v1/channel-interactions?channel_id=${encodeURIComponent(channelID)}&conversation_id=${encodeURIComponent(conversationID)}`
+    ),
+  respondChannelInteraction: (
+    interactionID: string,
+    nonce: string,
+    decision: string,
+    answers: Record<string, string[]>
+  ) =>
+    postChecked<{ ok: boolean }>("/api/v1/channel-interactions/respond", {
+      interaction_id: interactionID,
+      nonce,
+      decision,
+      answers,
+    }),
   beginFeishuSetup: () => postChecked<FeishuSetupBeginResponse>("/api/v1/setup/feishu/begin", {}),
   pollFeishuSetup: (deviceCode: string, baseUrl = "") =>
     postChecked<FeishuSetupPollResponse>("/api/v1/setup/feishu/poll", { device_code: deviceCode, base_url: baseUrl }),

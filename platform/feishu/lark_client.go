@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentnexus/agentnexus/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
@@ -29,6 +32,9 @@ const (
 	modelPickerActionSelect = "model_select"
 	modelPickerActionReset  = "model_reset"
 	runtimeSettingsAction   = "runtime_settings"
+	codexInteractionAction  = "codex_interaction"
+	larkWSStartupTimeout    = 45 * time.Second
+	larkWSHeartbeatTimeout  = 6 * time.Minute
 )
 
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
@@ -42,6 +48,16 @@ type larkClient struct {
 	ws        *larkws.Client
 	cancel    context.CancelFunc
 	botOpenID string
+
+	mu              sync.Mutex
+	closing         bool
+	healthState     string
+	healthError     string
+	healthStartedAt time.Time
+	connectedAt     time.Time
+	lastHeartbeatAt time.Time
+	lastEventAt     time.Time
+	lastInboundAt   time.Time
 }
 
 func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error) {
@@ -55,9 +71,11 @@ func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error)
 }
 
 func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
+	c.beginHealth()
 	botOpenID := c.loadBotOpenID(ctx)
 	handler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
+			c.markEvent()
 			if event == nil || event.Event == nil || event.Event.Message == nil {
 				return nil
 			}
@@ -81,16 +99,32 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			if msg.ChatType != nil {
 				chatType = *msg.ChatType
 			}
+			rootID := ""
+			if msg.RootId != nil {
+				rootID = *msg.RootId
+			}
+			parentID := ""
+			if msg.ParentId != nil {
+				parentID = *msg.ParentId
+			}
+			threadID := ""
+			if msg.ThreadId != nil {
+				threadID = *msg.ThreadId
+			}
 			userID := ""
 			if event.Event.Sender != nil && event.Event.Sender.SenderId != nil &&
 				event.Event.Sender.SenderId.OpenId != nil {
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
 			mentionedBot, mentionAll := mentionState(msg, botOpenID, text)
+			c.markInbound()
 			inbound <- &core.Message{
 				ID:           messageID,
 				ChatID:       chatID,
 				ChatType:     chatType,
+				RootID:       rootID,
+				ParentID:     parentID,
+				ThreadID:     threadID,
 				UserID:       userID,
 				Text:         text,
 				MentionedBot: mentionedBot,
@@ -101,10 +135,12 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			return nil
 		}).
 		OnP2CardActionTrigger(func(eventCtx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
-			msg, ok := c.modelCommandFromCardAction(project, event)
+			c.markEvent()
+			msg, ok := c.messageFromCardAction(project, event)
 			if !ok {
 				return nil, nil
 			}
+			c.markInbound()
 			select {
 			case inbound <- msg:
 			case <-ctx.Done():
@@ -113,12 +149,30 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			return nil, nil
 		})
 
-	c.ws = larkws.NewClient(c.appID, c.appSecret, larkws.WithDomain(c.domain), larkws.WithEventHandler(handler))
+	logger := &larkWSHealthLogger{
+		client:   c,
+		delegate: larkcore.NewDefaultLogger(larkcore.LogLevelInfo),
+	}
+	ws := larkws.NewClient(
+		c.appID,
+		c.appSecret,
+		larkws.WithDomain(c.domain),
+		larkws.WithEventHandler(handler),
+		larkws.WithLogger(logger),
+		larkws.WithOnReady(c.markReady),
+		larkws.WithOnReconnecting(c.markReconnecting),
+		larkws.WithOnReconnected(c.markReady),
+		larkws.WithOnDisconnected(c.markDisconnected),
+		larkws.WithOnError(c.markError),
+	)
 	wsCtx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
+	c.ws = ws
 	c.cancel = cancel
+	c.mu.Unlock()
 	// Start blocks; run until context cancelled.
 	errCh := make(chan error, 1)
-	go func() { errCh <- c.ws.Start(wsCtx) }()
+	go func() { errCh <- ws.Start(wsCtx) }()
 	select {
 	case <-ctx.Done():
 		return nil
@@ -148,6 +202,11 @@ func (c *larkClient) SendText(ctx context.Context, chatID, text string) (string,
 		return "", fmt.Errorf("%s send text: missing message id", c.platform)
 	}
 	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) ReplyText(ctx context.Context, messageID, text string) (string, error) {
+	content, _ := json.Marshal(map[string]string{"text": text})
+	return c.replyMessage(ctx, messageID, larkim.MsgTypeText, string(content))
 }
 
 func (c *larkClient) UpdateText(ctx context.Context, messageID, text string) error {
@@ -191,7 +250,37 @@ func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, fa
 	return *resp.Data.MessageId, nil
 }
 
+func (c *larkClient) ReplyCard(ctx context.Context, messageID, text string, done, failed bool) (string, error) {
+	return c.replyMessage(ctx, messageID, larkim.MsgTypeInteractive, buildCard(text, done, failed))
+}
+
+func (c *larkClient) replyMessage(ctx context.Context, messageID, msgType, content string) (string, error) {
+	replyInThread := true
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			MsgType(msgType).
+			Content(content).
+			ReplyInThread(replyInThread).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Reply(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s reply failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s reply: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
 func (c *larkClient) SendModelPickerCard(ctx context.Context, msg *core.Message, state core.ModelPickerState) (string, error) {
+	if shouldReplyInThread(msg) {
+		return c.replyMessage(ctx, msg.ID, larkim.MsgTypeInteractive, buildModelPickerCard(msg, state))
+	}
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType("chat_id").
 		Body(larkim.NewCreateMessageReqBodyBuilder().
@@ -214,6 +303,9 @@ func (c *larkClient) SendModelPickerCard(ctx context.Context, msg *core.Message,
 }
 
 func (c *larkClient) SendRuntimeSettingsPickerCard(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) (string, error) {
+	if shouldReplyInThread(msg) {
+		return c.replyMessage(ctx, msg.ID, larkim.MsgTypeInteractive, buildRuntimeSettingsPickerCard(msg, state))
+	}
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType("chat_id").
 		Body(larkim.NewCreateMessageReqBodyBuilder().
@@ -252,6 +344,52 @@ func (c *larkClient) UpdateRuntimeSettingsPickerCard(ctx context.Context, messag
 	return nil
 }
 
+func (c *larkClient) SendAgentInteractionCard(ctx context.Context, msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) (string, error) {
+	content := buildAgentInteractionCard(msg, task, interaction, "")
+	if shouldReplyInThread(msg) {
+		return c.replyMessage(ctx, msg.ID, larkim.MsgTypeInteractive, content)
+	}
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType("chat_id").
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(msg.ChatID).
+			MsgType(larkim.MsgTypeInteractive).
+			Content(content).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send Codex interaction failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send Codex interaction: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
+
+func (c *larkClient) UpdateAgentInteractionCard(ctx context.Context, messageID string, interaction core.ChannelInteraction, outcome string) error {
+	if messageID == "" {
+		return fmt.Errorf("%s update Codex interaction: missing message id", c.platform)
+	}
+	req := larkim.NewPatchMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewPatchMessageReqBodyBuilder().
+			Content(buildAgentInteractionCard(&core.Message{}, core.ChannelTask{}, interaction, outcome)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Patch(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("%s update Codex interaction failed: %s", c.platform, resp.Msg)
+	}
+	return nil
+}
+
 func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error {
 	req := larkim.NewPatchMessageReqBuilder().
 		MessageId(messageID).
@@ -272,6 +410,14 @@ func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, don
 // BeginStreamCard creates a streaming card entity via CardKit and sends it to
 // the chat, returning the card entity ID for subsequent streaming updates.
 func (c *larkClient) BeginStreamCard(ctx context.Context, chatID string) (string, error) {
+	return c.beginStreamCard(ctx, chatID, "")
+}
+
+func (c *larkClient) BeginStreamCardReply(ctx context.Context, messageID string) (string, error) {
+	return c.beginStreamCard(ctx, "", messageID)
+}
+
+func (c *larkClient) beginStreamCard(ctx context.Context, chatID, replyMessageID string) (string, error) {
 	req := larkcardkit.NewCreateCardReqBuilder().
 		Body(larkcardkit.NewCreateCardReqBodyBuilder().
 			Type("card_json").
@@ -294,20 +440,26 @@ func (c *larkClient) BeginStreamCard(ctx context.Context, chatID string) (string
 		"type": "card",
 		"data": map[string]string{"card_id": cardID},
 	})
-	sendReq := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType("chat_id").
-		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(chatID).
-			MsgType(larkim.MsgTypeInteractive).
-			Content(string(content)).
-			Build()).
-		Build()
-	sendResp, err := c.api.Im.Message.Create(ctx, sendReq)
-	if err != nil {
-		return "", err
-	}
-	if !sendResp.Success() {
-		return "", fmt.Errorf("%s send stream card failed: %s", c.platform, sendResp.Msg)
+	if replyMessageID != "" {
+		if _, err := c.replyMessage(ctx, replyMessageID, larkim.MsgTypeInteractive, string(content)); err != nil {
+			return "", err
+		}
+	} else {
+		sendReq := larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType("chat_id").
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(chatID).
+				MsgType(larkim.MsgTypeInteractive).
+				Content(string(content)).
+				Build()).
+			Build()
+		sendResp, err := c.api.Im.Message.Create(ctx, sendReq)
+		if err != nil {
+			return "", err
+		}
+		if !sendResp.Success() {
+			return "", fmt.Errorf("%s send stream card failed: %s", c.platform, sendResp.Msg)
+		}
 	}
 	return cardID, nil
 }
@@ -394,10 +546,176 @@ func (c *larkClient) DeleteReaction(ctx context.Context, messageID, reactionID s
 }
 
 func (c *larkClient) Close() error {
-	if c.cancel != nil {
-		c.cancel()
+	c.mu.Lock()
+	cancel, ws := c.cancel, c.ws
+	c.closing = true
+	c.healthState = core.ChannelStateStopped
+	c.healthError = ""
+	c.cancel, c.ws, c.connectedAt = nil, nil, time.Time{}
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if ws != nil {
+		ws.Close()
 	}
 	return nil
+}
+
+func (c *larkClient) beginHealth() {
+	now := time.Now()
+	c.mu.Lock()
+	c.closing = false
+	c.healthState = core.ChannelStateStarting
+	c.healthError = ""
+	c.healthStartedAt = now
+	c.connectedAt = time.Time{}
+	c.lastHeartbeatAt = time.Time{}
+	c.lastEventAt = time.Time{}
+	c.lastInboundAt = time.Time{}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markReady() {
+	now := time.Now()
+	c.mu.Lock()
+	if !c.closing {
+		c.healthState = core.ChannelStateRunning
+		c.healthError = ""
+		c.connectedAt = now
+		// Treat readiness as the initial heartbeat. The server's first pong will
+		// replace it before the heartbeat watchdog window expires.
+		c.lastHeartbeatAt = now
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markReconnecting() {
+	c.mu.Lock()
+	if !c.closing {
+		c.healthState = core.ChannelStateReconnecting
+		c.healthError = "Feishu WebSocket is reconnecting"
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markDisconnected() {
+	c.mu.Lock()
+	if !c.closing {
+		c.healthState = core.ChannelStateReconnecting
+		c.healthError = "Feishu WebSocket disconnected; waiting for reconnect"
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markError(err error) {
+	c.mu.Lock()
+	if !c.closing {
+		c.healthState = core.ChannelStateError
+		if err != nil {
+			c.healthError = err.Error()
+		} else {
+			c.healthError = "Feishu WebSocket connection failed"
+		}
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markHeartbeat() {
+	c.mu.Lock()
+	if !c.closing {
+		c.lastHeartbeatAt = time.Now()
+		if c.healthState == core.ChannelStateDegraded {
+			c.healthState = core.ChannelStateRunning
+			c.healthError = ""
+		}
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markEvent() {
+	c.mu.Lock()
+	if !c.closing {
+		c.lastEventAt = time.Now()
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) markInbound() {
+	c.mu.Lock()
+	if !c.closing {
+		c.lastInboundAt = time.Now()
+	}
+	c.mu.Unlock()
+}
+
+func (c *larkClient) ChannelHealth() core.PlatformHealth {
+	now := time.Now()
+	c.mu.Lock()
+	health := core.PlatformHealth{
+		State:           c.healthState,
+		Connected:       c.healthState == core.ChannelStateRunning,
+		Error:           c.healthError,
+		CheckedAt:       now,
+		ConnectedAt:     c.connectedAt,
+		LastHeartbeatAt: c.lastHeartbeatAt,
+		LastEventAt:     c.lastEventAt,
+		LastInboundAt:   c.lastInboundAt,
+	}
+	startedAt := c.healthStartedAt
+	c.mu.Unlock()
+
+	if health.State == "" {
+		health.State = core.ChannelStateStarting
+	}
+	if health.State == core.ChannelStateStarting && !startedAt.IsZero() && now.Sub(startedAt) > larkWSStartupTimeout {
+		health.State = core.ChannelStateDegraded
+		health.Error = "Feishu WebSocket did not become ready within 45 seconds"
+	}
+	if health.State == core.ChannelStateRunning {
+		lastActivity := health.LastHeartbeatAt
+		if health.LastEventAt.After(lastActivity) {
+			lastActivity = health.LastEventAt
+		}
+		if !lastActivity.IsZero() && now.Sub(lastActivity) > larkWSHeartbeatTimeout {
+			health.State = core.ChannelStateDegraded
+			health.Connected = false
+			health.Error = fmt.Sprintf("Feishu WebSocket heartbeat is stale (no pong or event for %s); restart the channel", now.Sub(lastActivity).Round(time.Second))
+		}
+	}
+	return health
+}
+
+type larkWSHealthLogger struct {
+	client   *larkClient
+	delegate larkcore.Logger
+}
+
+func (l *larkWSHealthLogger) Debug(ctx context.Context, args ...interface{}) {
+	if strings.Contains(fmt.Sprint(args...), "receive pong") {
+		l.client.markHeartbeat()
+	}
+	if l.delegate != nil {
+		l.delegate.Debug(ctx, args...)
+	}
+}
+
+func (l *larkWSHealthLogger) Info(ctx context.Context, args ...interface{}) {
+	if l.delegate != nil {
+		l.delegate.Info(ctx, args...)
+	}
+}
+
+func (l *larkWSHealthLogger) Warn(ctx context.Context, args ...interface{}) {
+	if l.delegate != nil {
+		l.delegate.Warn(ctx, args...)
+	}
+}
+
+func (l *larkWSHealthLogger) Error(ctx context.Context, args ...interface{}) {
+	if l.delegate != nil {
+		l.delegate.Error(ctx, args...)
+	}
 }
 
 // buildCard renders text into a Feishu interactive card JSON payload. While a
@@ -534,6 +852,145 @@ func buildRuntimeSettingsPickerCard(msg *core.Message, state core.RuntimeSetting
 	return string(b)
 }
 
+func buildAgentInteractionCard(msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction, outcome string) string {
+	request := interaction.Request
+	title := request.Title
+	if title == "" {
+		title = "Codex 需要确认"
+	}
+	template := "orange"
+	elements := []map[string]any{}
+	if outcome != "" {
+		template = "green"
+		if outcome == "decline" || outcome == "cancel" || outcome == "expired" {
+			template = "grey"
+		}
+		elements = append(elements, map[string]any{
+			"tag": "markdown", "content": "**已处理**：" + outcome,
+		})
+	} else {
+		detail := strings.TrimSpace(request.Description)
+		if request.Command != "" {
+			command := request.Command
+			if len(command) > 3000 {
+				command = command[:3000] + "…"
+			}
+			detail = "```text\n" + command + "\n```"
+		}
+		if request.Reason != "" {
+			if detail != "" {
+				detail += "\n"
+			}
+			detail += request.Reason
+		}
+		if request.Cwd != "" {
+			detail += "\n\n工作目录：`" + request.Cwd + "`"
+		}
+		if request.HighRisk {
+			detail += "\n\n<font color='red'>高风险操作：只能逐次允许。</font>"
+		}
+		if detail != "" {
+			elements = append(elements, map[string]any{"tag": "markdown", "content": detail})
+		}
+		if request.Kind == core.AgentInteractionUserInput {
+			elements = append(elements, interactionQuestionElements(msg, task, interaction)...)
+		} else {
+			elements = append(elements, interactionApprovalElements(msg, task, interaction)...)
+		}
+	}
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"template": template,
+			"title":    map[string]any{"tag": "plain_text", "content": title},
+		},
+		"body": map[string]any{"elements": elements},
+	}
+	data, err := json.Marshal(card)
+	if err != nil {
+		return `{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"Codex interaction unavailable"}]}}`
+	}
+	return string(data)
+}
+
+func interactionApprovalElements(msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) []map[string]any {
+	once := modelPickerButton("允许一次", "primary", interactionActionValue(msg, task, interaction, "accept", "", ""))
+	decline := modelPickerButton("拒绝", "danger", interactionActionValue(msg, task, interaction, "decline", "", ""))
+	buttons := []map[string]any{once}
+	if !interaction.Request.HighRisk {
+		session := modelPickerButton("本会话允许", "default", interactionActionValue(msg, task, interaction, "acceptForSession", "", ""))
+		session["confirm"] = map[string]any{
+			"title": map[string]any{"tag": "plain_text", "content": "确认本会话允许"},
+			"text":  map[string]any{"tag": "plain_text", "content": "仅当前 AgentNexus/Codex 会话有效，重启后失效。"},
+		}
+		buttons = append(buttons, session)
+	}
+	buttons = append(buttons, decline)
+	return []map[string]any{{"tag": "column_set", "flex_mode": "stretch", "columns": interactionButtonColumns(buttons)}}
+}
+
+func interactionQuestionElements(msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) []map[string]any {
+	request := interaction.Request
+	for _, question := range request.Questions {
+		if question.Secret {
+			return []map[string]any{
+				{"tag": "markdown", "content": "🔒 此问题包含敏感输入，只能在本机 AgentNexus 控制台处理。"},
+			}
+		}
+	}
+	elements := []map[string]any{}
+	if len(request.Questions) == 1 && len(request.Questions[0].Options) > 0 {
+		question := request.Questions[0]
+		elements = append(elements, map[string]any{"tag": "markdown", "content": "**" + question.Header + "**\n" + question.Question})
+		buttons := make([]map[string]any, 0, len(question.Options))
+		for _, option := range question.Options {
+			buttons = append(buttons, modelPickerButton(option.Label, "default",
+				interactionActionValue(msg, task, interaction, "answer", question.ID, option.Label)))
+		}
+		elements = append(elements, map[string]any{"tag": "column_set", "flex_mode": "stretch", "columns": interactionButtonColumns(buttons)})
+		return elements
+	}
+	for _, question := range request.Questions {
+		elements = append(elements,
+			map[string]any{"tag": "markdown", "content": "**" + question.Header + "**\n" + question.Question},
+			map[string]any{
+				"tag": "input", "name": "answer_" + question.ID,
+				"placeholder": map[string]any{"tag": "plain_text", "content": "请输入答案"},
+			},
+		)
+	}
+	elements = append(elements, modelPickerButton("提交", "primary",
+		interactionActionValue(msg, task, interaction, "answer", "", "")))
+	return elements
+}
+
+func interactionButtonColumns(buttons []map[string]any) []map[string]any {
+	columns := make([]map[string]any, 0, len(buttons))
+	for _, button := range buttons {
+		columns = append(columns, map[string]any{
+			"tag": "column", "width": "weighted", "weight": 1,
+			"elements": []map[string]any{button},
+		})
+	}
+	return columns
+}
+
+func interactionActionValue(msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction, decision, questionID, answer string) map[string]any {
+	return map[string]any{
+		modelPickerActionKey: codexInteractionAction,
+		"interaction_id":     interaction.ID,
+		"task_id":            task.ID,
+		"nonce":              interaction.Nonce,
+		"decision":           decision,
+		"question_id":        questionID,
+		"answer":             answer,
+		"chat_id":            msg.ChatID,
+		"chat_type":          msg.ChatType,
+		"conversation_key":   task.ConversationKey,
+	}
+}
+
 func runtimeSettingsScopeRow(msg *core.Message, current core.RuntimeSettingsScope) map[string]any {
 	return runtimeSettingsButtonRow(msg, []runtimeSettingsButton{
 		{label: "当前会话", primary: current == core.RuntimeSettingsScopeConversation, action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeConversation, Setting: core.RuntimeSettingScope}},
@@ -604,6 +1061,7 @@ func runtimeSettingsActionValue(msg *core.Message, action core.RuntimeSettingsAc
 		"reset":              action.Reset,
 		"chat_id":            msg.ChatID,
 		"chat_type":          msg.ChatType,
+		"conversation_key":   core.ResolveConversationKey(msg),
 	}
 }
 
@@ -631,6 +1089,7 @@ func modelPickerButtonRow(msg *core.Message, options []core.ModelPickerOption) m
 					"model":              option.Model,
 					"chat_id":            msg.ChatID,
 					"chat_type":          msg.ChatType,
+					"conversation_key":   core.ResolveConversationKey(msg),
 				}),
 			},
 		})
@@ -659,6 +1118,7 @@ func modelPickerResetRow(msg *core.Message) map[string]any {
 						modelPickerActionKey: modelPickerActionReset,
 						"chat_id":            msg.ChatID,
 						"chat_type":          msg.ChatType,
+						"conversation_key":   core.ResolveConversationKey(msg),
 					}),
 				},
 			},
@@ -742,40 +1202,243 @@ func buildStreamCardJSON(text string, done, failed bool) string {
 	return string(b)
 }
 
-// extractText pulls plain text out of a Feishu message content payload.
-func extractText(msgType, content string) string {
-	if msgType != "text" {
-		return ""
-	}
-	var c struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(content), &c); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(c.Text)
+type larkPostContent struct {
+	Title   string              `json:"title"`
+	Content [][]larkPostElement `json:"content"`
 }
 
-func (c *larkClient) modelCommandFromCardAction(project string, event *callback.CardActionTriggerEvent) (*core.Message, bool) {
+type larkPostElement struct {
+	Tag       string `json:"tag"`
+	Text      string `json:"text"`
+	Href      string `json:"href"`
+	UserID    string `json:"user_id"`
+	UserName  string `json:"user_name"`
+	EmojiType string `json:"emoji_type"`
+}
+
+// extractText pulls readable text out of a Feishu message content payload.
+func extractText(msgType, content string) string {
+	switch msgType {
+	case "text":
+		var c struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(content), &c); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(c.Text)
+	case "post":
+		return extractPostText(content)
+	default:
+		return ""
+	}
+}
+
+func extractPostText(content string) string {
+	var post larkPostContent
+	if err := json.Unmarshal([]byte(content), &post); err != nil {
+		return ""
+	}
+	if post.Title != "" || post.Content != nil {
+		return renderPostText(post)
+	}
+
+	// Some Feishu APIs wrap post content by locale, for example
+	// {"zh_cn":{"title":"...","content":[...]}}. Prefer the common
+	// locales, then accept any other locale deterministically.
+	var localized map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &localized); err != nil {
+		return ""
+	}
+	preferred := []string{"zh_cn", "en_us", "ja_jp"}
+	keys := make([]string, 0, len(localized))
+	seen := make(map[string]bool, len(preferred))
+	for _, key := range preferred {
+		if _, ok := localized[key]; ok {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	remaining := make([]string, 0, len(localized))
+	for key := range localized {
+		if !seen[key] {
+			remaining = append(remaining, key)
+		}
+	}
+	slices.Sort(remaining)
+	keys = append(keys, remaining...)
+	for _, key := range keys {
+		var candidate larkPostContent
+		if err := json.Unmarshal(localized[key], &candidate); err != nil {
+			continue
+		}
+		if candidate.Title != "" || candidate.Content != nil {
+			return renderPostText(candidate)
+		}
+	}
+	return ""
+}
+
+func renderPostText(post larkPostContent) string {
+	lines := make([]string, 0, len(post.Content)+1)
+	if title := strings.TrimSpace(post.Title); title != "" {
+		lines = append(lines, title)
+	}
+	for _, paragraph := range post.Content {
+		var line strings.Builder
+		for _, element := range paragraph {
+			switch element.Tag {
+			case "a":
+				label := strings.TrimSpace(element.Text)
+				href := strings.TrimSpace(element.Href)
+				switch {
+				case label == "":
+					line.WriteString(href)
+				case href == "" || label == href:
+					line.WriteString(element.Text)
+				default:
+					line.WriteString(element.Text)
+					line.WriteString(" (")
+					line.WriteString(href)
+					line.WriteByte(')')
+				}
+			case "at":
+				name := strings.TrimSpace(element.UserName)
+				if name == "" {
+					name = strings.TrimSpace(element.UserID)
+				}
+				if name != "" {
+					line.WriteByte('@')
+					line.WriteString(name)
+				}
+			case "img":
+				line.WriteString("[图片]")
+			case "media":
+				line.WriteString("[媒体]")
+			case "emotion":
+				if emoji := strings.TrimSpace(element.EmojiType); emoji != "" {
+					line.WriteByte(':')
+					line.WriteString(emoji)
+					line.WriteByte(':')
+				}
+			case "br":
+				line.WriteByte('\n')
+			default:
+				// Text and future text-bearing element types can degrade to their
+				// textual representation instead of dropping the whole message.
+				line.WriteString(element.Text)
+			}
+		}
+		if text := strings.TrimSpace(line.String()); text != "" {
+			lines = append(lines, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func (c *larkClient) messageFromCardAction(project string, event *callback.CardActionTriggerEvent) (*core.Message, bool) {
 	if event == nil || event.Event == nil || event.Event.Action == nil {
 		return nil, false
 	}
-	value := event.Event.Action.Value
-	action := stringValue(value[modelPickerActionKey])
-	if action == "" {
-		return nil, false
-	}
-	chatID := stringValue(value["chat_id"])
-	chatType := stringValue(value["chat_type"])
-	if chatID == "" && event.Event.Context != nil {
-		chatID = event.Event.Context.OpenChatID
-	}
-	if chatID == "" {
-		return nil, false
-	}
 	messageID := ""
+	chatID := ""
 	if event.Event.Context != nil {
 		messageID = event.Event.Context.OpenMessageID
+		chatID = event.Event.Context.OpenChatID
+	}
+	userID := ""
+	if event.Event.Operator != nil {
+		userID = event.Event.Operator.OpenID
+	}
+	value := event.Event.Action.Value
+	action := stringValue(value[modelPickerActionKey])
+	actionValue := jsonValue(event.Event.Action.Value)
+	formValue := jsonValue(event.Event.Action.FormValue)
+	inputValue := event.Event.Action.InputValue
+	option := event.Event.Action.Option
+	options := strings.Join(event.Event.Action.Options, ",")
+	if action == codexInteractionAction {
+		// Approval nonces and user answers are used only for the in-memory
+		// control action. Channel JSONL/audit records retain correlation but
+		// never the replay token or submitted answer values.
+		actionValue = jsonValue(map[string]any{
+			modelPickerActionKey: codexInteractionAction,
+			"interaction_id":     stringValue(value["interaction_id"]),
+		})
+		formValue = ""
+		inputValue = ""
+		option = ""
+		options = ""
+	}
+	msg := &core.Message{
+		ID:                   larkCardActionEventID(event, messageID),
+		InteractionMessageID: messageID,
+		ChatID:               chatID,
+		UserID:               userID,
+		MentionedBot:         true,
+		Platform:             c.platform,
+		Project:              project,
+		Timestamp:            time.Now(),
+		LogOnly:              true,
+		Callback: &core.CallbackEvent{
+			Type:        larkCardActionEventType(event),
+			MessageID:   messageID,
+			Host:        event.Event.Host,
+			ActionTag:   event.Event.Action.Tag,
+			ActionName:  event.Event.Action.Name,
+			ActionValue: actionValue,
+			FormValue:   formValue,
+			InputValue:  inputValue,
+			Option:      option,
+			Options:     options,
+			Checked:     event.Event.Action.Checked,
+			Timezone:    event.Event.Action.Timezone,
+		},
+	}
+	if action == "" {
+		return msg, true
+	}
+	if valueChatID := stringValue(value["chat_id"]); valueChatID != "" {
+		msg.ChatID = valueChatID
+	}
+	msg.ChatType = stringValue(value["chat_type"])
+	msg.ConversationKey = stringValue(value["conversation_key"])
+	if msg.ChatID == "" {
+		return msg, true
+	}
+	if action == codexInteractionAction {
+		interactionID := stringValue(value["interaction_id"])
+		nonce := stringValue(value["nonce"])
+		if interactionID == "" || nonce == "" {
+			return msg, true
+		}
+		decision := stringValue(value["decision"])
+		answers := map[string][]string{}
+		if questionID := stringValue(value["question_id"]); questionID != "" {
+			answers[questionID] = []string{stringValue(value["answer"])}
+		}
+		for key, raw := range event.Event.Action.FormValue {
+			if !strings.HasPrefix(key, "answer_") {
+				continue
+			}
+			questionID := strings.TrimPrefix(key, "answer_")
+			answer := strings.TrimSpace(fmt.Sprint(raw))
+			if questionID != "" {
+				answers[questionID] = []string{answer}
+			}
+		}
+		if decision == "answer" {
+			decision = ""
+		}
+		msg.LogOnly = false
+		msg.AgentInteractionAction = &core.AgentInteractionAction{
+			InteractionID: interactionID,
+			TaskID:        stringValue(value["task_id"]),
+			Nonce:         nonce,
+			Decision:      decision,
+			Answers:       answers,
+		}
+		return msg, true
 	}
 	if action == runtimeSettingsAction {
 		scope := core.RuntimeSettingsScope(stringValue(value["scope"]))
@@ -784,56 +1447,45 @@ func (c *larkClient) modelCommandFromCardAction(project string, event *callback.
 			scope = core.RuntimeSettingsScopeConversation
 		}
 		if setting == "" {
-			return nil, false
+			return msg, true
 		}
-		userID := ""
-		if event.Event.Operator != nil {
-			userID = event.Event.Operator.OpenID
+		msg.LogOnly = false
+		msg.RuntimeSettingsAction = &core.RuntimeSettingsAction{
+			Scope: scope, Setting: setting, Value: stringValue(value["value"]), Reset: boolValue(value["reset"]),
 		}
-		return &core.Message{
-			ID:                   larkCardActionEventID(event, messageID),
-			InteractionMessageID: messageID,
-			ChatID:               chatID,
-			ChatType:             chatType,
-			UserID:               userID,
-			MentionedBot:         true,
-			Platform:             c.platform,
-			Project:              project,
-			Timestamp:            time.Now(),
-			RuntimeSettingsAction: &core.RuntimeSettingsAction{
-				Scope: scope, Setting: setting, Value: stringValue(value["value"]), Reset: boolValue(value["reset"]),
-			},
-		}, true
+		return msg, true
 	}
 	text := ""
 	switch action {
 	case modelPickerActionSelect:
 		model := stringValue(value["model"])
 		if model == "" {
-			return nil, false
+			return msg, true
 		}
 		text = "/model " + model
 	case modelPickerActionReset:
 		text = "/model reset"
 	default:
-		return nil, false
+		return msg, true
 	}
-	userID := ""
-	if event.Event.Operator != nil {
-		userID = event.Event.Operator.OpenID
+	msg.LogOnly = false
+	msg.Text = text
+	return msg, true
+}
+
+func larkCardActionEventType(event *callback.CardActionTriggerEvent) string {
+	if event != nil && event.EventV2Base != nil && event.EventV2Base.Header != nil && event.EventV2Base.Header.EventType != "" {
+		return event.EventV2Base.Header.EventType
 	}
-	return &core.Message{
-		ID:                   larkCardActionEventID(event, messageID),
-		InteractionMessageID: messageID,
-		ChatID:               chatID,
-		ChatType:             chatType,
-		UserID:               userID,
-		Text:                 text,
-		MentionedBot:         true,
-		Platform:             c.platform,
-		Project:              project,
-		Timestamp:            time.Now(),
-	}, true
+	return "card.action.trigger"
+}
+
+func jsonValue(value any) string {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func larkCardActionEventID(event *callback.CardActionTriggerEvent, fallback string) string {

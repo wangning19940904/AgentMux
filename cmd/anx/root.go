@@ -37,6 +37,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(webCmd())
 	root.AddCommand(usageCmd())
 	root.AddCommand(providerCmd())
+	root.AddCommand(observabilityCmd())
 	root.AddCommand(sendCmd())
 	root.AddCommand(versionCmd())
 	return root

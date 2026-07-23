@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -30,6 +31,11 @@ const (
 	observationMasterKeySize           = 32
 	observationKeychainService         = "AgentNexus Observability Master Key"
 	observationPayloadChunkBytes       = 1 << 20
+	observationCleanupBatchSize        = 256
+	observationOrphanGracePeriod       = time.Hour
+	observationOrphanPayloadPredicate  = `created_at<? AND NOT EXISTS
+		(SELECT 1 FROM observation_events WHERE observation_events.payload_id=observation_payloads.payload_id
+		 AND observation_events.payload_id<>'')`
 )
 
 var errObservationSecureKeyUnavailable = errors.New("secure observation master key unavailable")
@@ -45,6 +51,12 @@ type ObservationRecorderOptions struct {
 	Now              func() time.Time
 }
 
+// ObservationPayloadSourceResolver materializes the public content candidates
+// derivable from one trusted local source record. The recorder selects the
+// exact candidate by checksum and performs final redaction so a source
+// reference cannot bypass the same protection used by encrypted payloads.
+type ObservationPayloadSourceResolver func(context.Context, core.ObservationPayloadRef) ([]core.ObservationContent, error)
+
 // ObservationRecorder is a bus subscriber backed by SQLite. If secure key
 // material is unavailable, it remains operational in metadata-only mode.
 type ObservationRecorder struct {
@@ -56,6 +68,7 @@ type ObservationRecorder struct {
 	contentRetention time.Duration
 	detailRetention  time.Duration
 	now              func() time.Time
+	sourceResolver   ObservationPayloadSourceResolver
 }
 
 func NewObservationRecorder(store *Store, options ObservationRecorderOptions) (*ObservationRecorder, error) {
@@ -146,6 +159,14 @@ func (r *ObservationRecorder) MetadataOnlyReason() string {
 	return r.metadataReason
 }
 
+// SetPayloadSourceResolver enables verified local-file payload references.
+// It is normally wired to the transcript tailer by the observability runtime.
+func (r *ObservationRecorder) SetPayloadSourceResolver(resolver ObservationPayloadSourceResolver) {
+	if r != nil {
+		r.sourceResolver = resolver
+	}
+}
+
 // Observe implements core.ObservationHandler. Plaintext content is removed
 // from the envelope before the event is serialized in every code path.
 func (r *ObservationRecorder) Observe(ctx context.Context, envelope core.ObservationEnvelope) error {
@@ -175,6 +196,18 @@ func (r *ObservationRecorder) Record(ctx context.Context, envelope core.Observat
 	// that contract centrally so a malformed external Envelope cannot bypass
 	// encryption by hiding content or credentials inside Attributes.
 	envelope.Attributes = sanitizeObservationAttributes(envelope.Attributes, r.knownSecrets)
+	alreadyRecorded, err := r.store.observationEventRecorded(ctx, envelope.EventID, envelope.DedupeKey)
+	if err != nil {
+		envelope.Content = nil
+		return envelope, err
+	}
+	if alreadyRecorded {
+		// Transcript delivery is intentionally at-least-once. Short-circuit a
+		// replay before compressing/encrypting its content; previously every
+		// duplicate allocated an unreferenced payload before event dedupe ran.
+		envelope.Content = nil
+		return envelope, nil
+	}
 	var payloadErr error
 	if envelope.Content != nil && len(envelope.Content.Data) > 0 {
 		if r.MetadataOnly() {
@@ -192,7 +225,13 @@ func (r *ObservationRecorder) Record(ctx context.Context, envelope core.Observat
 				envelope.Content = nil
 				return envelope, r.store.RecordObservation(ctx, envelope)
 			}
-			ref, err := r.storeObservationPayload(ctx, *envelope.Content, contentTime)
+			var ref *core.ObservationPayloadRef
+			var err error
+			if envelope.Content.Source != nil {
+				ref, err = r.referenceObservationPayload(envelope.EventID, *envelope.Content, contentTime)
+			} else {
+				ref, err = r.storeObservationPayload(ctx, *envelope.Content, contentTime)
+			}
 			if err != nil {
 				payloadErr = err
 				envelope.Attributes = cloneObservationAttributes(envelope.Attributes)
@@ -203,8 +242,15 @@ func (r *ObservationRecorder) Record(ctx context.Context, envelope core.Observat
 		}
 	}
 	envelope.Content = nil
-	recordErr := r.store.RecordObservation(ctx, envelope)
-	return envelope, errors.Join(payloadErr, recordErr)
+	inserted, recordErr := r.store.recordObservation(ctx, envelope)
+	var cleanupErr error
+	if envelope.PayloadRef != nil && (!inserted || recordErr != nil) {
+		cleanupErr = r.store.deleteObservationPayloadIfUnreferenced(ctx, envelope.PayloadRef.ID)
+		// A failed or deduplicated event must never be exported with a payload
+		// reference that its durable event does not own.
+		envelope.PayloadRef = nil
+	}
+	return envelope, errors.Join(payloadErr, recordErr, cleanupErr)
 }
 
 func suppressHiddenReasoningContent(envelope core.ObservationEnvelope) bool {
@@ -226,6 +272,34 @@ func suppressHiddenReasoningContent(envelope core.ObservationEnvelope) bool {
 
 func (r *ObservationRecorder) Handler(ctx context.Context, envelope core.ObservationEnvelope) error {
 	return r.Observe(ctx, envelope)
+}
+
+func (r *ObservationRecorder) referenceObservationPayload(eventID string, content core.ObservationContent, contentTime time.Time) (*core.ObservationPayloadRef, error) {
+	source := content.Source
+	if source == nil || source.Storage != core.ObservationPayloadStorageTranscriptFile {
+		return nil, errors.New("unsupported observation content source")
+	}
+	if !filepath.IsAbs(source.Path) || source.Offset < 0 || source.Length <= 0 || strings.TrimSpace(source.SHA256) == "" {
+		return nil, errors.New("incomplete transcript content source")
+	}
+	contentType := content.ContentType
+	if contentType == "" {
+		contentType = "text/plain; charset=utf-8"
+	}
+	// The source record itself and the selected public-content candidate are
+	// both authenticated. Do not run the comparatively expensive secret scanner
+	// over large transcript bodies during backfill; no plaintext is persisted,
+	// and ReadEnvelopePayload always redacts immediately before returning it.
+	digest := sha256.Sum256(content.Data)
+	expiresAt := contentTime.Add(r.contentRetention)
+	return &core.ObservationPayloadRef{
+		ID: "payload_source_" + strings.TrimPrefix(eventID, "obs_"), Storage: source.Storage,
+		ContentType: contentType, OriginalBytes: int64(len(content.Data)), StoredBytes: 0,
+		Redacted: true, ExpiresAt: expiresAt, SourcePath: filepath.Clean(source.Path),
+		SourceOffset: source.Offset, SourceLength: source.Length, SourceIdentity: source.Identity,
+		SourceSHA256: strings.ToLower(source.SHA256), SourceRuntime: source.Runtime, SourceClass: source.Class,
+		SourceContentSHA256: hex.EncodeToString(digest[:]),
+	}, nil
 }
 
 func (r *ObservationRecorder) storeObservationPayload(ctx context.Context, content core.ObservationContent, contentTime time.Time) (*core.ObservationPayloadRef, error) {
@@ -281,7 +355,7 @@ func (r *ObservationRecorder) storeObservationPayload(ctx context.Context, conte
 	}
 	digest := sha256.Sum256(redacted)
 	expiresAt := contentTime.Add(r.contentRetention)
-	tx, err := r.store.db.BeginTx(ctx, nil)
+	tx, err := r.store.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +383,28 @@ func (r *ObservationRecorder) storeObservationPayload(ctx context.Context, conte
 	}, nil
 }
 
+func (s *Store) deleteObservationPayloadIfUnreferenced(ctx context.Context, payloadID string) error {
+	if strings.TrimSpace(payloadID) == "" {
+		return nil
+	}
+	tx, err := s.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_payload_chunks
+		WHERE payload_id=? AND NOT EXISTS
+		(SELECT 1 FROM observation_events WHERE payload_id=? AND payload_id<>'')`, payloadID, payloadID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_payloads
+		WHERE payload_id=? AND NOT EXISTS
+		(SELECT 1 FROM observation_events WHERE payload_id=? AND payload_id<>'')`, payloadID, payloadID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (r *ObservationRecorder) loadOrCreateObservationDataKey(ctx context.Context, keyID string, now time.Time) ([]byte, error) {
 	var wrapNonce, wrappedKey []byte
 	err := r.store.db.QueryRowContext(ctx, `SELECT wrap_nonce,wrapped_key FROM observation_data_keys WHERE key_id=?`, keyID).Scan(&wrapNonce, &wrappedKey)
@@ -330,7 +426,7 @@ func (r *ObservationRecorder) loadOrCreateObservationDataKey(ctx context.Context
 	// Retain the wrapped key slightly longer than content, then remove it only
 	// after no payload rows reference it.
 	expiresAt := now.Add(r.contentRetention + 24*time.Hour)
-	result, err := r.store.db.ExecContext(ctx, `INSERT OR IGNORE INTO observation_data_keys
+	result, err := r.store.writer.ExecContext(ctx, `INSERT OR IGNORE INTO observation_data_keys
 		(key_id,wrap_nonce,wrapped_key,created_at,expires_at) VALUES(?,?,?,?,?)`, keyID, wrapNonce, wrappedKey,
 		observationTime(now), observationTime(expiresAt))
 	if err != nil {
@@ -382,6 +478,63 @@ func unwrapObservationDataKey(masterKey []byte, keyID string, nonce, wrapped []b
 		return nil, fmt.Errorf("observation data key %s has invalid length", keyID)
 	}
 	return key, nil
+}
+
+// ReadEnvelopePayload materializes either a verified transcript-file reference
+// or a conventional encrypted SQLite payload for an authenticated local caller.
+func (r *ObservationRecorder) ReadEnvelopePayload(ctx context.Context, envelope core.ObservationEnvelope) ([]byte, string, error) {
+	if r == nil {
+		return nil, "", errors.New("observation recorder unavailable")
+	}
+	if envelope.PayloadRef == nil {
+		return nil, "", sql.ErrNoRows
+	}
+	ref := *envelope.PayloadRef
+	if ref.Storage != core.ObservationPayloadStorageTranscriptFile {
+		return r.ReadPayload(ctx, ref.ID)
+	}
+	if !ref.ExpiresAt.IsZero() && !ref.ExpiresAt.After(r.now().UTC()) {
+		return nil, "", sql.ErrNoRows
+	}
+	if r.sourceResolver == nil {
+		return nil, "", errors.New("observation payload source resolver unavailable")
+	}
+	if strings.TrimSpace(ref.SourceContentSHA256) == "" && strings.TrimSpace(ref.ContentSHA256) == "" {
+		return nil, "", errors.New("observation source payload checksum missing")
+	}
+	candidates, err := r.sourceResolver(ctx, ref)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		candidateType := candidate.ContentType
+		if candidateType == "" {
+			candidateType = "text/plain; charset=utf-8"
+		}
+		if ref.ContentType != "" && candidateType != ref.ContentType {
+			continue
+		}
+		if ref.SourceContentSHA256 != "" {
+			rawDigest := sha256.Sum256(candidate.Data)
+			if !strings.EqualFold(hex.EncodeToString(rawDigest[:]), ref.SourceContentSHA256) {
+				continue
+			}
+		}
+		knownSecrets := append(append([]string(nil), r.knownSecrets...), candidate.KnownSecrets...)
+		redacted, _ := RedactObservationContent(candidate.Data, knownSecrets)
+		if ref.ContentSHA256 == "" {
+			return redacted, candidateType, nil
+		}
+		digest := sha256.Sum256(redacted)
+		if strings.EqualFold(hex.EncodeToString(digest[:]), ref.ContentSHA256) {
+			return redacted, candidateType, nil
+		}
+		clearObservationBytes(redacted)
+	}
+	return nil, "", errors.New("observation source payload checksum mismatch")
 }
 
 // ReadPayload decrypts a payload for an authenticated local caller. It never
@@ -693,38 +846,107 @@ func (s *Store) CleanupObservationRetention(ctx context.Context, now time.Time, 
 	}
 	cutoff := observationTime(now.UTC().Add(-detailRetention))
 	nowText := observationTime(now.UTC())
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ObservationCleanupResult{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
+	orphanBefore := observationTime(now.UTC().Add(-observationOrphanGracePeriod))
 	var result ObservationCleanupResult
-	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_payload_chunks WHERE payload_id IN
-		(SELECT payload_id FROM observation_payloads WHERE expires_at<=?)`, nowText); err != nil {
-		return ObservationCleanupResult{}, err
+	for {
+		count, err := s.cleanupExpiredObservationPayloadBatch(ctx, nowText)
+		if err != nil {
+			return result, err
+		}
+		result.Payloads += count
+		if count == 0 {
+			break
+		}
+	}
+	// Old unreferenced payloads can be left behind by a crash between the
+	// payload and event commits. The grace period avoids racing an in-flight
+	// recorder; batching also repairs databases created by older releases that
+	// allocated payloads before event dedupe.
+	for {
+		count, err := s.cleanupOrphanObservationPayloadBatch(ctx, orphanBefore)
+		if err != nil {
+			return result, err
+		}
+		result.Payloads += count
+		if count == 0 {
+			break
+		}
 	}
 	deletions := []struct {
 		query string
 		args  []any
 		count *int64
 	}{
-		{`DELETE FROM observation_payloads WHERE expires_at<=?`, []any{nowText}, &result.Payloads},
-		{`DELETE FROM observation_events WHERE timestamp<?`, []any{cutoff}, &result.Events},
-		{`DELETE FROM observation_spans WHERE COALESCE(NULLIF(ended_at,''),started_at)<?`, []any{cutoff}, &result.Spans},
-		{`DELETE FROM observation_traces WHERE COALESCE(NULLIF(ended_at,''),started_at)<?`, []any{cutoff}, &result.Traces},
-		{`DELETE FROM observation_export_outbox WHERE status IN ('sent','discarded') AND updated_at<?`, []any{cutoff}, &result.Outbox},
-		{`DELETE FROM observation_data_keys WHERE expires_at<=? AND NOT EXISTS
-			(SELECT 1 FROM observation_payloads WHERE observation_payloads.key_id=observation_data_keys.key_id)`, []any{nowText}, &result.DataKeys},
+		{`DELETE FROM observation_events WHERE rowid IN
+			(SELECT rowid FROM observation_events WHERE timestamp<? LIMIT ?)`, []any{cutoff}, &result.Events},
+		{`DELETE FROM observation_spans WHERE rowid IN
+			(SELECT rowid FROM observation_spans WHERE COALESCE(NULLIF(ended_at,''),started_at)<? LIMIT ?)`, []any{cutoff}, &result.Spans},
+		{`DELETE FROM observation_traces WHERE rowid IN
+			(SELECT rowid FROM observation_traces WHERE COALESCE(NULLIF(ended_at,''),started_at)<? LIMIT ?)`, []any{cutoff}, &result.Traces},
+		{`DELETE FROM observation_export_outbox WHERE rowid IN
+			(SELECT rowid FROM observation_export_outbox WHERE status IN ('sent','discarded') AND updated_at<? LIMIT ?)`, []any{cutoff}, &result.Outbox},
+		{`DELETE FROM observation_data_keys WHERE rowid IN
+			(SELECT rowid FROM observation_data_keys WHERE expires_at<=? AND NOT EXISTS
+			 (SELECT 1 FROM observation_payloads WHERE observation_payloads.key_id=observation_data_keys.key_id) LIMIT ?)`, []any{nowText}, &result.DataKeys},
 	}
 	for _, deletion := range deletions {
-		execResult, err := tx.ExecContext(ctx, deletion.query, deletion.args...)
+		count, err := s.cleanupObservationRowsInBatches(ctx, deletion.query, deletion.args...)
 		if err != nil {
-			return ObservationCleanupResult{}, err
+			return result, err
 		}
-		*deletion.count, _ = execResult.RowsAffected()
-	}
-	if err := tx.Commit(); err != nil {
-		return ObservationCleanupResult{}, err
+		*deletion.count = count
 	}
 	return result, nil
+}
+
+func (s *Store) cleanupExpiredObservationPayloadBatch(ctx context.Context, before string) (int64, error) {
+	return s.cleanupObservationPayloadBatch(ctx, `expires_at<=?`, []any{before})
+}
+
+func (s *Store) cleanupOrphanObservationPayloadBatch(ctx context.Context, before string) (int64, error) {
+	return s.cleanupObservationPayloadBatch(ctx, observationOrphanPayloadPredicate, []any{before})
+}
+
+func (s *Store) cleanupObservationPayloadBatch(ctx context.Context, predicate string, args []any) (int64, error) {
+	tx, err := s.writer.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	batchArgs := append(append([]any(nil), args...), observationCleanupBatchSize)
+	selection := `SELECT payload_id FROM observation_payloads WHERE ` + predicate + ` ORDER BY created_at LIMIT ?`
+	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_payload_chunks WHERE payload_id IN (`+selection+`)`, batchArgs...); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM observation_payloads WHERE payload_id IN (`+selection+`)`, batchArgs...)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) cleanupObservationRowsInBatches(ctx context.Context, query string, args ...any) (int64, error) {
+	var total int64
+	for {
+		batchArgs := append(append([]any(nil), args...), observationCleanupBatchSize)
+		result, err := s.writer.ExecContext(ctx, query, batchArgs...)
+		if err != nil {
+			return total, err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += count
+		if count == 0 {
+			return total, nil
+		}
+	}
 }

@@ -77,6 +77,9 @@ func TestWriteClaudeConfigThirdPartyUsesAuthToken(t *testing.T) {
 	if env["ANTHROPIC_BASE_URL"] != p.BaseURL {
 		t.Fatalf("base url = %v", env["ANTHROPIC_BASE_URL"])
 	}
+	if env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] != "1" {
+		t.Fatalf("gateway model discovery = %v", env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
+	}
 	if env["ANTHROPIC_AUTH_TOKEN"] != "sk-third-party" {
 		t.Fatalf("auth token = %v", env["ANTHROPIC_AUTH_TOKEN"])
 	}
@@ -127,7 +130,7 @@ func TestWriteClaudeConfigOfficialClearsManagedKeys(t *testing.T) {
 	}
 	settings := readJSON(t, filepath.Join(claudeDir, "settings.json"))
 	env := envOf(t, settings)
-	for _, k := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "API_TIMEOUT_MS"} {
+	for _, k := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "API_TIMEOUT_MS"} {
 		if _, ok := env[k]; ok {
 			t.Fatalf("stale key %s survived official switch: %v", k, env)
 		}

@@ -39,12 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusButton() {
         guard let button = statusItem.button else { return }
-        // The app icon is shown as a leading image, followed by a single
-        // animated emoji and the compact metrics as the button title.
+        // The app logo is the only default menu-bar content. Optional status
+        // details are appended as a title after the user enables them.
         button.image = appIcon()
-        button.imagePosition = .imageLeading
+        button.imagePosition = .imageOnly
         button.imageHugsTitle = true
-        button.title = "✨"
+        button.title = ""
         button.toolTip = "AgentNexus"
     }
 
@@ -72,21 +72,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.client.fetchDaily { [weak self] report in
                 guard let self = self else { return }
                 guard let report = report else {
-                    self.statusItem.button?.title = "⚠️"
+                    self.applyStatusTitle(self.hasStatusContent ? "⚠️" : "")
                     self.rebuildMenu(report: nil)
                     return
                 }
-                self.statusItem.button?.title = self.statusTitle(report: report)
+                self.applyStatusTitle(self.statusTitle(report: report))
                 self.rebuildMenu(report: report)
             }
         }
     }
 
-    // statusTitle builds the menu bar text: an animated icon reflecting current
-    // burn intensity followed by the enabled compact metrics.
+    private var hasStatusContent: Bool {
+        settings.show_status_icon || settings.show_cost || settings.show_tokens || settings.show_messages
+    }
+
+    private func applyStatusTitle(_ title: String) {
+        guard let button = statusItem.button else { return }
+        button.title = title
+        button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+    }
+
+    // statusTitle builds only the optional content that follows the app logo.
     private func statusTitle(report: UsageReport) -> String {
         let t = report.totals
-        var parts: [String] = [iconFor(report: report)]
+        var parts: [String] = []
+        if settings.show_status_icon {
+            parts.append(iconFor(report: report))
+        }
         if settings.show_cost {
             parts.append(fmtCostShort(t.cost_usd))
         }

@@ -116,10 +116,18 @@ func observationUsageCompleteness(record core.UsageRecord) int64 {
 }
 
 // MaterializeObservationDailyUsage refreshes every day still represented by
-// detailed model spans. Days whose details have already expired are left
-// untouched, providing a compact long-term usage history.
+// detailed model spans. It is intended for explicit full rebuilds; startup and
+// maintenance callers should use MaterializeObservationDailyUsageSince to
+// avoid monopolizing the database while scanning a large observation store.
 func (s *Store) MaterializeObservationDailyUsage(ctx context.Context) error {
-	records, err := s.QueryObservationUsage(ctx, time.Time{})
+	return s.MaterializeObservationDailyUsageSince(ctx, time.Time{})
+}
+
+// MaterializeObservationDailyUsageSince replaces daily rollups on or after
+// since. Days before the refresh window remain untouched, providing compact
+// long-term history after detailed traces expire.
+func (s *Store) MaterializeObservationDailyUsageSince(ctx context.Context, since time.Time) error {
+	records, err := s.QueryObservationUsage(ctx, since)
 	if err != nil {
 		return err
 	}
@@ -139,11 +147,18 @@ func (s *Store) MaterializeObservationDailyUsage(ctx context.Context) error {
 		current.Requests++
 		aggregates[key] = current
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if since.IsZero() {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM observation_daily_usage`); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, `DELETE FROM observation_daily_usage WHERE day>=?`, since.UTC().Format("2006-01-02")); err != nil {
+		return err
+	}
 	now := observationTime(time.Now().UTC())
 	for key, aggregate := range aggregates {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO observation_daily_usage
