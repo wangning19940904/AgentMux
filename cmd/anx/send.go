@@ -20,6 +20,16 @@ func sendCmd() *cobra.Command {
 		Use:   "send",
 		Short: "Send a message to a project via the running daemon's bridge",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, err := loadConfig(false)
+			if err != nil {
+				return err
+			}
+			if addr == "" {
+				addr = cfg.Server.Addr
+			}
+			if token == "" {
+				token = cfg.Bridge.Token
+			}
 			body, _ := json.Marshal(map[string]string{"project": project, "text": text})
 			url := "http://" + addr + "/api/v1/send"
 			req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, url, bytes.NewReader(body))
@@ -44,8 +54,8 @@ func sendCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&project, "project", "", "target project name")
 	cmd.Flags().StringVar(&text, "text", "", "message text")
-	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8765", "daemon address")
-	cmd.Flags().StringVar(&token, "token", "", "bridge token")
+	cmd.Flags().StringVar(&addr, "addr", "", "daemon address (default from config)")
+	cmd.Flags().StringVar(&token, "token", "", "bridge token (default from config)")
 	_ = cmd.MarkFlagRequired("text")
 	return cmd
 }

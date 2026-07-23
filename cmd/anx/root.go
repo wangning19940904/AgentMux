@@ -30,11 +30,14 @@ func rootCmd() *cobra.Command {
 			logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 		},
 	}
-	root.PersistentFlags().StringVarP(&flagConfig, "config", "c", "config.toml", "path to config.toml")
+	root.PersistentFlags().StringVarP(&flagConfig, "config", "c", "", "path to config.toml (default: ./config.toml, $XDG_CONFIG_HOME/agentnexus/config.toml, /etc/agentnexus/config.toml)")
 	root.PersistentFlags().StringVar(&flagDB, "db", "", "path to SQLite db (default ~/.agentnexus/agentnexus.db)")
 
+	root.AddCommand(clientCmd())
 	root.AddCommand(serveCmd())
 	root.AddCommand(webCmd())
+	root.AddCommand(configCmd())
+	root.AddCommand(toolsCmd())
 	root.AddCommand(usageCmd())
 	root.AddCommand(providerCmd())
 	root.AddCommand(observabilityCmd())

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"context"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/agentnexus/agentnexus/config"
 	"github.com/agentnexus/agentnexus/store"
@@ -17,37 +17,132 @@ import (
 
 func dbPath() string {
 	if flagDB != "" {
+		if path, err := config.ExpandPath(flagDB); err == nil {
+			return path
+		}
 		return flagDB
 	}
 	return store.DefaultPath()
 }
 
-// bootstrap loads config + opens the store. Shared by serve/web.
-func bootstrap() (*config.Config, *store.Store, error) {
-	cfg, err := config.Load(flagConfig)
+func loadConfig(required bool) (*config.Config, string, error) {
+	cfg, path, err := config.LoadResolved(flagConfig)
 	if err != nil {
-		return nil, nil, err
+		if !required && config.IsNotFound(err) && flagConfig == "" && os.Getenv(config.EnvPath) == "" {
+			return config.Default(), "", nil
+		}
+		return nil, "", err
+	}
+	return cfg, path, nil
+}
+
+// bootstrap loads config + opens the store. Shared by serve/web/client.
+func bootstrap() (*config.Config, *store.Store, error) {
+	cfg, st, _, err := bootstrapWithPath()
+	return cfg, st, err
+}
+
+func bootstrapWithPath() (*config.Config, *store.Store, string, error) {
+	return bootstrapWithPathRequired(true)
+}
+
+func bootstrapWithPathRequired(required bool) (*config.Config, *store.Store, string, error) {
+	cfg, path, err := loadConfig(required)
+	if err != nil {
+		return nil, nil, "", err
 	}
 	st, err := store.Open(dbPath())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return cfg, st, nil
+	return cfg, st, path, nil
 }
 
 // bootstrapStore opens just the store, tolerating a missing config file. Used
 // by commands that only need the DB (provider, usage) so they work without a
 // config.toml present.
 func bootstrapStore() (*config.Config, *store.Store, error) {
-	cfg, err := config.Load(flagConfig)
+	cfg, _, err := loadConfig(false)
 	if err != nil {
-		cfg = config.Default()
+		return nil, nil, err
 	}
 	st, err := store.Open(dbPath())
 	if err != nil {
 		return nil, nil, err
 	}
 	return cfg, st, nil
+}
+
+type daemonOptions struct {
+	addrOverride string
+	printConfig  bool
+	printReady   bool
+	printWebUI   bool
+	openWebUI    bool
+	allowDefault bool
+}
+
+func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
+	cfg, st, configPath, err := bootstrapWithPathRequired(!opts.allowDefault)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if opts.addrOverride != "" {
+		cfg.Server.Addr = opts.addrOverride
+	}
+
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	srv, providerSvc, usageEngine := newServer(cfg, st)
+	eng, connectSvc, err := attachRuntime(ctx, cfg, st, srv, providerSvc, usageEngine)
+	if err != nil {
+		return err
+	}
+	if err := providerSvc.RestoreProxyState(ctx); err != nil {
+		logger.Warn("local routing restore failed", "err", err)
+	}
+	defer func() { _ = providerSvc.Proxy().Stop() }()
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- srv.ListenAndServe(ctx) }()
+	go func() { errCh <- eng.Start(ctx) }()
+	if err := connectSvc.Start(ctx); err != nil {
+		logger.Warn("connect runtime start failed", "err", err)
+	}
+
+	if opts.printConfig {
+		if configPath != "" {
+			cmd.Println("Config:", configPath)
+		} else {
+			cmd.Println("Config: built-in defaults (run `anx config init` to create one)")
+		}
+	}
+	if opts.printReady {
+		cmd.Println("AgentNexus client:", cfg.Server.Addr, "(Ctrl-C to stop)")
+	}
+	if opts.printWebUI || opts.openWebUI {
+		url := "http://" + cfg.Server.Addr
+		if opts.openWebUI {
+			time.Sleep(300 * time.Millisecond)
+			if err := openBrowser(url); err != nil {
+				logger.Warn("open browser failed", "err", err)
+			}
+		}
+		cmd.Println("WebUI:", url)
+	}
+
+	select {
+	case err := <-errCh:
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 func serveCmd() *cobra.Command {
@@ -55,31 +150,7 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the bridge daemon (IM gateway + management API)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, st, err := bootstrap()
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-
-			ctx, cancel := signal.NotifyContext(context.Background(),
-				os.Interrupt, syscall.SIGTERM)
-			defer cancel()
-
-			srv, providerSvc, usageEngine := newServer(cfg, st)
-			eng, connectSvc, err := attachRuntime(ctx, cfg, st, srv, providerSvc, usageEngine)
-			if err != nil {
-				return err
-			}
-			if err := providerSvc.RestoreProxyState(ctx); err != nil {
-				logger.Warn("local routing restore failed", "err", err)
-			}
-			defer func() { _ = providerSvc.Proxy().Stop() }()
-			go func() { _ = srv.ListenAndServe(ctx) }()
-			if err := connectSvc.Start(ctx); err != nil {
-				logger.Warn("connect runtime start failed", "err", err)
-			}
-
-			return eng.Start(ctx)
+			return runDaemon(cmd, daemonOptions{})
 		},
 	}
 }

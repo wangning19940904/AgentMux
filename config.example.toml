@@ -1,4 +1,6 @@
-# AgentNexus configuration (example). Copy to config.toml and edit.
+# AgentNexus configuration (example).
+# Copy to config.toml, run `anx config init`, or place it at
+# ~/.config/agentnexus/config.toml or /etc/agentnexus/config.toml.
 # ${ENV_VAR} placeholders are expanded from the environment.
 
 display_mode = "normal"  # quiet | compact | normal | full
@@ -11,37 +13,38 @@ enabled = false
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
 
 # ---- Projects: pair an agent with one or more IM platforms ----
-[[projects]]
-name = "demo"
-agent = "claudecode"
-work_dir = "."
-system_prompt = "You are a helpful coding assistant."
+# Define projects here, or add channels and agent instances from the WebUI.
+# Keep the starter config runnable without credentials.
+#
+# [[projects]]
+# name = "demo"
+# agent = "claudecode"
+# work_dir = "."
+# system_prompt = "You are a helpful coding assistant."
 # default_model = "sonnet"
+#
+#   [projects.env]
+#   ANTHROPIC_API_KEY = "${MY_KEY}"
+#
+#   [[projects.platforms]]
+#   type = "feishu"
+#   app_id = "${FEISHU_APP_ID}"
+#   app_secret = "${FEISHU_APP_SECRET}"
+#   reply_scope = "dm_and_mentions"  # dm_and_mentions | all | mentions_only
+#   reply_mode = "stream_message"    # stream_message | stream_card
+#   ack_reaction_enabled = "true"
+#   ack_reaction_emojis = "OK,THUMBSUP,MUSCLE,THANKS"
 
-  [projects.env]
-  # ANTHROPIC_API_KEY = "${MY_KEY}"
-
-  [[projects.platforms]]
-  type = "feishu"
-  app_id = "${FEISHU_APP_ID}"
-  app_secret = "${FEISHU_APP_SECRET}"
-  # reply_scope: dm_and_mentions (default), all, mentions_only
-  reply_scope = "dm_and_mentions"
-  # reply_mode: stream_message (default), stream_card
-  reply_mode = "stream_message"
-  ack_reaction_enabled = "true"
-  ack_reaction_emojis = "OK,THUMBSUP,MUSCLE,THANKS"
-
-  # Other supported platform types (config.toml projects or the console's
-  # Channels & Triggers panel):
-  #   type = "lark"      -> app_id, app_secret (Lark international domain)
-  #   type = "telegram"  -> token
-  #   type = "dingtalk"  -> client_id, client_secret[, robot_code]
-  #   type = "slack"     -> bot_token (xoxb-), app_token (xapp-)
-  #   type = "discord"   -> token (enable Message Content Intent)
-  #   type = "webhook"   -> listen, outbound_url
-  # Channels created in the console are stored in SQLite and attached at
-  # runtime; cron / inbound-webhook / event triggers are managed there too.
+# Other supported platform types (config.toml projects or the console's
+# Channels & Triggers panel):
+#   type = "lark"      -> app_id, app_secret (Lark international domain)
+#   type = "telegram"  -> token
+#   type = "dingtalk"  -> client_id, client_secret[, robot_code]
+#   type = "slack"     -> bot_token (xoxb-), app_token (xapp-)
+#   type = "discord"   -> token (enable Message Content Intent)
+#   type = "webhook"   -> listen, outbound_url
+# Channels created in the console are stored in SQLite and attached at
+# runtime; cron / inbound-webhook / event triggers are managed there too.
 
 # ---- Lifecycle hooks (config.toml side; the console offers event triggers) ----
 # Events: message.received, message.sent, session.started, session.ended,

@@ -32,6 +32,35 @@ dist/anx-0.1.0-windows-amd64.exe
 
 The CLI binary is statically linked (CGO disabled) and self-contained.
 
+## Linux headless client
+
+AgentNexus does not require a desktop shell on Linux. Use the same `anx`
+binary as a foreground client, a server daemon, or a CLI toolbox:
+
+```bash
+sudo install -m 0755 dist/anx-0.1.0-linux-amd64 /usr/local/bin/anx
+anx config init
+anx client --web
+```
+
+The config lookup order is:
+
+1. `--config/-c`
+2. `ANX_CONFIG`
+3. `./config.toml`
+4. `$XDG_CONFIG_HOME/agentnexus/config.toml`
+5. `/etc/agentnexus/config.toml`
+
+Useful client commands:
+
+```bash
+anx client                  # run the local daemon in the foreground
+anx client --web            # print the WebUI URL without opening a browser
+anx client --web --open     # also try xdg-open
+anx tools list              # inspect supported local CLI tools
+anx usage daily --since 7d  # report token usage
+```
+
 ## Build the WebUI only
 
 ```bash
@@ -76,7 +105,7 @@ make sign-macos
 
 ## Linux service
 
-Run `anx serve` under systemd. A minimal unit:
+Run `anx client` or `anx serve` under systemd. A minimal unit:
 
 ```ini
 [Unit]
@@ -84,7 +113,7 @@ Description=AgentNexus
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/anx serve -c /etc/agentnexus/config.toml
+ExecStart=/usr/local/bin/anx client --config /etc/agentnexus/config.toml --web
 Restart=on-failure
 
 [Install]

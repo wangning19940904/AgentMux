@@ -6,7 +6,9 @@
 
 **AgentNexus**(中文名 *智枢 / 智能体中枢*)是一个单二进制的 Go 控制平面,把开发者本来要在多个工具间来回切换的能力统一到一处:从 IM 聊天驱动本地编码 Agent、在多 Agent 与多 LLM Provider 间路由、统计 Token 用量,并统一管理记忆、Skills、MCP 与权限审批。
 
-CLI 名称:`agent-nexus`(短别名 `anx`)。
+CLI 名称:`agent-nexus`(短别名 `anx`)。Linux 上推荐直接使用
+`anx` 作为无图形化客户端:它可以以前台进程或 systemd 服务运行,
+同时按需暴露 Web Console。
 
 ## 模块总览
 
@@ -73,11 +75,24 @@ make build
 # 4. 启动守护进程 + WebUI(嵌入式构建)
 make release
 ./anx web        # 打开 http://127.0.0.1:8765
+
+# Linux/headless: 初始化配置并启动客户端
+./anx config init
+./anx client --web
 ```
 
 ## 配置
 
-复制 `config.example.toml` 为 `config.toml`。要点:
+复制 `config.example.toml` 为 `config.toml`,或直接运行
+`anx config init` 写入默认用户配置。CLI 查找顺序:
+
+1. `--config/-c`
+2. `ANX_CONFIG`
+3. 当前目录 `config.toml`
+4. `$XDG_CONFIG_HOME/agentnexus/config.toml`
+5. `/etc/agentnexus/config.toml`(Linux/systemd)
+
+要点:
 
 - `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
 - `[bridge]` 暴露 HTTP send API;**启用时必须设置 token**。
@@ -90,8 +105,11 @@ Console 的 **Observability → Integrations** 可预览、安装、修复或卸
 ## CLI
 
 ```
+anx client [--web] [--open] [--addr 127.0.0.1:8765]
 anx serve                       # IM gateway + management API
 anx web [--no-open]             # serve + open Console
+anx config init|path            # create or inspect config.toml
+anx tools list|check|install|update <id>
 anx usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 anx usage statusline            # compact one-liner for status bars/hooks
 anx provider list|presets|import <id>|switch <id> --tool <tool>

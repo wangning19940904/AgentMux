@@ -146,3 +146,76 @@ enabled = true`,
 		})
 	}
 }
+
+func TestResolvePathSearchesLocalThenXDG(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvPath, "")
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+
+	xdgPath := filepath.Join(xdg, "agentnexus", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(xdgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(xdgPath, []byte("[server]\naddr = \"127.0.0.1:9001\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := ResolvePath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != xdgPath {
+		t.Fatalf("path = %q, want xdg path %q", got, xdgPath)
+	}
+
+	localPath := filepath.Join(cwd, "config.toml")
+	if err := os.WriteFile(localPath, []byte("[server]\naddr = \"127.0.0.1:9002\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = ResolvePath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != localPath {
+		t.Fatalf("path = %q, want local path %q", got, localPath)
+	}
+}
+
+func TestResolvePathHonorsExplicitPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom.toml")
+	if err := os.WriteFile(path, []byte("[server]\naddr = \"127.0.0.1:9003\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, candidates, err := ResolvePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != path {
+		t.Fatalf("path = %q, want %q", got, path)
+	}
+	if len(candidates) != 1 || candidates[0] != path {
+		t.Fatalf("candidates = %+v, want only explicit path", candidates)
+	}
+}
+
+func TestResolvePathReportsMissingExplicitPath(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.toml")
+	_, candidates, err := ResolvePath(missing)
+	if err == nil {
+		t.Fatal("expected missing config error")
+	}
+	if !IsNotFound(err) {
+		t.Fatalf("err = %v, want NotFoundError", err)
+	}
+	if len(candidates) != 1 || candidates[0] != missing {
+		t.Fatalf("candidates = %+v, want missing explicit path", candidates)
+	}
+}
