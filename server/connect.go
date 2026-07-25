@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // SetConnect attaches the channels/triggers runtime. Nil keeps the CRUD
@@ -624,6 +624,51 @@ func normalizeChannelConfig(ch *core.Channel) error {
 		emojis = core.DefaultAckReactionEmojis
 	}
 	ch.Config[core.ChannelConfigAckReactionEmojis] = emojis
+
+	voice := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingVoice]))
+	if voice == "" {
+		voice = core.DefaultMeetingVoice
+	}
+	switch voice {
+	case "true", "1", "yes", "on":
+		ch.Config[core.ChannelConfigMeetingVoice] = "true"
+	case "false", "0", "no", "off":
+		ch.Config[core.ChannelConfigMeetingVoice] = "false"
+	default:
+		return fmt.Errorf("invalid meeting_voice_enabled %q (want true or false)", voice)
+	}
+
+	if ch.Config[core.ChannelConfigMeetingVoice] == "true" {
+		baseURL := strings.TrimRight(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSBaseURL]), "/")
+		if baseURL == "" {
+			baseURL = core.DefaultMeetingTTSBaseURL
+		}
+		parsed, err := url.Parse(baseURL)
+		if err != nil ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" ||
+			parsed.User != nil ||
+			parsed.RawQuery != "" ||
+			parsed.Fragment != "" {
+			return fmt.Errorf("invalid meeting_voice_tts_base_url %q", baseURL)
+		}
+		apiKey := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSAPIKey])
+		if apiKey == "" {
+			return fmt.Errorf("meeting_voice_tts_api_key is required when meeting voice is enabled")
+		}
+		model := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSModel])
+		if model == "" {
+			model = core.DefaultMeetingTTSModel
+		}
+		voiceName := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSVoice])
+		if voiceName == "" {
+			voiceName = core.DefaultMeetingTTSVoice
+		}
+		ch.Config[core.ChannelConfigMeetingTTSBaseURL] = baseURL
+		ch.Config[core.ChannelConfigMeetingTTSAPIKey] = apiKey
+		ch.Config[core.ChannelConfigMeetingTTSModel] = model
+		ch.Config[core.ChannelConfigMeetingTTSVoice] = voiceName
+	}
 	return nil
 }
 

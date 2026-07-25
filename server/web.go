@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	webdist "github.com/agentnexus/agentnexus/web"
+	webdist "github.com/wangning19940904/AgentMux/web"
 )
 
 // registerWeb mounts the embedded WebUI when present (release builds with the
@@ -76,12 +76,12 @@ func trimLeadingSlash(p string) string {
 const placeholderHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AgentNexus</title>
+<title>AgentMux</title>
 <style>body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;display:grid;place-items:center;height:100vh}
 .card{max-width:560px;padding:2rem;border:1px solid #30363d;border-radius:12px;background:#161b22}
 h1{margin:0 0 .5rem;font-size:1.4rem}code{background:#0d1117;padding:.1rem .35rem;border-radius:4px}</style>
 </head><body><div class="card">
-<h1>AgentNexus</h1>
+<h1>AgentMux</h1>
 <p>Daemon is running. The React WebUI is bundled in release builds (built with <code>-tags embedweb</code>); in dev run the Vite dev server with <code>npm run dev</code>.</p>
 <p>API base: <code>/api/v1</code> &middot; status: <code>/api/v1/status</code></p>
 </div></body></html>`

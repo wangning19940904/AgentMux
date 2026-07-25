@@ -33,11 +33,11 @@ type Pricer struct {
 	loaded   bool
 }
 
-// New builds a Pricer. cacheDir defaults to ~/.cache/agentnexus.
+// New builds a Pricer. cacheDir defaults to ~/.cache/agentmux.
 func New(cacheDir string, offline bool) *Pricer {
 	if cacheDir == "" {
 		home, _ := os.UserHomeDir()
-		cacheDir = filepath.Join(home, ".cache", "agentnexus")
+		cacheDir = filepath.Join(home, ".cache", "agentmux")
 	}
 	return &Pricer{cacheDir: cacheDir, offline: offline}
 }

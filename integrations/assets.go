@@ -1,5 +1,5 @@
 // Package integrations embeds the two native observer marketplaces so a
-// released single-binary AgentNexus can materialize them into its private
+// released single-binary AgentMux can materialize them into its private
 // directory before invoking the host plugin CLIs.
 package integrations
 
@@ -22,7 +22,7 @@ func MaterializeMarketplaces(home, version string) (string, error) {
 	if version == "" {
 		version = "dev"
 	}
-	root := filepath.Join(home, ".agentnexus", "assets", "agentnexus-observer", version)
+	root := filepath.Join(home, ".agentmux", "assets", "agentmux-observer", version)
 	target := filepath.Join(root, "marketplaces")
 	if err := fs.WalkDir(marketplaceAssets, "marketplaces", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

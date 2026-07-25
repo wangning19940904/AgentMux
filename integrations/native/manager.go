@@ -82,19 +82,19 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 		if marketplace != nil {
 			result.Findings = append(result.Findings, Finding{
 				Code: "marketplace_name_conflict", Severity: SeverityError, Blocking: true,
-				Message: fmt.Sprintf("marketplace %q already exists without an AgentNexus ownership record", MarketplaceName),
+				Message: fmt.Sprintf("marketplace %q already exists without an AgentMux ownership record", MarketplaceName),
 			})
 		}
 		if plugin != nil {
 			result.Findings = append(result.Findings, Finding{
 				Code: "plugin_name_conflict", Severity: SeverityError, Blocking: true,
-				Message: fmt.Sprintf("plugin %q is already installed without an AgentNexus ownership record", PluginID),
+				Message: fmt.Sprintf("plugin %q is already installed without an AgentMux ownership record", PluginID),
 			})
 		}
 		if helperHash != "" {
 			result.Findings = append(result.Findings, Finding{
 				Code: "helper_path_conflict", Severity: SeverityError, Blocking: true, Path: helperPath,
-				Message: "the AgentNexus hook helper path already exists without an ownership record",
+				Message: "the AgentMux hook helper path already exists without an ownership record",
 			})
 		}
 	} else {
@@ -107,7 +107,7 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 		if marketplace != nil && !marketplaceMatchesRecord(*marketplace, record, spec, assets) {
 			result.Findings = append(result.Findings, Finding{
 				Code: "marketplace_drift", Severity: SeverityError, Blocking: true,
-				Message: "the native marketplace with AgentNexus's name now points to an unrecognized resource",
+				Message: "the native marketplace with AgentMux's name now points to an unrecognized resource",
 			})
 		}
 		if plugin != nil {
@@ -124,7 +124,7 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 			} else if !matches {
 				result.Findings = append(result.Findings, Finding{
 					Code: "plugin_fingerprint_drift", Severity: SeverityError, Blocking: true, Path: plugin.Path,
-					Message: "the installed plugin no longer matches AgentNexus's recorded or current fingerprint",
+					Message: "the installed plugin no longer matches AgentMux's recorded or current fingerprint",
 				})
 			}
 		}
@@ -137,7 +137,7 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 		} else if helperHash != "" && helperHash != helperResource.AfterHash {
 			result.Findings = append(result.Findings, Finding{
 				Code: "helper_drift", Severity: SeverityError, Blocking: true, Path: helperPath,
-				Message: "the hook helper was modified by another process; AgentNexus will not overwrite it",
+				Message: "the hook helper was modified by another process; AgentMux will not overwrite it",
 			})
 		}
 	}
@@ -162,7 +162,7 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 	if needsHelper && helperSourceHash == "" {
 		result.Findings = append(result.Findings, Finding{
 			Code: "helper_source_missing", Severity: SeverityError, Blocking: true,
-			Message: "the companion agentnexus-hook binary was not found; provide Options.HelperSource or package it next to AgentNexus",
+			Message: "the companion agentmux-hook binary was not found; provide Options.HelperSource or package it next to AgentMux",
 		})
 	}
 
@@ -214,7 +214,7 @@ func (m *Manager) preview(ctx context.Context, spec hostSpec) (Preview, error) {
 		result.Status = StatusPendingTrust
 		result.Actions = append(result.Actions, Action{
 			Kind: "review_trust", Target: "codex:/hooks",
-			Reason: "Codex requires the user to review hooks from non-managed plugins; AgentNexus never edits hooks.state",
+			Reason: "Codex requires the user to review hooks from non-managed plugins; AgentMux never edits hooks.state",
 		})
 	} else {
 		result.Status = StatusHealthy
@@ -468,7 +468,7 @@ func (m *Manager) Uninstall(ctx context.Context, host Host) (Result, error) {
 	if record == nil {
 		return Result{Host: host}, &OperationError{Kind: ErrConflict, Host: host, Findings: []Finding{{
 			Code: "ownership_missing", Severity: SeverityError, Blocking: true,
-			Message: "no AgentNexus ownership record exists; refusing to remove a possibly third-party plugin",
+			Message: "no AgentMux ownership record exists; refusing to remove a possibly third-party plugin",
 		}}}
 	}
 	assets, err := m.inspectAssets(spec)
@@ -715,7 +715,7 @@ func (m *Manager) marketplaceAddAction(spec hostSpec) Action {
 	} else {
 		command = append(command, "--scope", "user")
 	}
-	return Action{Kind: "add_marketplace", Target: spec.root, Command: command, Reason: "register the isolated AgentNexus local marketplace through the native CLI"}
+	return Action{Kind: "add_marketplace", Target: spec.root, Command: command, Reason: "register the isolated AgentMux local marketplace through the native CLI"}
 }
 
 func (m *Manager) marketplaceRemoveAction(spec hostSpec) Action {

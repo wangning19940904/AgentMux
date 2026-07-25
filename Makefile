@@ -1,4 +1,4 @@
-# AgentNexus build orchestration.
+# AgentMux build orchestration.
 #
 # Common targets:
 #   make build           # build CLI for the host (no embedded WebUI)
@@ -10,11 +10,11 @@
 #   make test            # run Go tests
 #   make sign-macos      # codesign + notarize the macOS artifacts (needs creds)
 
-BINARY      := anx
-ALIAS       := agent-nexus
-CMD         := ./cmd/anx
-HOOK_BINARY := agentnexus-hook
-HOOK_CMD    := ./cmd/agentnexus-hook
+BINARY      := amux
+ALIAS       := agentmux
+CMD         := ./cmd/amux
+HOOK_BINARY := agentmux-hook
+HOOK_CMD    := ./cmd/agentmux-hook
 DIST        := dist
 VERSION     ?= 0.1.0
 LDFLAGS     := -s -w -X main.version=$(VERSION)
@@ -63,19 +63,19 @@ desktop: web
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
 	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		macos_dir="desktop/build/bin/agentnexus-desktop.app/Contents/MacOS"; \
+		macos_dir="desktop/build/bin/agentmux-desktop.app/Contents/MacOS"; \
 		if [ -d "$$macos_dir" ]; then \
-			cp macos-menubar/AgentNexusMenuBar "$$macos_dir/AgentNexusMenuBar"; \
+			cp macos-menubar/AgentMuxMenuBar "$$macos_dir/AgentMuxMenuBar"; \
 			cp $(HOOK_BINARY) "$$macos_dir/$(HOOK_BINARY)"; \
-			codesign --force --sign - "$$macos_dir/AgentNexusMenuBar"; \
+			codesign --force --sign - "$$macos_dir/AgentMuxMenuBar"; \
 			codesign --force --sign - "$$macos_dir/$(HOOK_BINARY)"; \
-			codesign --force --deep --sign - "desktop/build/bin/agentnexus-desktop.app"; \
+			codesign --force --deep --sign - "desktop/build/bin/agentmux-desktop.app"; \
 		fi; \
 	fi
 
 # macOS menu bar app (SwiftUI). macOS only.
 menubar:
-	cd macos-menubar && swiftc -O -o AgentNexusMenuBar main.swift AppDelegate.swift \
+	cd macos-menubar && swiftc -O -o AgentMuxMenuBar main.swift AppDelegate.swift \
 		-framework AppKit -framework SwiftUI
 
 test:
@@ -88,7 +88,7 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -rf $(DIST) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentNexusMenuBar
+	rm -rf $(DIST) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentMuxMenuBar
 
 # Codesign + notarize macOS artifacts. Set these env vars first:
 #   MACOS_SIGN_IDENTITY  e.g. "Developer ID Application: Your Name (TEAMID)"

@@ -65,7 +65,7 @@ func newCodexAppClient(ctx context.Context, agent *codexAgent, workDir string) (
 	}
 	go client.readLoop()
 	if _, err := client.call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]string{"name": "AgentNexus", "version": "0.1.0"},
+		"clientInfo":   map[string]string{"name": "AgentMux", "version": "0.1.0"},
 		"capabilities": map[string]any{"experimentalApi": true},
 	}); err != nil {
 		_ = client.close()

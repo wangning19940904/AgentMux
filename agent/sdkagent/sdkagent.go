@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/framework"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework"
 )
 
 // Register discovers installed SDK frameworks and registers a core.Agent for

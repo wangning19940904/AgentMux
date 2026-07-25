@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 type capturedObservations struct {
@@ -45,7 +45,7 @@ func TestTranscriptTailerDiscoveryRetentionIncrementalAndTruncate(t *testing.T) 
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, ".agentnexus", "test.db"))
+	st, err := store.Open(filepath.Join(home, ".agentmux", "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestTranscriptTailerPartialLineAndCodexUsageDelta(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	st, err := store.Open(filepath.Join(home, "agentmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestTranscriptTailerStoresOnlyPublicReasoningSummary(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	st, err := store.Open(filepath.Join(home, "agentmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +339,7 @@ func TestTranscriptTailerSkipsUnchangedFiles(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	st, err := store.Open(filepath.Join(home, "agentmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestTranscriptTailerDurableCursorSkipsReplayAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	st, err := store.Open(filepath.Join(home, "agentmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestTranscriptTailerCheckpointsLargeFileAfterPartialFailure(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "agentnexus.db"))
+	st, err := store.Open(filepath.Join(home, "agentmux.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

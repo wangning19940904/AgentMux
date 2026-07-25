@@ -34,6 +34,11 @@ const FEISHU_DEFAULTS = {
   reply_mode: "stream_message",
   ack_reaction_enabled: "true",
   ack_reaction_emojis: "OK,THUMBSUP,MUSCLE,THANKS",
+  meeting_voice_enabled: "false",
+  meeting_voice_tts_base_url: "https://api.openai.com/v1",
+  meeting_voice_tts_api_key: "",
+  meeting_voice_tts_model: "gpt-4o-mini-tts",
+  meeting_voice_tts_voice: "alloy",
   codex_control_enabled: "false",
   allowed_user_ids: "",
   admin_user_ids: "",
@@ -646,6 +651,7 @@ function FeishuChannelOptions({
   const config = draft.config ?? {};
   const replyMode = configValue(config, "reply_mode", FEISHU_DEFAULTS.reply_mode);
   const ackEnabled = configValue(config, "ack_reaction_enabled", FEISHU_DEFAULTS.ack_reaction_enabled) !== "false";
+  const meetingVoice = configValue(config, "meeting_voice_enabled", FEISHU_DEFAULTS.meeting_voice_enabled) === "true";
   const codexControl = configValue(config, "codex_control_enabled", FEISHU_DEFAULTS.codex_control_enabled) === "true";
 
   return (
@@ -760,6 +766,52 @@ function FeishuChannelOptions({
             onChange={(e) => updateConfig("ack_reaction_emojis", e.target.value)}
           />
         </label>
+        <label className="switch-row channel-option-toggle">
+          <span>
+            <strong>{t("connect.meetingVoice")}</strong>
+            <small>{t("connect.meetingVoiceHint")}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={meetingVoice}
+            onChange={(e) => updateConfig("meeting_voice_enabled", e.target.checked ? "true" : "false")}
+          />
+        </label>
+        {meetingVoice && (
+          <>
+            <label className="field">
+              <span>{t("connect.meetingTTSBaseUrl")}</span>
+              <input
+                value={configValue(config, "meeting_voice_tts_base_url", FEISHU_DEFAULTS.meeting_voice_tts_base_url)}
+                onChange={(e) => updateConfig("meeting_voice_tts_base_url", e.target.value)}
+                placeholder="https://api.openai.com/v1"
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.meetingTTSApiKey")}</span>
+              <input
+                type="password"
+                value={configValue(config, "meeting_voice_tts_api_key", FEISHU_DEFAULTS.meeting_voice_tts_api_key)}
+                onChange={(e) => updateConfig("meeting_voice_tts_api_key", e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.meetingTTSModel")}</span>
+              <input
+                value={configValue(config, "meeting_voice_tts_model", FEISHU_DEFAULTS.meeting_voice_tts_model)}
+                onChange={(e) => updateConfig("meeting_voice_tts_model", e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>{t("connect.meetingTTSVoice")}</span>
+              <input
+                value={configValue(config, "meeting_voice_tts_voice", FEISHU_DEFAULTS.meeting_voice_tts_voice)}
+                onChange={(e) => updateConfig("meeting_voice_tts_voice", e.target.value)}
+              />
+            </label>
+          </>
+        )}
       </div>
     </div>
   );

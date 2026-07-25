@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func readJSON(t *testing.T, path string) map[string]any {
@@ -253,7 +253,7 @@ func TestWriteCodexConfigOfficialRestoresBuiltin(t *testing.T) {
 		t.Fatalf("model_provider should be removed for official: %#v", doc)
 	}
 	if _, ok := doc["model_providers"]; ok {
-		t.Fatalf("agentnexus block should be removed for official: %#v", doc)
+		t.Fatalf("agentmux block should be removed for official: %#v", doc)
 	}
 	if doc["model"] != "gpt-5" {
 		t.Fatalf("model = %v", doc["model"])
@@ -296,7 +296,7 @@ env_key = "OPENROUTER_API_KEY"
 		t.Fatalf("legacy block survived: %#v", providers)
 	}
 	if _, ok := providers[codexModelProviderID]; !ok {
-		t.Fatalf("agentnexus block missing: %#v", providers)
+		t.Fatalf("agentmux block missing: %#v", providers)
 	}
 }
 
@@ -466,7 +466,7 @@ func TestClaudeDesktopRollbackOnFailure(t *testing.T) {
 
 func TestClaudeDesktopDirectRejectsNonClaudeModel(t *testing.T) {
 	p := &core.Provider{Model: "gpt-5", Meta: core.ProviderMeta{ClaudeDesktopMode: "direct"}}
-	p.SettingsConfig = map[string]any{"claude_desktop_dir": filepath.Join(os.TempDir(), "agentnexus-cd-test")}
+	p.SettingsConfig = map[string]any{"claude_desktop_dir": filepath.Join(os.TempDir(), "agentmux-cd-test")}
 	if err := writeClaudeDesktopConfig(os.TempDir(), p); err == nil {
 		t.Fatal("expected non-Claude direct model to be rejected")
 	}

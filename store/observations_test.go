@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
@@ -39,7 +39,7 @@ func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 	start := core.ObservationEnvelope{
 		EventID: "event-start", TraceID: traceID, SpanID: spanID, Sequence: 1, Time: now,
 		Kind: "model.request", Name: "Claude request", Lifecycle: core.ObservationLifecycleStart,
-		AgentID: "agent-1", RuntimeID: "claude", SessionID: "session-1", Source: "agentnexus",
+		AgentID: "agent-1", RuntimeID: "claude", SessionID: "session-1", Source: "agentmux",
 		Status: core.ObservationStatusRunning,
 		Model:  &core.ObservationModel{Requested: "claude-sonnet", RequestID: "request-1"},
 		Content: &core.ObservationContent{ContentType: "application/json", Data: []byte(`{
@@ -633,7 +633,7 @@ func TestObservationOutboxInsightOwnershipAndLease(t *testing.T) {
 		t.Fatalf("insights = %+v, err=%v", insights, err)
 	}
 
-	ownership := ObservationIntegrationOwnership{InstallID: "install-a", Host: "local", Scope: "codex", ResourceKey: "agentnexus-observer",
+	ownership := ObservationIntegrationOwnership{InstallID: "install-a", Host: "local", Scope: "codex", ResourceKey: "agentmux-observer",
 		HandlerFingerprint: "fingerprint-a", TargetPath: "/tmp/plugin"}
 	claimed, err := store.ClaimObservationIntegrationOwnership(ctx, ownership)
 	if err != nil || !claimed {

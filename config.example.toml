@@ -1,6 +1,6 @@
-# AgentNexus configuration (example).
-# Copy to config.toml, run `anx config init`, or place it at
-# ~/.config/agentnexus/config.toml or /etc/agentnexus/config.toml.
+# AgentMux configuration (example).
+# Copy to config.toml, run `amux config init`, or place it at
+# ~/.config/agentmux/config.toml or /etc/agentmux/config.toml.
 # ${ENV_VAR} placeholders are expanded from the environment.
 
 display_mode = "normal"  # quiet | compact | normal | full
@@ -11,6 +11,13 @@ addr = "127.0.0.1:8765"
 [bridge]
 enabled = false
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
+
+# ---- SSH remote control ----
+# Remote machine profiles are managed in Console -> Machines and saved with
+# user-only permissions outside this file.
+[remote]
+connect_timeout_seconds = 10
+# hosts_file = "~/.config/agentmux/remote-hosts.json"
 
 # ---- Projects: pair an agent with one or more IM platforms ----
 # Define projects here, or add channels and agent instances from the WebUI.
@@ -34,6 +41,23 @@ enabled = false
 #   reply_mode = "stream_message"    # stream_message | stream_card
 #   ack_reaction_enabled = "true"
 #   ack_reaction_emojis = "OK,THUMBSUP,MUSCLE,THANKS"
+#
+#   # Optional VC Agent capability (currently in limited preview):
+#   # - Enable the bot capability and card callback configuration.
+#   # - Grant tenant scopes vc:meeting.bot.join:write and
+#   #   vc:meeting.meetingevent:read. For real-time speech, also request the
+#   #   limited-preview vc:meeting.bot.realtime:write scope.
+#   # - Subscribe to vc.bot.meeting_invited_v1 and vc.bot.meeting_ended_v1.
+#   #   AgentMux sends the inviter an approval card and only joins after that
+#   #   user clicks Join.
+#   # - The meeting owner must enable "Allow agents to join".
+#
+#   # Optional path 3: speak streamed Agent answers in the approved meeting.
+#   meeting_voice_enabled = "true"
+#   meeting_voice_tts_base_url = "https://api.openai.com/v1"
+#   meeting_voice_tts_api_key = "${OPENAI_API_KEY}"
+#   meeting_voice_tts_model = "gpt-4o-mini-tts"
+#   meeting_voice_tts_voice = "alloy"
 
 # Other supported platform types (config.toml projects or the console's
 # Channels & Triggers panel):
@@ -65,7 +89,7 @@ failover = true
 [usage]
 sources = ["claude", "codex", "cursor", "gemini"]
 offline = false
-# cache_dir = "~/.cache/agentnexus"
+# cache_dir = "~/.cache/agentmux"
 
 # ---- Agent observability ----
 # Full content is redacted, compressed and AES-256-GCM encrypted. On macOS the
@@ -77,7 +101,7 @@ capture_content = "full" # off | metadata | full
 content_retention_days = 30
 detail_retention_days = 180
 backfill_days = 180
-# master_key_env = "AGENTNEXUS_OBSERVABILITY_KEY"
+# master_key_env = "AGENTMUX_OBSERVABILITY_KEY"
 
 # OTLP/HTTP JSON exporters have independent durable queues. Content is never
 # exported unless include_content is explicitly enabled for that exporter.

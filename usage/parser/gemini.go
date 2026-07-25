@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // geminiCollector parses Gemini CLI logs. Gemini stores session telemetry
@@ -34,8 +34,8 @@ type geminiLine struct {
 	Model         string `json:"model"`
 	SessionID     string `json:"sessionId"`
 	UsageMetadata *struct {
-		PromptTokenCount     int64 `json:"promptTokenCount"`
-		CandidatesTokenCount int64 `json:"candidatesTokenCount"`
+		PromptTokenCount        int64 `json:"promptTokenCount"`
+		CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
 		CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
 }

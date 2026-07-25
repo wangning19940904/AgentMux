@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/hookrelay"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/hookrelay"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 type hookTraceContext struct {
@@ -64,12 +64,12 @@ func NewIngestService(log *slog.Logger, bus *core.ObservationBus, home, token st
 	}
 }
 
-// ObserveCorrelation remembers the current AgentNexus turn for a native
+// ObserveCorrelation remembers the current AgentMux turn for a native
 // session. Long-lived runtimes such as Codex app-server cannot change process
 // OTel resource attributes for every Send, so their asynchronously exported
 // spans are joined through the stable thread/session ID instead.
 func (s *IngestService) ObserveCorrelation(_ context.Context, envelope core.ObservationEnvelope) error {
-	if s == nil || envelope.Source != "agentnexus.internal" || envelope.SessionID == "" || envelope.TraceID == "" {
+	if s == nil || envelope.Source != "agentmux.internal" || envelope.SessionID == "" || envelope.TraceID == "" {
 		return nil
 	}
 	if envelope.Kind != "agent.turn" && envelope.Kind != "agent.run" && envelope.Kind != "subagent.run" {
@@ -238,7 +238,7 @@ func (s *IngestService) ConsumeSpool(ctx context.Context) error {
 	}
 	var names []string
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".anxspool") {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".amuxspool") {
 			names = append(names, entry.Name())
 		}
 	}
@@ -405,7 +405,7 @@ func (s *IngestService) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func LoadOrCreateIngestToken(home string) (string, error) {
-	path := filepath.Join(home, ".agentnexus", "observability", "ingest.token")
+	path := filepath.Join(home, ".agentmux", "observability", "ingest.token")
 	if raw, err := os.ReadFile(path); err == nil {
 		if token := strings.TrimSpace(string(raw)); token != "" {
 			return token, nil

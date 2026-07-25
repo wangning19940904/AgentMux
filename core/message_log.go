@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-// DefaultLogRoot returns ~/.agentnexus/logs, the base directory where channel
+// DefaultLogRoot returns ~/.agentmux/logs, the base directory where channel
 // message logs are written.
 func DefaultLogRoot() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".agentnexus", "logs")
+	return filepath.Join(home, ".agentmux", "logs")
 }
 
 // MessageLogger appends inbound channel messages to per-channel JSONL files

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/mcp"
-	"github.com/agentnexus/agentnexus/skills"
-	"github.com/agentnexus/agentnexus/workspace"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/mcp"
+	"github.com/wangning19940904/AgentMux/skills"
+	"github.com/wangning19940904/AgentMux/workspace"
 )
 
 func TestToolsEndpointAggregatesModules(t *testing.T) {

@@ -1,6 +1,6 @@
 package config
 
-const exampleConfig = `# AgentNexus configuration.
+const exampleConfig = `# AgentMux configuration.
 # ${ENV_VAR} placeholders are expanded from the environment.
 
 display_mode = "normal"  # quiet | compact | normal | full
@@ -8,9 +8,19 @@ display_mode = "normal"  # quiet | compact | normal | full
 [server]
 addr = "127.0.0.1:8765"
 
+[database]
+url = "postgresql:///agentmux?host=/tmp&sslmode=disable"
+max_open_connections = 12
+max_idle_connections = 4
+connection_max_lifetime = "30m"
+
 [bridge]
 enabled = false
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
+
+[remote]
+connect_timeout_seconds = 10
+# hosts_file = "~/.config/agentmux/remote-hosts.json"
 
 # Define projects here, or add channels and agent instances from the WebUI.
 # Keep the starter config runnable without credentials.
@@ -36,15 +46,15 @@ failover = true
 [usage]
 sources = ["claude", "codex", "cursor", "gemini"]
 offline = false
-# cache_dir = "~/.cache/agentnexus"
+# cache_dir = "~/.cache/agentmux"
 
 [observability]
 enabled = true
 capture_content = "full" # off | metadata | full
 content_retention_days = 30
-detail_retention_days = 180
-backfill_days = 180
-# master_key_env = "AGENTNEXUS_OBSERVABILITY_KEY"
+detail_retention_days = 30
+backfill_days = 30
+# master_key_env = "AGENTMUX_OBSERVABILITY_KEY"
 
 # [[observability.exporters]]
 # name = "local-otel"

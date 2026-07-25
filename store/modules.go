@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
-// --- Memory (AgentNexus Memory) ---
+// --- Memory (AgentMux Memory) ---
 
 // PutMemory inserts or updates a memory entry.
 func (s *Store) PutMemory(ctx context.Context, e *core.MemoryEntry) error {
@@ -97,7 +97,7 @@ func scanMemory(sc scanner) (*core.MemoryEntry, error) {
 	return &e, nil
 }
 
-// --- MCP Registry (AgentNexus MCP Registry) ---
+// --- MCP Registry (AgentMux MCP Registry) ---
 
 // ListMCPServers returns all registered MCP servers ordered by name.
 func (s *Store) ListMCPServers(ctx context.Context) ([]core.MCPServer, error) {
@@ -151,7 +151,7 @@ func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
 	return err
 }
 
-// --- Guard (AgentNexus Guard) ---
+// --- Guard (AgentMux Guard) ---
 
 // GuardPolicy is a single stored policy rule.
 type GuardPolicy struct {

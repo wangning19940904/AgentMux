@@ -1,6 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { Activity, Clipboard, ExternalLink, Link2, Play, RefreshCw, TerminalSquare, Trash2 } from "lucide-react";
-import { AgentSession, ProxyTrace, api } from "../api";
+import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  Bot,
+  Clipboard,
+  ExternalLink,
+  Link2,
+  MessageSquareText,
+  Play,
+  RefreshCw,
+  Send,
+  TerminalSquare,
+  Trash2,
+} from "lucide-react";
+import { ChannelAvatar } from "../ChannelAvatar";
+import { AgentSession, ProxyTrace, SessionMessage, api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -10,8 +23,10 @@ const PROVIDERS = [
   { id: "codex", labelKey: "sessions.codex" },
 ];
 
-const SURFACES = [
-  { id: "", labelKey: "sessions.allSurfaces" },
+const SOURCES = [
+  { id: "", labelKey: "sessions.allSources" },
+  { id: "channel", labelKey: "sessions.channelSessions" },
+  { id: "local", labelKey: "sessions.localSessions" },
   { id: "cli", labelKey: "sessions.cli" },
   { id: "app-server", labelKey: "sessions.desktopApp" },
 ];
@@ -19,56 +34,101 @@ const SURFACES = [
 export function SessionsPanel() {
   const { t, language } = useI18n();
   const [provider, setProvider] = useState("");
-  const [surface, setSurface] = useState("");
+  const [source, setSource] = useState("");
+  const [agentID, setAgentID] = useState("");
+  const [channelID, setChannelID] = useState("");
   const [query, setQuery] = useState("");
   const [selectedID, setSelectedID] = useState("");
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeError, setNoticeError] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [optimisticMessages, setOptimisticMessages] = useState<SessionMessage[]>([]);
   const [bindChannelID, setBindChannelID] = useState("");
   const [bindConversationID, setBindConversationID] = useState("");
   const [localAnswers, setLocalAnswers] = useState<Record<string, string>>({});
-  const sessions = useAsync(() => api.sessions(provider, surface), [provider, surface]);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+
+  const sessions = useAsync(() => api.sessions(), []);
   const channels = useAsync(() => api.channels(), []);
-  const channelConversations = useAsync(
-    () => (bindChannelID ? api.channelConversations(bindChannelID) : Promise.resolve([])),
-    [bindChannelID]
+  const channelByID = useMemo(
+    () => new Map((channels.data ?? []).map((channel) => [channel.id, channel])),
+    [channels.data]
   );
-  const pendingInteractions = useAsync(
-    () => (bindChannelID ? api.channelInteractions(bindChannelID, bindConversationID) : Promise.resolve([])),
-    [bindChannelID, bindConversationID]
-  );
+  const availableAgents = useMemo(() => {
+    const agents = new Map<string, string>();
+    for (const session of sessions.data ?? []) {
+      if (session.agent_id) agents.set(session.agent_id, session.agent_name || session.agent_id);
+    }
+    return [...agents.entries()].sort((left, right) => left[1].localeCompare(right[1]));
+  }, [sessions.data]);
+  const availableChannels = useMemo(() => {
+    const items = new Map<string, string>();
+    for (const session of sessions.data ?? []) {
+      if (session.channel_id) items.set(session.channel_id, session.channel_name || session.channel_id);
+    }
+    return [...items.entries()].sort((left, right) => left[1].localeCompare(right[1]));
+  }, [sessions.data]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (sessions.data ?? []).filter((session) => {
+      if (provider && normalizeProvider(session.provider_id) !== normalizeProvider(provider)) return false;
+      if (source === "channel" && session.origin !== "channel") return false;
+      if (source === "local" && session.origin === "channel") return false;
+      if ((source === "cli" || source === "app-server") && session.surface !== source) return false;
+      if (agentID && session.agent_id !== agentID) return false;
+      if (channelID && session.channel_id !== channelID) return false;
       if (!q) return true;
       return [
         session.title,
         session.summary,
         session.project_dir,
         session.session_id,
+        session.native_session_id,
         session.provider_id,
         session.surface,
+        session.agent_name,
+        session.channel_name,
+        session.channel_type,
+        session.conversation_key,
+        session.chat_id,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(q));
     });
-  }, [sessions.data, query]);
+  }, [agentID, channelID, provider, query, sessions.data, source]);
 
   const selected = useMemo(
     () => filtered.find((session) => keyOf(session) === selectedID) ?? filtered[0],
     [filtered, selectedID]
   );
-  const messages = useAsync(() => (selected ? api.sessionMessages(selected) : Promise.resolve([])), [selected?.session_id, selected?.source_path, selected?.surface]);
-  const traceTool = selected ? routeToolForSession(selected) : "";
+  const selectedKey = selected ? keyOf(selected) : "";
+  const messages = useAsync(
+    () => (selected ? api.sessionMessages(selected) : Promise.resolve([])),
+    [selected?.conversation_id, selected?.session_id, selected?.source_path, selected?.surface]
+  );
+  const traceSessionID = selected?.native_session_id || (selected?.origin !== "channel" ? selected?.session_id : "");
+  const traceTool = selected && traceSessionID ? routeToolForSession(selected) : "";
   const sessionTraces = useAsync(
-    () => (selected && traceTool ? api.proxyTraces({ tool: traceTool, sessionID: selected.session_id, limit: 20 }) : Promise.resolve([])),
-    [traceTool, selected?.session_id]
+    () => (traceTool && traceSessionID ? api.proxyTraces({ tool: traceTool, sessionID: traceSessionID, limit: 20 }) : Promise.resolve([])),
+    [traceTool, traceSessionID]
   );
   const recentTraces = useAsync(
-    () => (selected && traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }) : Promise.resolve([])),
-    [traceTool, selected?.session_id]
+    () => (traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }) : Promise.resolve([])),
+    [traceTool]
   );
+  const channelConversations = useAsync(
+    () => (bindChannelID ? api.channelConversations(bindChannelID) : Promise.resolve([])),
+    [bindChannelID]
+  );
+  const interactionChannelID = selected?.channel_id || bindChannelID;
+  const interactionConversationID = selected?.conversation_id || bindConversationID;
+  const pendingInteractions = useAsync(
+    () => (interactionChannelID ? api.channelInteractions(interactionChannelID, interactionConversationID) : Promise.resolve([])),
+    [interactionChannelID, interactionConversationID]
+  );
+  const visibleMessages = [...(messages.data ?? []), ...optimisticMessages];
   const selectedTraces = sessionTraces.data ?? [];
   const fallbackTraces = recentTraces.data ?? [];
   const routeTraces = selectedTraces.length > 0 ? selectedTraces : fallbackTraces;
@@ -77,12 +137,31 @@ export function SessionsPanel() {
 
   useEffect(() => {
     if (selected) setSelectedID(keyOf(selected));
-  }, [selected?.session_id, selected?.source_path]);
+  }, [selected?.conversation_id, selected?.session_id, selected?.source_path]);
+
+  useEffect(() => {
+    setOptimisticMessages([]);
+    setDraft("");
+    if (selected?.channel_id) {
+      setBindChannelID(selected.channel_id);
+      setBindConversationID(selected.conversation_id || "");
+    }
+  }, [selectedKey]);
+
+  useEffect(() => {
+    const node = transcriptRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages.data, optimisticMessages]);
+
+  function showNotice(text: string, error = false) {
+    setNotice(text);
+    setNoticeError(error);
+  }
 
   async function copy(text: string) {
     if (!text) return;
     await navigator.clipboard.writeText(text);
-    setNotice(t("sessions.copied"));
+    showNotice(t("sessions.copied"));
   }
 
   async function resume(openTerminal: boolean) {
@@ -91,7 +170,9 @@ export function SessionsPanel() {
     try {
       const res = await api.resumeSession(selected, openTerminal);
       if (res.command) await copy(res.command);
-      setNotice(res.status_message || (res.thread_id ? `${t("sessions.thread")} ${res.thread_id}` : t("sessions.resumeReady")));
+      showNotice(res.status_message || (res.thread_id ? `${t("sessions.thread")} ${res.thread_id}` : t("sessions.resumeReady")));
+    } catch (error) {
+      showNotice(String(error), true);
     } finally {
       setBusy("");
     }
@@ -103,34 +184,76 @@ export function SessionsPanel() {
     try {
       await api.deleteSession(selected);
       setSelectedID("");
-      sessions.reload();
-      setNotice(t("sessions.deleted"));
+      await sessions.reload();
+      showNotice(t("sessions.deleted"));
+    } catch (error) {
+      showNotice(String(error), true);
     } finally {
       setBusy("");
     }
   }
 
   async function openCodex() {
-    if (!selected?.session_id) return;
+    const threadID = selected?.native_session_id || selected?.session_id;
+    if (!threadID) return;
     setBusy("open-codex");
     try {
-      const result = await api.openCodexThread(selected.session_id);
+      const result = await api.openCodexThread(threadID);
       if (!result.opened && result.command) await copy(result.command);
-      setNotice(result.status_message || result.command || t("sessions.resumeReady"));
+      showNotice(result.status_message || result.command || t("sessions.resumeReady"));
+    } catch (error) {
+      showNotice(String(error), true);
     } finally {
       setBusy("");
     }
   }
 
   async function bindCodex() {
-    if (!selected?.session_id || !bindChannelID || !bindConversationID) return;
+    const threadID = selected?.native_session_id || selected?.session_id;
+    if (!threadID || !bindChannelID || !bindConversationID) return;
     setBusy("bind-codex");
     try {
-      await api.bindChannelConversation(bindChannelID, bindConversationID, selected.session_id);
-      setNotice(t("sessions.channelBound"));
-      channelConversations.reload();
+      await api.bindChannelConversation(bindChannelID, bindConversationID, threadID);
+      showNotice(t("sessions.channelBound"));
+      await Promise.all([channelConversations.reload(), sessions.reload()]);
+    } catch (error) {
+      showNotice(String(error), true);
     } finally {
       setBusy("");
+    }
+  }
+
+  async function sendMessage() {
+    const text = draft.trim();
+    if (!selected?.can_chat || !selected.channel_id || !selected.conversation_id || !text || busy === "message") return;
+    const sentAt = new Date().toISOString();
+    setDraft("");
+    setBusy("message");
+    setOptimisticMessages([{ role: "user", content: text, timestamp: sentAt }]);
+    try {
+      const result = await api.sendSessionMessage(selected, text);
+      if (result.answer) {
+        setOptimisticMessages((current) => [
+          ...current,
+          { role: "assistant", content: result.answer, timestamp: new Date().toISOString() },
+        ]);
+      }
+      await Promise.all([messages.reload(), sessions.reload(), pendingInteractions.reload()]);
+      setOptimisticMessages([]);
+      showNotice(t("sessions.messageSent"));
+    } catch (error) {
+      setDraft(text);
+      setOptimisticMessages([]);
+      showNotice(String(error), true);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
     }
   }
 
@@ -143,34 +266,39 @@ export function SessionsPanel() {
         answers[questionID] = [localAnswers[`${interactionID}:${questionID}`] ?? ""];
       }
       await api.respondChannelInteraction(interactionID, nonce, decision, answers);
-      setNotice(t("sessions.interactionResolved"));
-      pendingInteractions.reload();
+      showNotice(t("sessions.interactionResolved"));
+      await pendingInteractions.reload();
+    } catch (error) {
+      showNotice(String(error), true);
     } finally {
       setBusy("");
     }
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack sessions-page">
       <p className="subtle-copy">{t("sessions.subtitle")}</p>
 
       <section className="surface">
-        <div className="surface-header">
-          <h2>{t("sessions.title")}</h2>
+        <div className="surface-header sessions-toolbar">
+          <div>
+            <h2>{t("sessions.title")}</h2>
+            <span className="muted">{t("sessions.resultCount").replace("{count}", String(filtered.length))}</span>
+          </div>
           <div className="control-row">
-            <select value={provider} onChange={(event) => setProvider(event.target.value)}>
-              {PROVIDERS.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {t(item.labelKey)}
-                </option>
-              ))}
+            <select value={source} onChange={(event) => setSource(event.target.value)} aria-label={t("sessions.source")}>
+              {SOURCES.map((item) => <option key={item.id} value={item.id}>{t(item.labelKey)}</option>)}
             </select>
-            <select value={surface} onChange={(event) => setSurface(event.target.value)}>
-              {SURFACES.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {t(item.labelKey)}
-                </option>
-              ))}
+            <select value={agentID} onChange={(event) => setAgentID(event.target.value)} aria-label={t("sessions.agent")}>
+              <option value="">{t("sessions.allAgents")}</option>
+              {availableAgents.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+            <select value={channelID} onChange={(event) => setChannelID(event.target.value)} aria-label={t("sessions.channel")}>
+              <option value="">{t("sessions.allChannels")}</option>
+              {availableChannels.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+            <select value={provider} onChange={(event) => setProvider(event.target.value)} aria-label={t("sessions.provider")}>
+              {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{t(item.labelKey)}</option>)}
             </select>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("sessions.search")} />
             <button className="ghost-action" onClick={sessions.reload} title={t("sessions.refresh")}>
@@ -180,26 +308,43 @@ export function SessionsPanel() {
           </div>
         </div>
         {sessions.error && <div className="surface-body error">{sessions.error}</div>}
-        {notice && <div className="surface-body session-notice">{notice}</div>}
+        {notice && <div className={`surface-body session-notice${noticeError ? " error" : ""}`}>{notice}</div>}
         <div className="sessions-layout">
           <div className="session-list" role="list">
-            {filtered.map((session) => (
-              <button
-                key={keyOf(session)}
-                className={selected && keyOf(selected) === keyOf(session) ? "active" : ""}
-                onClick={() => setSelectedID(keyOf(session))}
-              >
-                <span className="session-main">
-                  <strong>{session.title || session.session_id}</strong>
-                  <span>{session.project_dir || session.status_message || session.session_id}</span>
-                </span>
-                <span className="session-meta">
-                  <span className="pill">{session.provider_id}</span>
-                  <span className="pill">{session.surface}</span>
-                  <span className="muted">{formatDate(session.last_active_at, language)}</span>
-                </span>
-              </button>
-            ))}
+            {filtered.map((session) => {
+              const channel = session.channel_id ? channelByID.get(session.channel_id) : undefined;
+              return (
+                <button
+                  key={keyOf(session)}
+                  className={selected && keyOf(selected) === keyOf(session) ? "active" : ""}
+                  onClick={() => setSelectedID(keyOf(session))}
+                >
+                  <span className="session-list-icon">
+                    {channel ? (
+                      <ChannelAvatar channel={channel} />
+                    ) : session.surface === "cli" ? (
+                      <TerminalSquare size={18} />
+                    ) : (
+                      <Bot size={18} />
+                    )}
+                  </span>
+                  <span className="session-main">
+                    <strong>{session.title || session.conversation_key || session.session_id}</strong>
+                    <span>
+                      {session.origin === "channel"
+                        ? [session.agent_name, session.channel_name].filter(Boolean).join(" · ")
+                        : session.project_dir || session.status_message || session.session_id}
+                    </span>
+                    <span className="session-meta">
+                      {session.origin === "channel" && <span className="pill accent">{t("sessions.channelSession")}</span>}
+                      {session.channel_type && <span className="pill">{channelTypeLabel(session.channel_type)}</span>}
+                      <span className="pill">{providerLabel(session.provider_id)}</span>
+                      <span className="muted">{formatDate(session.last_active_at, language)}</span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
             {!sessions.error && filtered.length === 0 && <div className="empty-state">{t("sessions.empty")}</div>}
           </div>
 
@@ -208,29 +353,40 @@ export function SessionsPanel() {
               <>
                 <div className="detail-header">
                   <div>
-                    <h3>{selected.title || selected.session_id}</h3>
-                    <p className="muted mono">{selected.session_id}</p>
+                    <span className="session-eyebrow">
+                      {selected.origin === "channel" ? t("sessions.channelSession") : t("sessions.localSession")}
+                    </span>
+                    <h3>{selected.title || selected.conversation_key || selected.session_id}</h3>
+                    <p className="muted">
+                      {selected.origin === "channel"
+                        ? [selected.agent_name, selected.channel_name, channelTypeLabel(selected.channel_type || "")].filter(Boolean).join(" · ")
+                        : selected.project_dir || selected.status_message || selected.session_id}
+                    </p>
                   </div>
                   <div className="control-row">
-                    <a
-                      className="ghost-action"
-                      href={`#observability/traces?session_id=${encodeURIComponent(selected.session_id)}`}
-                      title={t("sessions.viewTraces")}
-                    >
-                      <Activity size={15} />
-                      {t("sessions.viewTraces")}
-                    </a>
+                    {traceSessionID && (
+                      <a
+                        className="ghost-action"
+                        href={`#observability/traces?session_id=${encodeURIComponent(traceSessionID)}`}
+                        title={t("sessions.viewTraces")}
+                      >
+                        <Activity size={15} />
+                        {t("sessions.viewTraces")}
+                      </a>
+                    )}
                     {selected.resume_command && (
                       <button className="ghost-action" onClick={() => copy(selected.resume_command || "")} title={t("sessions.copy")}>
                         <Clipboard size={15} />
                         {t("sessions.copy")}
                       </button>
                     )}
-                    <button className="action" disabled={busy === "resume"} onClick={() => resume(false)} title={t("sessions.resume")}>
-                      <Play size={15} />
-                      {t("sessions.resume")}
-                    </button>
-                    {selected.provider_id === "codex" && (
+                    {selected.surface !== "channel" && selected.available && (
+                      <button className="action" disabled={busy === "resume"} onClick={() => resume(false)} title={t("sessions.resume")}>
+                        <Play size={15} />
+                        {t("sessions.resume")}
+                      </button>
+                    )}
+                    {selected.provider_id === "codex" && (selected.native_session_id || selected.surface === "app-server") && (
                       <button className="ghost-action" disabled={busy === "open-codex"} onClick={openCodex} title={t("sessions.openCodex")}>
                         <ExternalLink size={15} />
                         {t("sessions.openCodex")}
@@ -252,61 +408,102 @@ export function SessionsPanel() {
                 </div>
 
                 <div className="session-facts">
-                  <span>{selected.project_dir || t("sessions.noProject")}</span>
-                  <span>{formatDate(selected.created_at, language)}</span>
+                  {selected.agent_name && <span><Bot size={13} /> {selected.agent_name}</span>}
+                  {selected.channel_name && <span><MessageSquareText size={13} /> {selected.channel_name}</span>}
+                  <span>{providerLabel(selected.provider_id)} · {surfaceLabel(selected.surface, t)}</span>
                   <span>{selected.message_count}{selected.messages_partial ? "+" : ""} {t("sessions.messages")}</span>
+                  <span>{formatDate(selected.created_at, language)}</span>
                 </div>
 
-                {selected.provider_id === "codex" && selected.surface === "app-server" && (
-                  <div className="session-channel-control">
-                    <div className="control-row session-channel-bind">
-                      <Link2 size={15} />
-                      <select
-                        value={bindChannelID}
-                        onChange={(event) => {
-                          setBindChannelID(event.target.value);
-                          setBindConversationID("");
-                        }}
-                      >
-                        <option value="">{t("sessions.selectChannel")}</option>
-                        {(channels.data ?? [])
-                          .filter((channel) => channel.config?.codex_control_enabled === "true")
-                          .map((channel) => (
-                            <option key={channel.id} value={channel.id}>{channel.bot_name || channel.name}</option>
-                          ))}
-                      </select>
-                      <select value={bindConversationID} onChange={(event) => setBindConversationID(event.target.value)}>
-                        <option value="">{t("sessions.selectConversation")}</option>
-                        {(channelConversations.data ?? []).map((conversation) => (
-                          <option key={conversation.id} value={conversation.id}>
-                            {conversation.title || conversation.conversation_key}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className="ghost-action"
-                        disabled={!bindConversationID || busy === "bind-codex"}
-                        onClick={bindCodex}
-                      >
-                        {t("sessions.bindChannel")}
-                      </button>
-                    </div>
-                    {bindChannelID && (
-                      <div className="session-conversation-list">
-                        {(channelConversations.data ?? []).map((conversation) => (
-                          <div className="session-conversation-row" key={conversation.id}>
-                            <span>
-                              <strong>{conversation.thread_title || conversation.title || conversation.conversation_key}</strong>
-                              <small>{conversation.conversation_key}</small>
-                            </span>
-                            <span className="mono">{conversation.native_session_id || t("sessions.unboundThread")}</span>
-                            <span className="pill">{conversation.active_task?.status || t("sessions.idle")}</span>
-                            <span>{t("sessions.queued")}: {conversation.queued_tasks}</span>
-                            {conversation.controller_id && <span>{t("sessions.controller")}: {conversation.controller_id}</span>}
-                          </div>
-                        ))}
+                <div className="session-chat">
+                  <div className="transcript" ref={transcriptRef} aria-live="polite">
+                    {messages.loading && !messages.data && <div className="empty-state compact">{t("common.loading")}</div>}
+                    {messages.error && <div className="error">{messages.error}</div>}
+                    {visibleMessages.map((message, index) => (
+                      <article className={`message ${message.role}`} key={`${message.timestamp ?? ""}-${index}`}>
+                        <header>
+                          <span>{roleLabel(message.role, t)}</span>
+                          {message.kind && <span className="muted">{message.kind}</span>}
+                          <time>{formatDate(message.timestamp, language)}</time>
+                        </header>
+                        <p>{message.content}</p>
+                      </article>
+                    ))}
+                    {!messages.loading && !messages.error && visibleMessages.length === 0 && (
+                      <div className="empty-state">{t("sessions.noMessages")}</div>
+                    )}
+                    {busy === "message" && (
+                      <div className="session-typing">
+                        <span />
+                        <span />
+                        <span />
+                        {t("sessions.agentThinking")}
                       </div>
                     )}
+                  </div>
+
+                  {selected.can_chat ? (
+                    <div className="session-composer">
+                      <textarea
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        onKeyDown={handleComposerKeyDown}
+                        placeholder={t("sessions.messagePlaceholder")}
+                        rows={3}
+                        disabled={busy === "message"}
+                      />
+                      <div className="session-composer-footer">
+                        <span>{t("sessions.consoleOnlyHint")}</span>
+                        <button className="action" onClick={sendMessage} disabled={!draft.trim() || busy === "message"}>
+                          <Send size={15} />
+                          {busy === "message" ? t("sessions.sending") : t("sessions.send")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="session-chat-unavailable">
+                      <MessageSquareText size={16} />
+                      <span>{selected.origin === "channel" ? t("sessions.channelOffline") : t("sessions.localReadOnly")}</span>
+                    </div>
+                  )}
+                </div>
+
+                {(selected.provider_id === "codex" || traceTool || pendingInteractions.data?.length) && (
+                  <details className="session-advanced">
+                    <summary>{t("sessions.advanced")}</summary>
+                    {selected.provider_id === "codex" && selected.surface === "app-server" && selected.origin !== "channel" && (
+                      <div className="session-channel-control">
+                        <div className="control-row session-channel-bind">
+                          <Link2 size={15} />
+                          <select
+                            value={bindChannelID}
+                            onChange={(event) => {
+                              setBindChannelID(event.target.value);
+                              setBindConversationID("");
+                            }}
+                          >
+                            <option value="">{t("sessions.selectChannel")}</option>
+                            {(channels.data ?? [])
+                              .filter((channel) => channel.config?.codex_control_enabled === "true")
+                              .map((channel) => (
+                                <option key={channel.id} value={channel.id}>{channel.bot_name || channel.name}</option>
+                              ))}
+                          </select>
+                          <select value={bindConversationID} onChange={(event) => setBindConversationID(event.target.value)}>
+                            <option value="">{t("sessions.selectConversation")}</option>
+                            {(channelConversations.data ?? []).map((conversation) => (
+                              <option key={conversation.id} value={conversation.id}>
+                                {conversation.title || conversation.conversation_key}
+                              </option>
+                            ))}
+                          </select>
+                          <button className="ghost-action" disabled={!bindConversationID || busy === "bind-codex"} onClick={bindCodex}>
+                            {t("sessions.bindChannel")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     {(pendingInteractions.data ?? []).map((interaction) => {
                       const questions = interaction.request.questions ?? [];
                       return (
@@ -381,32 +578,19 @@ export function SessionsPanel() {
                         </div>
                       );
                     })}
-                  </div>
+
+                    {traceTool && (
+                      <RouteTracePanel
+                        error={sessionTraces.error || recentTraces.error}
+                        fallback={routeTraceFallback}
+                        language={language}
+                        loading={routeTraceLoading}
+                        traces={routeTraces}
+                        t={t}
+                      />
+                    )}
+                  </details>
                 )}
-
-                <RouteTracePanel
-                  error={sessionTraces.error || recentTraces.error}
-                  fallback={routeTraceFallback}
-                  language={language}
-                  loading={routeTraceLoading}
-                  traces={routeTraces}
-                  t={t}
-                />
-
-                <div className="transcript">
-                  {messages.error && <div className="error">{messages.error}</div>}
-                  {(messages.data ?? []).map((message, index) => (
-                    <article className={`message ${message.role}`} key={`${message.timestamp ?? ""}-${index}`}>
-                      <header>
-                        <span>{message.role}</span>
-                        {message.kind && <span className="muted">{message.kind}</span>}
-                        <time>{formatDate(message.timestamp, language)}</time>
-                      </header>
-                      <p>{message.content}</p>
-                    </article>
-                  ))}
-                  {!messages.error && messages.data?.length === 0 && <div className="empty-state">{t("sessions.noMessages")}</div>}
-                </div>
               </>
             ) : (
               <div className="empty-state">{t("sessions.empty")}</div>
@@ -419,6 +603,7 @@ export function SessionsPanel() {
 }
 
 function keyOf(session: AgentSession) {
+  if (session.conversation_id) return `conversation:${session.conversation_id}`;
   return `${session.provider_id}:${session.surface}:${session.session_id}:${session.source_path ?? ""}`;
 }
 
@@ -426,6 +611,39 @@ function routeToolForSession(session: AgentSession) {
   if (session.provider_id === "claude" || session.provider_id === "claudecode") return "claudecode";
   if (session.provider_id === "codex") return "codex";
   return session.provider_id;
+}
+
+function normalizeProvider(provider: string) {
+  return provider === "claude" ? "claudecode" : provider;
+}
+
+function providerLabel(provider: string) {
+  if (provider === "claude" || provider === "claudecode") return "Claude Code";
+  if (provider === "codex") return "Codex";
+  return provider || "Agent";
+}
+
+function channelTypeLabel(channelType: string) {
+  if (channelType === "feishu" || channelType === "lark") return "Feishu";
+  if (channelType === "dingtalk") return "DingTalk";
+  if (channelType === "telegram") return "Telegram";
+  if (channelType === "discord") return "Discord";
+  if (channelType === "slack") return "Slack";
+  if (channelType === "webhook") return "Webhook";
+  return channelType;
+}
+
+function surfaceLabel(surface: string, t: (key: string) => string) {
+  if (surface === "cli") return t("sessions.cli");
+  if (surface === "app-server") return t("sessions.desktopApp");
+  if (surface === "channel") return t("sessions.channelSession");
+  return surface;
+}
+
+function roleLabel(role: string, t: (key: string) => string) {
+  if (role === "user") return t("sessions.you");
+  if (role === "assistant") return t("sessions.agentReply");
+  return role;
 }
 
 function RouteTracePanel({

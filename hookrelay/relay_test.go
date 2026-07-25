@@ -19,7 +19,7 @@ func TestRelayWritesUnixSocket(t *testing.T) {
 	opts.Source = "codex"
 	// Darwin limits sockaddr_un paths to 104 bytes. testing.T.TempDir can be
 	// deeply nested, so keep the socket itself in a short system temp path.
-	socketDir, err := os.MkdirTemp("", "anx-hook-")
+	socketDir, err := os.MkdirTemp("", "amux-hook-")
 	if err != nil {
 		t.Fatal(err)
 	}

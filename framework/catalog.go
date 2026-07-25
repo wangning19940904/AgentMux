@@ -1,4 +1,4 @@
-// Package framework defines the catalog of agent frameworks AgentNexus can run,
+// Package framework defines the catalog of agent frameworks AgentMux can run,
 // plus detection and installation of the SDK-based ones.
 //
 // A framework is either:

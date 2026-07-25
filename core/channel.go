@@ -51,6 +51,11 @@ const (
 	ChannelConfigReplyMode         = "reply_mode"
 	ChannelConfigAckReaction       = "ack_reaction_enabled"
 	ChannelConfigAckReactionEmojis = "ack_reaction_emojis"
+	ChannelConfigMeetingVoice      = "meeting_voice_enabled"
+	ChannelConfigMeetingTTSBaseURL = "meeting_voice_tts_base_url"
+	ChannelConfigMeetingTTSAPIKey  = "meeting_voice_tts_api_key"
+	ChannelConfigMeetingTTSModel   = "meeting_voice_tts_model"
+	ChannelConfigMeetingTTSVoice   = "meeting_voice_tts_voice"
 )
 
 // Channel reply scopes.
@@ -69,6 +74,10 @@ const (
 const (
 	DefaultAckReactionEnabled = "true"
 	DefaultAckReactionEmojis  = "OK,THUMBSUP,MUSCLE,THANKS"
+	DefaultMeetingVoice       = "false"
+	DefaultMeetingTTSBaseURL  = "https://api.openai.com/v1"
+	DefaultMeetingTTSModel    = "gpt-4o-mini-tts"
+	DefaultMeetingTTSVoice    = "alloy"
 )
 
 // Trigger kinds. A trigger is the unified automation entry: cron schedules,

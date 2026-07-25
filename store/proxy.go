@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // ProxyToolConfig is the per-tool local-routing row (cc-switch proxy_config).
@@ -253,7 +253,7 @@ func (s *Store) GetOrCreateGatewayToken(ctx context.Context) (string, error) {
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	token := "anx-" + hex.EncodeToString(buf)
+	token := "amux-" + hex.EncodeToString(buf)
 	if err := s.SetSetting(ctx, gatewayTokenKey, token); err != nil {
 		return "", err
 	}

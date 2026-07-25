@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func newTestService(t *testing.T) (*Service, *store.Store) {

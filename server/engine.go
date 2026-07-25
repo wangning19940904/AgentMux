@@ -3,12 +3,12 @@ package server
 import (
 	"log/slog"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // BuildEngine constructs the Engine with config.toml hooks and projects.
-// Shared by `anx serve`, `anx web` and the desktop shell so the channel &
+// Shared by `amux serve`, `amux web` and the desktop shell so the channel &
 // trigger runtime behaves identically everywhere.
 func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.WorkspaceInitializer) (*core.Engine, error) {
 	var hookList []core.Hook

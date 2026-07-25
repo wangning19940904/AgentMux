@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 type memorySecretBackend struct {
@@ -36,7 +36,7 @@ func TestProviderAPIKeyPersistsAndRestoresEnv(t *testing.T) {
 	restore := setProviderSecretBackendForTest(&memorySecretBackend{values: map[string]string{}})
 	defer restore()
 
-	envName := "AGENTNEXUS_PROVIDER_TEST_RELAY_API_KEY"
+	envName := "AGENTMUX_PROVIDER_TEST_RELAY_API_KEY"
 	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 
 	if err := SaveProviderAPIKey(envName, "sk-saved"); err != nil {
@@ -66,7 +66,7 @@ func TestDeleteProviderAPIKeyRemovesSavedSecret(t *testing.T) {
 	restore := setProviderSecretBackendForTest(backend)
 	defer restore()
 
-	envName := "AGENTNEXUS_PROVIDER_DELETE_ME_API_KEY"
+	envName := "AGENTMUX_PROVIDER_DELETE_ME_API_KEY"
 	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 
 	if err := SaveProviderAPIKey(envName, "sk-delete"); err != nil {

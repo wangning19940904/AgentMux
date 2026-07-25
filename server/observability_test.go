@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	observationpkg "github.com/agentnexus/agentnexus/observability"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	observationpkg "github.com/wangning19940904/AgentMux/observability"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func newObservationHTTPTestServer(t *testing.T) (*httptest.Server, *store.Store) {
@@ -114,7 +114,7 @@ func TestObservabilityAllowsMemoryOnlyBearerOnlyForWailsOrigin(t *testing.T) {
 	sessionRequest, _ := http.NewRequest(http.MethodPost, httpServer.URL+"/api/v1/observability/session", bytes.NewReader(body))
 	sessionRequest.Header.Set("Content-Type", "application/json")
 	sessionRequest.Header.Set("Origin", "wails://wails.localhost")
-	sessionRequest.Header.Set("X-AgentNexus-Desktop", "1")
+	sessionRequest.Header.Set("X-AgentMux-Desktop", "1")
 	response, err = client.Do(sessionRequest)
 	if err != nil {
 		t.Fatal(err)

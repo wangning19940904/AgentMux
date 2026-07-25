@@ -10,26 +10,26 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/guard"
-	nativeintegration "github.com/agentnexus/agentnexus/integrations/native"
-	"github.com/agentnexus/agentnexus/mcp"
-	"github.com/agentnexus/agentnexus/memory"
-	observationpkg "github.com/agentnexus/agentnexus/observability"
-	"github.com/agentnexus/agentnexus/provider"
-	"github.com/agentnexus/agentnexus/server"
-	"github.com/agentnexus/agentnexus/skills"
-	"github.com/agentnexus/agentnexus/store"
-	"github.com/agentnexus/agentnexus/usage"
-	"github.com/agentnexus/agentnexus/workspace"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/guard"
+	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
+	"github.com/wangning19940904/AgentMux/mcp"
+	"github.com/wangning19940904/AgentMux/memory"
+	observationpkg "github.com/wangning19940904/AgentMux/observability"
+	"github.com/wangning19940904/AgentMux/provider"
+	"github.com/wangning19940904/AgentMux/server"
+	"github.com/wangning19940904/AgentMux/skills"
+	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/usage"
+	"github.com/wangning19940904/AgentMux/workspace"
 	"log/slog"
 	"time"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	_ "github.com/agentnexus/agentnexus/agent"
-	_ "github.com/agentnexus/agentnexus/platform"
+	_ "github.com/wangning19940904/AgentMux/agent"
+	_ "github.com/wangning19940904/AgentMux/platform"
 )
 
 // startup boots the in-process daemon (HTTP API on 127.0.0.1:8765) that the
@@ -43,7 +43,7 @@ func (a *App) startup(ctx context.Context) {
 		cfg = config.Default()
 	}
 	a.setAPITarget(cfg.Server.Addr)
-	st, err := store.Open(store.DefaultPath())
+	st, err := openDesktopStore(a.ctx, cfg)
 	if err != nil {
 		log.Error("open store", "err", err)
 		return
@@ -147,13 +147,30 @@ func (a *App) shutdown(ctx context.Context) {
 
 // SwitchProvider is bound to the frontend/tray for quick switching.
 func (a *App) SwitchProvider(id, tool string) error {
-	st, err := store.Open(store.DefaultPath())
+	cfg, cfgErr := config.Load("config.toml")
+	if cfgErr != nil {
+		cfg = config.Default()
+	}
+	st, err := openDesktopStore(a.ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return provider.NewService(log, st, "").Switch(a.ctx, id, tool)
+}
+
+func openDesktopStore(ctx context.Context, cfg *config.Config) (*store.Store, error) {
+	lifetime, err := time.ParseDuration(cfg.Database.ConnectionMaxLifetime)
+	if err != nil {
+		return nil, err
+	}
+	return store.OpenPostgres(ctx, store.DatabaseConfig{
+		URL:                   cfg.Database.URL,
+		MaxOpenConnections:    cfg.Database.MaxOpenConnections,
+		MaxIdleConnections:    cfg.Database.MaxIdleConnections,
+		ConnectionMaxLifetime: lifetime,
+	})
 }
 
 // SelectDirectory opens the native system directory picker for desktop users.

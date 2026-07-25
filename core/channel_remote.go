@@ -1022,7 +1022,7 @@ func formatInteractionFallback(interaction ChannelInteraction) string {
 	if request.Kind == AgentInteractionUserInput {
 		for _, question := range request.Questions {
 			if question.Secret {
-				return "Codex 需要敏感输入。请在本机 AgentNexus 控制台处理；该内容不会显示或接收于渠道。"
+				return "Codex 需要敏感输入。请在本机 AgentMux 控制台处理；该内容不会显示或接收于渠道。"
 			}
 		}
 		return "Codex 正等待补充信息，请在支持交互卡片的客户端或本机控制台处理。"

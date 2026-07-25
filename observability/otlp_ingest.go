@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // HandleOTLPTraces accepts the OTLP/HTTP JSON encoding used by the private
@@ -48,7 +48,7 @@ func (s *IngestService) HandleOTLPTraces(w http.ResponseWriter, r *http.Request)
 func (s *IngestService) authorized(r *http.Request) bool {
 	provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if provided == "" {
-		provided = r.Header.Get("X-AgentNexus-Token")
+		provided = r.Header.Get("X-AgentMux-Token")
 	}
 	return s.token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1
 }
@@ -80,11 +80,11 @@ func (s *IngestService) ingestOTLPSpan(r *http.Request, resource, span map[strin
 	for key, value := range otlpAttributes(span["attributes"]) {
 		attrs[key] = value
 	}
-	runtimeID := firstOTLPAttribute(attrs, "agentnexus.runtime", "service.name")
-	sessionID := firstOTLPAttribute(attrs, "agentnexus.session_id", "session.id", "session_id", "gen_ai.conversation.id", "conversation.id", "thread.id", "thread_id")
+	runtimeID := firstOTLPAttribute(attrs, "agentmux.runtime", "service.name")
+	sessionID := firstOTLPAttribute(attrs, "agentmux.session_id", "session.id", "session_id", "gen_ai.conversation.id", "conversation.id", "thread.id", "thread_id")
 	correlation := s.traceForSession(runtimeID, sessionID)
 	incomingTraceID := otlpStringValue(span["traceId"])
-	traceID := otlpAttrString(attrs, "agentnexus.parent_trace_id")
+	traceID := otlpAttrString(attrs, "agentmux.parent_trace_id")
 	if traceID == "" {
 		traceID = correlation.traceID
 	}
@@ -98,7 +98,7 @@ func (s *IngestService) ingestOTLPSpan(r *http.Request, resource, span map[strin
 	}
 	parentID := otlpStringValue(span["parentSpanId"])
 	if parentID == "" {
-		parentID = otlpAttrString(attrs, "agentnexus.parent_span_id")
+		parentID = otlpAttrString(attrs, "agentmux.parent_span_id")
 	}
 	if parentID == "" {
 		parentID = correlation.parentSpanID
@@ -127,9 +127,9 @@ func (s *IngestService) ingestOTLPSpan(r *http.Request, resource, span map[strin
 	safeAttrs, content := splitOTLPAttributes(attrs, otlpSlice(span["events"]))
 	base := core.ObservationEnvelope{
 		TraceID: traceID, SpanID: spanID, ParentSpanID: parentID, Kind: kind, Name: name,
-		AgentID:   firstOTLPAttribute(attrs, "agentnexus.agent_id", "agent_id"),
+		AgentID:   firstOTLPAttribute(attrs, "agentmux.agent_id", "agent_id"),
 		RuntimeID: runtimeID, SessionID: sessionID,
-		TurnID: firstNonBlank(firstOTLPAttribute(attrs, "agentnexus.turn_id", "turn.id", "turn_id"), correlation.turnID),
+		TurnID: firstNonBlank(firstOTLPAttribute(attrs, "agentmux.turn_id", "turn.id", "turn_id"), correlation.turnID),
 		Source: source, Provenance: []string{"native_otel", "otlp_http_json"},
 		Quality: core.ObservationQualityComplete, Model: model, Tool: tool, Attributes: safeAttrs,
 	}

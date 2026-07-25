@@ -13,7 +13,7 @@ export async function runOpenAIAgents(req, emit) {
   }
 
   const agent = new Agent({
-    name: req.name || "AgentNexus",
+    name: req.name || "AgentMux",
     instructions: req.system_prompt || "You are a helpful assistant.",
     ...(req.model ? { model: req.model } : {}),
   });

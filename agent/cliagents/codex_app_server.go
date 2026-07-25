@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // Codex's app-server is the transport used by the Codex desktop app. It is
@@ -486,12 +486,12 @@ func codexAppServerArgs(ctx context.Context) []string {
 		exporter := fmt.Sprintf(`{"otlp-http"={endpoint=%q,protocol="json",headers={Authorization=%q}}}`,
 			endpoint, "Bearer "+telemetry.Token)
 		args = append(args,
-			"-c", "otel.environment=\"agentnexus\"",
+			"-c", "otel.environment=\"agentmux\"",
 			"-c", "otel.exporter=\"none\"",
 			"-c", "otel.metrics_exporter=\"none\"",
 			"-c", "otel.trace_exporter="+exporter,
 			"-c", fmt.Sprintf("otel.log_user_prompt=%t", telemetry.CaptureContent),
-			"-c", `otel.span_attributes={"agentnexus.runtime"="codex"}`,
+			"-c", `otel.span_attributes={"agentmux.runtime"="codex"}`,
 		)
 	}
 	return append(args, "app-server", "--listen", "stdio://")

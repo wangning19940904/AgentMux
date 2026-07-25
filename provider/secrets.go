@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-const providerSecretService = "AgentNexus Provider API Keys"
+const providerSecretService = "AgentMux Provider API Keys"
 
 var errProviderSecretNotFound = errors.New("provider API key not found")
 

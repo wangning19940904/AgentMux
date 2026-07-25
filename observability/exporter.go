@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // Pipeline is the single bus subscriber that first encrypts/persists content
@@ -31,6 +31,9 @@ type Pipeline struct {
 }
 
 func NewPipeline(recorder *store.ObservationRecorder, exporters *ExporterService) *Pipeline {
+	if recorder != nil && recorder.Async() && exporters != nil {
+		recorder.SetAfterRecord(exporters.Enqueue)
+	}
 	return &Pipeline{recorder: recorder, exporters: exporters}
 }
 
@@ -40,7 +43,7 @@ func (p *Pipeline) Observe(ctx context.Context, envelope core.ObservationEnvelop
 	}
 	secured, recordErr := p.recorder.Record(ctx, envelope)
 	var exportErr error
-	if p.exporters != nil {
+	if p.exporters != nil && !p.recorder.Async() {
 		exportErr = p.exporters.Enqueue(ctx, secured)
 	}
 	return errors.Join(recordErr, exportErr)
@@ -274,8 +277,8 @@ func otlpTraceRequest(envelope core.ObservationEnvelope, content []byte, content
 	attributes := otlpEnvelopeAttributes(envelope)
 	if len(content) > 0 {
 		attributes = append(attributes,
-			otlpString("agentnexus.content", string(content)),
-			otlpString("agentnexus.content_type", contentType),
+			otlpString("agentmux.content", string(content)),
+			otlpString("agentmux.content_type", contentType),
 		)
 	}
 	status := otlpStatus{Code: 1}
@@ -293,21 +296,21 @@ func otlpTraceRequest(envelope core.ObservationEnvelope, content []byte, content
 	}
 	return otlpRequest{ResourceSpans: []otlpResourceSpans{{
 		Resource: otlpResource{Attributes: []otlpAttribute{
-			otlpString("service.name", "agentnexus"), otlpString("service.version", "0.1.0"),
+			otlpString("service.name", "agentmux"), otlpString("service.version", "0.1.0"),
 		}},
-		ScopeSpans: []otlpScopeSpan{{Scope: otlpScope{Name: "github.com/agentnexus/agentnexus", Version: "1"}, Spans: []otlpSpan{span}}},
+		ScopeSpans: []otlpScopeSpan{{Scope: otlpScope{Name: "github.com/wangning19940904/AgentMux", Version: "1"}, Spans: []otlpSpan{span}}},
 	}}}
 }
 
 func otlpEnvelopeAttributes(envelope core.ObservationEnvelope) []otlpAttribute {
 	attrs := []otlpAttribute{
-		otlpString("agentnexus.kind", envelope.Kind), otlpString("agentnexus.source", envelope.Source),
-		otlpString("agentnexus.quality", envelope.Quality), otlpString("agentnexus.lifecycle", envelope.Lifecycle),
+		otlpString("agentmux.kind", envelope.Kind), otlpString("agentmux.source", envelope.Source),
+		otlpString("agentmux.quality", envelope.Quality), otlpString("agentmux.lifecycle", envelope.Lifecycle),
 	}
 	for key, value := range map[string]string{
 		"gen_ai.agent.id": envelope.AgentID, "gen_ai.agent.name": envelope.AgentName,
 		"gen_ai.conversation.id": envelope.ConversationID, "gen_ai.session.id": envelope.SessionID,
-		"agentnexus.turn.id": envelope.TurnID,
+		"agentmux.turn.id": envelope.TurnID,
 	} {
 		if value != "" {
 			attrs = append(attrs, otlpString(key, value))
@@ -334,7 +337,7 @@ func otlpEnvelopeAttributes(envelope core.ObservationEnvelope) []otlpAttribute {
 		)
 	}
 	for key, value := range envelope.Attributes {
-		attrs = append(attrs, otlpString("agentnexus."+key, fmt.Sprint(value)))
+		attrs = append(attrs, otlpString("agentmux."+key, fmt.Sprint(value)))
 	}
 	return attrs
 }
@@ -370,7 +373,7 @@ func firstOTLPName(envelope core.ObservationEnvelope) string {
 	if envelope.Kind != "" {
 		return envelope.Kind
 	}
-	return "agentnexus.observation"
+	return "agentmux.observation"
 }
 
 func min(a, b int) int {

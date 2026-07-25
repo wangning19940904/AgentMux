@@ -1,4 +1,4 @@
-// AgentNexus Node sidecar worker.
+// AgentMux Node sidecar worker.
 //
 // The Go daemon spawns this process once and speaks a line-delimited JSON
 // protocol over stdio:

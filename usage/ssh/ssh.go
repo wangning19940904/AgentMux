@@ -55,7 +55,7 @@ func defaultRemotePath(source string) string {
 }
 
 // Sync connects to the target and copies each source's session files into a
-// local staging directory under ~/.agentnexus/ssh/<target>/<source>.
+// local staging directory under ~/.agentmux/ssh/<target>/<source>.
 func Sync(ctx context.Context, t Target, log *slog.Logger) (*Staging, error) {
 	client, err := dial(t)
 	if err != nil {
@@ -64,7 +64,7 @@ func Sync(ctx context.Context, t Target, log *slog.Logger) (*Staging, error) {
 	defer client.Close()
 
 	home, _ := os.UserHomeDir()
-	stagingBase := filepath.Join(home, ".agentnexus", "ssh", t.Name)
+	stagingBase := filepath.Join(home, ".agentmux", "ssh", t.Name)
 	st := &Staging{roots: map[string]string{}}
 
 	sources := t.Sources

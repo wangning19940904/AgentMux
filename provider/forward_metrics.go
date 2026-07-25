@@ -125,7 +125,7 @@ func parseProxyResponseMetrics(proto string, raw []byte, stream bool) proxyRespo
 	}
 	// OpenAI reports cached tokens as a subset of input_tokens, while
 	// Anthropic reports cache-read/cache-write tokens beside uncached input.
-	// Normalize to AgentNexus's mutually exclusive billing buckets.
+	// Normalize to AgentMux's mutually exclusive billing buckets.
 	if (proto == protoResponses || proto == protoOpenAIChat) && out.cacheReadTokens > 0 {
 		out.inputTokens -= out.cacheReadTokens
 		if out.inputTokens < 0 {
@@ -247,7 +247,7 @@ func proxyRequestIdentityFrom(r *http.Request) proxyRequestIdentity {
 	if requestID == "" {
 		requestID = randomProxyID("preq-")
 	}
-	traceID := firstTraceValue(r.Header.Get("x-agentnexus-trace-id"), traceIDFromTraceparent(r.Header.Get("traceparent")))
+	traceID := firstTraceValue(r.Header.Get("x-agentmux-trace-id"), traceIDFromTraceparent(r.Header.Get("traceparent")))
 	if traceID == "" {
 		traceID = randomProxyTraceID()
 	}

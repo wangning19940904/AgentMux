@@ -1,9 +1,0 @@
-{
-  "name": "agentnexus-observer",
-  "version": "0.1.0",
-  "description": "Additive lifecycle hooks that send Claude Code activity to the local AgentNexus observability collector.",
-  "author": {
-    "name": "AgentNexus"
-  },
-  "homepage": "https://github.com/agentnexus/agentnexus"
-}

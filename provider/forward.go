@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // forward.go is the protocol-agnostic request forwarder. A single code path
@@ -307,7 +307,7 @@ func traceSessionID(r *http.Request, body map[string]any) string {
 	return firstTraceValue(
 		traceBodyString(body, "session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId"),
 		traceNestedBodyString(body, "metadata", "session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId"),
-		r.Header.Get("x-agentnexus-session-id"),
+		r.Header.Get("x-agentmux-session-id"),
 		r.Header.Get("x-session-id"),
 		r.Header.Get("x-conversation-id"),
 		r.Header.Get("x-thread-id"),
@@ -318,7 +318,7 @@ func traceProjectDir(r *http.Request, body map[string]any) string {
 	return firstTraceValue(
 		traceBodyString(body, "project_dir", "projectDir", "cwd", "working_directory", "workingDirectory"),
 		traceNestedBodyString(body, "metadata", "project_dir", "projectDir", "cwd", "working_directory", "workingDirectory"),
-		r.Header.Get("x-agentnexus-project-dir"),
+		r.Header.Get("x-agentmux-project-dir"),
 		r.Header.Get("x-project-dir"),
 		r.Header.Get("x-cwd"),
 	)

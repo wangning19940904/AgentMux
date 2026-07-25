@@ -16,8 +16,8 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/framework"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework"
 )
 
 // request is a message sent to the sidecar worker.

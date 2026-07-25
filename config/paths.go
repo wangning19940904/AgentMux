@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// EnvPath is the environment variable used to point AgentNexus at a config
+// EnvPath is the environment variable used to point AgentMux at a config
 // file when --config is not supplied.
-const EnvPath = "ANX_CONFIG"
+const EnvPath = "AMUX_CONFIG"
 
 // NotFoundError reports all config paths that were checked.
 type NotFoundError struct {
@@ -32,28 +32,28 @@ func IsNotFound(err error) bool {
 }
 
 // DefaultPath returns the per-user config path. On Linux this follows XDG:
-// $XDG_CONFIG_HOME/agentnexus/config.toml, falling back to
-// ~/.config/agentnexus/config.toml.
+// $XDG_CONFIG_HOME/agentmux/config.toml, falling back to
+// ~/.config/agentmux/config.toml.
 func DefaultPath() string {
 	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
-		return filepath.Join(dir, "agentnexus", "config.toml")
+		return filepath.Join(dir, "agentmux", "config.toml")
 	}
 	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
-		return filepath.Join(dir, "agentnexus", "config.toml")
+		return filepath.Join(dir, "agentmux", "config.toml")
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".config", "agentnexus", "config.toml")
+		return filepath.Join(home, ".config", "agentmux", "config.toml")
 	}
-	return filepath.Join(".config", "agentnexus", "config.toml")
+	return filepath.Join(".config", "agentmux", "config.toml")
 }
 
 // SystemPath returns the machine-wide config path used by Linux services.
 func SystemPath() string {
-	return "/etc/agentnexus/config.toml"
+	return "/etc/agentmux/config.toml"
 }
 
 // CandidatePaths returns config paths in lookup order. An explicit path or
-// ANX_CONFIG disables fallback search so mistakes fail loudly.
+// AMUX_CONFIG disables fallback search so mistakes fail loudly.
 func CandidatePaths(explicit string) ([]string, error) {
 	if p := strings.TrimSpace(explicit); p != "" {
 		path, err := ExpandPath(p)

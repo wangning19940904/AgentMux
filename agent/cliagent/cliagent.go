@@ -9,7 +9,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // LineMapper maps one line of a CLI's streamed output to a core.Event (or nil

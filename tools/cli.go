@@ -1,4 +1,4 @@
-// Package tools implements installable local tool catalogs for AgentNexus.
+// Package tools implements installable local tool catalogs for AgentMux.
 package tools
 
 import (

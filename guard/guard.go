@@ -1,4 +1,4 @@
-// Package guard implements AgentNexus Guard: the permission-approval and
+// Package guard implements AgentMux Guard: the permission-approval and
 // policy gate for tool calls. The default "policy" guard evaluates a tool
 // call against ordered rules stored in the SQLite SSOT and falls back to a
 // configurable default decision (ask) when no rule matches.
@@ -7,8 +7,8 @@ package guard
 import (
 	"context"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func init() {

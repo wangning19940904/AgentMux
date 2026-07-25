@@ -617,7 +617,11 @@ func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier,
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
-	e.driveReplyStream(ctx, sess, stream, events, data)
+	speech := e.beginSpeechReply(ctx, mr, msg)
+	if speech != nil {
+		defer func() { _ = speech.Close(ctx) }()
+	}
+	e.driveReplyStream(ctx, sess, stream, speech, events, data)
 }
 
 // streamTurnCard drives a single turn onto a StreamReplier, rendering the whole
@@ -651,10 +655,27 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 	}
 	defer func() { _ = stream.Close(ctx) }()
 
-	e.driveReplyStream(ctx, sess, stream, events, data)
+	speech := e.beginSpeechReply(ctx, sr, msg)
+	if speech != nil {
+		defer func() { _ = speech.Close(ctx) }()
+	}
+	e.driveReplyStream(ctx, sess, stream, speech, events, data)
 }
 
-func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream ReplyStream, events <-chan *Event, data map[string]string) {
+func (e *Engine) beginSpeechReply(ctx context.Context, renderer any, msg *Message) SpeechReply {
+	replier, ok := renderer.(SpeechReplier)
+	if !ok {
+		return nil
+	}
+	speech, err := replier.BeginSpeechReply(ctx, msg)
+	if err != nil {
+		e.log.Warn("begin speech reply", "err", err)
+		return nil
+	}
+	return speech
+}
+
+func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream ReplyStream, speech SpeechReply, events <-chan *Event, data map[string]string) {
 	var answer, thinking, rendered string
 	var failed bool
 	var tools toolProgress
@@ -706,6 +727,11 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				continue
 			}
 			answer = ev.Text
+			if speech != nil {
+				if err := speech.Update(ctx, answer, false); err != nil {
+					e.log.Warn("speech update", "err", err)
+				}
+			}
 			body := tools.render(thinking, answer, false)
 			if body != rendered {
 				if err := stream.Update(ctx, body, false, false); err != nil {
@@ -725,6 +751,11 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 	}
 	if err := stream.Update(ctx, tools.render(thinking, answer, true), true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
+	}
+	if speech != nil && !failed && answer != "" && answer != "NO_REPLY" {
+		if err := speech.Update(ctx, answer, true); err != nil {
+			e.log.Warn("speech finalize", "err", err)
+		}
 	}
 }
 

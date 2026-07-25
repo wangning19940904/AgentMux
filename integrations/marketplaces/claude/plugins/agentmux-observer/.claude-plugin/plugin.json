@@ -1,0 +1,9 @@
+{
+  "name": "agentmux-observer",
+  "version": "0.1.0",
+  "description": "Additive lifecycle hooks that send Claude Code activity to the local AgentMux observability collector.",
+  "author": {
+    "name": "AgentMux"
+  },
+  "homepage": "https://github.com/wangning19940904/AgentMux"
+}

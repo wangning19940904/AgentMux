@@ -1,4 +1,4 @@
-// Package store provides the SQLite single-source-of-truth for AgentNexus:
+// Package store provides the SQLite single-source-of-truth for AgentMux:
 // providers, sessions, cached usage records and settings.
 package store
 
@@ -9,26 +9,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 	_ "modernc.org/sqlite"
 )
 
-// Store uses separate SQLite pools for reads and writes. SQLite permits many
-// concurrent readers in WAL mode but still has exactly one writer. Routing all
-// writes through a one-connection pool lets database/sql queue them fairly
-// instead of allowing several in-process connections to repeatedly race for
-// SQLite's write lock and eventually surface SQLITE_BUSY.
+// Store uses an isolated pool for observation writes so telemetry pressure
+// cannot starve task, chat, configuration, or provider traffic.
 type Store struct {
-	db     *sql.DB
-	writer *sql.DB
+	db      *dbHandle
+	writer  *dbHandle
+	observe *dbHandle
+	dialect Dialect
 }
 
-// DefaultPath returns ~/.agentnexus/agentnexus.db.
+// DefaultPath returns ~/.agentmux/agentmux.db.
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".agentnexus", "agentnexus.db")
+	return filepath.Join(home, ".agentmux", "agentmux.db")
 }
 
 // Open opens (and migrates) the database at path.
@@ -52,12 +52,78 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(4)
-	s := &Store{db: db, writer: writer}
-	if err := s.migrate(); err != nil {
+	readHandle := &dbHandle{DB: db, dialect: DialectSQLite}
+	writeHandle := &dbHandle{DB: writer, dialect: DialectSQLite}
+	s := &Store{db: readHandle, writer: writeHandle, observe: writeHandle, dialect: DialectSQLite}
+	if err := s.migrateSQLite(); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// OpenPostgres opens the PostgreSQL-only runtime store. Open remains available
+// solely for legacy SQLite migration and isolated compatibility tests.
+func OpenPostgres(ctx context.Context, cfg DatabaseConfig) (*Store, error) {
+	defaults := DefaultDatabaseConfig()
+	if strings.TrimSpace(cfg.URL) == "" {
+		cfg.URL = defaults.URL
+	}
+	if cfg.MaxOpenConnections <= 0 {
+		cfg.MaxOpenConnections = defaults.MaxOpenConnections
+	}
+	if cfg.MaxIdleConnections < 0 {
+		cfg.MaxIdleConnections = defaults.MaxIdleConnections
+	}
+	if cfg.ConnectionMaxLifetime <= 0 {
+		cfg.ConnectionMaxLifetime = defaults.ConnectionMaxLifetime
+	}
+	coreDB, err := sql.Open("pgx", cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres core pool: %w", err)
+	}
+	coreDB.SetMaxOpenConns(max(2, cfg.MaxOpenConnections-2))
+	coreDB.SetMaxIdleConns(min(cfg.MaxIdleConnections, max(2, cfg.MaxOpenConnections-2)))
+	coreDB.SetConnMaxLifetime(cfg.ConnectionMaxLifetime)
+	observeDB, err := sql.Open("pgx", cfg.URL)
+	if err != nil {
+		_ = coreDB.Close()
+		return nil, fmt.Errorf("open postgres observation pool: %w", err)
+	}
+	observeDB.SetMaxOpenConns(2)
+	observeDB.SetMaxIdleConns(2)
+	observeDB.SetConnMaxLifetime(cfg.ConnectionMaxLifetime)
+	coreHandle := &dbHandle{DB: coreDB, dialect: DialectPostgres}
+	observeHandle := &dbHandle{DB: observeDB, dialect: DialectPostgres}
+	s := &Store{db: coreHandle, writer: coreHandle, observe: observeHandle, dialect: DialectPostgres}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := coreDB.PingContext(pingCtx); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("connect postgres %q: %w", redactDatabaseURL(cfg.URL), err)
+	}
+	if err := observeDB.PingContext(pingCtx); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("connect postgres observation pool: %w", err)
+	}
+	if err := s.migratePostgres(ctx); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func redactDatabaseURL(raw string) string {
+	if before, after, ok := strings.Cut(raw, "://"); ok {
+		if credentials, host, found := strings.Cut(after, "@"); found && strings.Contains(credentials, ":") {
+			return before + "://***@" + host
+		}
+	}
+	return raw
+}
+
+func (s *Store) IsPostgres() bool {
+	return s != nil && s.dialect == DialectPostgres
 }
 
 // Close closes the database.
@@ -65,18 +131,20 @@ func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
-	var readerErr, writerErr error
+	var errs []error
 	if s.db != nil {
-		readerErr = s.db.Close()
+		errs = append(errs, s.db.Close())
 	}
-	if s.writer != nil {
-		writerErr = s.writer.Close()
+	if s.writer != nil && s.writer != s.db {
+		errs = append(errs, s.writer.Close())
 	}
-	return errors.Join(readerErr, writerErr)
+	if s.observe != nil && s.observe != s.db && s.observe != s.writer {
+		errs = append(errs, s.observe.Close())
+	}
+	return errors.Join(errs...)
 }
 
-func (s *Store) migrate() error {
-	const schema = `
+const sqliteCoreSchema = `
 CREATE TABLE IF NOT EXISTS providers (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -290,7 +358,9 @@ CREATE TABLE IF NOT EXISTS channel_interactions (
 );
 CREATE INDEX IF NOT EXISTS idx_channel_interactions_pending
 	ON channel_interactions(channel_id, conversation_key, status, created_at);`
-	if _, err := s.writer.Exec(schema); err != nil {
+
+func (s *Store) migrateSQLite() error {
+	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
 		return err
 	}
 	for _, col := range []struct {
@@ -460,10 +530,11 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 	}
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT OR IGNORE INTO usage_records
+		INSERT INTO usage_records
 		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT DO NOTHING`)
 	if err != nil {
 		return err
 	}

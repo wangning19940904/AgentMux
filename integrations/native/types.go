@@ -1,4 +1,4 @@
-// Package native manages the additive AgentNexus observer plugins for Claude
+// Package native manages the additive AgentMux observer plugins for Claude
 // Code and Codex. All host configuration changes are delegated to the hosts'
 // native plugin CLIs; this package never edits hooks.state or shared hook files.
 package native
@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	PluginID        = "agentnexus-observer"
-	MarketplaceName = "agentnexus-local"
+	PluginID        = "agentmux-observer"
+	MarketplaceName = "agentmux-local"
 	PluginVersion   = "0.1.0"
 )
 
@@ -75,8 +75,8 @@ type Preview struct {
 	Blocked            bool      `json:"blocked"`
 }
 
-// ResourceOwnership records only resources that AgentNexus created through a
-// native CLI or in its own private ~/.agentnexus directory. Shared host files
+// ResourceOwnership records only resources that AgentMux created through a
+// native CLI or in its own private ~/.agentmux directory. Shared host files
 // are observations, never resources restored from snapshots.
 type ResourceOwnership struct {
 	Kind               string `json:"kind"`

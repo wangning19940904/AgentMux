@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestInitializeClaudeWorkspaceCreatesNativeStructure(t *testing.T) {
@@ -28,13 +28,13 @@ func TestInitializeClaudeWorkspaceCreatesNativeStructure(t *testing.T) {
 	if res.WorkDir != root {
 		t.Fatalf("work_dir = %q, want %q", res.WorkDir, root)
 	}
-	assertDir(t, filepath.Join(root, ".agentnexus"))
+	assertDir(t, filepath.Join(root, ".agentmux"))
 	assertDir(t, filepath.Join(root, ".claude", "skills"))
 	assertFile(t, filepath.Join(root, "CLAUDE.md"))
 	assertFile(t, filepath.Join(root, ".claude", "skills", "code-review", "SKILL.md"))
 
 	var meta workspaceFile
-	data, err := os.ReadFile(filepath.Join(root, ".agentnexus", "workspace.json"))
+	data, err := os.ReadFile(filepath.Join(root, ".agentmux", "workspace.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

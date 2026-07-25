@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // LegacyObservationImportResult reports how many durable legacy rows were
@@ -42,6 +42,9 @@ const (
 // source row's durable identity.
 func (s *Store) ImportLegacyObservations(ctx context.Context) (LegacyObservationImportResult, error) {
 	var result LegacyObservationImportResult
+	if s.IsPostgres() {
+		return result, nil
+	}
 	correlations, err := s.loadLegacyCorrelations(ctx)
 	if err != nil {
 		return result, fmt.Errorf("load legacy observation correlations: %w", err)
@@ -183,6 +186,9 @@ func (s *Store) saveLegacyObservationImportCursor(ctx context.Context, key strin
 // event IDs make retries idempotent; content older than the recorder's policy
 // is discarded there before the plaintext source is cleared.
 func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.ObservationHandler) (int, error) {
+	if s.IsPostgres() {
+		return 0, nil
+	}
 	if secure == nil {
 		return 0, nil
 	}
@@ -228,7 +234,7 @@ func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.Observa
 				return secured, err
 			}
 		}
-		result, err := s.writer.ExecContext(ctx, `UPDATE proxy_traces SET error='Legacy proxy request failed' WHERE id=? AND error=?`, row.ID, row.Error)
+		result, err := s.observe.ExecContext(ctx, `UPDATE proxy_traces SET error='Legacy proxy request failed' WHERE id=? AND error=?`, row.ID, row.Error)
 		if err != nil {
 			return secured, err
 		}
@@ -623,7 +629,7 @@ func legacyEventID(namespace, identity string) string {
 }
 
 func legacyStableHex(namespace, identity string, size int) string {
-	digest := sha256.Sum256([]byte("agentnexus.observation.legacy.v1\x00" + namespace + "\x00" + identity))
+	digest := sha256.Sum256([]byte("agentmux.observation.legacy.v1\x00" + namespace + "\x00" + identity))
 	if size <= 0 || size > len(digest) {
 		size = len(digest)
 	}

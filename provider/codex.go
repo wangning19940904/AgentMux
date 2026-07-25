@@ -5,19 +5,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
-// codexModelProviderID is the single [model_providers.*] block AgentNexus
+// codexModelProviderID is the single [model_providers.*] block AgentMux
 // owns in ~/.codex/config.toml (cc-switch uses "custom" the same way, see
 // CC_SWITCH_CODEX_MODEL_PROVIDER_ID). A fixed id means switches never
 // accumulate stale per-provider blocks.
-const codexModelProviderID = "agentnexus"
+const codexModelProviderID = "agentmux"
 
 // codexModelCatalogFilename mirrors cc-switch's cc-switch-model-catalog.json:
 // a catalog file the Codex desktop app reads so third-party models appear in
 // its model picker.
-const codexModelCatalogFilename = "agentnexus-model-catalog.json"
+const codexModelCatalogFilename = "agentmux-model-catalog.json"
 
 // codexReservedProviderIDs are Codex built-in provider ids we must never
 // delete or overwrite (kept in sync with cc-switch CODEX_RESERVED_MODEL_PROVIDER_IDS).
@@ -81,7 +81,7 @@ func writeCodexConfig(home string, p, prev *core.Provider) error {
 	return writeTOMLObject(path, doc)
 }
 
-// cleanupLegacyCodexBlocks removes the per-provider block older AgentNexus
+// cleanupLegacyCodexBlocks removes the per-provider block older AgentMux
 // builds keyed by provider id, so switches stop accumulating stale tables.
 func cleanupLegacyCodexBlocks(doc map[string]any, prev *core.Provider) {
 	if prev == nil {
@@ -172,7 +172,7 @@ func codexCatalogModels(p *core.Provider) []string {
 	return out
 }
 
-// syncCodexModelCatalog writes (or unlinks) the AgentNexus model catalog and
+// syncCodexModelCatalog writes (or unlinks) the AgentMux model catalog and
 // keeps config.toml's model_catalog_json pointer in sync. The pointer is only
 // removed when it references our own file (cc-switch ownership rule).
 func syncCodexModelCatalog(dir string, doc map[string]any, models []string) error {

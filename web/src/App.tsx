@@ -20,6 +20,7 @@ import {
   PanelLeft,
   PanelTop,
   Search,
+  ServerCog,
   MessageSquareText,
   Settings,
   ShieldCheck,
@@ -42,6 +43,8 @@ import { MCPPanel } from "./panels/MCPPanel";
 import { GuardPanel } from "./panels/GuardPanel";
 import { SessionsPanel } from "./panels/SessionsPanel";
 import { MenuBarPanel } from "./panels/MenuBarPanel";
+import { RemoteHostsPanel } from "./panels/RemoteHostsPanel";
+import { RemoteTargetSelector } from "./RemoteTargetSelector";
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 
 type Tab =
@@ -52,6 +55,7 @@ type Tab =
   | "observability"
   | "usage"
   | "menubar"
+  | "machines"
   | "providers"
   | "gateway"
   | "memory"
@@ -103,7 +107,10 @@ const NAV_GROUPS: NavGroup[] = [
     id: "system",
     labelKey: "nav.group.system",
     icon: PanelTop,
-    items: [{ id: "menubar", labelKey: "nav.menubar", icon: PanelTop }],
+    items: [
+      { id: "machines", labelKey: "nav.machines", icon: ServerCog },
+      { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
+    ],
   },
 ];
 
@@ -121,13 +128,13 @@ const LANG_OPTIONS: { id: Language; labelKey: string }[] = [
 ];
 
 function initialLanguage(): Language {
-  const stored = localStorage.getItem("agentnexus:language");
+  const stored = localStorage.getItem("agentmux:language");
   if (stored === "zh" || stored === "en") return stored;
   return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
 function initialThemeMode(): ThemeMode {
-  const stored = localStorage.getItem("agentnexus:theme");
+  const stored = localStorage.getItem("agentmux:theme");
   if (stored === "system" || stored === "light" || stored === "dark") return stored;
   return "system";
 }
@@ -148,7 +155,7 @@ export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
   useEffect(() => {
-    localStorage.setItem("agentnexus:language", language);
+    localStorage.setItem("agentmux:language", language);
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   }, [language]);
 
@@ -160,7 +167,7 @@ export function App() {
       document.documentElement.dataset.themeMode = themeMode;
     };
 
-    localStorage.setItem("agentnexus:theme", themeMode);
+    localStorage.setItem("agentmux:theme", themeMode);
     applyTheme();
     media.addEventListener("change", applyTheme);
     return () => media.removeEventListener("change", applyTheme);
@@ -241,7 +248,7 @@ function Shell({
             <Network size={22} strokeWidth={2.4} />
           </div>
           <div>
-            <strong>AgentNexus</strong>
+            <strong>AgentMux</strong>
             <span>Command Surface</span>
           </div>
         </div>
@@ -313,7 +320,7 @@ function Shell({
           <div className="avatar">AN</div>
           <div>
             <strong>{t("app.admin")}</strong>
-            <span>admin@agentnexus.ai</span>
+            <span>admin@agentmux.ai</span>
           </div>
           <ChevronDown size={16} />
         </div>
@@ -335,6 +342,7 @@ function Shell({
               <input placeholder={t("app.search")} />
             </label>
           </div>
+          <RemoteTargetSelector onManage={() => setTab("machines")} />
           <details className="topbar-preferences">
             <summary title={t("app.settings")} aria-label={t("app.settings")}>
               <Settings size={18} />
@@ -364,6 +372,7 @@ function Shell({
             {tab === "observability" && <ObservabilityPanel />}
             {tab === "usage" && <UsagePanel />}
             {tab === "menubar" && <MenuBarPanel />}
+            {tab === "machines" && <RemoteHostsPanel />}
             {tab === "sessions" && <SessionsPanel />}
             {tab === "providers" && <ProvidersPanel />}
             {tab === "gateway" && <GatewayPanel />}
@@ -398,7 +407,7 @@ class PanelErrorBoundary extends Component<PanelErrorBoundaryProps, PanelErrorBo
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("AgentNexus panel render failed", error, info);
+    console.error("AgentMux panel render failed", error, info);
   }
 
   componentDidUpdate(prevProps: PanelErrorBoundaryProps) {

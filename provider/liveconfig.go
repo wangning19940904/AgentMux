@@ -1,7 +1,7 @@
 // Package provider: live-config writers ported from cc-switch. Switching a
 // provider rewrites the target tool's live config (e.g. ~/.claude/settings.json,
 // ~/.codex/config.toml, Claude Desktop's Claude-3p profile) atomically, only
-// touching keys AgentNexus manages.
+// touching keys AgentMux manages.
 package provider
 
 import (
@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // WriteLiveConfig writes a tool's live config file to point at provider p.
@@ -59,7 +59,7 @@ func liveConfigTool(tool string) string {
 }
 
 // managedClaudeEnvKeys are the env keys in ~/.claude/settings.json that
-// AgentNexus owns; every switch clears them before writing the new provider
+// AgentMux owns; every switch clears them before writing the new provider
 // (cc-switch clears these via full settingsConfig replacement).
 var managedClaudeEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",

@@ -1,6 +1,6 @@
 // Package hookrelay implements the small, fail-open transport used by native
 // Claude Code and Codex hooks. It deliberately has no dependency on the main
-// AgentNexus process: hooks can deliver to a Unix socket or spool an encrypted
+// AgentMux process: hooks can deliver to a Unix socket or spool an encrypted
 // event while the gateway is offline.
 package hookrelay
 
@@ -26,7 +26,7 @@ const (
 	// local collector. Native agent execution must never wait on telemetry.
 	MaxSocketWait = 200 * time.Millisecond
 	maxInputBytes = 64 << 20
-	spoolAAD      = "agentnexus-hook-spool-v1"
+	spoolAAD      = "agentmux-hook-spool-v1"
 )
 
 // Options configures one hook delivery.
@@ -65,10 +65,10 @@ type encryptedSpool struct {
 // DefaultOptions returns paths under the supplied home directory. Callers
 // normally use os.UserHomeDir; tests and integration previews pass a temp HOME.
 func DefaultOptions(home string) Options {
-	root := filepath.Join(home, ".agentnexus", "observability")
+	root := filepath.Join(home, ".agentmux", "observability")
 	return Options{
 		Source:     "unknown",
-		SocketPath: filepath.Join(home, ".agentnexus", "run", "observability.sock"),
+		SocketPath: filepath.Join(home, ".agentmux", "run", "observability.sock"),
 		SpoolDir:   filepath.Join(root, "hook-spool"),
 		KeyPath:    filepath.Join(root, "hook-spool.key"),
 		Timeout:    MaxSocketWait,
@@ -207,7 +207,7 @@ func writeEncryptedSpool(plaintext []byte, opts Options) (string, error) {
 	if _, err := io.ReadFull(opts.Random, randomName); err != nil {
 		return "", fmt.Errorf("generate spool filename: %w", err)
 	}
-	name := fmt.Sprintf("%020d-%s.anxspool", opts.Now().UnixNano(), base64.RawURLEncoding.EncodeToString(randomName))
+	name := fmt.Sprintf("%020d-%s.amuxspool", opts.Now().UnixNano(), base64.RawURLEncoding.EncodeToString(randomName))
 	path := filepath.Join(opts.SpoolDir, name)
 	if err := atomicWriteExclusive(path, envelope, 0o600); err != nil {
 		return "", err
@@ -238,7 +238,7 @@ func loadOrCreateKey(path string, random io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(random, key); err != nil {
 		return nil, fmt.Errorf("generate spool key: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".agentnexus-key-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".agentmux-key-*")
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +279,7 @@ func secureMkdirAll(path string) error {
 
 func atomicWriteExclusive(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".agentnexus-spool-*")
+	tmp, err := os.CreateTemp(dir, ".agentmux-spool-*")
 	if err != nil {
 		return err
 	}

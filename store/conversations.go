@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // compile-time check: Store implements core.ConversationStore.
@@ -19,7 +19,7 @@ var _ core.ConversationStore = (*Store)(nil)
 // (scope, conversationKey),
 // creating one from seed when none exists.
 func (s *Store) GetOrCreateConversation(ctx context.Context, seed core.Conversation) (*core.Conversation, bool, error) {
-	// A second AgentNexus process (for example the desktop app plus an `anx`
+	// A second AgentMux process (for example the desktop app plus an `amux`
 	// command) can still own SQLite's one cross-process writer. The driver busy
 	// timeout handles ordinary overlap; this bounded retry also survives a long
 	// checkpoint or maintenance batch instead of dropping the inbound message.

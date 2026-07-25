@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var parentTimer: Timer?
     private var settings = MenubarSettings.defaults
     private let parentPID: pid_t? = {
-        guard let raw = ProcessInfo.processInfo.environment["ANX_PARENT_PID"],
+        guard let raw = ProcessInfo.processInfo.environment["AMUX_PARENT_PID"],
               let value = Int32(raw) else {
             return nil
         }
@@ -45,13 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.imagePosition = .imageOnly
         button.imageHugsTitle = true
         button.title = ""
-        button.toolTip = "AgentNexus"
+        button.toolTip = "AgentMux"
     }
 
-    // appIcon loads the AgentNexus bundle icon scaled to the status-bar height
+    // appIcon loads the AgentMux bundle icon scaled to the status-bar height
     // so it sits next to the emoji. Returns nil (icon-less) if unavailable.
     private func appIcon() -> NSImage? {
-        guard let bundlePath = ProcessInfo.processInfo.environment["ANX_APP_BUNDLE"] else {
+        guard let bundlePath = ProcessInfo.processInfo.environment["AMUX_APP_BUNDLE"] else {
             return nil
         }
         let icon = NSWorkspace.shared.icon(forFile: bundlePath)
@@ -180,17 +180,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             menu.addItem(NSMenuItem(title: "Daemon unreachable", action: nil, keyEquivalent: ""))
-            menu.addItem(NSMenuItem(title: "Start: anx serve", action: nil, keyEquivalent: ""))
+            menu.addItem(NSMenuItem(title: "Start: amux serve", action: nil, keyEquivalent: ""))
         }
         menu.addItem(NSMenuItem.separator())
         if parentPID != nil {
-            menu.addItem(NSMenuItem(title: "Show AgentNexus",
-                                    action: #selector(showAgentNexus), keyEquivalent: "o"))
+            menu.addItem(NSMenuItem(title: "Show AgentMux",
+                                    action: #selector(showAgentMux), keyEquivalent: "o"))
         }
         menu.addItem(NSMenuItem(title: "Open WebUI",
                                 action: #selector(openWeb), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit",
-                                action: #selector(quitAgentNexus), keyEquivalent: "q"))
+                                action: #selector(quitAgentMux), keyEquivalent: "q"))
         for item in menu.items where item.action != nil { item.target = self }
         statusItem.menu = menu
     }
@@ -267,8 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return fmt.string(from: NSNumber(value: value)) ?? String(format: "%.\(fraction)f", value)
     }
 
-    @objc private func showAgentNexus() {
-        if let bundlePath = ProcessInfo.processInfo.environment["ANX_APP_BUNDLE"],
+    @objc private func showAgentMux() {
+        if let bundlePath = ProcessInfo.processInfo.environment["AMUX_APP_BUNDLE"],
            NSWorkspace.shared.open(URL(fileURLWithPath: bundlePath)) {
             return
         }
@@ -285,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func quitAgentNexus() {
+    @objc private func quitAgentMux() {
         if let pid = parentPID {
             kill(pid, SIGTERM)
         }

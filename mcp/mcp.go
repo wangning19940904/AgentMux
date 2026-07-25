@@ -1,4 +1,4 @@
-// Package mcp implements AgentNexus MCP Registry: registration, orchestration
+// Package mcp implements AgentMux MCP Registry: registration, orchestration
 // and distribution of Model Context Protocol server configurations. The
 // default "store" registry persists server definitions in the SQLite SSOT so
 // they can be rendered into per-tool MCP config files.
@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func init() {

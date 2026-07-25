@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestQueryObservationUsageSelectsHighestPrioritySourceWithoutDroppingAttempts(t *testing.T) {
@@ -33,15 +33,15 @@ func TestQueryObservationUsageSelectsHighestPrioritySourceWithoutDroppingAttempt
 	// The same logical request is visible internally, through Proxy and from a
 	// transcript trace reconstructed with a different trace ID. Only the
 	// authoritative internal record should count.
-	record("trace-shared", "span-internal", "agentnexus.internal", "codex", "req-shared", 1, 100)
-	record("trace-shared", "span-proxy", "agentnexus.proxy", "codex", "req-shared", 1, 100)
+	record("trace-shared", "span-internal", "agentmux.internal", "codex", "req-shared", 1, 100)
+	record("trace-shared", "span-proxy", "agentmux.proxy", "codex", "req-shared", 1, 100)
 	record("trace-backfill", "span-transcript", "transcript", "codex", "req-shared", 1, 100)
 	// A second real request in the same turn must not be dropped merely because
 	// its source rank matches the first request.
-	record("trace-shared", "span-internal-second", "agentnexus.internal", "codex", "req-second", 1, 7)
+	record("trace-shared", "span-internal-second", "agentmux.internal", "codex", "req-second", 1, 7)
 	// A proxy-only trace with two failover attempts keeps both attempts.
-	record("trace-retry", "span-attempt-1", "agentnexus.proxy", "claudecode", "req-retry", 1, 20)
-	record("trace-retry", "span-attempt-2", "agentnexus.proxy", "claudecode", "req-retry", 2, 30)
+	record("trace-retry", "span-attempt-1", "agentmux.proxy", "claudecode", "req-retry", 1, 20)
+	record("trace-retry", "span-attempt-2", "agentmux.proxy", "claudecode", "req-retry", 2, 30)
 
 	records, err := st.QueryObservationUsage(ctx, time.Time{})
 	if err != nil {
@@ -82,10 +82,10 @@ func TestObservationTraceSummaryDeduplicatesSourcesPerRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	record("internal-1", "internal-span-1", "agentnexus.internal", "request-1", 100)
+	record("internal-1", "internal-span-1", "agentmux.internal", "request-1", 100)
 	record("otel-1", "otel-span-1", "otel.codex", "request-1", 100)
-	record("proxy-1", "proxy-span-1", "agentnexus.proxy", "request-1", 100)
-	record("internal-2", "internal-span-2", "agentnexus.internal", "request-2", 7)
+	record("proxy-1", "proxy-span-1", "agentmux.proxy", "request-1", 100)
+	record("internal-2", "internal-span-2", "agentmux.internal", "request-2", 7)
 
 	trace, err := st.GetObservationTrace(ctx, "trace-summary")
 	if err != nil {
@@ -107,7 +107,7 @@ func TestDailyUsageSurvivesDetailedTraceRetention(t *testing.T) {
 	if err := st.RecordObservation(ctx, core.ObservationEnvelope{
 		EventID: "daily-event", TraceID: "daily-trace", SpanID: "daily-span", Time: created,
 		Kind: "model.request", Lifecycle: core.ObservationLifecycleEnd, Status: core.ObservationStatusOK,
-		AgentID: "agent", RuntimeID: "claude", Source: "agentnexus.internal",
+		AgentID: "agent", RuntimeID: "claude", Source: "agentmux.internal",
 		Model: &core.ObservationModel{Resolved: "claude-model", RequestID: "daily-request", Attempt: 1},
 		Usage: &core.ObservationUsage{InputTokens: 90, OutputTokens: 10, TotalTokens: 100, CostUSD: 0.05},
 	}); err != nil {

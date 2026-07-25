@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 type InsightEngine struct {
@@ -610,7 +610,7 @@ func insightSpanRichness(span store.ObservationSpan) int64 {
 func insightSourceRank(source string) int {
 	source = strings.ToLower(source)
 	switch {
-	case source == "agentnexus.internal":
+	case source == "agentmux.internal":
 		return 0
 	case strings.Contains(source, "otel") || strings.Contains(source, "app-server"):
 		return 1

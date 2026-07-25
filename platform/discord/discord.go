@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
 	"github.com/bwmarrin/discordgo"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // discordMaxLen keeps messages under Discord's 2000-char hard limit.
@@ -102,7 +102,7 @@ func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) erro
 			return
 		}
 		data := interaction.MessageComponentData()
-		if !strings.HasPrefix(data.CustomID, "agentnexus_settings_") || len(data.Values) == 0 {
+		if !strings.HasPrefix(data.CustomID, "agentmux_settings_") || len(data.Values) == 0 {
 			return
 		}
 		var action discordRuntimeSettingsAction
@@ -271,7 +271,7 @@ func discordSettingsSelect(id, placeholder string, entries []discordSettingOptio
 		options = append(options, discordgo.SelectMenuOption{Label: entry.label, Value: string(encoded), Default: entry.action.Value == selected || (entry.action.Setting == string(core.RuntimeSettingScope) && entry.action.Scope == selected)})
 	}
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{
-		CustomID: "agentnexus_settings_" + id, Placeholder: placeholder, Options: options,
+		CustomID: "agentmux_settings_" + id, Placeholder: placeholder, Options: options,
 	}}}
 }
 

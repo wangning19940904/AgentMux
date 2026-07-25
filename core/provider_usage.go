@@ -125,7 +125,7 @@ func ProviderWithRouteMeta(p *Provider, route ProviderMeta) *Provider {
 }
 
 // ClaudeDesktopModel is the subset of Claude Desktop's 3P profile model entry
-// AgentNexus needs for direct- and proxy-mode routing.
+// AgentMux needs for direct- and proxy-mode routing.
 type ClaudeDesktopModel struct {
 	ID          string `json:"id"`
 	Name        string `json:"name,omitempty"`
@@ -206,7 +206,7 @@ func ProviderModelOptions(p *Provider) []string {
 	return out
 }
 
-// ProxyTrace records one request that passed through AgentNexus local routing.
+// ProxyTrace records one request that passed through AgentMux local routing.
 type ProxyTrace struct {
 	ID               string    `json:"id"`
 	RequestID        string    `json:"request_id,omitempty"`

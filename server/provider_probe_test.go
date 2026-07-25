@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestProbeProviderModelsOpenAICompatible(t *testing.T) {
@@ -168,7 +168,7 @@ func TestNormalizeProviderAPIKeyInjectsGeneratedEnv(t *testing.T) {
 	if p.APIKey != "" {
 		t.Fatalf("APIKey should be cleared, got %q", p.APIKey)
 	}
-	if p.APIKeyEnv != "AGENTNEXUS_PROVIDER_SUPER_RELAY_API_KEY" {
+	if p.APIKeyEnv != "AGENTMUX_PROVIDER_SUPER_RELAY_API_KEY" {
 		t.Fatalf("APIKeyEnv = %q", p.APIKeyEnv)
 	}
 	if os.Getenv(p.APIKeyEnv) != "secret" {
@@ -183,7 +183,7 @@ func TestNormalizeProviderAPIKeyTreatsLegacyInlineEnvValueAsKey(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Unsetenv(p.APIKeyEnv) })
 
-	if p.APIKeyEnv != "AGENTNEXUS_PROVIDER_SUPER_RELAY_API_KEY" {
+	if p.APIKeyEnv != "AGENTMUX_PROVIDER_SUPER_RELAY_API_KEY" {
 		t.Fatalf("APIKeyEnv = %q", p.APIKeyEnv)
 	}
 	if os.Getenv(p.APIKeyEnv) != "plat_secret-with-dash" {

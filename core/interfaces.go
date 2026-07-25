@@ -1,5 +1,5 @@
 // Package core defines the central interfaces and the plugin registry that
-// the rest of AgentNexus builds on. core must never import from the
+// the rest of AgentMux builds on. core must never import from the
 // platform/, agent/, provider/ or usage/ packages: adapters register
 // themselves here via the registry instead.
 package core
@@ -57,7 +57,7 @@ type Message struct {
 	Callback *CallbackEvent
 	// LogOnly persists the inbound event without dispatching it to hooks or an
 	// agent session. Platforms use this for callbacks that are observable but
-	// are not an AgentNexus control action.
+	// are not an AgentMux control action.
 	LogOnly bool
 }
 
@@ -275,6 +275,22 @@ type ReplyStream interface {
 	// as an error when true.
 	Update(ctx context.Context, text string, done, failed bool) error
 	// Close releases any resources held by the stream.
+	Close(ctx context.Context) error
+}
+
+// SpeechReplier is an optional Platform capability that mirrors only the
+// assistant's textual answer to a speech destination. Unlike ReplyStream it
+// never receives thinking summaries or tool progress, so those implementation
+// details are not spoken to end users.
+type SpeechReplier interface {
+	BeginSpeechReply(ctx context.Context, msg *Message) (SpeechReply, error)
+}
+
+// SpeechReply receives the full accumulated assistant answer. Implementations
+// derive and enqueue only the newly appended suffix; Update must return
+// quickly so text rendering is never gated on TTS or audio playback.
+type SpeechReply interface {
+	Update(ctx context.Context, text string, done bool) error
 	Close(ctx context.Context) error
 }
 

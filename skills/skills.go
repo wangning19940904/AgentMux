@@ -1,6 +1,6 @@
-// Package skills implements AgentNexus Skills: unified discovery, installation
+// Package skills implements AgentMux Skills: unified discovery, installation
 // and management of Agent Skills. The default "fs" provider discovers
-// SKILL.md files under one or more roots (e.g. ~/.agentnexus/skills); other
+// SKILL.md files under one or more roots (e.g. ~/.agentmux/skills); other
 // providers (git, registry) can register via core.RegisterSkillManager.
 package skills
 
@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func init() {
@@ -40,7 +40,7 @@ type FSManager struct {
 var _ core.SkillManager = (*FSManager)(nil)
 
 // New builds a filesystem skill manager. With no roots it defaults to
-// ~/.agentnexus/skills.
+// ~/.agentmux/skills.
 func New(roots ...string) *FSManager {
 	if len(roots) == 0 {
 		roots = DefaultRoots()
@@ -48,13 +48,13 @@ func New(roots ...string) *FSManager {
 	return &FSManager{roots: roots, disabled: map[string]bool{}}
 }
 
-// DefaultRoots returns the global AgentNexus skill roots. The first root is the
+// DefaultRoots returns the global AgentMux skill roots. The first root is the
 // write target; the legacy root is still scanned for compatibility.
 func DefaultRoots() []string {
 	home, _ := os.UserHomeDir()
 	return []string{
-		filepath.Join(home, ".agentnexus", "tools", "skills"),
-		filepath.Join(home, ".agentnexus", "skills"),
+		filepath.Join(home, ".agentmux", "tools", "skills"),
+		filepath.Join(home, ".agentmux", "skills"),
 	}
 }
 

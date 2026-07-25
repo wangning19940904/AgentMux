@@ -244,7 +244,7 @@ func detectThirdPartyOwners(home string, host Host) []Finding {
 	if exists(fluxManifest) {
 		findings = append(findings, Finding{
 			Code: "third_party_owner", Severity: SeverityInfo, Owner: "flux-island", Path: fluxManifest,
-			Message: "Flux Island also manages hooks for this host; AgentNexus will use an additive plugin and will not edit Flux resources.",
+			Message: "Flux Island also manages hooks for this host; AgentMux will use an additive plugin and will not edit Flux resources.",
 		})
 	}
 	ccSwitchPaths := []string{
@@ -255,7 +255,7 @@ func detectThirdPartyOwners(home string, host Host) []Finding {
 		if exists(path) {
 			findings = append(findings, Finding{
 				Code: "third_party_owner", Severity: SeverityInfo, Owner: "cc-switch", Path: path,
-				Message: "CC Switch state was detected; AgentNexus will not edit its database or common configuration.",
+				Message: "CC Switch state was detected; AgentMux will not edit its database or common configuration.",
 			})
 			break
 		}
@@ -279,16 +279,16 @@ func detectThirdPartyOwners(home string, host Host) []Finding {
 				Message: "CC Switch markers are present in a shared host config and will be preserved.",
 			})
 		}
-		if strings.Contains(text, ".agentnexus/bin/agentnexus-hook") {
+		if strings.Contains(text, ".agentmux/bin/agentmux-hook") {
 			findings = append(findings, Finding{
 				Code: "same_handler_unowned", Severity: SeverityError, Owner: "unknown", Path: path, Blocking: true,
-				Message: "An AgentNexus hook handler already exists in shared configuration but is not owned by this plugin installation; refusing to create a duplicate.",
+				Message: "An AgentMux hook handler already exists in shared configuration but is not owned by this plugin installation; refusing to create a duplicate.",
 			})
 		}
-		if containsLoopback(text) && !strings.Contains(text, "agentnexus-proxy-managed") {
+		if containsLoopback(text) && !strings.Contains(text, "agentmux-proxy-managed") {
 			findings = append(findings, Finding{
 				Code: "unknown_loopback_route", Severity: SeverityWarning, Owner: "unknown", Path: path,
-				Message: "An existing loopback route is present. The observer plugin is additive, but AgentNexus will not claim or rewrite this route.",
+				Message: "An existing loopback route is present. The observer plugin is additive, but AgentMux will not claim or rewrite this route.",
 			})
 		}
 	}
