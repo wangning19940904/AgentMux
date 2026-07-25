@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-const menuBarHelperName = "AgentNexusMenuBar"
+const menuBarHelperName = "AgentMuxMenuBar"
 
 type menuBarProcess struct {
 	cmd *exec.Cmd
@@ -72,12 +72,12 @@ func findMenuBarHelper() (string, bool) {
 func menuBarEnv(addr string) []string {
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
-		"ANX_ADDR="+daemonBaseURL(addr),
-		fmt.Sprintf("ANX_PARENT_PID=%d", os.Getpid()),
+		"AMUX_ADDR="+daemonBaseURL(addr),
+		fmt.Sprintf("AMUX_PARENT_PID=%d", os.Getpid()),
 	)
 	if exe, err := os.Executable(); err == nil {
 		if bundle := appBundlePath(exe); bundle != "" {
-			env = append(env, "ANX_APP_BUNDLE="+bundle)
+			env = append(env, "AMUX_APP_BUNDLE="+bundle)
 		}
 	}
 	return env

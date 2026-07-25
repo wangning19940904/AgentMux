@@ -1,4 +1,4 @@
-// Package store provides the SQLite single-source-of-truth for AgentNexus:
+// Package store provides the SQLite single-source-of-truth for AgentMux:
 // providers, sessions, cached usage records and settings.
 package store
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,10 +25,10 @@ type Store struct {
 	writer *sql.DB
 }
 
-// DefaultPath returns ~/.agentnexus/agentnexus.db.
+// DefaultPath returns ~/.agentmux/agentmux.db.
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".agentnexus", "agentnexus.db")
+	return filepath.Join(home, ".agentmux", "agentmux.db")
 }
 
 // Open opens (and migrates) the database at path.

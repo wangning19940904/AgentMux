@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	integrationassets "github.com/agentnexus/agentnexus/integrations"
+	integrationassets "github.com/wangning19940904/AgentMux/integrations"
 )
 
 type Options struct {
@@ -93,13 +93,13 @@ func NewManager(options Options) (*Manager, error) {
 }
 
 func errorsNoAssets() error {
-	return fmt.Errorf("AgentNexus native integration assets were not found; set AGENTNEXUS_INTEGRATION_ASSETS")
+	return fmt.Errorf("AgentMux native integration assets were not found; set AGENTMUX_INTEGRATION_ASSETS")
 }
 
 // DefaultAssetsDir locates source-tree or packaged marketplace assets without
 // reading or changing any user configuration.
 func DefaultAssetsDir() string {
-	if configured := strings.TrimSpace(os.Getenv("AGENTNEXUS_INTEGRATION_ASSETS")); configured != "" {
+	if configured := strings.TrimSpace(os.Getenv("AGENTMUX_INTEGRATION_ASSETS")); configured != "" {
 		return configured
 	}
 	var candidates []string
@@ -107,7 +107,7 @@ func DefaultAssetsDir() string {
 		dir := filepath.Dir(executable)
 		candidates = append(candidates,
 			filepath.Join(dir, "integrations", "marketplaces"),
-			filepath.Join(dir, "..", "share", "agentnexus", "integrations", "marketplaces"),
+			filepath.Join(dir, "..", "share", "agentmux", "integrations", "marketplaces"),
 		)
 	}
 	if cwd, err := os.Getwd(); err == nil {
@@ -184,7 +184,7 @@ func (m *Manager) inspectAssets(spec hostSpec) (assetInfo, error) {
 }
 
 func (m *Manager) helperTarget() string {
-	return filepath.Join(m.home, ".agentnexus", "bin", "agentnexus-hook")
+	return filepath.Join(m.home, ".agentmux", "bin", "agentmux-hook")
 }
 
 func (m *Manager) resolvedHelperSource() string {
@@ -192,7 +192,7 @@ func (m *Manager) resolvedHelperSource() string {
 		return filepath.Clean(m.helperSource)
 	}
 	if executable, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(executable), "agentnexus-hook")
+		candidate := filepath.Join(filepath.Dir(executable), "agentmux-hook")
 		if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
 			return candidate
 		}
@@ -201,11 +201,11 @@ func (m *Manager) resolvedHelperSource() string {
 }
 
 func (m *Manager) statePath(host Host) string {
-	return filepath.Join(m.home, ".agentnexus", "integrations", string(host)+".json")
+	return filepath.Join(m.home, ".agentmux", "integrations", string(host)+".json")
 }
 
 func (m *Manager) lockPath() string {
-	return filepath.Join(m.home, ".agentnexus", "integrations", ".native-integrations.lock")
+	return filepath.Join(m.home, ".agentmux", "integrations", ".native-integrations.lock")
 }
 
 func (m *Manager) env() []string { return commandEnv(m.home) }

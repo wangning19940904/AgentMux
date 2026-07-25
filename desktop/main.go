@@ -1,8 +1,8 @@
 //go:build desktop
 // +build desktop
 
-// Command agentnexus-desktop is the Wails v2 desktop shell. It starts the
-// AgentNexus daemon in-process and renders the same React WebUI (web/dist)
+// Command agentmux-desktop is the Wails v2 desktop shell. It starts the
+// AgentMux daemon in-process and renders the same React WebUI (web/dist)
 // inside a native WebView. On macOS it also launches the bundled menu bar
 // helper so the app remains reachable after the main window is closed.
 //
@@ -39,7 +39,7 @@ var assets embed.FS
 func main() {
 	app := newApp()
 	err := wails.Run(&options.App{
-		Title:             "AgentNexus",
+		Title:             "AgentMux",
 		Width:             1100,
 		Height:            720,
 		HideWindowOnClose: true,
@@ -51,7 +51,7 @@ func main() {
 		OnShutdown: app.shutdown,
 		Bind:       []any{app},
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "com.agentnexus.desktop",
+			UniqueId: "com.agentmux.desktop",
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
 				if app.ctx == nil {
 					return

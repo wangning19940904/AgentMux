@@ -11,7 +11,7 @@ type observationTraceparentContextKey struct{}
 type observationChildTelemetryContextKey struct{}
 
 // ObservationChildTelemetry is private, per-process OTLP configuration for an
-// AgentNexus-launched runtime. It is never written to a host's shared config.
+// AgentMux-launched runtime. It is never written to a host's shared config.
 type ObservationChildTelemetry struct {
 	Endpoint       string
 	Token          string
@@ -193,7 +193,7 @@ func (e *Engine) observeLifecycle(ctx context.Context, event HookEvent, data map
 		DedupeKey: lifecycleDedupeKey(event, data), Kind: kind, Name: name,
 		Lifecycle: ObservationLifecycleEvent, AgentID: data["agent_id"], AgentName: data["agent_name"],
 		RuntimeID: data["runtime_id"], ConversationID: data["conversation_id"], SessionID: data["session_id"],
-		TurnID: data["turn_id"], Source: "agentnexus.internal", Provenance: []string{"engine", "lifecycle"},
+		TurnID: data["turn_id"], Source: "agentmux.internal", Provenance: []string{"engine", "lifecycle"},
 		Quality: ObservationQualityComplete, Status: status, Error: observationErr,
 		Attributes: safeObservationAttributes(data), Content: content,
 	})
@@ -221,7 +221,7 @@ func (e *Engine) observeHookRun(run HookRun) {
 		ParentSpanID: data["root_span_id"], Kind: "hook.run", Name: string(run.Event), Lifecycle: ObservationLifecycleEnd,
 		AgentID: data["agent_id"], AgentName: data["agent_name"], RuntimeID: data["runtime_id"],
 		ConversationID: data["conversation_id"], SessionID: data["session_id"], TurnID: data["turn_id"],
-		Source: "agentnexus.hook", Provenance: []string{"engine", "config_hook", run.Type}, Quality: ObservationQualityComplete,
+		Source: "agentmux.hook", Provenance: []string{"engine", "config_hook", run.Type}, Quality: ObservationQualityComplete,
 		Status: status, Error: observationErr, Attributes: map[string]any{
 			"hook_event": string(run.Event), "hook_type": run.Type, "duration_ms": run.Duration.Milliseconds(),
 		}, Content: content,
@@ -294,7 +294,7 @@ func (t *observedTurn) base(spanID, parentID, kind, name, lifecycle, status stri
 		Kind: kind, Name: name, Lifecycle: lifecycle,
 		AgentID: t.data["agent_id"], AgentName: t.data["agent_name"], RuntimeID: t.data["runtime_id"],
 		ConversationID: t.data["conversation_id"], SessionID: t.data["session_id"], TurnID: t.turnID,
-		Source: "agentnexus.internal", Provenance: []string{"engine", "agent_session"},
+		Source: "agentmux.internal", Provenance: []string{"engine", "agent_session"},
 		Quality: t.quality, Status: status,
 	}
 }
@@ -808,7 +808,7 @@ func normalizeObservationUsageSource(values ...string) string {
 			return value
 		}
 	}
-	return "agentnexus"
+	return "agentmux"
 }
 
 func sessionObservationID(session AgentSession) string {

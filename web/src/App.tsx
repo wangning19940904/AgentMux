@@ -121,13 +121,13 @@ const LANG_OPTIONS: { id: Language; labelKey: string }[] = [
 ];
 
 function initialLanguage(): Language {
-  const stored = localStorage.getItem("agentnexus:language");
+  const stored = localStorage.getItem("agentmux:language");
   if (stored === "zh" || stored === "en") return stored;
   return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
 function initialThemeMode(): ThemeMode {
-  const stored = localStorage.getItem("agentnexus:theme");
+  const stored = localStorage.getItem("agentmux:theme");
   if (stored === "system" || stored === "light" || stored === "dark") return stored;
   return "system";
 }
@@ -148,7 +148,7 @@ export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
   useEffect(() => {
-    localStorage.setItem("agentnexus:language", language);
+    localStorage.setItem("agentmux:language", language);
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   }, [language]);
 
@@ -160,7 +160,7 @@ export function App() {
       document.documentElement.dataset.themeMode = themeMode;
     };
 
-    localStorage.setItem("agentnexus:theme", themeMode);
+    localStorage.setItem("agentmux:theme", themeMode);
     applyTheme();
     media.addEventListener("change", applyTheme);
     return () => media.removeEventListener("change", applyTheme);
@@ -241,7 +241,7 @@ function Shell({
             <Network size={22} strokeWidth={2.4} />
           </div>
           <div>
-            <strong>AgentNexus</strong>
+            <strong>AgentMux</strong>
             <span>Command Surface</span>
           </div>
         </div>
@@ -313,7 +313,7 @@ function Shell({
           <div className="avatar">AN</div>
           <div>
             <strong>{t("app.admin")}</strong>
-            <span>admin@agentnexus.ai</span>
+            <span>admin@agentmux.ai</span>
           </div>
           <ChevronDown size={16} />
         </div>
@@ -398,7 +398,7 @@ class PanelErrorBoundary extends Component<PanelErrorBoundaryProps, PanelErrorBo
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("AgentNexus panel render failed", error, info);
+    console.error("AgentMux panel render failed", error, info);
   }
 
   componentDidUpdate(prevProps: PanelErrorBoundaryProps) {

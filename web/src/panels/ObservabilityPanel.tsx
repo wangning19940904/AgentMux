@@ -1083,7 +1083,7 @@ function coverageValue(status?: string): ObservationIntegrationCoverage | undefi
 function sourceLabel(value: string) {
   if (!value) return "—";
   const known: Record<string, string> = {
-    "agentnexus.internal": "AgentNexus",
+    "agentmux.internal": "AgentMux",
     "codex.app_server": "Codex app-server",
     "claude.otel": "Claude OTel",
     "codex.otel": "Codex OTel",

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // takeover.go implements cc-switch's Local Routing takeover lifecycle:
@@ -128,7 +128,7 @@ func claudePrimaryAPIKeyConfigured(home string, p *core.Provider) bool {
 	return strings.TrimSpace(stringValue(config["primaryApiKey"])) != ""
 }
 
-// writeCodexTakeoverConfig rewrites ~/.codex/config.toml so the agentnexus
+// writeCodexTakeoverConfig rewrites ~/.codex/config.toml so the agentmux
 // provider block targets the proxy with a placeholder bearer token. wire_api
 // mirrors the active provider so the client calls the endpoint the proxy can
 // pass through. auth.json is untouched.
@@ -142,7 +142,7 @@ func writeCodexTakeoverConfig(home string, p *core.Provider, proxyBaseURL string
 	}
 	providers := ensureMap(doc, "model_providers")
 	providers[codexModelProviderID] = map[string]any{
-		"name":                      "AgentNexus Local Routing",
+		"name":                      "AgentMux Local Routing",
 		"base_url":                  proxyBaseURL + "/v1",
 		"wire_api":                  codexWireAPI(p),
 		"experimental_bearer_token": ProxyManagedToken,
@@ -660,7 +660,7 @@ func (s *Service) rewriteClaudeDesktopTakeoverProfile(ctx context.Context, p *co
 }
 
 func takeoverJournalLockPath(home, tool string) string {
-	return filepath.Join(home, ".agentnexus", "locks", "takeover-"+tool)
+	return filepath.Join(home, ".agentmux", "locks", "takeover-"+tool)
 }
 
 func mergeLiveFilePaths(groups ...[]string) []string {

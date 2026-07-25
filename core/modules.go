@@ -6,7 +6,7 @@ import (
 )
 
 // This file declares the interfaces for the four control-plane modules that
-// round out AgentNexus beyond Connect (platform/), Router (agent/) and
+// round out AgentMux beyond Connect (platform/), Router (agent/) and
 // Ledger (usage/): Memory, Skills, MCP Registry and Guard. As with the other
 // subsystems, core only declares the contracts; the concrete adapters live in
 // their own packages and register themselves via the registry below.
@@ -24,7 +24,7 @@ type MemoryEntry struct {
 }
 
 // MemoryStore is the unified, cross-agent and cross-session memory layer
-// (AgentNexus Memory). Implementations may be backed by SQLite, a vector
+// (AgentMux Memory). Implementations may be backed by SQLite, a vector
 // store, or a remote service.
 type MemoryStore interface {
 	// Name returns the registered backend id, e.g. "sqlite".
@@ -39,7 +39,7 @@ type MemoryStore interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// Skill describes one installed or discovered Agent Skill (AgentNexus Skills).
+// Skill describes one installed or discovered Agent Skill (AgentMux Skills).
 type Skill struct {
 	Name        string   `json:"name"`
 	Path        string   `json:"path"`
@@ -74,8 +74,8 @@ type WorkspaceInitOptions struct {
 
 // ConversationBaseDir returns the root under which per-conversation working
 // directories live for the given agent workspace. When the agent configures a
-// WorkDir it lives beside it under .agentnexus/conversations; otherwise it
-// falls back to ~/.agentnexus/conversations.
+// WorkDir it lives beside it under .agentmux/conversations; otherwise it
+// falls back to ~/.agentmux/conversations.
 func (o WorkspaceInitOptions) ConversationBaseDir() string {
 	return conversationBaseDir(o.WorkDir)
 }
@@ -96,7 +96,7 @@ type WorkspaceInitializer interface {
 }
 
 // MCPServer is a registered Model Context Protocol server definition
-// (AgentNexus MCP Registry) that can be distributed to agents/tools.
+// (AgentMux MCP Registry) that can be distributed to agents/tools.
 type MCPServer struct {
 	Name      string            `json:"name"`
 	Transport string            `json:"transport"` // stdio, sse, http
@@ -140,7 +140,7 @@ type GuardRequest struct {
 }
 
 // Guard is the permission-approval and policy gate for tool calls
-// (AgentNexus Guard).
+// (AgentMux Guard).
 type Guard interface {
 	// Name returns the registered guard id, e.g. "policy".
 	Name() string

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/agentnexus/agentnexus/core"
-	providerpkg "github.com/agentnexus/agentnexus/provider"
+	"github.com/wangning19940904/AgentMux/core"
+	providerpkg "github.com/wangning19940904/AgentMux/provider"
 )
 
 const claudeDesktopTool = "claude-desktop"

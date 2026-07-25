@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // LegacyObservationImportResult reports how many durable legacy rows were
@@ -623,7 +623,7 @@ func legacyEventID(namespace, identity string) string {
 }
 
 func legacyStableHex(namespace, identity string, size int) string {
-	digest := sha256.Sum256([]byte("agentnexus.observation.legacy.v1\x00" + namespace + "\x00" + identity))
+	digest := sha256.Sum256([]byte("agentmux.observation.legacy.v1\x00" + namespace + "\x00" + identity))
 	if size <= 0 || size > len(digest) {
 		size = len(digest)
 	}

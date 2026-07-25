@@ -1,4 +1,4 @@
-// Package memory implements AgentNexus Memory: the unified, cross-agent and
+// Package memory implements AgentMux Memory: the unified, cross-agent and
 // cross-session memory layer. The default backend stores entries in the
 // SQLite SSOT; richer backends (vector stores, remote services) can register
 // themselves via core.RegisterMemory under a different name.
@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func init() {
@@ -23,7 +23,7 @@ func init() {
 	})
 }
 
-// SQLiteStore implements core.MemoryStore on top of the AgentNexus store.
+// SQLiteStore implements core.MemoryStore on top of the AgentMux store.
 type SQLiteStore struct {
 	st *store.Store
 }

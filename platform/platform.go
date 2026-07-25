@@ -3,10 +3,10 @@
 package platform
 
 import (
-	_ "github.com/agentnexus/agentnexus/platform/dingtalk"
-	_ "github.com/agentnexus/agentnexus/platform/discord"
-	_ "github.com/agentnexus/agentnexus/platform/feishu"
-	_ "github.com/agentnexus/agentnexus/platform/slack"
-	_ "github.com/agentnexus/agentnexus/platform/telegram"
-	_ "github.com/agentnexus/agentnexus/platform/webhook"
+	_ "github.com/wangning19940904/AgentMux/platform/dingtalk"
+	_ "github.com/wangning19940904/AgentMux/platform/discord"
+	_ "github.com/wangning19940904/AgentMux/platform/feishu"
+	_ "github.com/wangning19940904/AgentMux/platform/slack"
+	_ "github.com/wangning19940904/AgentMux/platform/telegram"
+	_ "github.com/wangning19940904/AgentMux/platform/webhook"
 )

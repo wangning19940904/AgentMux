@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // claudeCollector parses Claude Code transcripts at
@@ -31,16 +31,16 @@ func (c *claudeCollector) base() string {
 
 // claudeLine is the subset of a transcript line we care about.
 type claudeLine struct {
-	Type    string `json:"type"`
+	Type      string `json:"type"`
 	Timestamp string `json:"timestamp"`
 	SessionID string `json:"sessionId"`
-	Cwd     string `json:"cwd"`
-	Message struct {
+	Cwd       string `json:"cwd"`
+	Message   struct {
 		Model string `json:"model"`
 		Usage struct {
-			InputTokens         int64 `json:"input_tokens"`
-			OutputTokens        int64 `json:"output_tokens"`
-			CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`

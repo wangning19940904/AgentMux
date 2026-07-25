@@ -13,8 +13,8 @@ package cliagents
 import (
 	"encoding/json"
 
-	"github.com/agentnexus/agentnexus/agent/cliagent"
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/agent/cliagent"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func register(name, binary string, supportsModel bool, args func(prompt, sys, model string) []string, mapper cliagent.LineMapper, finalLast bool) {

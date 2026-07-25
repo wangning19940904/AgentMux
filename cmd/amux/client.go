@@ -11,7 +11,7 @@ func clientCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "client",
 		Short: "Run the headless Linux client",
-		Long: "Run AgentNexus as a headless Linux client. It starts the local " +
+		Long: "Run AgentMux as a headless Linux client. It starts the local " +
 			"daemon, serves the management API, and can expose the WebUI URL " +
 			"without requiring a desktop shell.",
 		RunE: func(cmd *cobra.Command, args []string) error {

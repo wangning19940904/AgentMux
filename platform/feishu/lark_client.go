@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -20,6 +19,7 @@ import (
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // streamCardElementID is the fixed element_id of the markdown component we
@@ -28,7 +28,7 @@ import (
 const streamCardElementID = "answer"
 
 const (
-	modelPickerActionKey    = "agentnexus_action"
+	modelPickerActionKey    = "agentmux_action"
 	modelPickerActionSelect = "model_select"
 	modelPickerActionReset  = "model_reset"
 	runtimeSettingsAction   = "runtime_settings"
@@ -741,13 +741,13 @@ func buildCard(text string, done, failed bool) string {
 	}
 
 	template := "blue"
-	title := "AgentNexus"
+	title := "AgentMux"
 	if done {
 		template = "green"
 	}
 	if failed {
 		template = "red"
-		title = "AgentNexus · 出错"
+		title = "AgentMux · 出错"
 	}
 
 	card := map[string]any{
@@ -922,7 +922,7 @@ func interactionApprovalElements(msg *core.Message, task core.ChannelTask, inter
 		session := modelPickerButton("本会话允许", "default", interactionActionValue(msg, task, interaction, "acceptForSession", "", ""))
 		session["confirm"] = map[string]any{
 			"title": map[string]any{"tag": "plain_text", "content": "确认本会话允许"},
-			"text":  map[string]any{"tag": "plain_text", "content": "仅当前 AgentNexus/Codex 会话有效，重启后失效。"},
+			"text":  map[string]any{"tag": "plain_text", "content": "仅当前 AgentMux/Codex 会话有效，重启后失效。"},
 		}
 		buttons = append(buttons, session)
 	}
@@ -935,7 +935,7 @@ func interactionQuestionElements(msg *core.Message, task core.ChannelTask, inter
 	for _, question := range request.Questions {
 		if question.Secret {
 			return []map[string]any{
-				{"tag": "markdown", "content": "🔒 此问题包含敏感输入，只能在本机 AgentNexus 控制台处理。"},
+				{"tag": "markdown", "content": "🔒 此问题包含敏感输入，只能在本机 AgentMux 控制台处理。"},
 			}
 		}
 	}
@@ -1162,13 +1162,13 @@ func buildStreamCardJSON(text string, done, failed bool) string {
 		text = " "
 	}
 	template := "blue"
-	title := "AgentNexus"
+	title := "AgentMux"
 	if done {
 		template = "green"
 	}
 	if failed {
 		template = "red"
-		title = "AgentNexus · 出错"
+		title = "AgentMux · 出错"
 	}
 	card := map[string]any{
 		"schema": "2.0",

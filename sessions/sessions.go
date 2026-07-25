@@ -45,7 +45,7 @@ type Message struct {
 	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
-// ResumeRequest asks AgentNexus to restore or open a session.
+// ResumeRequest asks AgentMux to restore or open a session.
 type ResumeRequest struct {
 	ProviderID   string `json:"provider_id"`
 	Surface      string `json:"surface"`
@@ -812,7 +812,7 @@ func (c *CodexAppClient) call(ctx context.Context, method string, params any) (j
 	}()
 	reader := bufio.NewReader(stdout)
 	nextID := 1
-	if err := writeRPC(stdin, nextID, "initialize", map[string]any{"clientInfo": map[string]any{"name": "AgentNexus", "version": "0.1.0"}}); err != nil {
+	if err := writeRPC(stdin, nextID, "initialize", map[string]any{"clientInfo": map[string]any{"name": "AgentMux", "version": "0.1.0"}}); err != nil {
 		return nil, err
 	}
 	if _, err := readRPCResult(reader, nextID); err != nil {

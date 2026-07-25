@@ -6,13 +6,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/store"
 	"github.com/spf13/cobra"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/store"
 
 	// Register all adapters via blank imports (plugin pattern).
-	_ "github.com/agentnexus/agentnexus/agent"
-	_ "github.com/agentnexus/agentnexus/platform"
+	_ "github.com/wangning19940904/AgentMux/agent"
+	_ "github.com/wangning19940904/AgentMux/platform"
 )
 
 func dbPath() string {
@@ -116,11 +116,11 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 		if configPath != "" {
 			cmd.Println("Config:", configPath)
 		} else {
-			cmd.Println("Config: built-in defaults (run `anx config init` to create one)")
+			cmd.Println("Config: built-in defaults (run `amux config init` to create one)")
 		}
 	}
 	if opts.printReady {
-		cmd.Println("AgentNexus client:", cfg.Server.Addr, "(Ctrl-C to stop)")
+		cmd.Println("AgentMux client:", cfg.Server.Addr, "(Ctrl-C to stop)")
 	}
 	if opts.printWebUI || opts.openWebUI {
 		url := "http://" + cfg.Server.Addr

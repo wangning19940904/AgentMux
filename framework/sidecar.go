@@ -6,14 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
-	sidecarfs "github.com/agentnexus/agentnexus/sidecar"
+	sidecarfs "github.com/wangning19940904/AgentMux/sidecar"
 )
 
-// DataDir returns AgentNexus's base data directory (~/.agentnexus), matching
+// DataDir returns AgentMux's base data directory (~/.agentmux), matching
 // the store's default location.
 func DataDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".agentnexus")
+	return filepath.Join(home, ".agentmux")
 }
 
 // SidecarDir returns the directory where the Node sidecar worker and its

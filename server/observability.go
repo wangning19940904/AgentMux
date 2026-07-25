@@ -18,14 +18,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	nativeintegration "github.com/agentnexus/agentnexus/integrations/native"
-	observationpkg "github.com/agentnexus/agentnexus/observability"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
+	observationpkg "github.com/wangning19940904/AgentMux/observability"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
-const observabilitySessionCookie = "agentnexus_observability_session"
+const observabilitySessionCookie = "agentmux_observability_session"
 
 type observabilityRuntime struct {
 	config   config.ObservabilityConfig
@@ -78,7 +78,7 @@ func (s *Server) applyObservabilityCORS(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-AgentNexus-Token, X-AgentNexus-Desktop")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-AgentMux-Token, X-AgentMux-Desktop")
 }
 
 func isObservationDesktopOrigin(parsed *url.URL) bool {
@@ -188,7 +188,7 @@ func (s *Server) handleObservationSession(w http.ResponseWriter, r *http.Request
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: sessionExpires,
 	})
 	response := map[string]any{"ok": true, "expires_at": sessionExpires.UTC()}
-	if r.Header.Get("X-AgentNexus-Desktop") == "1" {
+	if r.Header.Get("X-AgentMux-Desktop") == "1" {
 		if origin, err := url.Parse(r.Header.Get("Origin")); err == nil && isObservationDesktopOrigin(origin) {
 			// A Wails WebView cannot send a SameSite cookie to the loopback HTTP
 			// daemon. Return the same short-lived session as a memory-only bearer
@@ -510,7 +510,7 @@ func (s *Server) handleObservationIntegrationAction(w http.ResponseWriter, r *ht
 	}
 	action := r.PathValue("action")
 	if s.st != nil && (action == "install" || action == "repair" || action == "uninstall") {
-		lease, acquired, leaseErr := s.st.AcquireObservationResourceLease(r.Context(), "native-integration:"+string(host), "agentnexus-api", "", 2*time.Minute,
+		lease, acquired, leaseErr := s.st.AcquireObservationResourceLease(r.Context(), "native-integration:"+string(host), "agentmux-api", "", 2*time.Minute,
 			map[string]any{"action": action})
 		if leaseErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": leaseErr.Error()})

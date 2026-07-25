@@ -22,14 +22,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 const (
 	defaultObservationContentRetention = 30 * 24 * time.Hour
 	defaultObservationDetailRetention  = 180 * 24 * time.Hour
 	observationMasterKeySize           = 32
-	observationKeychainService         = "AgentNexus Observability Master Key"
+	observationKeychainService         = "AgentMux Observability Master Key"
 	observationPayloadChunkBytes       = 1 << 20
 	observationCleanupBatchSize        = 256
 	observationOrphanGracePeriod       = time.Hour

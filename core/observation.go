@@ -12,7 +12,7 @@ import (
 )
 
 // ObservationEnvelopeVersion is the stable wire/storage version for
-// AgentNexus observability events. Additive fields may be introduced without
+// AgentMux observability events. Additive fields may be introduced without
 // changing it; incompatible changes require a new version.
 const ObservationEnvelopeVersion = "v1"
 

@@ -6,11 +6,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/core"
-	providerpkg "github.com/agentnexus/agentnexus/provider"
+	"github.com/wangning19940904/AgentMux/core"
+	providerpkg "github.com/wangning19940904/AgentMux/provider"
 )
 
-const providerAPIKeyEnvPrefix = "AGENTNEXUS_PROVIDER_"
+const providerAPIKeyEnvPrefix = "AGENTMUX_PROVIDER_"
 
 var providerAPIKeyEnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 

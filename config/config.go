@@ -1,4 +1,4 @@
-// Package config loads and parses AgentNexus's config.toml. It extends the
+// Package config loads and parses AgentMux's config.toml. It extends the
 // cc-connect project model with [provider], [usage] and [usage.ssh] sections.
 package config
 

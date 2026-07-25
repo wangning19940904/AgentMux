@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // Runtime owns the shared observation bus and its durable/remote consumers.

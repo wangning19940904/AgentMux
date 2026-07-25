@@ -1,4 +1,4 @@
-module github.com/agentnexus/agentnexus
+module github.com/wangning19940904/AgentMux
 
 go 1.25
 

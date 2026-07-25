@@ -1,19 +1,19 @@
-// AgentNexus macOS menu bar app.
+// AgentMux macOS menu bar app.
 //
 // A lightweight SwiftUI/AppKit status-bar item that polls the local
-// AgentNexus daemon (http://127.0.0.1:8765/api/v1/usage) and shows today's
+// AgentMux daemon (http://127.0.0.1:8765/api/v1/usage) and shows today's
 // estimated token cost in the menu bar, with a dropdown breakdown. Inspired by
 // CodeBurn / cc-statistics menu bar panels, but it reads from our own daemon so
 // there is a single source of truth across CLI, WebUI and desktop.
 //
 // Build (macOS, requires Xcode command line tools):
-//   swiftc -O -o AgentNexusMenuBar main.swift -framework AppKit -framework SwiftUI
-// Then run ./AgentNexusMenuBar (the daemon must be running: `anx serve`).
+//   swiftc -O -o AgentMuxMenuBar main.swift -framework AppKit -framework SwiftUI
+// Then run ./AgentMuxMenuBar (the daemon must be running: `amux serve`).
 
 import AppKit
 import SwiftUI
 
-let daemonBase = ProcessInfo.processInfo.environment["ANX_ADDR"] ?? "http://127.0.0.1:8765"
+let daemonBase = ProcessInfo.processInfo.environment["AMUX_ADDR"] ?? "http://127.0.0.1:8765"
 
 // UsageTotals mirrors the daemon's JSON usage totals.
 struct UsageTotals: Decodable {

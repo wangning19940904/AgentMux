@@ -141,7 +141,7 @@ func atomicWriteCAS(path string, data []byte, mode os.FileMode, expectedHash str
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, ".agentnexus-write-*")
+	tmp, err := os.CreateTemp(dir, ".agentmux-write-*")
 	if err != nil {
 		return "", err
 	}

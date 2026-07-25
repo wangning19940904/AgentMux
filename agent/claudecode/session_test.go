@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestObservationTelemetryIsPrivatePerChildAndContentGated(t *testing.T) {
@@ -27,7 +27,7 @@ func TestObservationTelemetryIsPrivatePerChildAndContentGated(t *testing.T) {
 	if values["OTEL_LOG_USER_PROMPTS"] != "0" || values["OTEL_LOG_TOOL_CONTENT"] != "0" || values["OTEL_LOG_RAW_API_BODIES"] != "0" {
 		t.Fatalf("content gates = %+v", values)
 	}
-	if !strings.Contains(values["OTEL_RESOURCE_ATTRIBUTES"], "agentnexus.parent_trace_id=trace-1") ||
+	if !strings.Contains(values["OTEL_RESOURCE_ATTRIBUTES"], "agentmux.parent_trace_id=trace-1") ||
 		values["OTEL_EXPORTER_OTLP_HEADERS"] != "Authorization=Bearer local-token" {
 		t.Fatalf("correlation/auth environment = %+v", values)
 	}

@@ -1,5 +1,5 @@
 // Package core defines the central interfaces and the plugin registry that
-// the rest of AgentNexus builds on. core must never import from the
+// the rest of AgentMux builds on. core must never import from the
 // platform/, agent/, provider/ or usage/ packages: adapters register
 // themselves here via the registry instead.
 package core
@@ -57,7 +57,7 @@ type Message struct {
 	Callback *CallbackEvent
 	// LogOnly persists the inbound event without dispatching it to hooks or an
 	// agent session. Platforms use this for callbacks that are observable but
-	// are not an AgentNexus control action.
+	// are not an AgentMux control action.
 	LogOnly bool
 }
 

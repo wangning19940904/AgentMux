@@ -12,13 +12,13 @@ import (
 // directories for an agent whose configured workDir is agentWorkDir.
 func conversationBaseDir(agentWorkDir string) string {
 	if strings.TrimSpace(agentWorkDir) != "" {
-		return filepath.Join(agentWorkDir, ".agentnexus", "conversations")
+		return filepath.Join(agentWorkDir, ".agentmux", "conversations")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return filepath.Join(".agentnexus", "conversations")
+		return filepath.Join(".agentmux", "conversations")
 	}
-	return filepath.Join(home, ".agentnexus", "conversations")
+	return filepath.Join(home, ".agentmux", "conversations")
 }
 
 // conversationCwd computes the isolated working directory (sandbox) for a

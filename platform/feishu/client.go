@@ -3,7 +3,7 @@ package feishu
 import (
 	"context"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // clientAPI abstracts the Feishu client so the adapter can compile and be

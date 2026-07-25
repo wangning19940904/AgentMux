@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/agentnexus/agentnexus/agent/sdkagent"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/framework"
+	"github.com/wangning19940904/AgentMux/agent/sdkagent"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework"
 )
 
 // frameworkView is one framework's catalog entry plus its live install state

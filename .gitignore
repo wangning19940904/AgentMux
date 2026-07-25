@@ -1,9 +1,9 @@
 # Binaries
-/anx
-/agent-nexus
-/agentnexus-hook
+/amux
+/agentmux
+/agentmux-hook
 /dist/
-macos-menubar/AgentNexusMenuBar
+macos-menubar/AgentMuxMenuBar
 desktop/build/
 desktop/frontend
 

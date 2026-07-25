@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func TestMigrateTranscriptPayloadReferencesValidatesAndRemovesEncryptedCopy(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
 	now := time.Now().UTC().Add(-time.Minute)
-	st, err := store.Open(filepath.Join(home, ".agentnexus", "migration.db"))
+	st, err := store.Open(filepath.Join(home, ".agentmux", "migration.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,9 +47,9 @@ func TestMigrateTranscriptPayloadReferencesValidatesAndRemovesEncryptedCopy(t *t
 	if legacy.Content == nil || legacy.Content.Source == nil {
 		t.Fatal("transcript tool output did not carry a source reference")
 	}
-	t.Setenv("AGENTNEXUS_TEST_SOURCE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("AGENTMUX_TEST_SOURCE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	runtime, err := NewRuntime(nil, config.ObservabilityConfig{
-		Enabled: true, CaptureContent: "full", MasterKeyEnv: "AGENTNEXUS_TEST_SOURCE_KEY",
+		Enabled: true, CaptureContent: "full", MasterKeyEnv: "AGENTMUX_TEST_SOURCE_KEY",
 		ContentRetentionDays: 30, DetailRetentionDays: 180, BackfillDays: 180,
 	}, st, home, nil)
 	if err != nil {

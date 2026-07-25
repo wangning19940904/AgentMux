@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 var _ core.ChannelControlStore = (*Store)(nil)
@@ -88,7 +88,7 @@ func (s *Store) RecoverChannelTasks(ctx context.Context, channelID string) ([]co
 		return nil, err
 	}
 	if _, err := s.writer.ExecContext(ctx, `UPDATE channel_tasks
-		SET status='interrupted', error='AgentNexus restarted while task was active',
+		SET status='interrupted', error='AgentMux restarted while task was active',
 		    finished_at=?, updated_at=?, prompt=''
 		WHERE channel_id=? AND status IN ('running','waiting_input')`, now, now, channelID); err != nil {
 		return nil, err

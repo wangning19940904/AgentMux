@@ -128,7 +128,7 @@ func (r *fakeRunner) mutations() []Command {
 
 func newTestManager(t *testing.T, home string, runner *fakeRunner) *Manager {
 	t.Helper()
-	helperSource := filepath.Join(t.TempDir(), "agentnexus-hook")
+	helperSource := filepath.Join(t.TempDir(), "agentmux-hook")
 	if err := os.WriteFile(helperSource, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestRepairRefusesPluginFingerprintDrift(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(foreign, ".codex-plugin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(foreign, ".codex-plugin", "plugin.json"), []byte(`{"name":"agentnexus-observer","version":"9.9.9"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(foreign, ".codex-plugin", "plugin.json"), []byte(`{"name":"agentmux-observer","version":"9.9.9"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runner.mu.Lock()
@@ -313,7 +313,7 @@ func TestRepairRefusesPluginFingerprintDrift(t *testing.T) {
 	}
 }
 
-func TestPreviewRefusesUnownedSharedAgentNexusHandler(t *testing.T) {
+func TestPreviewRefusesUnownedSharedAgentMuxHandler(t *testing.T) {
 	home := t.TempDir()
 	runner := newFakeRunner()
 	manager := newTestManager(t, home, runner)
@@ -321,7 +321,7 @@ func TestPreviewRefusesUnownedSharedAgentNexusHandler(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"hooks":{"Stop":[{"hooks":[{"command":"$HOME/.agentnexus/bin/agentnexus-hook --source claude"}]}]}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"hooks":{"Stop":[{"hooks":[{"command":"$HOME/.agentmux/bin/agentmux-hook --source claude"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	preview, err := manager.Preview(context.Background(), HostClaude)
@@ -352,8 +352,8 @@ func TestAtomicWriteCASRefusesConcurrentChange(t *testing.T) {
 }
 
 func TestNativeCLIEndToEnd(t *testing.T) {
-	if os.Getenv("ANX_RUN_NATIVE_CLI_TEST") != "1" {
-		t.Skip("set ANX_RUN_NATIVE_CLI_TEST=1 to exercise installed Claude and Codex CLIs")
+	if os.Getenv("AMUX_RUN_NATIVE_CLI_TEST") != "1" {
+		t.Skip("set AMUX_RUN_NATIVE_CLI_TEST=1 to exercise installed Claude and Codex CLIs")
 	}
 	assets, err := filepath.Abs(filepath.Join("..", "marketplaces"))
 	if err != nil {

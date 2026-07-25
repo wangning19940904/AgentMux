@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 const takeoverOwnershipVersion = 2
@@ -42,7 +42,7 @@ type liveFileState struct {
 }
 
 // TakeoverDriftError reports shared config values that no longer match the
-// AgentNexus-owned fingerprint. Those values are deliberately preserved.
+// AgentMux-owned fingerprint. Those values are deliberately preserved.
 type TakeoverDriftError struct {
 	Paths []string
 }
@@ -115,7 +115,7 @@ func finalizeLiveOwnershipSnapshot(blobRaw string) (string, error) {
 	}
 	// Full file images are needed only during the before-write crash window.
 	// Once pointer fingerprints are finalized, discard them permanently so the
-	// durable journal contains only values AgentNexus actually owns.
+	// durable journal contains only values AgentMux actually owns.
 	blob.Files = nil
 	raw, err := json.Marshal(blob)
 	return string(raw), err
@@ -612,7 +612,7 @@ func withLiveFileLocks(ctx context.Context, files []string, fn func() error) err
 	}
 	locks := make([]*liveFileLock, 0, len(unique))
 	for _, path := range unique {
-		lock, err := acquireLiveFileLock(ctx, path+".agentnexus.lock")
+		lock, err := acquireLiveFileLock(ctx, path+".agentmux.lock")
 		if err != nil {
 			for i := len(locks) - 1; i >= 0; i-- {
 				_ = locks[i].Close()
@@ -642,7 +642,7 @@ func detectForeignLoopbackRouting(files []string, ownBaseURL string) error {
 			continue
 		}
 		if ownBaseURL != "" && strings.Contains(lower, ownBaseURL) && strings.Contains(string(raw), ProxyManagedToken) {
-			return fmt.Errorf("%s already points at an unmanaged AgentNexus proxy; repair ownership explicitly before takeover", path)
+			return fmt.Errorf("%s already points at an unmanaged AgentMux proxy; repair ownership explicitly before takeover", path)
 		}
 		return fmt.Errorf("%s is owned by another loopback router (for example CC Switch or Flux); refusing takeover", path)
 	}

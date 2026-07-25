@@ -1,6 +1,6 @@
-# AgentNexus configuration (example).
-# Copy to config.toml, run `anx config init`, or place it at
-# ~/.config/agentnexus/config.toml or /etc/agentnexus/config.toml.
+# AgentMux configuration (example).
+# Copy to config.toml, run `amux config init`, or place it at
+# ~/.config/agentmux/config.toml or /etc/agentmux/config.toml.
 # ${ENV_VAR} placeholders are expanded from the environment.
 
 display_mode = "normal"  # quiet | compact | normal | full
@@ -65,7 +65,7 @@ failover = true
 [usage]
 sources = ["claude", "codex", "cursor", "gemini"]
 offline = false
-# cache_dir = "~/.cache/agentnexus"
+# cache_dir = "~/.cache/agentmux"
 
 # ---- Agent observability ----
 # Full content is redacted, compressed and AES-256-GCM encrypted. On macOS the
@@ -77,7 +77,7 @@ capture_content = "full" # off | metadata | full
 content_retention_days = 30
 detail_retention_days = 180
 backfill_days = 180
-# master_key_env = "AGENTNEXUS_OBSERVABILITY_KEY"
+# master_key_env = "AGENTMUX_OBSERVABILITY_KEY"
 
 # OTLP/HTTP JSON exporters have independent durable queues. Content is never
 # exported unless include_content is explicitly enabled for that exporter.

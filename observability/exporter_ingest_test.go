@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/hookrelay"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/hookrelay"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func TestOTLPExporterDefaultsToMetadataAndRequiresPerExporterContentOptIn(t *testing.T) {
@@ -68,7 +68,7 @@ func TestOTLPExporterDefaultsToMetadataAndRequiresPerExporterContentOptIn(t *tes
 	}
 	var metadataBody, contentBody []byte
 	for _, body := range bodies {
-		if bytes.Contains(body, []byte("agentnexus.content")) {
+		if bytes.Contains(body, []byte("agentmux.content")) {
 			contentBody = body
 		} else {
 			metadataBody = body
@@ -110,13 +110,13 @@ func TestOTLPExporterFallsBackToMetadataAfterContentExpires(t *testing.T) {
 	}, item); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) == 0 || bytes.Contains(body, []byte("agentnexus.content")) {
+	if len(body) == 0 || bytes.Contains(body, []byte("agentmux.content")) {
 		t.Fatalf("expired payload should export metadata only: %s", body)
 	}
 }
 
 func TestNativeHookSocketAndEncryptedSpoolReachObservationBus(t *testing.T) {
-	home, err := os.MkdirTemp("/tmp", "anx-ingest-")
+	home, err := os.MkdirTemp("/tmp", "amux-ingest-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,9 +197,9 @@ func TestOTLPJSONIngestJoinsParentTraceAndNeverKeepsHiddenReasoning(t *testing.T
 	}
 	payload := map[string]any{"resourceSpans": []any{map[string]any{
 		"resource": map[string]any{"attributes": attributes(map[string]any{
-			"agentnexus.parent_trace_id": "11111111111111111111111111111111",
-			"agentnexus.parent_span_id":  "2222222222222222", "agentnexus.runtime": "claude",
-			"agentnexus.session_id": "session-1", "agentnexus.turn_id": "turn-1",
+			"agentmux.parent_trace_id": "11111111111111111111111111111111",
+			"agentmux.parent_span_id":  "2222222222222222", "agentmux.runtime": "claude",
+			"agentmux.session_id": "session-1", "agentmux.turn_id": "turn-1",
 		})},
 		"scopeSpans": []any{map[string]any{"spans": []any{map[string]any{
 			"traceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "spanId": "bbbbbbbbbbbbbbbb", "name": "claude_code.llm_request",
@@ -262,8 +262,8 @@ func TestOTLPLongLivedRuntimeJoinsCurrentSessionTurn(t *testing.T) {
 		return nil
 	})
 	for _, envelope := range []core.ObservationEnvelope{
-		{TraceID: "11111111111111111111111111111111", SpanID: "2222222222222222", Kind: "agent.turn", Lifecycle: core.ObservationLifecycleStart, Source: "agentnexus.internal", RuntimeID: "codex", SessionID: "thread-1", TurnID: "turn-1"},
-		{TraceID: "11111111111111111111111111111111", SpanID: "3333333333333333", ParentSpanID: "2222222222222222", Kind: "agent.run", Lifecycle: core.ObservationLifecycleStart, Source: "agentnexus.internal", RuntimeID: "codex", SessionID: "thread-1", TurnID: "turn-1"},
+		{TraceID: "11111111111111111111111111111111", SpanID: "2222222222222222", Kind: "agent.turn", Lifecycle: core.ObservationLifecycleStart, Source: "agentmux.internal", RuntimeID: "codex", SessionID: "thread-1", TurnID: "turn-1"},
+		{TraceID: "11111111111111111111111111111111", SpanID: "3333333333333333", ParentSpanID: "2222222222222222", Kind: "agent.run", Lifecycle: core.ObservationLifecycleStart, Source: "agentmux.internal", RuntimeID: "codex", SessionID: "thread-1", TurnID: "turn-1"},
 	} {
 		if err := service.ObserveCorrelation(context.Background(), envelope); err != nil {
 			t.Fatal(err)
@@ -283,11 +283,11 @@ func TestOTLPLongLivedRuntimeJoinsCurrentSessionTurn(t *testing.T) {
 	}
 }
 
-func TestNativeHookJoinsCurrentAgentNexusTurn(t *testing.T) {
+func TestNativeHookJoinsCurrentAgentMuxTurn(t *testing.T) {
 	service := NewIngestService(nil, core.NewObservationBus(), t.TempDir(), "token")
 	for _, envelope := range []core.ObservationEnvelope{
-		{TraceID: "11111111111111111111111111111111", SpanID: "2222222222222222", Kind: "agent.turn", Source: "agentnexus.internal", RuntimeID: "claude", SessionID: "session-1", TurnID: "turn-1"},
-		{TraceID: "11111111111111111111111111111111", SpanID: "3333333333333333", Kind: "agent.run", Source: "agentnexus.internal", RuntimeID: "claude", SessionID: "session-1", TurnID: "turn-1"},
+		{TraceID: "11111111111111111111111111111111", SpanID: "2222222222222222", Kind: "agent.turn", Source: "agentmux.internal", RuntimeID: "claude", SessionID: "session-1", TurnID: "turn-1"},
+		{TraceID: "11111111111111111111111111111111", SpanID: "3333333333333333", Kind: "agent.run", Source: "agentmux.internal", RuntimeID: "claude", SessionID: "session-1", TurnID: "turn-1"},
 	} {
 		if err := service.ObserveCorrelation(context.Background(), envelope); err != nil {
 			t.Fatal(err)

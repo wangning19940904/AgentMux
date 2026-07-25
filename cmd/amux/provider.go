@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"text/tabwriter"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/provider"
 	"github.com/spf13/cobra"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/provider"
 )
 
 // providerProtocol reports the upstream wire protocol a provider speaks,

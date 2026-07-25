@@ -1,4 +1,4 @@
-// Package sidecar embeds the Node sidecar worker sources so the compiled anx
+// Package sidecar embeds the Node sidecar worker sources so the compiled amux
 // binary can materialize them into the user's data dir at runtime, where SDK
 // framework packages get npm-installed on demand.
 package sidecar

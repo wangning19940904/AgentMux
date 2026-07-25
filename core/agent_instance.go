@@ -24,7 +24,7 @@ type AgentSchedule struct {
 	Enabled bool   `json:"enabled"`
 }
 
-// AgentInstance is the product-level object users manage in AgentNexus. It
+// AgentInstance is the product-level object users manage in AgentMux. It
 // wraps a local coding-agent runtime with routing, channels, memory, tools and
 // governance bindings.
 type AgentInstance struct {

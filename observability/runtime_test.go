@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func TestRuntimeAlwaysRedactsIngestAndConfiguredMasterKeys(t *testing.T) {
@@ -19,9 +19,9 @@ func TestRuntimeAlwaysRedactsIngestAndConfiguredMasterKeys(t *testing.T) {
 	}
 	defer st.Close()
 	master := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	t.Setenv("AGENTNEXUS_TEST_OBSERVATION_KEY", master)
+	t.Setenv("AGENTMUX_TEST_OBSERVATION_KEY", master)
 	runtime, err := NewRuntime(nil, config.ObservabilityConfig{
-		Enabled: true, CaptureContent: "full", MasterKeyEnv: "AGENTNEXUS_TEST_OBSERVATION_KEY",
+		Enabled: true, CaptureContent: "full", MasterKeyEnv: "AGENTMUX_TEST_OBSERVATION_KEY",
 		ContentRetentionDays: 30, DetailRetentionDays: 180, BackfillDays: 180,
 	}, st, home, nil)
 	if err != nil {

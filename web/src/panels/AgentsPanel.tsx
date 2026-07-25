@@ -370,7 +370,7 @@ function AgentForm({
   const [directoryBusy, setDirectoryBusy] = useState("");
   const [directoryNotice, setDirectoryNotice] = useState("");
   const injectedPrompt = useMemo(() => {
-    const logPaths = selectedChannelIDs.map((id) => `~/.agentnexus/logs/channels/${id}.jsonl`);
+    const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
     const clis = (draft.clis ?? [])
       .map((id) => cliOptions.find((option) => option.id === id))
       .filter((option): option is CLIOption => Boolean(option))

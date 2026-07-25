@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // MarketplaceSkill is a public skill catalog entry.
@@ -145,7 +145,7 @@ func (m *FSManager) InstallMarketplace(ctx context.Context, req InstallRequest) 
 	if targetRoot == "" {
 		targetRoot = DefaultRoots()[0]
 	}
-	tmp, err := os.MkdirTemp("", "agentnexus-skill-*")
+	tmp, err := os.MkdirTemp("", "agentmux-skill-*")
 	if err != nil {
 		return nil, err
 	}

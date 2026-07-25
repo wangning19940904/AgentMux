@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func init() {
@@ -52,7 +52,7 @@ func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
 func (p *Platform) Name() string { return p.name }
 
 // ChannelHealth exposes the long-connection lifecycle and heartbeat snapshot
-// to AgentNexus's channel watchdog.
+// to AgentMux's channel watchdog.
 func (p *Platform) ChannelHealth() core.PlatformHealth {
 	if p.client == nil {
 		return core.PlatformHealth{State: core.ChannelStateStarting, CheckedAt: time.Now()}

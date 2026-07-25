@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestChannelHealthDetectsStartupTimeout(t *testing.T) {
@@ -90,7 +90,7 @@ func TestBuildModelPickerCardUsesV2CallbackButtons(t *testing.T) {
 		`"tag":"column_set"`,
 		`"behaviors"`,
 		`"type":"callback"`,
-		`"agentnexus_action":"model_select"`,
+		`"agentmux_action":"model_select"`,
 		`"chat_id":"oc_1"`,
 		`"chat_type":"group"`,
 		`gpt-5-mini`,
@@ -161,7 +161,7 @@ func TestRuntimeSettingsPickerCardCarriesScopeAndControls(t *testing.T) {
 		t.Fatalf("card is not valid JSON: %s", card)
 	}
 	for _, want := range []string{
-		`"agentnexus_action":"runtime_settings"`, `"setting":"model"`, `"setting":"reasoning_effort"`,
+		`"agentmux_action":"runtime_settings"`, `"setting":"model"`, `"setting":"reasoning_effort"`,
 		`"setting":"service_tier"`, `"setting":"scope"`, `Agent 默认`, `gpt-5-mini`,
 	} {
 		if !strings.Contains(card, want) {

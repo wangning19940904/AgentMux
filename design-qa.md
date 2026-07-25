@@ -19,11 +19,10 @@
 - None required for this change.
 
 source visual truth path: /var/folders/9k/dn93qqs10jd9y5y25jlf0nkr0000gn/T/codex-clipboard-0fdcf515-0095-43ae-9711-108793e7d4c1.png
-implementation screenshot path: /Users/bytedance/Projects/playground/AgentNexus/artifacts/mcp-nav-group-final.png
 viewport: 1280 x 720 browser viewport; focused sidebar capture 244 x 520
 state: Chinese, system theme resolved light; `智能体` and `连接与集成` expanded; `MCP 注册表` selected
-full-view comparison evidence: /Users/bytedance/Projects/playground/AgentNexus/artifacts/mcp-nav-group-comparison.png
-focused region comparison evidence: /Users/bytedance/Projects/playground/AgentNexus/artifacts/mcp-nav-group-focused.png; the source visual is already a focused sidebar crop, so the target region can be inspected directly
+full-view comparison evidence: artifacts/mcp-nav-group-comparison.png
+focused region comparison evidence: artifacts/mcp-nav-group-focused.png; the source visual is already a focused sidebar crop, so the target region can be inspected directly
 primary interactions tested: Selected `MCP 注册表` and verified the registry panel loaded; collapsed and reopened `智能体` and verified the moved item follows the group behavior.
 console errors checked: No warning or error entries after navigation and group toggle interactions.
 fonts and typography: Passed. Existing navigation type scale, weight, and Chinese labels are preserved.

@@ -133,7 +133,7 @@ func TestCheckUpdateDetectsNewerSDKVersion(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentnexus", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
+	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestUpdateSkipsInstallWhenSDKIsCurrent(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentnexus", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
+	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestUpdateInstallsLatestSDKVersion(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentnexus", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
+	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
 	if err := os.MkdirAll(packageDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestSDKVersionGreaterHandlesPrerelease(t *testing.T) {
 func TestEnsureSidecarPreservesInstalledDependencies(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	manifestPath := filepath.Join(home, ".agentnexus", "sidecar", "package.json")
+	manifestPath := filepath.Join(home, ".agentmux", "sidecar", "package.json")
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

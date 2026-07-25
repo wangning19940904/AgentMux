@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // ObserveProxyTrace converts one local-routing attempt into a model span. A
@@ -51,7 +51,7 @@ func (r *Runtime) ObserveProxyTrace(ctx context.Context, trace core.ProxyTrace, 
 		EventID: stableProxyEventID(trace.ID, "start"), Time: started, TraceID: traceID, SpanID: spanID,
 		ParentSpanID: trace.ParentSpanID, DedupeKey: "proxy:" + trace.ID + ":start",
 		Kind: "model.request", Name: "Proxy model request", Lifecycle: core.ObservationLifecycleStart,
-		RuntimeID: trace.Tool, SessionID: trace.SessionID, Source: "agentnexus.proxy",
+		RuntimeID: trace.Tool, SessionID: trace.SessionID, Source: "agentmux.proxy",
 		Provenance: []string{"proxy", trace.ClientProtocol, trace.UpstreamProtocol}, Quality: core.ObservationQualityComplete,
 		Status: core.ObservationStatusRunning, Model: model, Attributes: attributes,
 	}

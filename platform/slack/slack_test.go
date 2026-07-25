@@ -3,7 +3,7 @@ package slack
 import (
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestRuntimeSettingsBlocksExposeNativeSelections(t *testing.T) {

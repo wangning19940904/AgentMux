@@ -1,6 +1,6 @@
 package config
 
-const exampleConfig = `# AgentNexus configuration.
+const exampleConfig = `# AgentMux configuration.
 # ${ENV_VAR} placeholders are expanded from the environment.
 
 display_mode = "normal"  # quiet | compact | normal | full
@@ -36,7 +36,7 @@ failover = true
 [usage]
 sources = ["claude", "codex", "cursor", "gemini"]
 offline = false
-# cache_dir = "~/.cache/agentnexus"
+# cache_dir = "~/.cache/agentmux"
 
 [observability]
 enabled = true
@@ -44,7 +44,7 @@ capture_content = "full" # off | metadata | full
 content_retention_days = 30
 detail_retention_days = 180
 backfill_days = 180
-# master_key_env = "AGENTNEXUS_OBSERVABILITY_KEY"
+# master_key_env = "AGENTMUX_OBSERVABILITY_KEY"
 
 # [[observability.exporters]]
 # name = "local-otel"

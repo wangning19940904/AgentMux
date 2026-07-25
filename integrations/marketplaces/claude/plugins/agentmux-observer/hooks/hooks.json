@@ -1,12 +1,12 @@
 {
-  "description": "Additive, fail-open AgentNexus observability hooks for Claude Code.",
+  "description": "Additive, fail-open AgentMux observability hooks for Claude Code.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -76,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -87,7 +87,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -110,7 +110,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]
@@ -122,7 +122,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test ! -x \"$HOME/.agentnexus/bin/agentnexus-hook\" || \"$HOME/.agentnexus/bin/agentnexus-hook\" --source claude",
+            "command": "test ! -x \"$HOME/.agentmux/bin/agentmux-hook\" || \"$HOME/.agentmux/bin/agentmux-hook\" --source claude",
             "timeout": 1
           }
         ]

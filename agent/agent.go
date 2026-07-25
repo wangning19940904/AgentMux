@@ -4,9 +4,9 @@
 package agent
 
 import (
-	_ "github.com/agentnexus/agentnexus/agent/claudecode"
-	_ "github.com/agentnexus/agentnexus/agent/cliagents"
-	"github.com/agentnexus/agentnexus/agent/sdkagent"
+	_ "github.com/wangning19940904/AgentMux/agent/claudecode"
+	_ "github.com/wangning19940904/AgentMux/agent/cliagents"
+	"github.com/wangning19940904/AgentMux/agent/sdkagent"
 )
 
 func init() {

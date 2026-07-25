@@ -1,4 +1,4 @@
-// Command anx is the unified entrypoint: it runs the daemon, serves
+// Command amux is the unified entrypoint: it runs the daemon, serves
 // the WebUI, reports token usage, and manages providers. CLI / WebUI / desktop
 // all share the same Go core.
 package main

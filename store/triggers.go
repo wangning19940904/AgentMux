@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 const triggerColumns = `id,name,kind,agent_id,channel_id,chat_id,cron_expr,prompt,

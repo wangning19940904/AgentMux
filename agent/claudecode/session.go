@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // session drives one `claude` subprocess invocation per turn using
@@ -413,12 +413,12 @@ func withObservationTelemetry(env []string, telemetry core.ObservationChildTelem
 		content = "1"
 	}
 	resource := []string{
-		"service.namespace=agentnexus", "agentnexus.runtime=claude",
-		"agentnexus.parent_trace_id=" + telemetry.TraceID,
-		"agentnexus.parent_span_id=" + telemetry.ParentSpanID,
-		"agentnexus.turn_id=" + telemetry.TurnID,
-		"agentnexus.session_id=" + telemetry.SessionID,
-		"agentnexus.agent_id=" + telemetry.AgentID,
+		"service.namespace=agentmux", "agentmux.runtime=claude",
+		"agentmux.parent_trace_id=" + telemetry.TraceID,
+		"agentmux.parent_span_id=" + telemetry.ParentSpanID,
+		"agentmux.turn_id=" + telemetry.TurnID,
+		"agentmux.session_id=" + telemetry.SessionID,
+		"agentmux.agent_id=" + telemetry.AgentID,
 	}
 	overrides := map[string]string{
 		"CLAUDE_CODE_ENABLE_TELEMETRY":        "1",

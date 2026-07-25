@@ -1,0 +1,30 @@
+{
+  "name": "agentmux-observer",
+  "version": "0.1.0",
+  "description": "Additive lifecycle hooks that send Codex activity to the local AgentMux observability collector.",
+  "author": {
+    "name": "AgentMux"
+  },
+  "homepage": "https://github.com/wangning19940904/AgentMux",
+  "repository": "https://github.com/wangning19940904/AgentMux",
+  "license": "Apache-2.0",
+  "keywords": [
+    "observability",
+    "tracing",
+    "hooks"
+  ],
+  "interface": {
+    "displayName": "AgentMux Observer",
+    "shortDescription": "Send Codex lifecycle events to AgentMux",
+    "longDescription": "Adds fail-open lifecycle hooks for local AgentMux tracing. It does not replace or rewrite hooks installed by other plugins.",
+    "developerName": "AgentMux",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/wangning19940904/AgentMux",
+    "defaultPrompt": [
+      "Show my recent AgentMux traces"
+    ]
+  }
+}

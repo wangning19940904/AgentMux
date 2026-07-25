@@ -15,9 +15,9 @@ func TestRunIsFailOpen(t *testing.T) {
 		t.Fatalf("invalid flags must remain fail-open: %v", err)
 	}
 	if stderr.Len() != 0 {
-		t.Fatalf("unexpected stderr without ANX_DEBUG: %s", stderr.String())
+		t.Fatalf("unexpected stderr without AMUX_DEBUG: %s", stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(home, ".agentnexus")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, ".agentmux")); !os.IsNotExist(err) {
 		t.Fatalf("flag parse failure should not create state, stat err=%v", err)
 	}
 }

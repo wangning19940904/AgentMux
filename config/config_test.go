@@ -161,7 +161,7 @@ func TestResolvePathSearchesLocalThenXDG(t *testing.T) {
 	xdg := filepath.Join(t.TempDir(), "xdg")
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 
-	xdgPath := filepath.Join(xdg, "agentnexus", "config.toml")
+	xdgPath := filepath.Join(xdg, "agentmux", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(xdgPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

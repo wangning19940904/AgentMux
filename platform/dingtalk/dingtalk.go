@@ -20,9 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
 	dtclient "github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func init() {
@@ -131,7 +131,7 @@ func (p *Platform) Reply(ctx context.Context, msg *core.Message, text string) er
 func (p *Platform) replyViaWebhook(ctx context.Context, url, text string) error {
 	body, _ := json.Marshal(map[string]any{
 		"msgtype":  "markdown",
-		"markdown": map[string]string{"title": "AgentNexus", "text": text},
+		"markdown": map[string]string{"title": "AgentMux", "text": text},
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -159,7 +159,7 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 	if err != nil {
 		return err
 	}
-	msgParam, _ := json.Marshal(map[string]string{"title": "AgentNexus", "text": text})
+	msgParam, _ := json.Marshal(map[string]string{"title": "AgentMux", "text": text})
 	var apiURL string
 	var body map[string]any
 	switch {

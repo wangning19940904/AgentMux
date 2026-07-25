@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/agentnexus/agentnexus/core"
-	skillpkg "github.com/agentnexus/agentnexus/skills"
+	"github.com/wangning19940904/AgentMux/core"
+	skillpkg "github.com/wangning19940904/AgentMux/skills"
 )
 
 // registerModuleRoutes wires the Memory, Skills, MCP Registry and Guard

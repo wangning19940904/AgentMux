@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 const claudeDesktopProfileID = "00000000-0000-4000-8000-000000157210"
-const claudeDesktopProfileName = "AgentNexus"
+const claudeDesktopProfileName = "AgentMux"
 const claudeDesktopConfigFile = "claude_desktop_config.json"
 
 var claudeDesktopDefaultProxyRoutes = []string{
@@ -92,7 +92,7 @@ func claudeDesktopConfigDir(home string, p *core.Provider) (string, error) {
 
 // writeClaudeDesktopConfig applies provider p to Claude Desktop, mirroring
 // cc-switch's apply_provider_to_paths: official providers restore 1p mode,
-// everything else installs the AgentNexus 3P gateway profile. All touched
+// everything else installs the AgentMux 3P gateway profile. All touched
 // files are snapshotted first and rolled back on error.
 func writeClaudeDesktopConfig(home string, p *core.Provider) error {
 	paths, err := claudeDesktopPathsFor(home, p)
@@ -141,7 +141,7 @@ func WriteClaudeDesktopProxyProfile(p *core.Provider, gatewayBaseURL, gatewayTok
 }
 
 // RestoreClaudeDesktopOfficial resets Claude Desktop to 1p mode and removes
-// the AgentNexus profile (used when disabling takeover without a provider).
+// the AgentMux profile (used when disabling takeover without a provider).
 func RestoreClaudeDesktopOfficial(p *core.Provider) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -303,11 +303,11 @@ func applyClaudeDesktopProfile(paths claudeDesktopPaths, profile map[string]any)
 	return writeClaudeDesktopMeta(paths.metaPath, claudeDesktopProfileID, claudeDesktopProfileName)
 }
 
-// writeClaudeDesktopProfile owns the documented AgentNexus profile keys while
+// writeClaudeDesktopProfile owns the documented AgentMux profile keys while
 // retaining unknown keys another local integration may have added. This is the
 // three-way merge side of takeover's file lock + ownership CAS: a provider
 // hot-switch must not erase unrelated Flux/user profile metadata merely
-// because the desired AgentNexus profile is rebuilt from scratch.
+// because the desired AgentMux profile is rebuilt from scratch.
 func writeClaudeDesktopProfile(path string, profile map[string]any) error {
 	existing := readJSONObject(path)
 	for _, key := range []string{
@@ -386,7 +386,7 @@ func withClaudeDesktopRollback(paths claudeDesktopPaths, op func(claudeDesktopPa
 	return err
 }
 
-// ClaudeDesktopStatus returns whether the AgentNexus Claude-3p profile is active.
+// ClaudeDesktopStatus returns whether the AgentMux Claude-3p profile is active.
 func ClaudeDesktopStatus(p *core.Provider) (ClaudeDesktopConfigStatus, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -399,7 +399,7 @@ func ClaudeDesktopStatus(p *core.Provider) (ClaudeDesktopConfigStatus, error) {
 	return claudeDesktopStatusForPaths(paths, "")
 }
 
-// DisableClaudeDesktopConfig removes the AgentNexus Claude-3p profile and
+// DisableClaudeDesktopConfig removes the AgentMux Claude-3p profile and
 // restores 1p deployment mode, backing up touched files first.
 func DisableClaudeDesktopConfig(p *core.Provider) (ClaudeDesktopConfigStatus, error) {
 	home, err := os.UserHomeDir()
@@ -531,7 +531,7 @@ func disableClaudeDesktopProfile(paths claudeDesktopPaths) (string, error) {
 		changed = true
 	}
 
-	// Legacy index keys written by older AgentNexus builds.
+	// Legacy index keys written by older AgentMux builds.
 	index := readJSONObject(paths.threepConfigPath)
 	if len(index) > 0 && stringValue(index["activeProfileId"]) == claudeDesktopProfileID {
 		if err := backupClaudeDesktopFile(paths.threepConfigPath, backupDir); err != nil {
@@ -618,11 +618,11 @@ func claudeDesktopStatusForPaths(paths claudeDesktopPaths, backupPath string) (C
 	}
 	switch {
 	case enabled:
-		status.Message = "Claude-3p is enabled through AgentNexus."
+		status.Message = "Claude-3p is enabled through AgentMux."
 	case configured:
-		status.Message = "AgentNexus Claude-3p profile is installed but inactive."
+		status.Message = "AgentMux Claude-3p profile is installed but inactive."
 	default:
-		status.Message = "No AgentNexus Claude-3p profile is active."
+		status.Message = "No AgentMux Claude-3p profile is active."
 	}
 	return status, nil
 }

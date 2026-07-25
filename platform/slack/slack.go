@@ -12,10 +12,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/agentnexus/agentnexus/core"
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func init() {
@@ -309,11 +309,11 @@ func slackSettingsSelect(id, title string, entries []slackSettingOption, selecte
 			initial = option
 		}
 	}
-	selectElement := slackapi.NewOptionsSelectBlockElement("static_select", slackapi.NewTextBlockObject("plain_text", title, false, false), "agentnexus_settings_"+id, options...)
+	selectElement := slackapi.NewOptionsSelectBlockElement("static_select", slackapi.NewTextBlockObject("plain_text", title, false, false), "agentmux_settings_"+id, options...)
 	if initial != nil {
 		selectElement.WithInitialOption(initial)
 	}
-	return slackapi.NewActionBlock("agentnexus_settings_"+id, selectElement)
+	return slackapi.NewActionBlock("agentmux_settings_"+id, selectElement)
 }
 
 func slackDisplay(value string) string {

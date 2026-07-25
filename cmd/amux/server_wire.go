@@ -6,20 +6,20 @@ import (
 	"os"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/guard"
-	nativeintegration "github.com/agentnexus/agentnexus/integrations/native"
-	"github.com/agentnexus/agentnexus/mcp"
-	"github.com/agentnexus/agentnexus/memory"
-	observationpkg "github.com/agentnexus/agentnexus/observability"
-	"github.com/agentnexus/agentnexus/provider"
-	"github.com/agentnexus/agentnexus/server"
-	"github.com/agentnexus/agentnexus/skills"
-	"github.com/agentnexus/agentnexus/store"
-	"github.com/agentnexus/agentnexus/usage"
-	"github.com/agentnexus/agentnexus/workspace"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/guard"
+	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
+	"github.com/wangning19940904/AgentMux/mcp"
+	"github.com/wangning19940904/AgentMux/memory"
+	observationpkg "github.com/wangning19940904/AgentMux/observability"
+	"github.com/wangning19940904/AgentMux/provider"
+	"github.com/wangning19940904/AgentMux/server"
+	"github.com/wangning19940904/AgentMux/skills"
+	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/usage"
+	"github.com/wangning19940904/AgentMux/workspace"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // newServer wires the management server with provider + usage backends plus
@@ -45,7 +45,7 @@ func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.S
 }
 
 // attachRuntime builds the Engine plus the channels & triggers runtime and
-// wires both onto the server. Shared by `anx serve` and `anx web` so
+// wires both onto the server. Shared by `amux serve` and `amux web` so
 // console-managed channels and cron triggers run in either mode.
 func attachRuntime(ctx context.Context, cfg *config.Config, st *store.Store, srv *server.Server, providerService *provider.Service, usageEngine *usage.Engine) (*core.Engine, *core.ConnectService, error) {
 	initializer := workspace.New()

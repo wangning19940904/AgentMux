@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // QueryObservationUsage materializes request-level usage from finalized model
@@ -211,7 +211,7 @@ func (s *Store) QueryObservationDailyUsage(ctx context.Context, since, before ti
 func observationUsageSourceRank(source string) int {
 	source = strings.ToLower(source)
 	switch {
-	case source == "agentnexus.internal":
+	case source == "agentmux.internal":
 		return 0
 	case strings.Contains(source, "otel") || strings.Contains(source, "app-server"):
 		return 1

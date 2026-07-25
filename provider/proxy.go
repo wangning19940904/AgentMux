@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // ProxyManagedToken is the placeholder credential written into live configs
@@ -30,7 +30,7 @@ import (
 const ProxyManagedToken = "PROXY_MANAGED"
 
 // DefaultProxyAddr is the local routing listen address (cc-switch defaults to
-// 127.0.0.1:15721; AgentNexus claims a nearby port).
+// 127.0.0.1:15721; AgentMux claims a nearby port).
 const DefaultProxyAddr = "127.0.0.1:15733"
 
 // claudeCodeModelPrefix makes every provider model eligible for Claude Code's

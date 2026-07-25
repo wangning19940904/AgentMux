@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agentnexus/agentnexus/config"
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/provider"
-	"github.com/agentnexus/agentnexus/store"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/provider"
+	"github.com/wangning19940904/AgentMux/store"
 
 	// Register agent adapters for agent instance validation.
-	_ "github.com/agentnexus/agentnexus/agent"
+	_ "github.com/wangning19940904/AgentMux/agent"
 	// Register platform adapters for channel type validation.
-	_ "github.com/agentnexus/agentnexus/platform"
+	_ "github.com/wangning19940904/AgentMux/platform"
 )
 
 func newTestServer(t *testing.T) (*Server, *store.Store) {

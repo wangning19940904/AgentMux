@@ -1,5 +1,5 @@
-// Command agentnexus-hook is the fail-open native hook transport installed at
-// ~/.agentnexus/bin/agentnexus-hook. It always exits successfully so a stopped
+// Command agentmux-hook is the fail-open native hook transport installed at
+// ~/.agentmux/bin/agentmux-hook. It always exits successfully so a stopped
 // or unhealthy observability collector cannot interrupt Claude Code or Codex.
 package main
 
@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/agentnexus/agentnexus/hookrelay"
+	"github.com/wangning19940904/AgentMux/hookrelay"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func run(args []string, stdin io.Reader, stderr io.Writer) error {
 		return nil
 	}
 	opts := hookrelay.DefaultOptions(home)
-	fs := flag.NewFlagSet("agentnexus-hook", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agentmux-hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.Source, "source", opts.Source, "native hook source")
 	fs.StringVar(&opts.SocketPath, "socket", opts.SocketPath, "collector Unix socket")
@@ -37,8 +37,8 @@ func run(args []string, stdin io.Reader, stderr io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), hookrelay.MaxSocketWait+time.Second)
 	defer cancel()
 	_, relayErr := hookrelay.Relay(ctx, stdin, opts)
-	if relayErr != nil && os.Getenv("ANX_DEBUG") != "" {
-		_, _ = fmt.Fprintf(stderr, "agentnexus-hook: %v\n", relayErr)
+	if relayErr != nil && os.Getenv("AMUX_DEBUG") != "" {
+		_, _ = fmt.Fprintf(stderr, "agentmux-hook: %v\n", relayErr)
 	}
 	return nil
 }

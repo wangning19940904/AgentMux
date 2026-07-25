@@ -3,7 +3,7 @@ package telegram
 import (
 	"testing"
 
-	"github.com/agentnexus/agentnexus/core"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestRuntimeSettingsKeyboardStoresCallbackActions(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"text/tabwriter"
 
-	toolpkg "github.com/agentnexus/agentnexus/tools"
 	"github.com/spf13/cobra"
+	toolpkg "github.com/wangning19940904/AgentMux/tools"
 )
 
 func toolsCmd() *cobra.Command {

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agentnexus/agentnexus/tools"
+	"github.com/wangning19940904/AgentMux/tools"
 )
 
 // ConnectService supervises console-managed channels and triggers: it loads

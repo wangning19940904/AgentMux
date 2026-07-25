@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"os"
 
-	observationpkg "github.com/agentnexus/agentnexus/observability"
 	"github.com/spf13/cobra"
+	observationpkg "github.com/wangning19940904/AgentMux/observability"
 )
 
 func observabilityCmd() *cobra.Command {

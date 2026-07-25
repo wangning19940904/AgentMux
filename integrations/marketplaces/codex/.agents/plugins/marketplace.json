@@ -1,14 +1,14 @@
 {
-  "name": "agentnexus-local",
+  "name": "agentmux-local",
   "interface": {
-    "displayName": "AgentNexus Local"
+    "displayName": "AgentMux Local"
   },
   "plugins": [
     {
-      "name": "agentnexus-observer",
+      "name": "agentmux-observer",
       "source": {
         "source": "local",
-        "path": "./plugins/agentnexus-observer"
+        "path": "./plugins/agentmux-observer"
       },
       "policy": {
         "installation": "AVAILABLE",

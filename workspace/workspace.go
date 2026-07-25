@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agentnexus/agentnexus/core"
-	"github.com/agentnexus/agentnexus/skills"
+	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/skills"
 )
 
 const initVersion = 1
 
-// Initializer prepares work directories with AgentNexus metadata and native
+// Initializer prepares work directories with AgentMux metadata and native
 // agent directories.
 type Initializer struct {
 	SkillRoots []string
@@ -61,10 +61,10 @@ func (i *Initializer) InitializeWorkspace(ctx context.Context, opts core.Workspa
 	if err := ensureDir(workDir, res); err != nil {
 		return nil, err
 	}
-	if err := ensureDir(filepath.Join(workDir, ".agentnexus"), res); err != nil {
+	if err := ensureDir(filepath.Join(workDir, ".agentmux"), res); err != nil {
 		return nil, err
 	}
-	if err := writeWorkspaceFile(filepath.Join(workDir, ".agentnexus", "workspace.json"), opts, res); err != nil {
+	if err := writeWorkspaceFile(filepath.Join(workDir, ".agentmux", "workspace.json"), opts, res); err != nil {
 		return nil, err
 	}
 
@@ -188,24 +188,24 @@ func ensurePrompt(path, body string, res *core.WorkspaceInitResult) error {
 func claudePrompt(opts core.WorkspaceInitOptions) string {
 	return fmt.Sprintf(`# CLAUDE.md
 
-This workspace is initialized by AgentNexus for Claude Code.
+This workspace is initialized by AgentMux for Claude Code.
 
 - Agent: %s
 - Runtime: %s
 
-Keep project-specific guidance here. AgentNexus will not overwrite this file after creation.
+Keep project-specific guidance here. AgentMux will not overwrite this file after creation.
 `, displayOrDash(opts.AgentID), displayOrDash(opts.RuntimeID))
 }
 
 func codexPrompt(opts core.WorkspaceInitOptions) string {
 	return fmt.Sprintf(`# AGENTS.md
 
-This workspace is initialized by AgentNexus for Codex.
+This workspace is initialized by AgentMux for Codex.
 
 - Agent: %s
 - Runtime: %s
 
-Keep project-specific guidance here. AgentNexus will not overwrite this file after creation.
+Keep project-specific guidance here. AgentMux will not overwrite this file after creation.
 `, displayOrDash(opts.AgentID), displayOrDash(opts.RuntimeID))
 }
 

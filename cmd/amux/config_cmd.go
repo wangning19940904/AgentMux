@@ -6,14 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
-	configpkg "github.com/agentnexus/agentnexus/config"
 	"github.com/spf13/cobra"
+	configpkg "github.com/wangning19940904/AgentMux/config"
 )
 
 func configCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Manage AgentNexus config files",
+		Short: "Manage AgentMux config files",
 	}
 	cmd.AddCommand(configInitCmd())
 	cmd.AddCommand(configPathCmd())

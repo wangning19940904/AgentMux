@@ -1065,7 +1065,7 @@ export const api = {
   ensureDirectory: (path: string) =>
     postChecked<{ path: string }>("/api/v1/system/directories", { path }),
 
-  // AgentNexus Frameworks: detect & install agent frameworks
+  // AgentMux Frameworks: detect & install agent frameworks
   frameworks: () => get<FrameworksResponse>("/api/v1/frameworks"),
   installFramework: (kind: string, action: "install" | "update" = "install") =>
     postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
@@ -1077,7 +1077,7 @@ export const api = {
   saveMenubarSettings: (settings: MenubarSettings) =>
     put<MenubarSettings>("/api/v1/menubar/settings", settings),
 
-  // AgentNexus Observability
+  // AgentMux Observability
   observationOverview: () => observationGet<ObservationOverview>("/api/v1/observability/overview"),
   observationTraces: ({
     agentID = "",
@@ -1126,7 +1126,7 @@ export const api = {
       body
     ),
 
-  // AgentNexus Connect: channels & triggers
+  // AgentMux Connect: channels & triggers
   channels: () => get<Channel[] | null>("/api/v1/channels"),
   upsertChannel: (ch: Partial<Channel>) => postChecked<Channel>("/api/v1/channels", ch),
   deleteChannel: (id: string) => del<{ ok: boolean }>(`/api/v1/channels?id=${encodeURIComponent(id)}`),
@@ -1176,7 +1176,7 @@ export const api = {
   runTrigger: (id: string) =>
     postChecked<{ ok: boolean }>(`/api/v1/triggers/run?id=${encodeURIComponent(id)}`, {}),
 
-  // AgentNexus Memory
+  // AgentMux Memory
   memory: (scope = "", q = "", limit = 50) =>
     get<MemoryEntry[] | null>(
       `/api/v1/memory?scope=${encodeURIComponent(scope)}&q=${encodeURIComponent(q)}&limit=${limit}`
@@ -1184,7 +1184,7 @@ export const api = {
   putMemory: (e: Partial<MemoryEntry>) => post<{ id: string }>("/api/v1/memory", e),
   deleteMemory: (id: string) => del<{ ok: boolean }>(`/api/v1/memory?id=${encodeURIComponent(id)}`),
 
-  // AgentNexus Skills
+  // AgentMux Skills
   skills: () => get<Skill[] | null>("/api/v1/skills"),
   skillMarketplace: (q = "", source = "", category = "") =>
     get<MarketplaceSkill[] | null>(
@@ -1195,12 +1195,12 @@ export const api = {
   toggleSkill: (name: string, enabled: boolean) =>
     post<{ ok: boolean }>("/api/v1/skills/toggle", { name, enabled }),
 
-  // AgentNexus MCP Registry
+  // AgentMux MCP Registry
   mcp: () => get<MCPServer[] | null>("/api/v1/mcp"),
   upsertMCP: (m: MCPServer) => post<MCPServer>("/api/v1/mcp", m),
   deleteMCP: (name: string) => del<{ ok: boolean }>(`/api/v1/mcp?name=${encodeURIComponent(name)}`),
 
-  // AgentNexus Guard
+  // AgentMux Guard
   guardPolicies: () => get<GuardPolicy[] | null>("/api/v1/guard/policies"),
   evaluateGuard: (req: { project?: string; tool: string; action?: string }) =>
     post<{ decision: string }>("/api/v1/guard/evaluate", req),
