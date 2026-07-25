@@ -278,6 +278,22 @@ type ReplyStream interface {
 	Close(ctx context.Context) error
 }
 
+// SpeechReplier is an optional Platform capability that mirrors only the
+// assistant's textual answer to a speech destination. Unlike ReplyStream it
+// never receives thinking summaries or tool progress, so those implementation
+// details are not spoken to end users.
+type SpeechReplier interface {
+	BeginSpeechReply(ctx context.Context, msg *Message) (SpeechReply, error)
+}
+
+// SpeechReply receives the full accumulated assistant answer. Implementations
+// derive and enqueue only the newly appended suffix; Update must return
+// quickly so text rendering is never gated on TTS or audio playback.
+type SpeechReply interface {
+	Update(ctx context.Context, text string, done bool) error
+	Close(ctx context.Context) error
+}
+
 // StreamMessageReplier is an optional Platform capability for rendering a
 // whole agent turn as one in-place updating plain-text message.
 type StreamMessageReplier interface {

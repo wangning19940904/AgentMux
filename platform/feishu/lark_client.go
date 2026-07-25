@@ -14,6 +14,7 @@ import (
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkcardkit "github.com/larksuite/oapi-sdk-go/v3/service/cardkit/v1"
@@ -58,16 +59,22 @@ type larkClient struct {
 	lastHeartbeatAt time.Time
 	lastEventAt     time.Time
 	lastInboundAt   time.Time
+
+	meetingInvites *meetingInviteController
+	meetingVoice   *meetingVoiceManager
 }
 
-func newLarkClient(platform, domain, appID, appSecret string) (clientAPI, error) {
-	return &larkClient{
+func newLarkClient(platform, domain, appID, appSecret string, voiceConfig meetingVoiceConfig) (clientAPI, error) {
+	client := &larkClient{
 		platform:  platform,
 		domain:    domain,
 		appID:     appID,
 		appSecret: appSecret,
 		api:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(domain)),
-	}, nil
+	}
+	client.meetingInvites = newMeetingInviteController(client)
+	client.meetingVoice = newMeetingVoiceManager(client, voiceConfig)
+	return client, nil
 }
 
 func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
@@ -134,8 +141,29 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			}
 			return nil
 		}).
+		OnCustomizedEvent(meetingInvitedEventType, func(eventCtx context.Context, event *larkevent.EventReq) error {
+			c.markEvent()
+			if c.meetingInvites == nil || event == nil {
+				return nil
+			}
+			return c.meetingInvites.HandleInvitation(eventCtx, event.Body)
+		}).
+		OnCustomizedEvent(meetingEndedEventType, func(_ context.Context, event *larkevent.EventReq) error {
+			c.markEvent()
+			if c.meetingVoice == nil || event == nil {
+				return nil
+			}
+			c.meetingVoice.HandleMeetingEnded(event.Body)
+			return nil
+		}).
 		OnP2CardActionTrigger(func(eventCtx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 			c.markEvent()
+			if c.meetingInvites != nil {
+				if handled, response := c.meetingInvites.HandleAction(ctx, event); handled {
+					c.markInbound()
+					return response, nil
+				}
+			}
 			msg, ok := c.messageFromCardAction(project, event)
 			if !ok {
 				return nil, nil
@@ -558,6 +586,9 @@ func (c *larkClient) Close() error {
 	}
 	if ws != nil {
 		ws.Close()
+	}
+	if c.meetingVoice != nil {
+		c.meetingVoice.Close()
 	}
 	return nil
 }

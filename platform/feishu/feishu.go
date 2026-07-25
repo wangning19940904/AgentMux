@@ -33,6 +33,7 @@ type Platform struct {
 	appID     string
 	appSecret string
 	project   string
+	voice     meetingVoiceConfig
 
 	client clientAPI
 }
@@ -42,6 +43,11 @@ func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
 	p.appID, _ = cfg["app_id"].(string)
 	p.appSecret, _ = cfg["app_secret"].(string)
 	p.project, _ = cfg["project"].(string)
+	voice, err := parseMeetingVoiceConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	p.voice = voice
 	if p.appID == "" || p.appSecret == "" {
 		return nil, fmt.Errorf("%s: app_id and app_secret are required", name)
 	}
@@ -66,7 +72,7 @@ func (p *Platform) ChannelHealth() core.PlatformHealth {
 // Start opens the long connection and forwards inbound messages.
 func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) error {
 	if p.client == nil {
-		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret)
+		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice)
 		if err != nil {
 			return err
 		}
@@ -116,6 +122,26 @@ func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.Repl
 		return nil, fmt.Errorf("%s: client not started", p.name)
 	}
 	return &cardStream{client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg)}, nil
+}
+
+// BeginSpeechReply mirrors the assistant answer to the active meeting joined
+// through the invite approval flow. A nil reply means voice is disabled or the
+// bot is not currently in a meeting.
+func (p *Platform) BeginSpeechReply(ctx context.Context, msg *core.Message) (core.SpeechReply, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("%s: client not started", p.name)
+	}
+	client, ok := p.client.(meetingVoiceClient)
+	if !ok {
+		return nil, nil
+	}
+	userID := ""
+	chatID := ""
+	if msg != nil {
+		userID = msg.UserID
+		chatID = msg.ChatID
+	}
+	return client.BeginMeetingSpeech(ctx, userID, chatID)
 }
 
 // ReplyModelPicker renders /model status as an interactive selector.

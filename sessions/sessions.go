@@ -23,6 +23,7 @@ type Meta struct {
 	ProviderID      string    `json:"provider_id"`
 	Surface         string    `json:"surface"` // cli, app-server
 	SessionID       string    `json:"session_id"`
+	NativeSessionID string    `json:"native_session_id,omitempty"`
 	Title           string    `json:"title,omitempty"`
 	Summary         string    `json:"summary,omitempty"`
 	ProjectDir      string    `json:"project_dir,omitempty"`
@@ -35,6 +36,17 @@ type Meta struct {
 	MessagesPartial bool      `json:"messages_partial,omitempty"`
 	Available       bool      `json:"available"`
 	StatusMessage   string    `json:"status_message,omitempty"`
+	Origin          string    `json:"origin,omitempty"` // local, channel
+	AgentID         string    `json:"agent_id,omitempty"`
+	AgentName       string    `json:"agent_name,omitempty"`
+	ChannelID       string    `json:"channel_id,omitempty"`
+	ChannelName     string    `json:"channel_name,omitempty"`
+	ChannelType     string    `json:"channel_type,omitempty"`
+	ConversationID  string    `json:"conversation_id,omitempty"`
+	ConversationKey string    `json:"conversation_key,omitempty"`
+	ChatID          string    `json:"chat_id,omitempty"`
+	ChatType        string    `json:"chat_type,omitempty"`
+	CanChat         bool      `json:"can_chat,omitempty"`
 }
 
 // Message is a compact transcript row extracted from a session source.

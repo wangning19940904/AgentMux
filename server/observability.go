@@ -455,15 +455,21 @@ func (s *Server) handleObservationSettings(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	metadataOnly, reason := true, "recorder unavailable"
+	recorderStats := store.ObservationRecorderStats{}
+	databaseStatus := store.DatabaseStatus{}
+	if s.st != nil {
+		databaseStatus = s.st.DatabaseStatus(r.Context())
+	}
 	if s.obs.recorder != nil {
 		metadataOnly, reason = s.obs.recorder.MetadataOnly(), s.obs.recorder.MetadataOnlyReason()
+		recorderStats = s.obs.recorder.Stats()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": s.obs.config.Enabled, "capture_content": s.obs.config.CaptureContent,
 		"content_retention_days": s.obs.config.ContentRetentionDays, "detail_retention_days": s.obs.config.DetailRetentionDays,
 		"backfill_days": s.obs.config.BackfillDays, "metadata_only": metadataOnly,
 		"metadata_only_reason": reason, "key_status": map[bool]string{true: "metadata-only", false: "encrypted"}[metadataOnly],
-		"exporters": exporters,
+		"exporters": exporters, "writer": recorderStats, "database": databaseStatus,
 	})
 }
 

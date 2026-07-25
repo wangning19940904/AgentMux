@@ -93,8 +93,13 @@ endpoint = "http://127.0.0.1:4318"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Observability.Enabled || cfg.Observability.ContentRetentionDays != 14 || cfg.Observability.DetailRetentionDays != 180 || cfg.Observability.BackfillDays != 180 {
+	if !cfg.Observability.Enabled || cfg.Observability.ContentRetentionDays != 14 || cfg.Observability.DetailRetentionDays != 30 || cfg.Observability.BackfillDays != 30 {
 		t.Fatalf("observability config = %+v", cfg.Observability)
+	}
+	if cfg.Database.URL != "postgresql:///agentmux?host=/tmp&sslmode=disable" ||
+		cfg.Database.MaxOpenConnections != 12 || cfg.Database.MaxIdleConnections != 4 ||
+		cfg.Database.ConnectionMaxLifetime != "30m" {
+		t.Fatalf("database defaults = %+v", cfg.Database)
 	}
 	if len(cfg.Observability.Exporters) != 1 {
 		t.Fatalf("exporters = %+v", cfg.Observability.Exporters)
@@ -184,7 +189,9 @@ func TestResolvePathSearchesLocalThenXDG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != localPath {
+	gotInfo, gotErr := os.Stat(got)
+	wantInfo, wantErr := os.Stat(localPath)
+	if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
 		t.Fatalf("path = %q, want local path %q", got, localPath)
 	}
 }

@@ -31,6 +31,9 @@ type Pipeline struct {
 }
 
 func NewPipeline(recorder *store.ObservationRecorder, exporters *ExporterService) *Pipeline {
+	if recorder != nil && recorder.Async() && exporters != nil {
+		recorder.SetAfterRecord(exporters.Enqueue)
+	}
 	return &Pipeline{recorder: recorder, exporters: exporters}
 }
 
@@ -40,7 +43,7 @@ func (p *Pipeline) Observe(ctx context.Context, envelope core.ObservationEnvelop
 	}
 	secured, recordErr := p.recorder.Record(ctx, envelope)
 	var exportErr error
-	if p.exporters != nil {
+	if p.exporters != nil && !p.recorder.Async() {
 		exportErr = p.exporters.Enqueue(ctx, secured)
 	}
 	return errors.Join(recordErr, exportErr)

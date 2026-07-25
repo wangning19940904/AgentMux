@@ -77,7 +77,7 @@ func NewRuntime(log *slog.Logger, cfg config.ObservabilityConfig, st *store.Stor
 	bus := core.NewObservationBus()
 	exporters := NewExporterService(log, st, recorder, cfg.Exporters)
 	pipeline := NewPipeline(recorder, exporters)
-	bus.Subscribe("sqlite-recorder-and-export-outbox", pipeline.Observe)
+	bus.Subscribe("postgres-recorder-and-export-outbox", pipeline.Observe)
 	ingest := NewIngestService(log, bus, home, token)
 	bus.Subscribe("native-session-trace-correlation", ingest.ObserveCorrelation)
 	transcript := NewTranscriptTailer(log, st, bus, TranscriptTailerOptions{
@@ -131,6 +131,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return nil
 	}
 	r.Exporters.Start(ctx)
+	r.Recorder.BindContext(ctx)
 	if err := r.Ingest.Start(ctx); err != nil {
 		return err
 	}
@@ -146,7 +147,6 @@ func (r *Runtime) Start(ctx context.Context) error {
 			r.Log.Info("legacy proxy errors encrypted", "errors", secured)
 		}
 	}
-	go r.Transcript.Start(ctx)
 	if r.Store != nil {
 		if err := r.Store.MaterializeObservationDailyUsageSince(ctx, observationDailyRefreshSince(time.Now())); err != nil {
 			r.Log.Warn("initial observation daily aggregation failed", "err", err)
@@ -158,6 +158,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if _, err := r.Insights.Run(ctx, time.Now().UTC().Add(-7*24*time.Hour)); err != nil {
 		r.Log.Warn("initial observation insight materialization failed", "err", err)
 	}
+	go r.Transcript.Start(ctx)
 	go r.maintenance(ctx)
 	return nil
 }

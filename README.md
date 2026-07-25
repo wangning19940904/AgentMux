@@ -34,6 +34,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
+- **SSH 远程控制** — 在本机保存远程机器档案，通过 SSH 隧道切换到另一台 AgentMux，直接复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
 
 ## 架构
 
@@ -52,11 +53,11 @@ clients (CLI / WebUI / Wails / menubar)
    ├── skills/      Skills:Agent Skills 发现与管理
    ├── mcp/         MCP Registry:MCP server 注册与下发
    ├── guard/       Guard:权限审批与策略
-   ├── store/       SQLite SSOT (atomic writes)
+   ├── store/       PostgreSQL SSOT + asynchronous observation batches
    └── server/      Console API + embedded WebUI (go:embed)
 ```
 
-`core` 永不导入 `platform/`、`agent/`、`provider/`、`usage/`、`memory/`、`skills/`、`mcp/`、`guard/`;各适配器在自身 `init()` 中通过 registry 自注册。Memory/Skills/MCP/Guard 四个模块已落地骨架实现(SQLite 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),并通过 `/api/v1` 暴露给 Console。
+`core` 永不导入 `platform/`、`agent/`、`provider/`、`usage/`、`memory/`、`skills/`、`mcp/`、`guard/`;各适配器在自身 `init()` 中通过 registry 自注册。Memory/Skills/MCP/Guard 四个模块已落地骨架实现(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),并通过 `/api/v1` 暴露给 Console。
 
 ## 快速开始
 
@@ -64,15 +65,18 @@ clients (CLI / WebUI / Wails / menubar)
 # 1. 构建(仅 CLI,占位 WebUI)
 make build
 
-# 2. 立即看 Token 用量(读取本地 Agent 日志)
+# 2. 初始化本机 PostgreSQL
+./amux database setup
+
+# 3. 立即看 Token 用量(读取本地 Agent 日志)
 ./amux usage daily --since 7d
 
-# 3. Provider 管理
+# 4. Provider 管理
 ./amux provider presets
 ./amux provider import anthropic-official
 ./amux provider switch anthropic-official --tool claudecode
 
-# 4. 启动守护进程 + WebUI(嵌入式构建)
+# 5. 启动守护进程 + WebUI(嵌入式构建)
 make release
 ./amux web        # 打开 http://127.0.0.1:8765
 
@@ -96,6 +100,7 @@ make release
 
 - `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
 - `[bridge]` 暴露 HTTP send API;**启用时必须设置 token**。
+- `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
 - `[observability]` 默认启用；完整内容先脱敏、分块压缩并以 AES-256-GCM 加密，默认保留 30 天，详细元数据保留 180 天。每个 `[[observability.exporters]]` 独立配置 OTLP 队列，`include_content` 默认关闭。
 - `${ENV_VAR}` 占位符从环境变量展开。
@@ -132,6 +137,11 @@ POST /api/v1/mcp                      # 注册/更新 MCP server
 DELETE /api/v1/mcp?name=             # 删除 MCP server
 GET  /api/v1/guard/policies          # Guard 策略列表
 POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
+
+GET    /api/v1/remote/hosts                    # 本机保存的 SSH 机器（敏感字段脱敏）
+POST   /api/v1/remote/hosts                    # 新建/更新 SSH 机器
+DELETE /api/v1/remote/hosts?id=                # 删除 SSH 机器
+POST   /api/v1/remote/hosts/test?id=           # 测试连接并确认主机指纹
 
 GET  /api/v1/channels                # 渠道列表(含运行状态)
 POST /api/v1/channels                # 新建/更新渠道 {name,type,agent_id,config,enabled}
@@ -176,9 +186,10 @@ POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall
 ## 安全说明
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
-- Provider API key 在 SQLite 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
+- SSH 远程控制仅支持私钥/`ssh-agent`，不保存 SSH 密码；首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
+- Provider API key 在 PostgreSQL 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
 - SSH 采集器为本地工具便利使用 `InsecureIgnoreHostKey`;在不可信网络中使用前请固定 host key。
-- Observability 内容不会明文写入 SQLite：已知 Secret、Authorization、Cookie、API Key 与隐藏 reasoning 在持久化前删除；macOS 主密钥位于 Keychain，其他平台未显式配置安全密钥时自动退化为 metadata-only。
+- Observability 内容不会明文写入 PostgreSQL：已知 Secret、Authorization、Cookie、API Key 与隐藏 reasoning 在持久化前删除；macOS 主密钥位于 Keychain，其他平台未显式配置安全密钥时自动退化为 metadata-only。
 - Console 的敏感 Trace API 使用 loopback 一次性 nonce 换取 SameSite HttpOnly 会话；原生 Hook/OTLP ingest 使用独立随机本地 token。OTLP Exporter 默认只发送元数据。
 
 ## License

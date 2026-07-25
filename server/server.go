@@ -14,30 +14,33 @@ import (
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
+	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 	"github.com/wangning19940904/AgentMux/store"
 )
 
 // Server is the management/bridge HTTP server.
 type Server struct {
-	cfg       *config.Config
-	log       *slog.Logger
-	st        *store.Store
-	provider  core.ProviderManager
-	proxySvc  *providerpkg.Service
-	usageFn   UsageReporter
-	sender    core.Sender
-	connect   *core.ConnectService
-	presets   any
-	memory    core.MemoryStore
-	skills    core.SkillManager
-	mcp       core.MCPRegistry
-	guard     core.Guard
-	workspace core.WorkspaceInitializer
-	sessions  *sessionstore.Service
-	obs       *observabilityRuntime
-	mux       *http.ServeMux
-	httpSrv   *http.Server
+	cfg             *config.Config
+	log             *slog.Logger
+	st              *store.Store
+	provider        core.ProviderManager
+	proxySvc        *providerpkg.Service
+	usageFn         UsageReporter
+	sender          core.Sender
+	connect         *core.ConnectService
+	presets         any
+	memory          core.MemoryStore
+	skills          core.SkillManager
+	mcp             core.MCPRegistry
+	guard           core.Guard
+	workspace       core.WorkspaceInitializer
+	sessions        *sessionstore.Service
+	obs             *observabilityRuntime
+	providerMonitor *providerMonitor
+	remote          *remotepkg.Manager
+	mux             *http.ServeMux
+	httpSrv         *http.Server
 }
 
 // UsageReporter produces an aggregated usage report for the API.
@@ -53,6 +56,19 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		usageFn:  usageFn,
 		sessions: sessionstore.New(),
 		mux:      http.NewServeMux(),
+	}
+	s.providerMonitor = newProviderMonitor(log, st, pm)
+	remoteManager, err := remotepkg.NewManager(
+		cfg.Remote.HostsFile,
+		time.Duration(cfg.Remote.ConnectTimeoutSeconds)*time.Second,
+		log,
+	)
+	if err != nil {
+		if log != nil {
+			log.Warn("remote SSH control unavailable", "err", err)
+		}
+	} else {
+		s.remote = remoteManager
 	}
 	s.routes()
 	return s
@@ -87,6 +103,9 @@ func (s *Server) SetProviderService(svc *providerpkg.Service) {
 	s.proxySvc = svc
 	if svc != nil {
 		s.provider = svc
+		if s.providerMonitor != nil {
+			s.providerMonitor.provider = svc
+		}
 	}
 }
 
@@ -108,6 +127,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/providers/active", s.handleProviderClearRoute)
 	s.mux.HandleFunc("GET /api/v1/providers/presets", s.handleProviderPresets)
 	s.mux.HandleFunc("POST /api/v1/providers/probe", s.handleProviderProbe)
+	s.mux.HandleFunc("GET /api/v1/providers/monitor", s.handleProviderMonitorGet)
+	s.mux.HandleFunc("PUT /api/v1/providers/monitor", s.handleProviderMonitorPut)
+	s.mux.HandleFunc("POST /api/v1/providers/monitor/run", s.handleProviderMonitorRun)
+	s.mux.HandleFunc("DELETE /api/v1/providers/monitor/alerts", s.handleProviderMonitorAlertDismiss)
 	s.mux.HandleFunc("POST /api/v1/providers/switch", s.handleProviderSwitch)
 	s.mux.HandleFunc("POST /api/v1/providers/failover", s.handleProviderFailover)
 	s.mux.HandleFunc("GET /api/v1/proxy/status", s.handleProxyStatus)
@@ -122,6 +145,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)
 	s.mux.HandleFunc("GET /api/v1/sessions/messages", s.handleSessionMessages)
+	s.mux.HandleFunc("POST /api/v1/sessions/messages", s.handleSessionMessageSend)
 	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
 	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
@@ -140,6 +164,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/channel-interactions/respond", s.handleChannelInteractionRespond)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/begin", s.handleFeishuSetupBegin)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/poll", s.handleFeishuSetupPoll)
+	s.registerRemoteRoutes()
 	s.mux.HandleFunc("GET /api/v1/triggers", s.handleTriggersList)
 	s.mux.HandleFunc("POST /api/v1/triggers", s.handleTriggerUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/triggers", s.handleTriggerDelete)
@@ -153,9 +178,15 @@ func (s *Server) routes() {
 
 // ListenAndServe starts the HTTP server until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if s.remote != nil {
+		defer s.remote.Close()
+	}
 	s.httpSrv = &http.Server{
 		Addr:    s.cfg.Server.Addr,
 		Handler: s.withAuth(s.mux),
+	}
+	if s.providerMonitor != nil {
+		go s.providerMonitor.Run(ctx)
 	}
 	go func() {
 		<-ctx.Done()
@@ -187,7 +218,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

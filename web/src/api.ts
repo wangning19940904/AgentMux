@@ -14,10 +14,32 @@ declare global {
   }
 }
 
+const ACTIVE_REMOTE_KEY = "agentmux:active-remote";
+
+export function activeRemoteID(): string {
+  return localStorage.getItem(ACTIVE_REMOTE_KEY) ?? "";
+}
+
+export function setActiveRemoteID(id: string) {
+  if (id) localStorage.setItem(ACTIVE_REMOTE_KEY, id);
+  else localStorage.removeItem(ACTIVE_REMOTE_KEY);
+}
+
 function apiPath(path: string) {
   // All clients use same-origin API requests. Vite proxies them in development,
   // the Go web server handles them in a browser, and the Wails asset middleware
   // proxies them inside the desktop process without exposing HTTP to WebKit.
+  //
+  // Remote-control management always stays local. All other API calls are
+  // transparently routed through the selected SSH target.
+  const remoteID = activeRemoteID();
+  if (
+    remoteID &&
+    path.startsWith("/api/v1/") &&
+    !path.startsWith("/api/v1/remote/")
+  ) {
+    return `/api/v1/remote/proxy/${encodeURIComponent(remoteID)}/${path.slice("/api/v1/".length)}`;
+  }
   return path;
 }
 
@@ -108,6 +130,58 @@ export interface ProviderProbeCheck {
   message?: string;
 }
 
+export interface ProviderMonitorConfig {
+  enabled: boolean;
+  interval_minutes: number;
+  probe_models: boolean;
+  max_models_per_provider: number;
+}
+
+export interface ProviderModelHealth {
+  model: string;
+  state: string;
+  status_code?: number;
+  message?: string;
+  checked_at: string;
+}
+
+export interface ProviderMonitorProviderStatus {
+  provider_id: string;
+  provider_name: string;
+  state: string;
+  catalog_count: number;
+  checked_models: number;
+  healthy_models: number;
+  unhealthy_models: number;
+  added_models?: string[];
+  removed_models?: string[];
+  models?: ProviderModelHealth[];
+  message?: string;
+  last_checked_at: string;
+}
+
+export interface ProviderMonitorAlert {
+  id: string;
+  type: string;
+  severity: string;
+  provider_id: string;
+  provider_name: string;
+  model?: string;
+  models?: string[];
+  message?: string;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface ProviderMonitorSnapshot {
+  config: ProviderMonitorConfig;
+  running: boolean;
+  last_run_at?: string;
+  next_run_at?: string;
+  providers: ProviderMonitorProviderStatus[];
+  alerts: ProviderMonitorAlert[];
+}
+
 export interface Claude3PStatus {
   enabled: boolean;
   configured: boolean;
@@ -191,6 +265,41 @@ export interface Status {
   ok: boolean;
   projects: number;
   version: string;
+}
+
+export interface RemoteHost {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  key_path?: string;
+  remote_addr: string;
+  api_token?: string;
+  api_token_set?: boolean;
+  host_key_fingerprint?: string;
+  trusted?: boolean;
+  clear_api_token?: boolean;
+}
+
+export interface RemoteTestResult {
+  ok: boolean;
+  name: string;
+  latency_ms: number;
+  host_key_fingerprint: string;
+  status?: Status;
+}
+
+export class RemoteConnectionError extends Error {
+  code?: string;
+  fingerprint?: string;
+
+  constructor(message: string, code?: string, fingerprint?: string) {
+    super(message);
+    this.name = "RemoteConnectionError";
+    this.code = code;
+    this.fingerprint = fingerprint;
+  }
 }
 
 export interface AgentChannelBinding {
@@ -539,6 +648,7 @@ export interface AgentSession {
   provider_id: string;
   surface: string;
   session_id: string;
+  native_session_id?: string;
   title?: string;
   summary?: string;
   project_dir?: string;
@@ -551,6 +661,17 @@ export interface AgentSession {
   messages_partial?: boolean;
   available: boolean;
   status_message?: string;
+  origin?: "local" | "channel" | string;
+  agent_id?: string;
+  agent_name?: string;
+  channel_id?: string;
+  channel_name?: string;
+  channel_type?: string;
+  conversation_id?: string;
+  conversation_key?: string;
+  chat_id?: string;
+  chat_type?: string;
+  can_chat?: boolean;
 }
 
 export interface SessionMessage {
@@ -967,6 +1088,24 @@ async function del<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function testRemoteHost(id: string, trustOnFirstUse: boolean): Promise<RemoteTestResult> {
+  const path = `/api/v1/remote/hosts/test?id=${encodeURIComponent(id)}`;
+  const response = await fetch(apiPath(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trust_on_first_use: trustOnFirstUse }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new RemoteConnectionError(
+      typeof payload.error === "string" ? payload.error : `${path}: ${response.status}`,
+      typeof payload.code === "string" ? payload.code : undefined,
+      typeof payload.host_key_fingerprint === "string" ? payload.host_key_fingerprint : undefined,
+    );
+  }
+  return payload as unknown as RemoteTestResult;
+}
+
 async function selectSystemDirectory(defaultDirectory = ""): Promise<{ path: string }> {
   const picker = window.go?.main?.App?.SelectDirectory;
   if (!picker) {
@@ -1016,6 +1155,14 @@ async function getProviders(path: string): Promise<Provider[] | null> {
 }
 
 export const api = {
+  // SSH remote control. These paths intentionally bypass the selected target.
+  remoteHosts: () => get<RemoteHost[]>("/api/v1/remote/hosts"),
+  upsertRemoteHost: (host: Partial<RemoteHost>) =>
+    postChecked<RemoteHost>("/api/v1/remote/hosts", host),
+  deleteRemoteHost: (id: string) =>
+    del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
+  testRemoteHost,
+
   status: () => get<Status>("/api/v1/status"),
   platforms: () => get<string[]>("/api/v1/platforms"),
   agents: () => get<string[]>("/api/v1/agents"),
@@ -1035,6 +1182,15 @@ export const api = {
   presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],
   upsertProvider: (p: Provider) => post<Provider>("/api/v1/providers", p),
   probeProvider: (p: Provider) => postChecked<ProviderProbeResult>("/api/v1/providers/probe", p),
+  providerMonitor: () => get<ProviderMonitorSnapshot>("/api/v1/providers/monitor"),
+  saveProviderMonitor: (config: ProviderMonitorConfig) =>
+    put<ProviderMonitorSnapshot>("/api/v1/providers/monitor", config),
+  runProviderMonitor: () =>
+    postChecked<ProviderMonitorSnapshot>("/api/v1/providers/monitor/run", {}),
+  dismissProviderMonitorAlert: (id = "") =>
+    del<ProviderMonitorSnapshot>(
+      `/api/v1/providers/monitor/alerts${id ? `?id=${encodeURIComponent(id)}` : ""}`
+    ),
   deleteProvider: (id: string) => del<{ ok: boolean }>(`/api/v1/providers?id=${encodeURIComponent(id)}`),
   switchProvider: (id: string, tool: string, meta?: Record<string, unknown>, localTakeover?: boolean) =>
     post<{ ok: boolean }>("/api/v1/providers/switch", { id, tool, meta, local_takeover: localTakeover }),
@@ -1210,14 +1366,25 @@ export const api = {
     get<AgentSession[] | null>(
       `/api/v1/sessions?provider=${encodeURIComponent(provider)}&surface=${encodeURIComponent(surface)}`
     ),
-  sessionMessages: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path" | "project_dir">) =>
+  sessionMessages: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path" | "project_dir" | "conversation_id">) =>
     get<SessionMessage[] | null>(
       `/api/v1/sessions/messages?provider=${encodeURIComponent(session.provider_id)}&surface=${encodeURIComponent(
         session.surface
       )}&session_id=${encodeURIComponent(session.session_id)}&source_path=${encodeURIComponent(
         session.source_path ?? ""
-      )}&project_dir=${encodeURIComponent(session.project_dir ?? "")}`
+      )}&project_dir=${encodeURIComponent(session.project_dir ?? "")}&conversation_id=${encodeURIComponent(
+        session.conversation_id ?? ""
+      )}`
     ),
+  sendSessionMessage: (
+    session: Pick<AgentSession, "channel_id" | "conversation_id">,
+    text: string
+  ) =>
+    postChecked<{ ok: boolean; answer: string }>("/api/v1/sessions/messages", {
+      channel_id: session.channel_id,
+      conversation_id: session.conversation_id,
+      text,
+    }),
   resumeSession: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path" | "project_dir">, openTerminal = false) =>
     post<{ ok: boolean; command?: string; thread_id?: string; opened?: boolean; status_message?: string }>(
       "/api/v1/sessions/resume",

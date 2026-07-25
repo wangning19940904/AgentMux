@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -14,12 +16,22 @@ import (
 type Config struct {
 	DisplayMode   string              `toml:"display_mode"`
 	Server        ServerConfig        `toml:"server"`
+	Database      DatabaseConfig      `toml:"database"`
 	Bridge        BridgeConfig        `toml:"bridge"`
+	Remote        RemoteConfig        `toml:"remote"`
 	Projects      []ProjectConfig     `toml:"projects"`
 	Hooks         []HookConfig        `toml:"hooks"`
 	Provider      ProviderConfig      `toml:"provider"`
 	Usage         UsageConfig         `toml:"usage"`
 	Observability ObservabilityConfig `toml:"observability"`
+}
+
+// DatabaseConfig configures the PostgreSQL runtime store.
+type DatabaseConfig struct {
+	URL                   string `toml:"url"`
+	MaxOpenConnections    int    `toml:"max_open_connections"`
+	MaxIdleConnections    int    `toml:"max_idle_connections"`
+	ConnectionMaxLifetime string `toml:"connection_max_lifetime"`
 }
 
 // ServerConfig configures the HTTP/WS management server.
@@ -32,6 +44,14 @@ type ServerConfig struct {
 type BridgeConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Token   string `toml:"token"`
+}
+
+// RemoteConfig controls the local SSH control-plane client. Remote host
+// profiles are intentionally stored outside config.toml so they can be
+// managed from the Console without rewriting the daemon configuration.
+type RemoteConfig struct {
+	HostsFile             string `toml:"hosts_file"`
+	ConnectTimeoutSeconds int    `toml:"connect_timeout_seconds"`
 }
 
 // ProjectConfig pairs one agent with one or more platforms.
@@ -133,8 +153,20 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
+	if !strings.HasPrefix(c.Database.URL, "postgres://") && !strings.HasPrefix(c.Database.URL, "postgresql://") {
+		return fmt.Errorf("database.url must use postgres:// or postgresql://")
+	}
+	if _, err := time.ParseDuration(c.Database.ConnectionMaxLifetime); err != nil {
+		return fmt.Errorf("database.connection_max_lifetime: %w", err)
+	}
+	if c.Database.MaxIdleConnections > c.Database.MaxOpenConnections {
+		return fmt.Errorf("database.max_idle_connections cannot exceed max_open_connections")
+	}
 	if c.Bridge.Enabled && c.Bridge.Token == "" {
 		return fmt.Errorf("bridge enabled but no token set (refusing to start: security)")
+	}
+	if c.Remote.ConnectTimeoutSeconds < 1 || c.Remote.ConnectTimeoutSeconds > 120 {
+		return fmt.Errorf("remote.connect_timeout_seconds must be between 1 and 120")
 	}
 	for _, p := range c.Projects {
 		if p.Name == "" {
@@ -170,6 +202,26 @@ func (c *Config) applyDefaults() {
 	if c.DisplayMode == "" {
 		c.DisplayMode = "normal"
 	}
+	if c.Remote.ConnectTimeoutSeconds == 0 {
+		c.Remote.ConnectTimeoutSeconds = 10
+	}
+	if value := os.Getenv("AGENTMUX_DATABASE_URL"); value != "" {
+		c.Database.URL = value
+	}
+	if c.Database.URL == "" {
+		c.Database.URL = "postgresql:///agentmux?host=/tmp&sslmode=disable"
+	}
+	if c.Database.MaxOpenConnections <= 0 {
+		c.Database.MaxOpenConnections = 12
+	}
+	if c.Database.MaxIdleConnections < 0 {
+		c.Database.MaxIdleConnections = 0
+	} else if c.Database.MaxIdleConnections == 0 {
+		c.Database.MaxIdleConnections = 4
+	}
+	if c.Database.ConnectionMaxLifetime == "" {
+		c.Database.ConnectionMaxLifetime = "30m"
+	}
 	if len(c.Usage.Sources) == 0 {
 		c.Usage.Sources = []string{"claude", "codex", "cursor", "gemini"}
 	}
@@ -180,10 +232,10 @@ func (c *Config) applyDefaults() {
 		c.Observability.ContentRetentionDays = 30
 	}
 	if c.Observability.DetailRetentionDays <= 0 {
-		c.Observability.DetailRetentionDays = 180
+		c.Observability.DetailRetentionDays = 30
 	}
 	if c.Observability.BackfillDays <= 0 {
-		c.Observability.BackfillDays = 180
+		c.Observability.BackfillDays = 30
 	}
 	for index := range c.Observability.Exporters {
 		exporter := &c.Observability.Exporters[index]

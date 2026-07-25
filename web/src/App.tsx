@@ -20,6 +20,7 @@ import {
   PanelLeft,
   PanelTop,
   Search,
+  ServerCog,
   MessageSquareText,
   Settings,
   ShieldCheck,
@@ -42,6 +43,8 @@ import { MCPPanel } from "./panels/MCPPanel";
 import { GuardPanel } from "./panels/GuardPanel";
 import { SessionsPanel } from "./panels/SessionsPanel";
 import { MenuBarPanel } from "./panels/MenuBarPanel";
+import { RemoteHostsPanel } from "./panels/RemoteHostsPanel";
+import { RemoteTargetSelector } from "./RemoteTargetSelector";
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 
 type Tab =
@@ -52,6 +55,7 @@ type Tab =
   | "observability"
   | "usage"
   | "menubar"
+  | "machines"
   | "providers"
   | "gateway"
   | "memory"
@@ -103,7 +107,10 @@ const NAV_GROUPS: NavGroup[] = [
     id: "system",
     labelKey: "nav.group.system",
     icon: PanelTop,
-    items: [{ id: "menubar", labelKey: "nav.menubar", icon: PanelTop }],
+    items: [
+      { id: "machines", labelKey: "nav.machines", icon: ServerCog },
+      { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
+    ],
   },
 ];
 
@@ -335,6 +342,7 @@ function Shell({
               <input placeholder={t("app.search")} />
             </label>
           </div>
+          <RemoteTargetSelector onManage={() => setTab("machines")} />
           <details className="topbar-preferences">
             <summary title={t("app.settings")} aria-label={t("app.settings")}>
               <Settings size={18} />
@@ -364,6 +372,7 @@ function Shell({
             {tab === "observability" && <ObservabilityPanel />}
             {tab === "usage" && <UsagePanel />}
             {tab === "menubar" && <MenuBarPanel />}
+            {tab === "machines" && <RemoteHostsPanel />}
             {tab === "sessions" && <SessionsPanel />}
             {tab === "providers" && <ProvidersPanel />}
             {tab === "gateway" && <GatewayPanel />}

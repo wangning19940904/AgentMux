@@ -39,12 +39,16 @@ func (s *Store) ListObservationTranscriptPayloadCandidates(ctx context.Context, 
 	if limit <= 0 || limit > 1000 {
 		limit = observationCleanupBatchSize
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT e.rowid,e.envelope_json,e.payload_id,
+	rowColumn := "e.rowid"
+	if s.IsPostgres() {
+		rowColumn = "e.ingestion_seq"
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+rowColumn+`,e.envelope_json,e.payload_id,
 		p.content_type,p.sha256,p.original_bytes,p.stored_bytes,p.redacted,p.expires_at
 		FROM observation_events e
 		JOIN observation_payloads p ON p.payload_id=e.payload_id
-		WHERE e.rowid>? AND e.source='transcript' AND e.payload_id<>''
-		ORDER BY e.rowid LIMIT ?`, afterRowID, limit)
+		WHERE `+rowColumn+`>? AND e.source='transcript' AND e.payload_id<>''
+		ORDER BY `+rowColumn+` LIMIT ?`, afterRowID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +76,7 @@ func (s *Store) ReplaceObservationPayloadsWithSources(ctx context.Context, repla
 	if len(replacements) == 0 {
 		return 0, nil
 	}
-	tx, err := s.writer.BeginTx(ctx, nil)
+	tx, err := s.observe.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -87,8 +91,12 @@ func (s *Store) ReplaceObservationPayloadsWithSources(ctx context.Context, repla
 		if err != nil {
 			return replaced, err
 		}
+		rowColumn := "rowid"
+		if s.IsPostgres() {
+			rowColumn = "ingestion_seq"
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE observation_events SET envelope_json=?
-			WHERE rowid=? AND event_id=? AND payload_id=?`, string(encoded), replacement.RowID, replacement.EventID, replacement.PayloadID)
+			WHERE `+rowColumn+`=? AND event_id=? AND payload_id=?`, string(encoded), replacement.RowID, replacement.EventID, replacement.PayloadID)
 		if err != nil {
 			return replaced, err
 		}
@@ -106,8 +114,12 @@ func (s *Store) ReplaceObservationPayloadsWithSources(ctx context.Context, repla
 	// statements, while retaining any encrypted body that still has a legacy
 	// second owner without its own verified source reference.
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(payloadIDs)), ",")
+	payloadStorage := "json_extract(envelope_json,'$.payload_ref.storage')"
+	if s.IsPostgres() {
+		payloadStorage = "(envelope_json::jsonb #>> '{payload_ref,storage}')"
+	}
 	legacyOwners := `SELECT payload_id FROM observation_events WHERE payload_id IN (` + placeholders + `)
-		AND payload_id<>'' AND COALESCE(json_extract(envelope_json,'$.payload_ref.storage'),'')<>?`
+		AND payload_id<>'' AND COALESCE(` + payloadStorage + `,'')<>?`
 	deleteArgs := make([]any, 0, len(payloadIDs)*2+1)
 	for _, payloadID := range payloadIDs {
 		deleteArgs = append(deleteArgs, payloadID)

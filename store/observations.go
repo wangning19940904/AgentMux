@@ -252,7 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_observation_resource_leases_expiry ON observation
 `
 
 func (s *Store) migrateObservations() error {
-	_, err := s.writer.Exec(observationSchema)
+	_, err := s.observe.Exec(observationSchema)
 	return err
 }
 
@@ -336,6 +336,11 @@ func (s *Store) RecordObservation(ctx context.Context, envelope core.Observation
 // distinction lets the encrypted-content recorder reclaim a just-created
 // payload when an at-least-once replay loses the dedupe race.
 func (s *Store) recordObservation(ctx context.Context, envelope core.ObservationEnvelope) (bool, error) {
+	if s.IsPostgres() {
+		envelope.Normalize()
+		inserted, err := s.recordObservationBatch(ctx, []core.ObservationEnvelope{envelope})
+		return inserted[envelope.EventID], err
+	}
 	envelope.Content = nil
 	envelope.Normalize()
 	if err := envelope.Validate(); err != nil {
@@ -373,15 +378,16 @@ func (s *Store) recordObservation(ctx context.Context, envelope core.Observation
 		duration = envelope.Tool.DurationMillis
 	}
 
-	tx, err := s.writer.BeginTx(ctx, nil)
+	tx, err := s.observe.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO observation_events
+		INSERT INTO observation_events
 		(event_id,dedupe_key,trace_id,span_id,parent_span_id,sequence,timestamp,kind,name,lifecycle,source,quality,status,payload_id,envelope_json,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT DO NOTHING`,
 		envelope.EventID, nullObservationString(envelope.DedupeKey), envelope.TraceID, envelope.SpanID,
 		envelope.ParentSpanID, envelope.Sequence, timestamp, envelope.Kind, envelope.Name, envelope.Lifecycle,
 		envelope.Source, envelope.Quality, envelope.Status, payloadID, string(envelopeJSON), now)
@@ -538,7 +544,7 @@ func (s *Store) observationEventRecorded(ctx context.Context, eventID, dedupeKey
 // the long-term Usage materializer while the event transaction is still open.
 // This keeps Trace cards and details from summing internal, OTel and Proxy
 // copies of the same model request.
-func observationTraceUsageTx(ctx context.Context, tx *sql.Tx, traceID string) (core.ObservationUsage, bool, error) {
+func observationTraceUsageTx(ctx context.Context, tx *dbTx, traceID string) (core.ObservationUsage, bool, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT span_id,runtime_id,source,model_json,input_tokens,output_tokens,
 		cache_read_tokens,cache_write_tokens,reasoning_tokens,tool_tokens,total_tokens,cost_usd
 		FROM observation_spans WHERE trace_id=? AND kind='model.request'`, traceID)
@@ -754,7 +760,7 @@ func (s *Store) UpsertObservationIngestCursor(ctx context.Context, cursor Observ
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	_, err := s.writer.ExecContext(ctx, `INSERT INTO observation_ingest_cursors
+	_, err := s.observe.ExecContext(ctx, `INSERT INTO observation_ingest_cursors
 		(source,resource,cursor,message_id,file_identity,byte_offset,observed_at,updated_at) VALUES(?,?,?,?,?,?,?,?)
 		ON CONFLICT(source,resource) DO UPDATE SET cursor=excluded.cursor,message_id=excluded.message_id,
 		file_identity=excluded.file_identity,byte_offset=excluded.byte_offset,observed_at=excluded.observed_at,updated_at=excluded.updated_at`,

@@ -137,6 +137,7 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		core.ChannelConfigReplyMode:         core.ReplyModeStreamMessage,
 		core.ChannelConfigAckReaction:       "true",
 		core.ChannelConfigAckReactionEmojis: "OK,THANKS",
+		core.ChannelConfigMeetingVoice:      "false",
 	}
 	for k, v := range want {
 		if saved.Config[k] != v {
@@ -175,12 +176,74 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		{Name: "bad scope", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyScope: "direct"}},
 		{Name: "bad mode", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyMode: "lark_cli"}},
 		{Name: "bad ack", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigAckReaction: "sometimes"}},
+		{Name: "bad voice", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingVoice: "sometimes"}},
+		{Name: "missing TTS key", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingVoice: "true"}},
+		{Name: "bad TTS URL", Type: "feishu", Config: map[string]string{
+			"app_id": "cli_test", "app_secret": "secret",
+			core.ChannelConfigMeetingVoice:      "true",
+			core.ChannelConfigMeetingTTSAPIKey:  "tts-secret",
+			core.ChannelConfigMeetingTTSBaseURL: "file:///tmp/tts",
+		}},
 	}
 	for _, ch := range invalids {
 		rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", ch)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: code = %d body = %s", ch.Name, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestFeishuMeetingVoiceConfigDefaultsAndSecretRoundTrip(t *testing.T) {
+	s, st := newTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/channels", core.Channel{
+		Name: "Voice", Type: "feishu",
+		Config: map[string]string{
+			"app_id":                            "cli_test",
+			"app_secret":                        "secret",
+			core.ChannelConfigMeetingVoice:      "true",
+			core.ChannelConfigMeetingTTSAPIKey:  "tts-secret",
+			core.ChannelConfigMeetingTTSBaseURL: "https://tts.example.test/v1/",
+			core.ChannelConfigMeetingTTSModel:   "",
+			core.ChannelConfigMeetingTTSVoice:   "",
+		},
+		Enabled: false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upsert: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var saved core.Channel
+	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Config[core.ChannelConfigMeetingTTSAPIKey] != "<redacted>" {
+		t.Fatalf("returned TTS key = %q", saved.Config[core.ChannelConfigMeetingTTSAPIKey])
+	}
+	if saved.Config[core.ChannelConfigMeetingTTSBaseURL] != "https://tts.example.test/v1" ||
+		saved.Config[core.ChannelConfigMeetingTTSModel] != core.DefaultMeetingTTSModel ||
+		saved.Config[core.ChannelConfigMeetingTTSVoice] != core.DefaultMeetingTTSVoice {
+		t.Fatalf("voice defaults = %+v", saved.Config)
+	}
+
+	stored, err := st.GetChannel(context.Background(), saved.ID)
+	if err != nil || stored == nil {
+		t.Fatal(err)
+	}
+	if stored.Config[core.ChannelConfigMeetingTTSAPIKey] != "tts-secret" {
+		t.Fatalf("stored TTS key = %q", stored.Config[core.ChannelConfigMeetingTTSAPIKey])
+	}
+	saved.Config[core.ChannelConfigMeetingTTSAPIKey] = "<redacted>"
+	saved.Config[core.ChannelConfigMeetingTTSVoice] = "nova"
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", saved)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("round-trip: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	stored, err = st.GetChannel(context.Background(), saved.ID)
+	if err != nil || stored == nil {
+		t.Fatal(err)
+	}
+	if stored.Config[core.ChannelConfigMeetingTTSAPIKey] != "tts-secret" ||
+		stored.Config[core.ChannelConfigMeetingTTSVoice] != "nova" {
+		t.Fatalf("stored voice config after round-trip = %+v", stored.Config)
 	}
 }
 

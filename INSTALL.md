@@ -4,6 +4,7 @@
 
 - **Go 1.25+** (core, CLI, daemon)
 - **Node.js 20+** with npm (WebUI build)
+- **PostgreSQL 16+** (runtime data store)
 - **Wails v2 toolchain** (only for the desktop app):
   `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 - **Xcode command line tools** (only for the macOS menu bar app)
@@ -31,6 +32,32 @@ dist/amux-0.1.0-windows-amd64.exe
 ```
 
 The CLI binary is statically linked (CGO disabled) and self-contained.
+
+## Set up PostgreSQL
+
+AgentMux uses PostgreSQL as its runtime store. On macOS with Homebrew:
+
+```bash
+brew install postgresql@16
+amux database setup
+```
+
+The default connection is
+`postgresql:///agentmux?host=/tmp&sslmode=disable`. Override it with
+`[database].url`, `AGENTMUX_DATABASE_URL`, or `--database-url`.
+
+To migrate an existing AgentMux SQLite store while retaining 30 days of
+detailed observations:
+
+```bash
+amux database migrate-sqlite --source ~/.agentmux/agentmux.db \
+  --observations-since 30d --dry-run
+# Stop AgentMux, then run again without --dry-run.
+amux database migrate-sqlite --source ~/.agentmux/agentmux.db \
+  --observations-since 30d
+```
+
+The migration creates a consistent timestamped SQLite backup before copying.
 
 ## Linux headless client
 
@@ -110,7 +137,7 @@ Run `amux client` or `amux serve` under systemd. A minimal unit:
 ```ini
 [Unit]
 Description=AgentMux
-After=network-online.target
+After=network-online.target postgresql.service
 
 [Service]
 ExecStart=/usr/local/bin/amux client --config /etc/agentmux/config.toml --web

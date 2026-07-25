@@ -147,7 +147,7 @@ func (s *Store) MaterializeObservationDailyUsageSince(ctx context.Context, since
 		current.Requests++
 		aggregates[key] = current
 	}
-	tx, err := s.writer.BeginTx(ctx, nil)
+	tx, err := s.observe.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

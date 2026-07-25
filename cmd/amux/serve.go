@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,16 +16,6 @@ import (
 	_ "github.com/wangning19940904/AgentMux/agent"
 	_ "github.com/wangning19940904/AgentMux/platform"
 )
-
-func dbPath() string {
-	if flagDB != "" {
-		if path, err := config.ExpandPath(flagDB); err == nil {
-			return path
-		}
-		return flagDB
-	}
-	return store.DefaultPath()
-}
 
 func loadConfig(required bool) (*config.Config, string, error) {
 	cfg, path, err := config.LoadResolved(flagConfig)
@@ -51,7 +43,7 @@ func bootstrapWithPathRequired(required bool) (*config.Config, *store.Store, str
 	if err != nil {
 		return nil, nil, "", err
 	}
-	st, err := store.Open(dbPath())
+	st, err := openRuntimeStore(cfg)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -66,11 +58,31 @@ func bootstrapStore() (*config.Config, *store.Store, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := store.Open(dbPath())
+	st, err := openRuntimeStore(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	return cfg, st, nil
+}
+
+func openRuntimeStore(cfg *config.Config) (*store.Store, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("database configuration is required")
+	}
+	lifetime, err := time.ParseDuration(cfg.Database.ConnectionMaxLifetime)
+	if err != nil {
+		return nil, fmt.Errorf("database.connection_max_lifetime: %w", err)
+	}
+	url := cfg.Database.URL
+	if flagDatabaseURL != "" {
+		url = flagDatabaseURL
+	}
+	return store.OpenPostgres(context.Background(), store.DatabaseConfig{
+		URL:                   url,
+		MaxOpenConnections:    cfg.Database.MaxOpenConnections,
+		MaxIdleConnections:    cfg.Database.MaxIdleConnections,
+		ConnectionMaxLifetime: lifetime,
+	})
 }
 
 type daemonOptions struct {

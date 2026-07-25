@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	flagConfig string
-	flagDB     string
-	logger     *slog.Logger
+	flagConfig      string
+	flagDatabaseURL string
+	logger          *slog.Logger
 	// version is overridable at build time via -ldflags "-X main.version=...".
 	version = "0.1.0"
 )
@@ -31,7 +31,7 @@ func rootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVarP(&flagConfig, "config", "c", "", "path to config.toml (default: ./config.toml, $XDG_CONFIG_HOME/agentmux/config.toml, /etc/agentmux/config.toml)")
-	root.PersistentFlags().StringVar(&flagDB, "db", "", "path to SQLite db (default ~/.agentmux/agentmux.db)")
+	root.PersistentFlags().StringVar(&flagDatabaseURL, "database-url", "", "PostgreSQL connection URL (default local Unix socket)")
 
 	root.AddCommand(clientCmd())
 	root.AddCommand(serveCmd())
@@ -41,6 +41,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(usageCmd())
 	root.AddCommand(providerCmd())
 	root.AddCommand(observabilityCmd())
+	root.AddCommand(databaseCmd())
 	root.AddCommand(sendCmd())
 	root.AddCommand(versionCmd())
 	return root

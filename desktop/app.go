@@ -43,7 +43,7 @@ func (a *App) startup(ctx context.Context) {
 		cfg = config.Default()
 	}
 	a.setAPITarget(cfg.Server.Addr)
-	st, err := store.Open(store.DefaultPath())
+	st, err := openDesktopStore(a.ctx, cfg)
 	if err != nil {
 		log.Error("open store", "err", err)
 		return
@@ -147,13 +147,30 @@ func (a *App) shutdown(ctx context.Context) {
 
 // SwitchProvider is bound to the frontend/tray for quick switching.
 func (a *App) SwitchProvider(id, tool string) error {
-	st, err := store.Open(store.DefaultPath())
+	cfg, cfgErr := config.Load("config.toml")
+	if cfgErr != nil {
+		cfg = config.Default()
+	}
+	st, err := openDesktopStore(a.ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return provider.NewService(log, st, "").Switch(a.ctx, id, tool)
+}
+
+func openDesktopStore(ctx context.Context, cfg *config.Config) (*store.Store, error) {
+	lifetime, err := time.ParseDuration(cfg.Database.ConnectionMaxLifetime)
+	if err != nil {
+		return nil, err
+	}
+	return store.OpenPostgres(ctx, store.DatabaseConfig{
+		URL:                   cfg.Database.URL,
+		MaxOpenConnections:    cfg.Database.MaxOpenConnections,
+		MaxIdleConnections:    cfg.Database.MaxIdleConnections,
+		ConnectionMaxLifetime: lifetime,
+	})
 }
 
 // SelectDirectory opens the native system directory picker for desktop users.

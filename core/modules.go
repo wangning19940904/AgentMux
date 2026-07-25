@@ -27,7 +27,7 @@ type MemoryEntry struct {
 // (AgentMux Memory). Implementations may be backed by SQLite, a vector
 // store, or a remote service.
 type MemoryStore interface {
-	// Name returns the registered backend id, e.g. "sqlite".
+	// Name returns the registered backend id, e.g. "postgres".
 	Name() string
 	// Put writes (inserts or updates) a memory entry and returns its id.
 	Put(ctx context.Context, e *MemoryEntry) (string, error)

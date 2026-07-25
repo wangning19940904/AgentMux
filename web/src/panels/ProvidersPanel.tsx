@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Power, PowerOff, RefreshCw, Save } from "lucide-react";
-import { api, Provider } from "../api";
+import { AlertTriangle, Bell, CheckCircle2, Clock, Power, PowerOff, RefreshCw, Save, X } from "lucide-react";
+import { api, Provider, ProviderMonitorAlert, ProviderMonitorConfig } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -51,16 +51,45 @@ function parseClaudeDesktopModelList(value: string) {
     .map((model) => ({ id: model, name: model, display_name: model }));
 }
 
+const defaultMonitorConfig: ProviderMonitorConfig = {
+  enabled: false,
+  interval_minutes: 360,
+  probe_models: true,
+  max_models_per_provider: 20,
+};
+
+function monitorBadgeClass(state: string) {
+  if (state === "healthy") return "status-badge success";
+  if (state === "warning" || state === "checking") return "status-badge warning";
+  if (state === "error") return "status-badge danger";
+  return "status-badge";
+}
+
+function formatMonitorTime(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function ProvidersPanel() {
   const { t } = useI18n();
   const providers = useAsync(() => api.providers(), []);
   const presets = useAsync(() => api.presets(), []);
   const claude3p = useAsync(() => api.claude3pStatus(), []);
+  const monitor = useAsync(() => api.providerMonitor(), []);
   const [busy, setBusy] = useState<string | null>(null);
   const [selectedClaudeProvider, setSelectedClaudeProvider] = useState("");
   const [claudeModelMapping, setClaudeModelMapping] = useState(false);
   const [claudeModelList, setClaudeModelList] = useState("");
   const [notice, setNotice] = useState("");
+  const [monitorNotice, setMonitorNotice] = useState("");
+  const [monitorConfig, setMonitorConfig] = useState<ProviderMonitorConfig>(defaultMonitorConfig);
 
   // Any provider can back Claude Desktop now that the proxy converts protocols.
   const claudeProviders = useMemo(() => providers.data ?? [], [providers.data]);
@@ -87,6 +116,18 @@ export function ProvidersPanel() {
     setClaudeModelMapping(modelList.length > 0);
     setClaudeModelList(modelList);
   }, [selectedClaudeProviderData]);
+
+  useEffect(() => {
+    if (monitor.data?.config) setMonitorConfig(monitor.data.config);
+  }, [monitor.data?.config]);
+
+  useEffect(() => {
+    if (!monitorConfig.enabled) return;
+    const timer = window.setInterval(() => {
+      void monitor.reload();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [monitor.reload, monitorConfig.enabled]);
 
   async function importPreset(p: Provider) {
     setBusy(p.id);
@@ -154,6 +195,74 @@ export function ProvidersPanel() {
     }
   }
 
+  async function saveMonitorConfig() {
+    setBusy("provider-monitor-save");
+    setMonitorNotice("");
+    try {
+      await api.saveProviderMonitor(monitorConfig);
+      setMonitorNotice(t("providers.monitorSaved"));
+      await monitor.reload();
+    } catch (error) {
+      setMonitorNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runProviderMonitor() {
+    setBusy("provider-monitor-run");
+    setMonitorNotice("");
+    try {
+      await api.runProviderMonitor();
+      setMonitorNotice(t("providers.monitorRunComplete"));
+      await Promise.all([monitor.reload(), providers.reload()]);
+    } catch (error) {
+      setMonitorNotice(error instanceof Error ? error.message : String(error));
+      await monitor.reload();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function dismissMonitorAlert(id = "") {
+    setBusy(id ? `provider-monitor-dismiss:${id}` : "provider-monitor-dismiss-all");
+    try {
+      await api.dismissProviderMonitorAlert(id);
+      await monitor.reload();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function monitorAlertText(alert: ProviderMonitorAlert) {
+    const models = alert.models?.join(", ") || alert.model || "—";
+    switch (alert.type) {
+      case "new_models":
+        return t("providers.monitorNewModels")
+          .replace("{provider}", alert.provider_name)
+          .replace("{models}", models);
+      case "removed_models":
+        return t("providers.monitorRemovedModels")
+          .replace("{provider}", alert.provider_name)
+          .replace("{models}", models);
+      case "model_error":
+        return t("providers.monitorModelError")
+          .replace("{provider}", alert.provider_name)
+          .replace("{model}", alert.model || "—")
+          .replace("{error}", alert.message || "—");
+      default:
+        return t("providers.monitorProviderError")
+          .replace("{provider}", alert.provider_name)
+          .replace("{error}", alert.message || "—");
+    }
+  }
+
+  function monitorStateLabel(state: string) {
+    const key = `providers.monitorState.${state}`;
+    const label = t(key);
+    return label === key ? state : label;
+  }
+
   const claudeStatus = claude3p.data;
   const canEnableClaude3p = selectedClaudeProvider !== "" && busy !== "claude3p";
   const canSaveClaudeModels =
@@ -163,6 +272,176 @@ export function ProvidersPanel() {
 
   return (
     <div className="page-stack">
+      <section className="surface provider-monitor">
+        <div className="surface-header">
+          <div>
+            <h2>{t("providers.monitorTitle")}</h2>
+            <p className="subtle-copy">{t("providers.monitorSubtitle")}</p>
+          </div>
+          <span className={monitorConfig.enabled ? "status-badge success" : "status-badge"}>
+            <span className="status-dot" />
+            {monitorConfig.enabled ? t("common.enabled") : t("common.disabled")}
+          </span>
+        </div>
+
+        <div className="surface-body provider-monitor-body">
+          {(monitor.data?.alerts ?? []).length > 0 && (
+            <div className="provider-monitor-alerts">
+              <div className="provider-monitor-alert-head">
+                <span>
+                  <Bell size={15} />
+                  <strong>
+                    {t("providers.monitorAlerts").replace("{count}", String(monitor.data?.alerts.length ?? 0))}
+                  </strong>
+                </span>
+                <button
+                  className="ghost-action"
+                  disabled={busy === "provider-monitor-dismiss-all"}
+                  onClick={() => dismissMonitorAlert()}
+                >
+                  {t("providers.monitorDismissAll")}
+                </button>
+              </div>
+              {(monitor.data?.alerts ?? []).map((alert) => (
+                <div className={`provider-monitor-alert ${alert.severity === "error" ? "error" : "warning"}`} key={alert.id}>
+                  {alert.severity === "error" ? <AlertTriangle size={16} /> : <Bell size={16} />}
+                  <span>
+                    <strong>{monitorAlertText(alert)}</strong>
+                    <small>{formatMonitorTime(alert.created_at)}</small>
+                  </span>
+                  <button
+                    className="ghost-action icon-only"
+                    disabled={busy === `provider-monitor-dismiss:${alert.id}`}
+                    title={t("providers.monitorDismiss")}
+                    onClick={() => dismissMonitorAlert(alert.id)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="provider-monitor-settings">
+            <label className="switch-row provider-monitor-switch">
+              <span>
+                <strong>{t("providers.monitorEnabled")}</strong>
+                <small>{t("providers.monitorEnabledHint")}</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={monitorConfig.enabled}
+                onChange={(event) => setMonitorConfig((current) => ({ ...current, enabled: event.target.checked }))}
+              />
+            </label>
+            <label className="field">
+              <span>{t("providers.monitorInterval")}</span>
+              <input
+                type="number"
+                min={15}
+                max={10080}
+                value={monitorConfig.interval_minutes}
+                onChange={(event) =>
+                  setMonitorConfig((current) => ({
+                    ...current,
+                    interval_minutes: Number(event.target.value),
+                  }))
+                }
+              />
+              <small>{t("providers.monitorIntervalHint")}</small>
+            </label>
+            <label className="field">
+              <span>{t("providers.monitorMaxModels")}</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={monitorConfig.max_models_per_provider}
+                onChange={(event) =>
+                  setMonitorConfig((current) => ({
+                    ...current,
+                    max_models_per_provider: Number(event.target.value),
+                  }))
+                }
+              />
+              <small>{t("providers.monitorMaxModelsHint")}</small>
+            </label>
+            <label className="switch-row provider-monitor-switch">
+              <span>
+                <strong>{t("providers.monitorProbeModels")}</strong>
+                <small>{t("providers.monitorProbeModelsHint")}</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={monitorConfig.probe_models}
+                onChange={(event) =>
+                  setMonitorConfig((current) => ({ ...current, probe_models: event.target.checked }))
+                }
+              />
+            </label>
+          </div>
+
+          <div className="provider-monitor-actions">
+            <span className="muted">
+              <Clock size={14} />
+              {t("providers.monitorLastRun")}: {formatMonitorTime(monitor.data?.last_run_at)}
+              {monitor.data?.next_run_at
+                ? ` · ${t("providers.monitorNextRun")}: ${formatMonitorTime(monitor.data.next_run_at)}`
+                : ""}
+            </span>
+            <div className="table-actions">
+              <button
+                className="ghost-action"
+                disabled={busy === "provider-monitor-save"}
+                onClick={saveMonitorConfig}
+              >
+                <Save size={15} />
+                {t("common.save")}
+              </button>
+              <button
+                className="action"
+                disabled={busy === "provider-monitor-run" || monitor.data?.running}
+                onClick={runProviderMonitor}
+              >
+                <RefreshCw size={15} className={busy === "provider-monitor-run" ? "spin" : ""} />
+                {monitor.data?.running ? t("providers.monitorRunning") : t("providers.monitorRunNow")}
+              </button>
+            </div>
+          </div>
+
+          {(monitorNotice || monitor.error) && (
+            <div className={`probe-message ${monitor.error ? "error" : "success"}`}>
+              {monitorNotice || monitor.error}
+            </div>
+          )}
+
+          {(monitor.data?.providers ?? []).length > 0 && (
+            <div className="provider-monitor-status-grid">
+              {(monitor.data?.providers ?? []).map((status) => (
+                <div className="provider-monitor-status" key={status.provider_id}>
+                  <span className="provider-monitor-status-icon">
+                    {status.state === "healthy" ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+                  </span>
+                  <span>
+                    <strong>{status.provider_name}</strong>
+                    <small>
+                      {t("providers.monitorCatalogCount").replace("{count}", String(status.catalog_count))}
+                      {status.checked_models > 0
+                        ? ` · ${t("providers.monitorHealthCount")
+                            .replace("{healthy}", String(status.healthy_models))
+                            .replace("{total}", String(status.checked_models))}`
+                        : ""}
+                    </small>
+                    {status.message && <small title={status.message}>{status.message}</small>}
+                  </span>
+                  <span className={monitorBadgeClass(status.state)}>{monitorStateLabel(status.state)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
       <section className="surface claude3p-control">
         <div className="surface-header">
           <div>
