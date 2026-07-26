@@ -92,7 +92,7 @@ export function MenuBarPanel() {
         <div className="surface-body">
           <div className="menubar-preview">
             <span className="menubar-preview-chip">
-              <img className="menubar-preview-logo" src="/favicon.svg" alt={t("menubar.logo")} />
+              <img className="menubar-preview-logo" src="/agentmux-logo.png" alt={t("menubar.logo")} />
               {previewParts.length > 0 && <span>{previewParts.join("  ")}</span>}
             </span>
             {status === "saved" && <span className="muted">{t("menubar.saved")}</span>}
