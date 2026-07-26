@@ -61,6 +61,8 @@ cross: web
 desktop: web
 	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
+	@mkdir -p desktop/build
+	@cp assets/branding/agentmux-logo.png desktop/build/appicon.png
 	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		macos_dir="desktop/build/bin/agentmux-desktop.app/Contents/MacOS"; \

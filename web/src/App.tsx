@@ -16,7 +16,6 @@ import {
   Languages,
   LayoutGrid,
   Moon,
-  Network,
   PanelLeft,
   PanelTop,
   Search,
@@ -244,9 +243,7 @@ function Shell({
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true">
-            <Network size={22} strokeWidth={2.4} />
-          </div>
+          <img className="brand-logo" src="/agentmux-logo.png" alt="" aria-hidden="true" />
           <div>
             <strong>AgentMux</strong>
             <span>Command Surface</span>

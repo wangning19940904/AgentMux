@@ -4,32 +4,38 @@
 
 **Open Questions**
 
-- None. The requested target is interpreted as placing `MCP 注册表` directly after `技能` inside the `智能体` navigation group.
+- None. The selected visual target is the original node-free S1 logo.
 
 **Implementation Checklist**
 
-- `MCP 注册表` appears directly below `技能` in the `智能体` group.
-- `MCP 注册表` no longer appears in the `连接与集成` group.
-- Selecting `MCP 注册表` opens the existing MCP registry panel.
-- Collapsing and reopening the `智能体` group preserves the existing navigation behavior.
-- Existing labels, icon treatment, spacing, colors, and active-state styling are unchanged.
+- The sidebar brand mark uses the S1 production asset instead of the temporary network icon.
+- The browser favicon and Apple touch icon use the S1 asset.
+- The menu-bar settings preview uses the same S1 asset.
+- The Wails desktop build copies the canonical S1 asset to `desktop/build/appicon.png`.
+- The image remains sharp and legible at the 42 px sidebar and 18 px menu-bar sizes.
 
 **Follow-up Polish**
 
-- None required for this change.
+- P3: A future release pipeline could generate platform-specific `.ico` and `.icns` files explicitly, although Wails already derives its application icon from `desktop/build/appicon.png`.
 
-source visual truth path: /var/folders/9k/dn93qqs10jd9y5y25jlf0nkr0000gn/T/codex-clipboard-0fdcf515-0095-43ae-9711-108793e7d4c1.png
-viewport: 1280 x 720 browser viewport; focused sidebar capture 244 x 520
-state: Chinese, system theme resolved light; `智能体` and `连接与集成` expanded; `MCP 注册表` selected
-full-view comparison evidence: artifacts/mcp-nav-group-comparison.png
-focused region comparison evidence: artifacts/mcp-nav-group-focused.png; the source visual is already a focused sidebar crop, so the target region can be inspected directly
-primary interactions tested: Selected `MCP 注册表` and verified the registry panel loaded; collapsed and reopened `智能体` and verified the moved item follows the group behavior.
-console errors checked: No warning or error entries after navigation and group toggle interactions.
-fonts and typography: Passed. Existing navigation type scale, weight, and Chinese labels are preserved.
-spacing and layout rhythm: Passed. The moved item uses the same indentation and vertical spacing as adjacent `智能体` items.
-colors and visual tokens: Passed. Existing neutral, hover, and teal active-state tokens are reused without modification.
-image quality and asset fidelity: Passed. No raster assets were introduced; the existing Lucide `Boxes` icon is reused.
-copy and content: Passed. `MCP 注册表` copy is unchanged and now appears in the requested group.
+source visual truth path: /Users/bytedance/.codex/generated_images/019f999a-4a97-7de1-8d86-52db9eb01fcf/exec-9f082cdf-2062-4c60-be39-7af84bf8e6b6.png
+source pixel dimensions: 1254 x 1254
+production asset path: assets/branding/agentmux-logo.png
+production asset dimensions: 1024 x 1024 PNG with alpha
+implementation screenshot path: artifacts/agentmux-logo-implementation.png
+implementation screenshot pixel dimensions: 1280 x 720
+comparison evidence path: artifacts/agentmux-logo-comparison.png
+viewport: 1280 x 720 CSS px at device pixel ratio 2; browser screenshot normalized to 1280 x 720 pixels
+state: Chinese locale, system theme resolved light, Agents page selected
+full-view comparison evidence: `artifacts/agentmux-logo-comparison.png` contains the original S1 source, the 42 px production asset, and the browser-rendered console in one comparison view.
+focused region comparison evidence: The same comparison includes the 42 px production asset at its actual sidebar size; a separate focused crop was unnecessary.
+primary interactions tested: Navigated from Overview to Menu Bar through the sidebar and verified the menu-bar settings panel loaded with the new logo preview.
+console errors checked: No warning or error entries after navigation and image loading.
+fonts and typography: Passed. Brand name, subtitle, navigation typography, and all existing type tokens are unchanged.
+spacing and layout rhythm: Passed. The S1 asset occupies the existing 42 x 42 brand slot without changing sidebar spacing or alignment.
+colors and visual tokens: Passed. The selected cyan-to-blue-violet S1 gradient and dark tile remain faithful to the source; surrounding application tokens are unchanged.
+image quality and asset fidelity: Passed. The production asset is a 1024 px alpha PNG generated from the selected S1 source; it loads at its full natural resolution and remains crisp at 42 px and 18 px. The removed studio background is an intentional production treatment rather than design drift.
+copy and content: Passed. No application copy changed.
 comparison history:
-- Initial implementation comparison: No actionable P0/P1/P2 differences were found in the requested navigation-group scope. The implementation retains the current application shell while moving only the MCP item.
+- Initial implementation comparison: No actionable P0/P1/P2 differences were found. The S1 geometry, color progression, dark rounded tile, and proportions are preserved; only the presentation background was removed for production use.
 final result: passed
