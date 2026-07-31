@@ -8,6 +8,9 @@ declare global {
       main?: {
         App?: {
           SelectDirectory?: (defaultDirectory?: string) => Promise<string>;
+          GetLaunchAtLogin?: () => Promise<LaunchAtLoginStatus>;
+          SetLaunchAtLogin?: (enabled: boolean) => Promise<LaunchAtLoginStatus>;
+          OpenLocalWebUI?: () => Promise<void>;
         };
       };
     };
@@ -238,6 +241,9 @@ export interface RuntimeStat {
 
 export interface UsageReport {
   period: string;
+  from?: string;
+  to?: string;
+  timezone?: string;
   totals: UsageTotals;
   buckets: UsageBucket[];
   by_model: ModelStat[];
@@ -256,9 +262,15 @@ export interface MenubarSettings {
   show_tokens: boolean;
   show_cost: boolean;
   show_cny: boolean;
+  currency: "cny" | "usd";
   cny_rate: number;
   breakdowns: string[];
   top_n: number;
+}
+
+export interface LaunchAtLoginStatus {
+  supported: boolean;
+  enabled: boolean;
 }
 
 export interface Status {
@@ -280,6 +292,17 @@ export interface RemoteHost {
   host_key_fingerprint?: string;
   trusted?: boolean;
   clear_api_token?: boolean;
+}
+
+export interface DiscoveredRemoteHost {
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  key_path?: string;
+  source: string;
+  proxy_jump?: string;
+  proxy_command?: boolean;
 }
 
 export interface RemoteTestResult {
@@ -1028,10 +1051,20 @@ async function ensureObservationSession(): Promise<void> {
     if (!nonceResponse.ok) throw new Error(`observability nonce: ${nonceResponse.status}`);
     const noncePayload = (await nonceResponse.json()) as { nonce?: string };
     if (!noncePayload.nonce) throw new Error("observability nonce missing");
+    const sessionHeaders = new Headers({ "Content-Type": "application/json" });
+    if (
+      window.location.hostname.toLowerCase() === "wails.localhost" ||
+      Boolean(window.go?.main?.App)
+    ) {
+      // The native WebView cannot rely on the daemon's SameSite cookie.
+      // Identify the trusted Wails flow so the server also returns a
+      // short-lived, memory-only bearer for subsequent observability calls.
+      sessionHeaders.set("X-AgentMux-Desktop", "1");
+    }
     const sessionResponse = await fetch(apiPath("/api/v1/observability/session"), {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: sessionHeaders,
       body: JSON.stringify({ nonce: noncePayload.nonce }),
     });
     const sessionPayload = (await sessionResponse.json().catch(() => ({}))) as {
@@ -1115,6 +1148,37 @@ async function selectSystemDirectory(defaultDirectory = ""): Promise<{ path: str
   return { path };
 }
 
+export function isDesktopApp(): boolean {
+  return (
+    window.location.hostname.toLowerCase() === "wails.localhost" ||
+    Boolean(window.go?.main?.App)
+  );
+}
+
+export async function getLaunchAtLogin(): Promise<LaunchAtLoginStatus> {
+  const getStatus = window.go?.main?.App?.GetLaunchAtLogin;
+  if (!getStatus) {
+    return { supported: false, enabled: false };
+  }
+  return getStatus();
+}
+
+export async function setLaunchAtLogin(enabled: boolean): Promise<LaunchAtLoginStatus> {
+  const update = window.go?.main?.App?.SetLaunchAtLogin;
+  if (!update) {
+    throw new Error("launch at login is unavailable");
+  }
+  return update(enabled);
+}
+
+export async function openLocalWebUI(): Promise<void> {
+  const open = window.go?.main?.App?.OpenLocalWebUI;
+  if (!open) {
+    throw new Error("local Web UI is unavailable");
+  }
+  await open();
+}
+
 function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
   const extra =
     provider.extra && typeof provider.extra === "object" && !Array.isArray(provider.extra)
@@ -1157,6 +1221,8 @@ async function getProviders(path: string): Promise<Provider[] | null> {
 export const api = {
   // SSH remote control. These paths intentionally bypass the selected target.
   remoteHosts: () => get<RemoteHost[]>("/api/v1/remote/hosts"),
+  discoveredRemoteHosts: () =>
+    get<DiscoveredRemoteHost[]>("/api/v1/remote/discovered-hosts"),
   upsertRemoteHost: (host: Partial<RemoteHost>) =>
     postChecked<RemoteHost>("/api/v1/remote/hosts", host),
   deleteRemoteHost: (id: string) =>
@@ -1227,8 +1293,12 @@ export const api = {
     postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
   checkFrameworkUpdate: (kind: string) =>
     post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
-  usage: (period: string) =>
-    get<UsageReport>(`/api/v1/usage?period=${encodeURIComponent(period)}`),
+  usage: (period: string, from = "", to = "") => {
+    const params = new URLSearchParams({ period });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    return get<UsageReport>(`/api/v1/usage?${params.toString()}`);
+  },
   menubarSettings: () => get<MenubarSettings>("/api/v1/menubar/settings"),
   saveMenubarSettings: (settings: MenubarSettings) =>
     put<MenubarSettings>("/api/v1/menubar/settings", settings),

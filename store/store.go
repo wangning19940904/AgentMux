@@ -444,6 +444,9 @@ func (s *Store) migrateSQLite() error {
 		ON usage_records(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>''`); err != nil {
 		return err
 	}
+	if _, err := s.writer.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp)`); err != nil {
+		return err
+	}
 	for _, col := range []struct {
 		name string
 		def  string
@@ -541,7 +544,7 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 	defer stmt.Close()
 	for _, r := range recs {
 		if _, err := stmt.ExecContext(ctx, r.Source, r.SessionID, r.ConversationID, r.TraceID, r.TurnID, r.RequestID, r.RuntimeID, r.Project, r.Model,
-			r.Timestamp.Format(time.RFC3339Nano), r.InputTokens, r.OutputTokens,
+			r.Timestamp.UTC().Format(time.RFC3339Nano), r.InputTokens, r.OutputTokens,
 			r.CacheReadTokens, r.CacheWriteTokens, r.Tool, r.CostUSD, r.Host); err != nil {
 			return err
 		}
@@ -551,13 +554,27 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 
 // QueryUsage returns usage records since the given time (zero = all).
 func (s *Store) QueryUsage(ctx context.Context, since time.Time) ([]core.UsageRecord, error) {
+	return s.QueryUsageRange(ctx, since, time.Time{})
+}
+
+// QueryUsageRange returns canonical usage records inside [since, until).
+func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]core.UsageRecord, error) {
 	q := `SELECT source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		cache_read_tokens,cache_write_tokens,tool,cost_usd,host FROM usage_records`
 	args := []any{}
+	var filters []string
 	if !since.IsZero() {
-		q += ` WHERE timestamp >= ?`
-		args = append(args, since.Format(time.RFC3339Nano))
+		filters = append(filters, `timestamp >= ?`)
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
 	}
+	if !until.IsZero() {
+		filters = append(filters, `timestamp < ?`)
+		args = append(args, until.UTC().Format(time.RFC3339Nano))
+	}
+	if len(filters) > 0 {
+		q += ` WHERE ` + strings.Join(filters, ` AND `)
+	}
+	q += ` ORDER BY timestamp,source,session_id`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

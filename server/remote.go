@@ -17,6 +17,7 @@ import (
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
+	s.mux.HandleFunc("GET /api/v1/remote/discovered-hosts", s.handleRemoteDiscoveredHosts)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts", s.handleRemoteHostUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/remote/hosts", s.handleRemoteHostDelete)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/test", s.handleRemoteHostTest)
@@ -31,6 +32,15 @@ func (s *Server) handleRemoteHostsList(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.remote.List())
+}
+
+func (s *Server) handleRemoteDiscoveredHosts(w http.ResponseWriter, _ *http.Request) {
+	hosts, err := remotepkg.DiscoverSSHHosts("")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, hosts)
 }
 
 func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) {

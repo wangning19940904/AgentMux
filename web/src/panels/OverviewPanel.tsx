@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { api, GuardPolicy, Provider, UsageReport } from "../api";
+import { formatUsageCost, validCNYRate } from "../currency";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -44,17 +45,24 @@ const SAMPLE_POLICIES: GuardPolicy[] = [
 ];
 
 export function OverviewPanel() {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
+  const today = formatLocalDate(new Date());
   const status = useAsync(() => api.status(), []);
-  const usage = useAsync(() => api.usage("daily"), []);
+  const usage = useAsync(() => api.usage("daily", today, today), [today]);
+  const currencyPreferences = useAsync(() => api.menubarSettings(), []);
   const providers = useAsync(() => api.providers(), []);
   const policies = useAsync(() => api.guardPolicies(), []);
 
   const usageData = usage.data ?? SAMPLE_USAGE;
+  const currency = currencyPreferences.data?.currency ?? "cny";
+  const cnyRate = validCNYRate(currencyPreferences.data?.cny_rate ?? 7);
   const providerRows = providers.data?.length ? providers.data : SAMPLE_PROVIDERS;
   const policyRows = policies.data?.length ? policies.data : SAMPLE_POLICIES;
   const totalTokens =
-    usageData.totals.input_tokens + usageData.totals.output_tokens + usageData.totals.cache_read_tokens;
+    usageData.totals.input_tokens +
+    usageData.totals.output_tokens +
+    usageData.totals.cache_read_tokens +
+    usageData.totals.cache_write_tokens;
 
   return (
     <div className="page-stack">
@@ -80,7 +88,7 @@ export function OverviewPanel() {
         <Metric
           icon={<CircleDollarSign size={21} />}
           label={t("overview.cost")}
-          value={`$${usageData.totals.cost_usd.toFixed(2)}`}
+          value={formatUsageCost(usageData.totals.cost_usd, currency, cnyRate, language)}
           trend="+ 8.2%"
         />
         <Metric
@@ -338,4 +346,11 @@ export function fmt(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(2) + "K";
   return String(n);
+}
+
+function formatLocalDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }

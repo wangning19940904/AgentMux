@@ -101,6 +101,14 @@ func newApp() *App {
 func (a *App) assetServerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/api" || strings.HasPrefix(request.URL.Path, "/api/") {
+			if isDesktopObservationSessionPath(request.URL.Path) {
+				// This middleware is the native trust boundary. Preserve the
+				// desktop marker even if a WebView strips custom fetch headers.
+				request.Header.Set("X-AgentMux-Desktop", "1")
+				if strings.TrimSpace(request.Header.Get("Origin")) == "" {
+					request.Header.Set("Origin", "wails://wails.localhost")
+				}
+			}
 			a.apiProxy.ServeHTTP(response, request)
 			return
 		}
@@ -108,8 +116,30 @@ func (a *App) assetServerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func isDesktopObservationSessionPath(path string) bool {
+	if path == "/api/v1/observability/session" {
+		return true
+	}
+	return strings.HasPrefix(path, "/api/v1/remote/proxy/") &&
+		strings.HasSuffix(path, "/observability/session")
+}
+
 func (a *App) setAPITarget(addr string) {
 	a.apiTarget.Store(desktopAPITarget(addr))
+}
+
+// OpenLocalWebUI opens the in-process daemon's Web UI in the user's default
+// browser. The target follows the configured server address and is normalized
+// to loopback when the daemon listens on a wildcard interface.
+func (a *App) OpenLocalWebUI() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, a.localWebUIURL())
+}
+
+func (a *App) localWebUIURL() string {
+	return a.apiTarget.Load().(*url.URL).String()
 }
 
 func desktopAPITarget(addr string) *url.URL {

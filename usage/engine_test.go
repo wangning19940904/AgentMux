@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -48,41 +49,36 @@ func TestInitialCollectSinceResumesFromCheckpoint(t *testing.T) {
 	}
 }
 
-func TestMergeUsageRecordsDeduplicatesObservedRequestsAndKeepsLegacyOnlySources(t *testing.T) {
-	day := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
-	observed := []core.UsageRecord{
-		{Source: "codex", RequestID: "request-1", Model: "gpt-5", Timestamp: day, InputTokens: 80},
+func TestReportRangeUsesCanonicalRowsFiltersDatesAndReprices(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	legacy := []core.UsageRecord{
-		{Source: "codex-cli", RequestID: "request-1", Model: "gpt-5", Timestamp: day.Add(time.Second), InputTokens: 80},
-		{Source: "codex", RequestID: "request-2", Model: "gpt-5", Timestamp: day.Add(2 * time.Second), InputTokens: 20},
-		{Source: "cursor", SessionID: "cursor-session", Model: "cursor-model", Timestamp: day, InputTokens: 30},
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := &config.Config{Usage: config.UsageConfig{CacheDir: t.TempDir(), Offline: true}}
+	eng := NewEngine(cfg, st, nil)
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	records := []core.UsageRecord{
+		{Source: "codex", SessionID: "s1", Model: "gpt-5", Timestamp: base, InputTokens: 100, CostUSD: 999},
+		{Source: "codex", SessionID: "s2", Model: "gpt-5", Timestamp: base.Add(24 * time.Hour), InputTokens: 200, OutputTokens: 10, CostUSD: 999},
+		{Source: "codex", SessionID: "s3", Model: "gpt-5", Timestamp: base.Add(48 * time.Hour), InputTokens: 300, CostUSD: 999},
 	}
-	merged := mergeUsageRecords(observed, legacy)
-	if len(merged) != 3 {
-		t.Fatalf("merged = %+v", merged)
+	if err := st.UpsertUsage(ctx, records); err != nil {
+		t.Fatal(err)
 	}
-	var total int64
-	for _, record := range merged {
-		total += record.InputTokens
-	}
-	if total != 130 {
-		t.Fatalf("total = %d, records=%+v", total, merged)
-	}
-}
 
-func TestMergeUsageRecordsDailyAggregateCoversLegacyRowsOnlyForSameSourceModelDay(t *testing.T) {
-	day := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
-	observed := []core.UsageRecord{
-		{Source: "claude", Model: "sonnet", Timestamp: day, InputTokens: 100, Requests: 2},
+	report, err := eng.ReportRange(ctx, "daily", base.Add(24*time.Hour), base.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
 	}
-	legacy := []core.UsageRecord{
-		{Source: "claude", Model: "sonnet", Timestamp: day.Add(time.Hour), InputTokens: 40},
-		{Source: "claude", Model: "opus", Timestamp: day.Add(time.Hour), InputTokens: 10},
-		{Source: "gemini", Model: "sonnet", Timestamp: day.Add(time.Hour), InputTokens: 5},
+	if report.Totals.Records != 1 || report.Totals.InputTokens != 200 || report.Totals.OutputTokens != 10 {
+		t.Fatalf("totals = %+v", report.Totals)
 	}
-	merged := mergeUsageRecords(observed, legacy)
-	if len(merged) != 3 {
-		t.Fatalf("merged = %+v", merged)
+	// gpt-5 fallback: $1.25/M input + $10/M output. The stored $999
+	// sentinel must not leak into the calibrated report.
+	wantCost := float64(200)*1.25/1e6 + float64(10)*10/1e6
+	if math.Abs(report.Totals.CostUSD-wantCost) > 1e-12 {
+		t.Fatalf("cost = %.12f, want %.12f", report.Totals.CostUSD, wantCost)
 	}
 }

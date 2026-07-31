@@ -43,8 +43,9 @@ type Server struct {
 	httpSrv         *http.Server
 }
 
-// UsageReporter produces an aggregated usage report for the API.
-type UsageReporter func(ctx context.Context, period string, since time.Time) (any, error)
+// UsageReporter produces an aggregated usage report for the API. until is an
+// exclusive upper bound.
+type UsageReporter func(ctx context.Context, period string, since, until time.Time) (any, error)
 
 // New builds a server.
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
@@ -410,14 +411,42 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if period == "" {
 		period = "daily"
 	}
+	since, err := parseUsageDate(r.URL.Query().Get("from"), false)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	until, err := parseUsageDate(r.URL.Query().Get("to"), true)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "usage date range must start on or before the end date"})
+		return
+	}
 	if s.usageFn == nil {
 		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
-	rep, err := s.usageFn(r.Context(), period, time.Time{})
+	rep, err := s.usageFn(r.Context(), period, since, until)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)
+}
+
+func parseUsageDate(value string, inclusiveEnd bool) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid usage date %q; expected YYYY-MM-DD", value)
+	}
+	if inclusiveEnd {
+		parsed = parsed.AddDate(0, 0, 1)
+	}
+	return parsed, nil
 }

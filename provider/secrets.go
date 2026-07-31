@@ -8,7 +8,10 @@ import (
 	"sync"
 )
 
-const providerSecretService = "AgentMux Provider API Keys"
+const (
+	providerSecretService       = "AgentMux Provider API Keys"
+	legacyProviderSecretService = "AgentNexus Provider API Keys"
+)
 
 var errProviderSecretNotFound = errors.New("provider API key not found")
 
@@ -16,6 +19,54 @@ type providerSecretBackend interface {
 	Save(account, secret string) error
 	Load(account string) (string, error)
 	Delete(account string) error
+}
+
+// migratingSecretBackend keeps provider credentials available across the
+// AgentNexus -> AgentMux rename. Reads prefer the current service and
+// transparently copy legacy-only entries into it. Deletes cover both services
+// so a removed key cannot be restored from a stale legacy entry later.
+type migratingSecretBackend struct {
+	current providerSecretBackend
+	legacy  providerSecretBackend
+}
+
+func (m migratingSecretBackend) Save(account, secret string) error {
+	return m.current.Save(account, secret)
+}
+
+func (m migratingSecretBackend) Load(account string) (string, error) {
+	secret, err := m.current.Load(account)
+	if err == nil || !errors.Is(err, errProviderSecretNotFound) {
+		return secret, err
+	}
+	secret, err = m.legacy.Load(account)
+	if err != nil {
+		return "", err
+	}
+	if err := m.current.Save(account, secret); err != nil {
+		return "", fmt.Errorf("migrate legacy provider API key: %w", err)
+	}
+	return secret, nil
+}
+
+func (m migratingSecretBackend) Delete(account string) error {
+	currentErr := m.current.Delete(account)
+	legacyErr := m.legacy.Delete(account)
+	currentMissing := errors.Is(currentErr, errProviderSecretNotFound)
+	legacyMissing := errors.Is(legacyErr, errProviderSecretNotFound)
+
+	switch {
+	case currentErr != nil && !currentMissing && legacyErr != nil && !legacyMissing:
+		return errors.Join(currentErr, legacyErr)
+	case currentErr != nil && !currentMissing:
+		return currentErr
+	case legacyErr != nil && !legacyMissing:
+		return legacyErr
+	case currentMissing && legacyMissing:
+		return errProviderSecretNotFound
+	default:
+		return nil
+	}
 }
 
 var (

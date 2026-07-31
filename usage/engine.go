@@ -203,94 +203,42 @@ func (e *Engine) price(recs []core.UsageRecord) {
 	}
 }
 
-// reportDetailWindowDays bounds how far back a report reads request-level
-// observation spans. Older days are served from the compact
-// observation_daily_usage rollup so a report never rescans the entire span
-// table (which grows without bound and starved the single write connection,
-// stalling every DB-backed API until requests timed out with "Load failed").
-const reportDetailWindowDays = 2
-
-// Report aggregates persisted usage into the requested period view.
-//
-// Recent days (within reportDetailWindowDays) are read at request granularity
-// from observation spans so today's numbers stay live; everything older is
-// read from the pre-materialized daily rollup. This keeps the query bounded to
-// a few thousand recent spans instead of the full history.
+// Report aggregates canonical usage records from since onward.
 func (e *Engine) Report(ctx context.Context, period string, since time.Time) (*Report, error) {
-	detailStart := time.Now().UTC().Add(-reportDetailWindowDays * 24 * time.Hour).Truncate(24 * time.Hour)
-	daily, err := e.st.QueryObservationDailyUsage(ctx, since, detailStart)
+	return e.ReportRange(ctx, period, since, time.Time{})
+}
+
+// ReportRange aggregates the canonical usage_records table inside [since,
+// until). usage_records is already protected by request and transcript
+// identities at insertion time. Keeping the ledger on this one source avoids
+// mixing legacy rows with observation rollups of the same transcripts.
+//
+// Costs are recalculated for every report with one pricing snapshot so rows
+// imported under an old fallback price cannot make a mixed-price total.
+func (e *Engine) ReportRange(ctx context.Context, period string, since, until time.Time) (*Report, error) {
+	recs, err := e.st.QueryUsageRange(ctx, since, until)
 	if err != nil {
 		return nil, err
 	}
-	detailSince := since
-	if detailSince.IsZero() || detailSince.Before(detailStart) {
-		detailSince = detailStart
+	e.reprice(recs)
+	for i := range recs {
+		recs[i].Timestamp = recs[i].Timestamp.In(time.Local)
 	}
-	detail, err := e.st.QueryObservationUsage(ctx, detailSince)
-	if err != nil {
-		return nil, err
+	report := Aggregate(period, recs)
+	if !since.IsZero() {
+		report.From = since.In(time.Local).Format("2006-01-02")
 	}
-	legacy, err := e.st.QueryUsage(ctx, since)
-	if err != nil {
-		return nil, err
+	if !until.IsZero() {
+		report.To = until.In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
 	}
-	recs := mergeUsageRecords(append(daily, detail...), legacy)
-	e.price(recs)
-	return Aggregate(period, recs), nil
+	report.Timezone = time.Local.String()
+	return report, nil
 }
 
-// mergeUsageRecords keeps observation-backed Claude/Codex requests as the
-// authoritative copy while retaining legacy-only sources such as Cursor and
-// Gemini. Old daily observation aggregates cover their source/model/day as a
-// whole; recent detailed rows deduplicate by native request ID (or an exact
-// transcript fingerprint when the runtime did not expose one).
-func mergeUsageRecords(observation, legacy []core.UsageRecord) []core.UsageRecord {
-	out := append([]core.UsageRecord(nil), observation...)
-	dailyCoverage := map[string]bool{}
-	detailCoverage := map[string]bool{}
-	for _, record := range observation {
-		if record.Requests > 0 && record.SessionID == "" && record.RequestID == "" {
-			dailyCoverage[usageDayCoverageKey(record)] = true
-			continue
-		}
-		detailCoverage[usageRecordIdentity(record)] = true
-	}
-	for _, record := range legacy {
-		if dailyCoverage[usageDayCoverageKey(record)] || detailCoverage[usageRecordIdentity(record)] {
-			continue
-		}
-		out = append(out, record)
-	}
-	return out
-}
-
-func usageDayCoverageKey(record core.UsageRecord) string {
-	return strings.Join([]string{
-		record.Timestamp.UTC().Format("2006-01-02"), normalizeUsageSource(record.Source), strings.ToLower(strings.TrimSpace(record.Model)),
-	}, "\x00")
-}
-
-func usageRecordIdentity(record core.UsageRecord) string {
-	source := normalizeUsageSource(record.Source)
-	if requestID := strings.TrimSpace(record.RequestID); requestID != "" {
-		return strings.Join([]string{"request", source, requestID}, "\x00")
-	}
-	return strings.Join([]string{
-		"fingerprint", source, strings.TrimSpace(record.SessionID), record.Timestamp.UTC().Format(time.RFC3339Nano),
-		strings.ToLower(strings.TrimSpace(record.Model)), strconv.FormatInt(record.InputTokens, 10),
-		strconv.FormatInt(record.OutputTokens, 10), strconv.FormatInt(record.CacheReadTokens, 10),
-		strconv.FormatInt(record.CacheWriteTokens, 10),
-	}, "\x00")
-}
-
-func normalizeUsageSource(source string) string {
-	source = strings.ToLower(strings.TrimSpace(source))
-	switch {
-	case strings.Contains(source, "claude"):
-		return "claude"
-	case strings.Contains(source, "codex"):
-		return "codex"
-	default:
-		return source
+func (e *Engine) reprice(recs []core.UsageRecord) {
+	for i := range recs {
+		recs[i].CostUSD = e.pricer.Cost(recs[i].Model,
+			recs[i].InputTokens, recs[i].OutputTokens,
+			recs[i].CacheReadTokens, recs[i].CacheWriteTokens)
 	}
 }

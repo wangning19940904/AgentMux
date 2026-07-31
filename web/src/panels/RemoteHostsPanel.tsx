@@ -6,6 +6,7 @@ import {
   Pencil,
   PlugZap,
   Plus,
+  RefreshCw,
   Save,
   Server,
   ShieldAlert,
@@ -16,6 +17,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   activeRemoteID,
   api,
+  DiscoveredRemoteHost,
   RemoteConnectionError,
   RemoteHost,
   RemoteTestResult,
@@ -50,8 +52,11 @@ const emptyForm = (): RemoteForm => ({
 export function RemoteHostsPanel() {
   const { t } = useI18n();
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
+  const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredRemoteHost[]>([]);
   const [form, setForm] = useState<RemoteForm | null>(null);
   const [loading, setLoading] = useState(true);
+  const [discoveryLoading, setDiscoveryLoading] = useState(true);
+  const [discoveryError, setDiscoveryError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [testingID, setTestingID] = useState("");
@@ -70,9 +75,46 @@ export function RemoteHostsPanel() {
     }
   };
 
+  const loadDiscovered = async () => {
+    setDiscoveryLoading(true);
+    try {
+      setDiscoveredHosts(await api.discoveredRemoteHosts());
+      setDiscoveryError("");
+    } catch (cause) {
+      setDiscoveryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  };
+
   useEffect(() => {
     void load();
+    void loadDiscovered();
   }, []);
+
+  const addDiscovered = (host: DiscoveredRemoteHost) => {
+    setForm({
+      ...emptyForm(),
+      name: host.name,
+      host: host.host,
+      port: host.port,
+      user: host.user,
+      key_path: host.key_path ?? "",
+    });
+    setMessage("");
+    setError("");
+    window.requestAnimationFrame(() => {
+      document.querySelector(".remote-host-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
+  const isConfigured = (candidate: DiscoveredRemoteHost) =>
+    hosts.some(
+      (host) =>
+        host.host.toLowerCase() === candidate.host.toLowerCase() &&
+        host.port === candidate.port &&
+        host.user === candidate.user,
+    );
 
   const edit = (host: RemoteHost) => {
     setForm({
@@ -277,6 +319,84 @@ export function RemoteHostsPanel() {
           </form>
         </section>
       )}
+
+      <section className="surface">
+        <div className="surface-header">
+          <div>
+            <h2>{t("remote.discovered")}</h2>
+            <p className="subtle-copy">{t("remote.discoveredHint")}</p>
+          </div>
+          <div className="remote-discovery-summary">
+            <span className="pill">{discoveredHosts.length}</span>
+            <button
+              className="ghost-action"
+              type="button"
+              disabled={discoveryLoading}
+              onClick={() => void loadDiscovered()}
+            >
+              <RefreshCw size={14} className={discoveryLoading ? "spin" : ""} />
+              {t("common.refresh")}
+            </button>
+          </div>
+        </div>
+        <div className="remote-host-list remote-discovered-list">
+          {discoveryLoading && <div className="empty-state">{t("common.loading")}</div>}
+          {!discoveryLoading && discoveryError && (
+            <div className="remote-discovery-error">
+              <ShieldAlert size={17} />
+              <span>{t("remote.discoveryError")}: {discoveryError}</span>
+            </div>
+          )}
+          {!discoveryLoading && !discoveryError && discoveredHosts.length === 0 && (
+            <div className="empty-state remote-discovery-empty">
+              <KeyRound size={25} />
+              <strong>{t("remote.noneDiscovered")}</strong>
+              <span>{t("remote.noneDiscoveredHint")}</span>
+            </div>
+          )}
+          {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
+            const configured = isConfigured(host);
+            const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
+            return (
+              <article key={host.name} className="remote-host-card remote-discovered-card">
+                <div className="remote-host-icon">
+                  <KeyRound size={19} />
+                </div>
+                <div className="remote-host-main">
+                  <header>
+                    <div>
+                      <strong>{host.name}</strong>
+                      <span>{host.user}@{host.host}:{host.port}</span>
+                    </div>
+                    <span className={`status-badge ${requiresProxy ? "warning" : "neutral"}`}>
+                      {requiresProxy ? <ShieldAlert size={13} /> : <CheckCircle2 size={13} />}
+                      {requiresProxy ? t("remote.proxyRequired") : t("remote.readyToImport")}
+                    </span>
+                  </header>
+                  <div className="remote-host-facts">
+                    <span><KeyRound size={13} />{host.key_path || t("remote.agentOrDefaultKey")}</span>
+                    <span>{host.source}</span>
+                    {host.proxy_jump && <span>ProxyJump: {host.proxy_jump}</span>}
+                    {host.proxy_command && <span>ProxyCommand</span>}
+                  </div>
+                </div>
+                <div className="remote-host-actions">
+                  <button
+                    className={configured ? "ghost-action" : "action"}
+                    type="button"
+                    disabled={configured || requiresProxy}
+                    title={requiresProxy ? t("remote.proxyUnsupported") : undefined}
+                    onClick={() => addDiscovered(host)}
+                  >
+                    {configured ? <CheckCircle2 size={14} /> : <Plus size={14} />}
+                    {configured ? t("remote.imported") : t("remote.import")}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
 
       <section className="surface">
         <div className="surface-header">

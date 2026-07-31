@@ -89,3 +89,54 @@ func TestDeleteProviderAPIKeyRemovesSavedSecret(t *testing.T) {
 		t.Fatal("deleted key should not restore")
 	}
 }
+
+func TestMigratingSecretBackendRestoresAndCopiesLegacySecret(t *testing.T) {
+	current := &memorySecretBackend{values: map[string]string{}}
+	legacy := &memorySecretBackend{values: map[string]string{
+		"AGENTNEXUS_PROVIDER_LEGACY_API_KEY": "sk-legacy",
+	}}
+	restore := setProviderSecretBackendForTest(migratingSecretBackend{
+		current: current,
+		legacy:  legacy,
+	})
+	defer restore()
+
+	envName := "AGENTNEXUS_PROVIDER_LEGACY_API_KEY"
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
+
+	ok, err := EnsureProviderAPIKeyEnv(envName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("legacy key should restore")
+	}
+	if got := os.Getenv(envName); got != "sk-legacy" {
+		t.Fatalf("restored env = %q", got)
+	}
+	if got := current.values[envName]; got != "sk-legacy" {
+		t.Fatalf("migrated secret = %q", got)
+	}
+}
+
+func TestMigratingSecretBackendDeleteRemovesCurrentAndLegacySecrets(t *testing.T) {
+	envName := "AGENTNEXUS_PROVIDER_DELETE_LEGACY_API_KEY"
+	current := &memorySecretBackend{values: map[string]string{envName: "sk-current"}}
+	legacy := &memorySecretBackend{values: map[string]string{envName: "sk-legacy"}}
+	restore := setProviderSecretBackendForTest(migratingSecretBackend{
+		current: current,
+		legacy:  legacy,
+	})
+	defer restore()
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
+
+	if err := DeleteProviderAPIKey(envName); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := current.values[envName]; ok {
+		t.Fatal("current secret still stored")
+	}
+	if _, ok := legacy.values[envName]; ok {
+		t.Fatal("legacy secret still stored")
+	}
+}

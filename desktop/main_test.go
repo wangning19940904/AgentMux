@@ -44,11 +44,51 @@ func TestDesktopAssetMiddlewareProxiesAPIOnSameOrigin(t *testing.T) {
 	}
 }
 
+func TestDesktopAssetMiddlewareMarksObservabilitySession(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-AgentMux-Desktop") != "1" {
+			t.Fatalf("desktop marker = %q", request.Header.Get("X-AgentMux-Desktop"))
+		}
+		if request.Header.Get("Origin") != "wails://wails.localhost" {
+			t.Fatalf("origin = %q", request.Header.Get("Origin"))
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := newApp()
+	app.apiTarget.Store(target)
+	handler := app.assetServerMiddleware(http.NotFoundHandler())
+	for _, path := range []string{
+		"/api/v1/observability/session",
+		"/api/v1/remote/proxy/host-id/observability/session",
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://wails.localhost"+path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+	}
+}
+
 func TestDesktopAPITargetUsesLoopbackForWildcardListener(t *testing.T) {
 	for _, addr := range []string{":9000", "0.0.0.0:9000", "[::]:9000"} {
 		target := desktopAPITarget(addr)
 		if target.String() != "http://127.0.0.1:9000" {
 			t.Fatalf("desktopAPITarget(%q) = %q", addr, target)
 		}
+	}
+}
+
+func TestLocalWebUIURLFollowsConfiguredDesktopTarget(t *testing.T) {
+	app := newApp()
+	app.setAPITarget("0.0.0.0:9123")
+	if got := app.localWebUIURL(); got != "http://127.0.0.1:9123" {
+		t.Fatalf("localWebUIURL() = %q", got)
 	}
 }

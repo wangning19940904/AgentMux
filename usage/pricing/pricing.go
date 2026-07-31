@@ -83,12 +83,16 @@ func (p *Pricer) lookup(model string) (modelPrice, bool) {
 		return mp, true
 	}
 	lower := strings.ToLower(model)
+	var best modelPrice
+	bestLength := 0
 	for k, v := range p.table {
-		if strings.Contains(lower, strings.ToLower(k)) {
-			return v, true
+		key := strings.ToLower(k)
+		if strings.Contains(lower, key) && len(key) > bestLength {
+			best = v
+			bestLength = len(key)
 		}
 	}
-	return modelPrice{}, false
+	return best, bestLength > 0
 }
 
 func fresh(path string) bool {

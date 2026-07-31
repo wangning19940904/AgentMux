@@ -10,6 +10,9 @@ import (
 // Report is the aggregated usage view returned to clients.
 type Report struct {
 	Period    string        `json:"period"`
+	From      string        `json:"from,omitempty"`
+	To        string        `json:"to,omitempty"`
+	Timezone  string        `json:"timezone,omitempty"`
 	Totals    Totals        `json:"totals"`
 	Buckets   []Bucket      `json:"buckets"`
 	ByModel   []ModelStat   `json:"by_model"`

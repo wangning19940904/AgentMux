@@ -18,3 +18,19 @@ func TestFallbackPricing(t *testing.T) {
 		t.Fatalf("unknown model cost = %v, want > 0", got)
 	}
 }
+
+func TestLookupUsesMostSpecificModelMatch(t *testing.T) {
+	p := New(t.TempDir(), true)
+	p.loaded = true
+	p.table = map[string]modelPrice{
+		"gpt-5":         {Input: 1},
+		"gpt-5.6-sol":   {Input: 2},
+		"5.6-sol":       {Input: 3},
+		"unrelated-key": {Input: 4},
+	}
+
+	got, ok := p.lookup("openai/gpt-5.6-sol")
+	if !ok || got.Input != 2 {
+		t.Fatalf("lookup = %+v, %t; want longest model key", got, ok)
+	}
+}

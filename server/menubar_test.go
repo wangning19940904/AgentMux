@@ -20,6 +20,9 @@ func TestMenubarDefaultsToLogoOnly(t *testing.T) {
 	if settings.ShowStatusIcon || settings.ShowMessages || settings.ShowTokens || settings.ShowCost {
 		t.Fatalf("menu bar should default to logo only: %+v", settings)
 	}
+	if settings.Currency != "cny" || settings.CNYRate != 7 {
+		t.Fatalf("currency defaults = %q %.2f, want cny 7", settings.Currency, settings.CNYRate)
+	}
 }
 
 func TestMenubarDisplayChoicesRoundTrip(t *testing.T) {
@@ -27,6 +30,8 @@ func TestMenubarDisplayChoicesRoundTrip(t *testing.T) {
 	want := defaultMenubarSettings()
 	want.ShowStatusIcon = true
 	want.ShowTokens = true
+	want.Currency = "usd"
+	want.CNYRate = 6.88
 
 	rec := doJSON(t, s, http.MethodPut, "/api/v1/menubar/settings", want)
 	if rec.Code != http.StatusOK {
@@ -38,7 +43,27 @@ func TestMenubarDisplayChoicesRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.ShowStatusIcon || !got.ShowTokens || got.ShowMessages || got.ShowCost {
+	if !got.ShowStatusIcon || !got.ShowTokens || got.ShowMessages || got.ShowCost ||
+		got.Currency != "usd" || got.CNYRate != 6.88 {
 		t.Fatalf("display choices did not round-trip: %+v", got)
+	}
+}
+
+func TestMenubarSettingsNormalizesInvalidCurrencyAndRate(t *testing.T) {
+	s, _ := newTestServer(t)
+	want := defaultMenubarSettings()
+	want.Currency = "eur"
+	want.CNYRate = 0
+
+	rec := doJSON(t, s, http.MethodPut, "/api/v1/menubar/settings", want)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put settings: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var got MenubarSettings
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Currency != "cny" || got.CNYRate != 7 {
+		t.Fatalf("normalized currency settings = %+v", got)
 	}
 }

@@ -169,7 +169,7 @@ struct MenubarSettings: Decodable {
         theme: "flame", stages: [], metric: "cost",
         thresholds: [0.01, 1, 10, 100],
         statusIcon: false, messages: false, tokens: false, cost: false, cny: false,
-        rate: 7.2, breakdowns: ["model", "runtime", "date"], topN: 3)
+        rate: 7.0, breakdowns: ["model", "runtime", "date"], topN: 3)
 }
 
 // UsageClient fetches the daily report from the daemon.

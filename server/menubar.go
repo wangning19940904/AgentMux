@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // menubarSettingsKey is the settings-table key holding the menubar preferences
@@ -31,6 +32,9 @@ type MenubarSettings struct {
 	ShowCost       bool `json:"show_cost"`
 	ShowCNY        bool `json:"show_cny"`
 
+	// Currency is the preferred cost display currency across the WebUI.
+	// Canonical costs remain stored in USD.
+	Currency string `json:"currency"`
 	// CNYRate is the fixed USD->CNY exchange rate for the ¥ display.
 	CNYRate float64 `json:"cny_rate"`
 
@@ -55,7 +59,8 @@ func defaultMenubarSettings() MenubarSettings {
 		ShowTokens:     false,
 		ShowCost:       false,
 		ShowCNY:        false,
-		CNYRate:        7.2,
+		Currency:       "cny",
+		CNYRate:        7,
 		Breakdowns:     []string{"model", "runtime", "date"},
 		TopN:           3,
 	}
@@ -73,6 +78,10 @@ func (m *MenubarSettings) normalize() {
 	}
 	if len(m.CostThresholds) == 0 {
 		m.CostThresholds = d.CostThresholds
+	}
+	m.Currency = strings.ToLower(strings.TrimSpace(m.Currency))
+	if m.Currency != "cny" && m.Currency != "usd" {
+		m.Currency = d.Currency
 	}
 	if m.CNYRate <= 0 {
 		m.CNYRate = d.CNYRate

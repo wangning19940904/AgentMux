@@ -11,6 +11,7 @@ import {
   ChevronDown,
   Command,
   DatabaseZap,
+  ExternalLink,
   Gauge,
   KeyRound,
   Languages,
@@ -45,6 +46,13 @@ import { MenuBarPanel } from "./panels/MenuBarPanel";
 import { RemoteHostsPanel } from "./panels/RemoteHostsPanel";
 import { RemoteTargetSelector } from "./RemoteTargetSelector";
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
+import {
+  getLaunchAtLogin,
+  isDesktopApp,
+  LaunchAtLoginStatus,
+  openLocalWebUI,
+  setLaunchAtLogin,
+} from "./api";
 
 type Tab =
   | "overview"
@@ -445,6 +453,37 @@ function PreferenceControls({
   setThemeMode: (mode: ThemeMode) => void;
 }) {
   const { t } = useI18n();
+  const [launchAtLogin, setLaunchAtLoginStatus] = useState<LaunchAtLoginStatus | null>(null);
+  const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(false);
+  const [preferenceError, setPreferenceError] = useState("");
+  const desktop = isDesktopApp();
+
+  useEffect(() => {
+    if (!desktop) return;
+    let active = true;
+    getLaunchAtLogin()
+      .then((status) => {
+        if (active) setLaunchAtLoginStatus(status);
+      })
+      .catch((error) => {
+        if (active) setPreferenceError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [desktop]);
+
+  async function updateLaunchAtLogin(enabled: boolean) {
+    setLaunchAtLoginBusy(true);
+    setPreferenceError("");
+    try {
+      setLaunchAtLoginStatus(await setLaunchAtLogin(enabled));
+    } catch (error) {
+      setPreferenceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLaunchAtLoginBusy(false);
+    }
+  }
 
   return (
     <>
@@ -478,10 +517,36 @@ function PreferenceControls({
         })}
       </div>
 
-      <button className="status-action" title={t("app.status")}>
-        <Activity size={17} />
-        <span>{t("app.status")}</span>
-      </button>
+      {desktop && launchAtLogin?.supported && (
+        <label className="switch-row preference-switch-row">
+          <span>
+            <strong>{t("app.launchAtLogin")}</strong>
+            <small>{t("app.launchAtLoginHint")}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={launchAtLogin.enabled}
+            disabled={launchAtLoginBusy}
+            onChange={(event) => updateLaunchAtLogin(event.target.checked)}
+          />
+        </label>
+      )}
+      {desktop && (
+        <button
+          className="preference-action"
+          type="button"
+          onClick={() => {
+            setPreferenceError("");
+            openLocalWebUI().catch((error) => {
+              setPreferenceError(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        >
+          <ExternalLink size={17} />
+          <span>{t("app.openLocalWebUI")}</span>
+        </button>
+      )}
+      {preferenceError && <small className="preference-error">{preferenceError}</small>}
     </>
   );
 }

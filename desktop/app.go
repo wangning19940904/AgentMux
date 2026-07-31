@@ -37,6 +37,7 @@ import (
 func (a *App) startup(ctx context.Context) {
 	a.ctx, a.cancel = context.WithCancel(ctx)
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	a.ensureLaunchAtLoginDefault(log)
 
 	cfg, err := config.Load("config.toml")
 	if err != nil {
@@ -50,8 +51,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 	svc := provider.NewService(log, st, cfg.Provider.ProxyAddr)
 	ue := usage.NewEngine(cfg, st, log)
-	reporter := func(ctx context.Context, period string, since time.Time) (any, error) {
-		return ue.Report(ctx, period, since)
+	reporter := func(ctx context.Context, period string, since, until time.Time) (any, error) {
+		return ue.ReportRange(ctx, period, since, until)
 	}
 	initializer := workspace.New()
 	srv := server.New(cfg, log, st, svc, reporter)

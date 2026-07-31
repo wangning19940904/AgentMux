@@ -139,6 +139,7 @@ GET  /api/v1/guard/policies          # Guard 策略列表
 POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
 
 GET    /api/v1/remote/hosts                    # 本机保存的 SSH 机器（敏感字段脱敏）
+GET    /api/v1/remote/discovered-hosts         # 从 ~/.ssh/config 发现可导入的 Host 别名
 POST   /api/v1/remote/hosts                    # 新建/更新 SSH 机器
 DELETE /api/v1/remote/hosts?id=                # 删除 SSH 机器
 POST   /api/v1/remote/hosts/test?id=           # 测试连接并确认主机指纹

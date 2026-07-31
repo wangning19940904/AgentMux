@@ -88,14 +88,23 @@ func (c *geminiCollector) parseFile(path string, since time.Time) []core.UsageRe
 			continue
 		}
 		out = append(out, core.UsageRecord{
-			Source:          "gemini",
-			SessionID:       l.SessionID,
-			Model:           orDefault(l.Model, "gemini"),
-			Timestamp:       ts,
-			InputTokens:     l.UsageMetadata.PromptTokenCount,
+			Source:    "gemini",
+			SessionID: l.SessionID,
+			Model:     orDefault(l.Model, "gemini"),
+			Timestamp: ts,
+			// Gemini reports cached content as a subset of promptTokenCount.
+			// Keep AgentMux's input and cache-read billing buckets exclusive.
+			InputTokens:     uncachedTokens(l.UsageMetadata.PromptTokenCount, l.UsageMetadata.CachedContentTokenCount),
 			OutputTokens:    l.UsageMetadata.CandidatesTokenCount,
 			CacheReadTokens: l.UsageMetadata.CachedContentTokenCount,
 		})
 	}
 	return out
+}
+
+func uncachedTokens(total, cached int64) int64 {
+	if total <= cached {
+		return 0
+	}
+	return total - cached
 }

@@ -258,10 +258,10 @@ button:disabled {
 
 .preference-panel {
   display: grid;
-  gap: 8px;
-  margin: 6px 0 10px;
-  padding: 10px;
-  background: var(--bg);
+  gap: 5px;
+  margin: 4px 0 8px;
+  padding: 7px;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -269,13 +269,25 @@ button:disabled {
 .preference-panel .segmented {
   width: 100%;
   min-width: 0;
+  gap: 1px;
+  padding: 2px;
 }
 
 .preference-panel .segmented button {
   flex: 1 1 0;
   width: auto;
   min-width: 0;
-  padding: 0 8px;
+  min-height: 26px;
+  padding: 0 6px;
+  gap: 4px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+
+.preference-panel .segmented > svg {
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
 }
 
 .preference-panel .theme-toggle button span {
@@ -283,19 +295,72 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
-.status-action {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  justify-content: flex-start;
-  min-height: 34px;
-  padding: 0 9px;
-  color: var(--text-soft);
-  background: var(--bg-elevated);
+.preference-panel .theme-toggle button {
+  gap: 2px;
+  padding-inline: 3px;
+}
+
+.preference-switch-row {
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.preference-switch-row > span {
+  min-width: 0;
+}
+
+.preference-switch-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.preference-switch-row small {
+  display: none;
+}
+
+.preference-switch-row input {
+  width: 30px;
+  height: 17px;
+}
+
+.preference-error {
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.preference-action {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  justify-content: flex-start;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--text-soft);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
   text-align: left;
+}
+
+.preference-action:hover {
+  color: var(--text);
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+
+.preference-action svg {
+  width: 14px;
+  height: 14px;
 }
 
 .account {
@@ -351,8 +416,8 @@ button:disabled {
 .topbar-preferences > summary {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   color: var(--text-soft);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -374,12 +439,12 @@ button:disabled {
 
 .topbar-preferences .preference-panel {
   position: absolute;
-  top: 44px;
+  top: 40px;
   right: 0;
-  width: 268px;
+  width: 226px;
   margin: 0;
   background: var(--bg-elevated);
-  box-shadow: var(--shadow);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
 }
 
 .remote-target-selector {
@@ -611,6 +676,18 @@ h2 {
   display: grid;
   grid-template-columns: repeat(5, minmax(150px, 1fr));
   gap: 18px;
+}
+
+.usage-metrics-grid {
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.usage-controls {
+  justify-content: flex-end;
+}
+
+.usage-rate-input {
+  width: 88px;
 }
 
 .metric-card,
@@ -2640,6 +2717,33 @@ textarea:focus {
   display: grid;
 }
 
+.remote-discovery-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.remote-discovered-list {
+  background: color-mix(in srgb, var(--bg) 32%, transparent);
+}
+
+.remote-discovered-card {
+  background: var(--bg-elevated);
+}
+
+.remote-discovered-card .remote-host-facts span:nth-child(n + 2) {
+  font-family: var(--mono);
+}
+
+.remote-discovery-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 18px;
+  color: var(--red);
+  background: var(--red-soft);
+}
+
 .remote-host-list > .empty-state {
   display: grid;
   justify-items: center;
@@ -2649,6 +2753,10 @@ textarea:focus {
 
 .remote-host-list > .empty-state strong {
   color: var(--text);
+}
+
+.remote-host-list > .remote-discovery-empty {
+  padding-block: 28px;
 }
 
 .remote-host-card {
@@ -3599,7 +3707,7 @@ textarea:focus {
   }
 
   .topbar-preferences .preference-panel {
-    width: min(252px, calc(100vw - 36px));
+    width: min(226px, calc(100vw - 36px));
   }
 
   .search-box {

@@ -28,8 +28,8 @@ import (
 func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.Service, *usage.Engine) {
 	svc := provider.NewService(logger, st, cfg.Provider.ProxyAddr)
 	eng := usage.NewEngine(cfg, st, logger)
-	reporter := func(ctx context.Context, period string, since time.Time) (any, error) {
-		return eng.Report(ctx, period, since)
+	reporter := func(ctx context.Context, period string, since, until time.Time) (any, error) {
+		return eng.ReportRange(ctx, period, since, until)
 	}
 	srv := server.New(cfg, logger, st, svc, reporter)
 	srv.SetProviderService(svc)

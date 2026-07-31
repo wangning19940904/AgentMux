@@ -143,6 +143,13 @@ CREATE INDEX IF NOT EXISTS idx_observation_spans_model_request
 	ON observation_spans((model_json->>'request_id')) WHERE model_json IS NOT NULL AND model_json<>'null'::jsonb;
 `,
 		},
+		{
+			version: 4,
+			name:    "usage_timestamp_index",
+			sql: `
+CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp);
+`,
+		},
 	}
 }
 

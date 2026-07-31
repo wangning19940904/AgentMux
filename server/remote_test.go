@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,5 +82,34 @@ func TestRemoteProxyRejectsNestedProxying(t *testing.T) {
 	server.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRemoteDiscoveredHostsReadsUserSSHConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configBody := "Host build-box\n  HostName 10.0.0.8\n  User deploy\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "config"), []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := newRemoteTestServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/remote/discovered-hosts", nil)
+	recorder := httptest.NewRecorder()
+	server.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var hosts []map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &hosts); err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 1 || hosts[0]["name"] != "build-box" ||
+		hosts[0]["host"] != "10.0.0.8" || hosts[0]["user"] != "deploy" {
+		t.Fatalf("hosts = %+v", hosts)
 	}
 }
