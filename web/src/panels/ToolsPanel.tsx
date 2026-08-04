@@ -11,7 +11,7 @@ import {
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
-type CLIBusyAction = "install" | "update" | "check";
+type CLIBusyAction = "install" | "update" | "check" | "sync";
 
 export function ToolsPanel() {
   const { t } = useI18n();
@@ -108,6 +108,22 @@ export function ToolsPanel() {
     }
   }
 
+  async function syncCLISkills(id: string) {
+    markCLIBusy(id, "sync");
+    setNotice("");
+    setResult(null);
+    try {
+      const res = await api.syncCLISkills(id);
+      setResult(res);
+      setNotice(res.ok ? t("tools.skillsSynced") : res.error || t("tools.skillsSyncFailed"));
+      await tools.reload();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      clearCLIBusy(id);
+    }
+  }
+
   async function installSkill(skill: MarketplaceSkill) {
     setBusy(`skill:${skill.name}`);
     setNotice("");
@@ -159,6 +175,7 @@ export function ToolsPanel() {
               check={cliChecks[item.spec.id]}
               onCheck={checkCLIUpdate}
               onInstall={installCLI}
+              onSync={syncCLISkills}
               t={t}
             />
           ))}
@@ -251,6 +268,7 @@ function CLIManagedCard({
   check,
   onCheck,
   onInstall,
+  onSync,
   t,
 }: {
   item: CLIManagedTool;
@@ -258,21 +276,25 @@ function CLIManagedCard({
   check?: CLIUpdateCheck;
   onCheck: (id: string) => void;
   onInstall: (id: string, action: "install" | "update") => void;
+  onSync: (id: string) => void;
   t: (key: string) => string;
 }) {
   const hasUpdate = Boolean(check?.update_available);
-  const action: "install" | "update" | "check" = item.installed ? (hasUpdate ? "update" : "check") : "install";
+  const linkedSkills = item.linked_skills ?? [];
+  const hasLinkedSkills = linkedSkills.length > 0 || Boolean(item.spec.linked_skills?.length);
+  const needsSkillSync = linkedSkills.some((skill) => !skill.installed || !skill.in_sync);
+  let action: "install" | "update" | "check" | "sync" = "check";
+  if (!item.installed) action = "install";
+  else if (hasUpdate) action = "update";
+  else if (needsSkillSync) action = "sync";
   const disabled = Boolean(busy);
-  const buttonLabel =
-    busy === "check"
-      ? t("tools.checkingUpdate")
-      : busy
-        ? t("frameworks.installing")
-        : action === "install"
-          ? t("frameworks.install")
-          : action === "update"
-            ? t("tools.update")
-            : t("tools.checkUpdate");
+  let buttonLabel = t("tools.checkUpdate");
+  if (busy === "check") buttonLabel = t("tools.checkingUpdate");
+  else if (busy === "sync") buttonLabel = t("tools.syncingSkills");
+  else if (busy) buttonLabel = t("frameworks.installing");
+  else if (action === "install") buttonLabel = hasLinkedSkills ? t("tools.installBundle") : t("frameworks.install");
+  else if (action === "update") buttonLabel = t("tools.update");
+  else if (action === "sync") buttonLabel = t("tools.syncSkills");
   const updateStatus = updateStatusLabel(check, t);
   const updateStatusClass = check?.error ? "warning" : check?.update_available ? "warning" : "success";
   return (
@@ -294,18 +316,41 @@ function CLIManagedCard({
             {item.installed ? item.version || t("frameworks.installed") : t("frameworks.notDetected")}
           </span>
           {item.installed && updateStatus && <span className={`status-badge ${updateStatusClass}`}>{updateStatus}</span>}
+          {linkedSkills.map((skill) => (
+            <span
+              key={skill.spec.id}
+              className={`status-badge ${skill.installed && skill.in_sync ? "success" : "warning"}`}
+              title={skill.detail || skill.spec.version_policy_label || skill.spec.note}
+            >
+              <Bot size={14} />
+              {skill.spec.name}: {linkedSkillStatusLabel(skill, t)}
+            </span>
+          ))}
         </span>
         <button
           className="action"
           disabled={disabled}
-          onClick={() => (action === "check" ? onCheck(item.spec.id) : onInstall(item.spec.id, action))}
+          onClick={() => {
+            if (action === "check") onCheck(item.spec.id);
+            else if (action === "sync") onSync(item.spec.id);
+            else onInstall(item.spec.id, action);
+          }}
         >
-          {busy === "check" || action === "check" ? <RefreshCw size={14} /> : <Download size={14} />}
+          {busy === "check" || action === "check" || action === "sync" ? <RefreshCw size={14} /> : <Download size={14} />}
           {buttonLabel}
         </button>
       </div>
     </article>
   );
+}
+
+function linkedSkillStatusLabel(
+  skill: { installed: boolean; in_sync: boolean; version?: string },
+  t: (key: string) => string,
+) {
+  if (!skill.installed) return t("tools.skillMissing");
+  if (!skill.in_sync) return `${skill.version || "?"} · ${t("tools.skillNeedsSync")}`;
+  return `${skill.version || ""} · ${t("tools.skillInSync")}`.trim();
 }
 
 function updateStatusLabel(

@@ -2,46 +2,89 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
+const agentMuxSkillsDirToken = "{agentmux_skills_dir}"
+
+// CLILinkedSkillSpec describes a skill whose lifecycle is managed with a CLI.
+// Install commands are catalog-owned and may use agentMuxSkillsDirToken to
+// target AgentMux's global skill library without invoking a shell.
+type CLILinkedSkillSpec struct {
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Source             string   `json:"source,omitempty"`
+	InstallCommand     []string `json:"install_command,omitempty"`
+	MatchCLIVersion    bool     `json:"match_cli_version,omitempty"`
+	VersionPolicyLabel string   `json:"version_policy_label,omitempty"`
+	Note               string   `json:"note,omitempty"`
+}
+
 // CLISpec describes one managed local CLI.
 type CLISpec struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Bin            string   `json:"bin"`
-	Package        string   `json:"package"`
-	Registry       string   `json:"registry,omitempty"`
-	InstallCommand []string `json:"install_command,omitempty"`
-	UpdateCommand  []string `json:"update_command,omitempty"`
-	Note           string   `json:"note,omitempty"`
+	ID                 string               `json:"id"`
+	Name               string               `json:"name"`
+	Bin                string               `json:"bin"`
+	Package            string               `json:"package"`
+	Registry           string               `json:"registry,omitempty"`
+	InstallCommand     []string             `json:"install_command,omitempty"`
+	PostInstallCommand []string             `json:"post_install_command,omitempty"`
+	UpdateCommand      []string             `json:"update_command,omitempty"`
+	LinkedSkills       []CLILinkedSkillSpec `json:"linked_skills,omitempty"`
+	Note               string               `json:"note,omitempty"`
+}
+
+// CLILinkedSkillStatus is the detected state of a CLI-managed skill in the
+// AgentMux global library.
+type CLILinkedSkillStatus struct {
+	Spec      CLILinkedSkillSpec `json:"spec"`
+	Installed bool               `json:"installed"`
+	InSync    bool               `json:"in_sync"`
+	Path      string             `json:"path,omitempty"`
+	Version   string             `json:"version,omitempty"`
+	Detail    string             `json:"detail,omitempty"`
 }
 
 // CLIStatus is the detected state for a local CLI.
 type CLIStatus struct {
-	Spec      CLISpec `json:"spec"`
-	Installed bool    `json:"installed"`
-	Path      string  `json:"path,omitempty"`
-	Version   string  `json:"version,omitempty"`
-	Detail    string  `json:"detail,omitempty"`
+	Spec         CLISpec                `json:"spec"`
+	Installed    bool                   `json:"installed"`
+	Path         string                 `json:"path,omitempty"`
+	Version      string                 `json:"version,omitempty"`
+	Detail       string                 `json:"detail,omitempty"`
+	LinkedSkills []CLILinkedSkillStatus `json:"linked_skills,omitempty"`
+}
+
+// CLILinkedSkillResult reports one linked-skill sync step.
+type CLILinkedSkillResult struct {
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	Command string `json:"command,omitempty"`
+	Log     string `json:"log,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // CLIInstallResult reports the install/update outcome.
 type CLIInstallResult struct {
-	ID      string `json:"id"`
-	Action  string `json:"action"`
-	OK      bool   `json:"ok"`
-	Command string `json:"command,omitempty"`
-	Log     string `json:"log,omitempty"`
-	Version string `json:"version,omitempty"`
-	Error   string `json:"error,omitempty"`
+	ID           string                 `json:"id"`
+	Action       string                 `json:"action"`
+	OK           bool                   `json:"ok"`
+	Command      string                 `json:"command,omitempty"`
+	Log          string                 `json:"log,omitempty"`
+	Version      string                 `json:"version,omitempty"`
+	LinkedSkills []CLILinkedSkillResult `json:"linked_skills,omitempty"`
+	Error        string                 `json:"error,omitempty"`
 }
 
 // CLIUpdateCheck reports whether an installed CLI has a newer package version.
@@ -75,6 +118,29 @@ var cliCatalog = []CLISpec{
 		UpdateCommand:  []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
 		Note:           "AI-native runtime and CLI hub that turns websites and browser sessions into command-line tools.",
 	},
+	{
+		ID: "agent-browser", Name: "agent-browser", Bin: "agent-browser", Package: "agent-browser",
+		InstallCommand:     []string{"npm", "install", "-g", "agent-browser@latest"},
+		PostInstallCommand: []string{"agent-browser", "install"},
+		UpdateCommand:      []string{"agent-browser", "upgrade"},
+		Note:               "Fast browser automation CLI for AI agents with version-matched bundled skills.",
+	},
+	{
+		ID: "cis-cli", Name: "CIS CLI", Bin: "cis-cli", Package: "@byted/cis-cli",
+		Registry:       "https://bnpm.byted.org/",
+		InstallCommand: []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
+		UpdateCommand:  []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
+		LinkedSkills: []CLILinkedSkillSpec{
+			{
+				ID: "cis-cli", Name: "cis-cli Skill", Source: "skills.byted.org/default/public/cis-cli",
+				InstallCommand:     []string{"cis-cli", "install-skills", "--dir", agentMuxSkillsDirToken, "--force"},
+				MatchCLIVersion:    true,
+				VersionPolicyLabel: "version-matched with CIS CLI",
+				Note:               "Bundled enterprise-service instructions distributed from the installed CLI into AgentMux.",
+			},
+		},
+		Note: "ByteDance enterprise services CLI with a version-matched companion Skill managed as one unit.",
+	},
 }
 
 // CLICatalog returns the managed CLI catalog.
@@ -99,6 +165,7 @@ func DetectCLI(ctx context.Context, spec CLISpec) CLIStatus {
 	path, err := exec.LookPath(spec.Bin)
 	if err != nil {
 		st.Detail = "not found on PATH"
+		st.LinkedSkills = detectLinkedSkills(spec, "")
 		return st
 	}
 	st.Installed = true
@@ -108,6 +175,7 @@ func DetectCLI(ctx context.Context, spec CLISpec) CLIStatus {
 	} else {
 		st.Detail = err.Error()
 	}
+	st.LinkedSkills = detectLinkedSkills(spec, st.Version)
 	return st
 }
 
@@ -179,10 +247,9 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 			return res
 		}
 		if !check.UpdateAvailable {
-			res.OK = true
 			res.Version = statusBefore.Version
 			res.Log = fmt.Sprintf("%s is already up to date (current %s, latest %s)", spec.Name, check.CurrentVersion, check.LatestVersion)
-			return res
+			return syncAfterCLIChange(ctx, spec, res)
 		}
 		if len(spec.UpdateCommand) > 0 {
 			cmdArgs = spec.UpdateCommand
@@ -192,7 +259,15 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		res.Error = fmt.Sprintf("CLI %q has no install command", id)
 		return res
 	}
-	res.Command = strings.Join(cmdArgs, " ")
+	commands := [][]string{cmdArgs}
+	if action == "install" && len(spec.PostInstallCommand) > 0 {
+		commands = append(commands, spec.PostInstallCommand)
+	}
+	commandLabels := make([]string, 0, len(commands))
+	for _, args := range commands {
+		commandLabels = append(commandLabels, strings.Join(args, " "))
+	}
+	res.Command = strings.Join(commandLabels, " && ")
 
 	runCtx := ctx
 	if _, ok := ctx.Deadline(); !ok {
@@ -200,16 +275,13 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		runCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, cmdArgs[0], cmdArgs[1:]...)
-	cmd.Env = cliEnv(spec)
-	out, err := cmd.CombinedOutput()
-	res.Log = string(out)
+	logOutput, err := runCLICommands(runCtx, spec, commands)
+	res.Log = appendLog(res.Log, logOutput)
 	if err != nil {
 		res.Error = fmt.Sprintf("%s failed: %v", action, err)
 		return res
 	}
 	status := DetectCLI(ctx, spec)
-	res.OK = status.Installed
 	res.Version = status.Version
 	if !status.Installed {
 		res.Error = "command completed but CLI was not found on PATH"
@@ -220,7 +292,105 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 			res.Log += "\n" + out
 		}
 	}
+	return syncAfterCLIChange(ctx, spec, res)
+}
+
+// SyncCLILinkedSkills repairs or refreshes the skills managed by a CLI without
+// reinstalling the CLI itself.
+func SyncCLILinkedSkills(ctx context.Context, id string) CLIInstallResult {
+	id = strings.TrimSpace(id)
+	res := CLIInstallResult{ID: id, Action: "sync-skills"}
+	spec, ok := lookupCLI(id)
+	if !ok {
+		res.Error = fmt.Sprintf("unknown CLI %q", id)
+		return res
+	}
+	if len(spec.LinkedSkills) == 0 {
+		res.Error = fmt.Sprintf("CLI %q has no linked skills", id)
+		return res
+	}
+	status := DetectCLI(ctx, spec)
+	if !status.Installed {
+		res.Error = fmt.Sprintf("CLI %q is not installed; install it first", id)
+		return res
+	}
+	res.Version = status.Version
+	return syncAfterCLIChange(ctx, spec, res)
+}
+
+func syncAfterCLIChange(ctx context.Context, spec CLISpec, res CLIInstallResult) CLIInstallResult {
+	if len(spec.LinkedSkills) == 0 {
+		res.OK = true
+		return res
+	}
+
+	runCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
+	linkedResults := make([]CLILinkedSkillResult, 0, len(spec.LinkedSkills))
+	for _, linked := range spec.LinkedSkills {
+		result := syncLinkedSkill(runCtx, spec, linked, res.Version)
+		linkedResults = append(linkedResults, result)
+		res.Command = appendCommand(res.Command, result.Command)
+		res.Log = appendLog(res.Log, result.Log)
+		if !result.OK && res.Error == "" {
+			res.Error = fmt.Sprintf("%s is installed, but linked skill %q could not be synced: %s", spec.Name, linked.Name, result.Error)
+		}
+	}
+	res.LinkedSkills = linkedResults
+	res.OK = res.Error == ""
 	return res
+}
+
+func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec, cliVersion string) CLILinkedSkillResult {
+	res := CLILinkedSkillResult{ID: linked.ID}
+	command, err := resolveLinkedSkillCommand(linked.InstallCommand)
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	if len(command) == 0 {
+		res.Error = "no sync command configured"
+		return res
+	}
+	res.Command = strings.Join(command, " ")
+	logOutput, err := runCLICommands(ctx, cli, [][]string{command})
+	res.Log = logOutput
+	if err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	status := detectLinkedSkill(linked, cliVersion)
+	res.Path = status.Path
+	res.Version = status.Version
+	res.OK = status.Installed && status.InSync
+	if !res.OK {
+		res.Error = status.Detail
+		if res.Error == "" {
+			res.Error = "sync command completed but the linked skill is not ready"
+		}
+	}
+	return res
+}
+
+func runCLICommands(ctx context.Context, spec CLISpec, commands [][]string) (string, error) {
+	var logOutput string
+	for _, args := range commands {
+		if len(args) == 0 {
+			return logOutput, fmt.Errorf("empty command")
+		}
+		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd.Env = cliEnv(spec)
+		out, err := cmd.CombinedOutput()
+		logOutput = appendLog(logOutput, string(out))
+		if err != nil {
+			return logOutput, fmt.Errorf("running %q: %w", strings.Join(args, " "), err)
+		}
+	}
+	return logOutput, nil
 }
 
 func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {
@@ -229,6 +399,122 @@ func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {
 		args = append(args, "--registry="+spec.Registry)
 	}
 	return commandOutputWithEnv(ctx, cliEnv(spec), "npm", args...)
+}
+
+func detectLinkedSkills(spec CLISpec, cliVersion string) []CLILinkedSkillStatus {
+	if len(spec.LinkedSkills) == 0 {
+		return nil
+	}
+	out := make([]CLILinkedSkillStatus, 0, len(spec.LinkedSkills))
+	for _, linked := range spec.LinkedSkills {
+		out = append(out, detectLinkedSkill(linked, cliVersion))
+	}
+	return out
+}
+
+func detectLinkedSkill(spec CLILinkedSkillSpec, cliVersion string) CLILinkedSkillStatus {
+	st := CLILinkedSkillStatus{Spec: spec}
+	root, err := agentMuxSkillsDir()
+	if err != nil {
+		st.Detail = err.Error()
+		return st
+	}
+	st.Path = filepath.Join(root, spec.ID, "SKILL.md")
+	if _, err := os.Stat(st.Path); err != nil {
+		if os.IsNotExist(err) {
+			st.Detail = "not installed in the AgentMux skill library"
+		} else {
+			st.Detail = err.Error()
+		}
+		return st
+	}
+	st.Installed = true
+	st.Version = readSkillVersion(st.Path)
+	st.InSync = true
+	if spec.MatchCLIVersion {
+		cliNormalized := normalizeVersion(cliVersion)
+		skillNormalized := normalizeVersion(st.Version)
+		if cliNormalized == "" || skillNormalized == "" {
+			st.InSync = false
+			st.Detail = "could not verify the linked skill version"
+		} else if cliNormalized != skillNormalized {
+			st.InSync = false
+			st.Detail = fmt.Sprintf("skill version %s does not match CLI version %s", skillNormalized, cliNormalized)
+		}
+	}
+	return st
+}
+
+func readSkillVersion(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	inFrontMatter := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "---" {
+			if inFrontMatter {
+				break
+			}
+			inFrontMatter = true
+			continue
+		}
+		if inFrontMatter && strings.HasPrefix(line, "version:") {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "version:")), "\"'")
+		}
+	}
+	return ""
+}
+
+func resolveLinkedSkillCommand(command []string) ([]string, error) {
+	if len(command) == 0 {
+		return nil, nil
+	}
+	root, err := agentMuxSkillsDir()
+	if err != nil {
+		return nil, err
+	}
+	resolved := make([]string, len(command))
+	for i, arg := range command {
+		resolved[i] = strings.ReplaceAll(arg, agentMuxSkillsDirToken, root)
+	}
+	return resolved, nil
+}
+
+func agentMuxSkillsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		if err == nil {
+			err = fmt.Errorf("home directory is empty")
+		}
+		return "", fmt.Errorf("resolve AgentMux skill library: %w", err)
+	}
+	return filepath.Join(home, ".agentmux", "tools", "skills"), nil
+}
+
+func appendCommand(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + " && " + next
+}
+
+func appendLog(existing, next string) string {
+	if next == "" {
+		return existing
+	}
+	if existing != "" && !strings.HasSuffix(existing, "\n") {
+		existing += "\n"
+	}
+	return existing + next
 }
 
 // LookupCLI returns the catalog spec for a CLI id.

@@ -43,6 +43,22 @@ func TestMarketplaceSearchMarksInstalled(t *testing.T) {
 	}
 }
 
+func TestMarketplaceIncludesAgentBrowserSkill(t *testing.T) {
+	m := New(t.TempDir())
+
+	items, err := m.Marketplace(context.Background(), "agent-browser", "vercel-labs", "browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	item := items[0]
+	if item.Repo != "vercel-labs/agent-browser" || item.Path != "skills/agent-browser" || !item.Trusted {
+		t.Fatalf("item = %+v", item)
+	}
+}
+
 func TestValidateGitHubRequestRejectsUnsafePath(t *testing.T) {
 	if _, _, err := validateGitHubRequest(InstallRequest{Repo: "owner/repo", Path: "../skill"}); err == nil {
 		t.Fatal("expected unsafe path error")

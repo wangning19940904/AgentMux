@@ -18,6 +18,7 @@ declare global {
 }
 
 const ACTIVE_REMOTE_KEY = "agentmux:active-remote";
+export const REMOTE_HOSTS_CHANGED_EVENT = "agentmux:remote-hosts-changed";
 
 export function activeRemoteID(): string {
   return localStorage.getItem(ACTIVE_REMOTE_KEY) ?? "";
@@ -26,6 +27,10 @@ export function activeRemoteID(): string {
 export function setActiveRemoteID(id: string) {
   if (id) localStorage.setItem(ACTIVE_REMOTE_KEY, id);
   else localStorage.removeItem(ACTIVE_REMOTE_KEY);
+}
+
+export function notifyRemoteHostsChanged() {
+  window.dispatchEvent(new Event(REMOTE_HOSTS_CHANGED_EVENT));
 }
 
 function apiPath(path: string) {
@@ -286,6 +291,7 @@ export interface RemoteHost {
   port: number;
   user: string;
   key_path?: string;
+  ssh_alias?: string;
   remote_addr: string;
   api_token?: string;
   api_token_set?: boolean;
@@ -300,6 +306,7 @@ export interface DiscoveredRemoteHost {
   port: number;
   user: string;
   key_path?: string;
+  ssh_alias: string;
   source: string;
   proxy_jump?: string;
   proxy_command?: boolean;
@@ -311,6 +318,11 @@ export interface RemoteTestResult {
   latency_ms: number;
   host_key_fingerprint: string;
   status?: Status;
+  installed?: boolean;
+}
+
+export interface RemoteImportResult extends RemoteTestResult {
+  host: RemoteHost;
 }
 
 export class RemoteConnectionError extends Error {
@@ -611,20 +623,51 @@ export interface CLIManagedTool {
     package: string;
     registry?: string;
     note?: string;
+    linked_skills?: CLILinkedSkillSpec[];
   };
   installed: boolean;
   path?: string;
   version?: string;
   detail?: string;
+  linked_skills?: CLILinkedSkillStatus[];
+}
+
+export interface CLILinkedSkillSpec {
+  id: string;
+  name: string;
+  source?: string;
+  match_cli_version?: boolean;
+  version_policy_label?: string;
+  note?: string;
+}
+
+export interface CLILinkedSkillStatus {
+  spec: CLILinkedSkillSpec;
+  installed: boolean;
+  in_sync: boolean;
+  path?: string;
+  version?: string;
+  detail?: string;
+}
+
+export interface CLILinkedSkillResult {
+  id: string;
+  ok: boolean;
+  command?: string;
+  log?: string;
+  path?: string;
+  version?: string;
+  error?: string;
 }
 
 export interface CLIInstallResult {
   id: string;
-  action: "install" | "update";
+  action: "install" | "update" | "sync-skills";
   ok: boolean;
   command?: string;
   log?: string;
   version?: string;
+  linked_skills?: CLILinkedSkillResult[];
   error?: string;
 }
 
@@ -1139,6 +1182,31 @@ async function testRemoteHost(id: string, trustOnFirstUse: boolean): Promise<Rem
   return payload as unknown as RemoteTestResult;
 }
 
+async function importRemoteHost(
+  host: DiscoveredRemoteHost,
+  trustOnFirstUse: boolean,
+): Promise<RemoteImportResult> {
+  const path = "/api/v1/remote/hosts/import";
+  const response = await fetch(apiPath(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...host,
+      remote_addr: "127.0.0.1:8765",
+      trust_on_first_use: trustOnFirstUse,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new RemoteConnectionError(
+      typeof payload.error === "string" ? payload.error : `${path}: ${response.status}`,
+      typeof payload.code === "string" ? payload.code : undefined,
+      typeof payload.host_key_fingerprint === "string" ? payload.host_key_fingerprint : undefined,
+    );
+  }
+  return payload as unknown as RemoteImportResult;
+}
+
 async function selectSystemDirectory(defaultDirectory = ""): Promise<{ path: string }> {
   const picker = window.go?.main?.App?.SelectDirectory;
   if (!picker) {
@@ -1225,6 +1293,7 @@ export const api = {
     get<DiscoveredRemoteHost[]>("/api/v1/remote/discovered-hosts"),
   upsertRemoteHost: (host: Partial<RemoteHost>) =>
     postChecked<RemoteHost>("/api/v1/remote/hosts", host),
+  importRemoteHost,
   deleteRemoteHost: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
   testRemoteHost,
@@ -1243,6 +1312,8 @@ export const api = {
   installCLI: (id: string, action: "install" | "update") =>
     postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
   checkCLIUpdate: (id: string) => post<CLIUpdateCheck>("/api/v1/tools/cli/check", { id }),
+  syncCLISkills: (id: string) =>
+    postChecked<CLIInstallResult>("/api/v1/tools/cli/skills/sync", { id }),
   providers: () => getProviders("/api/v1/providers"),
   activeRoutes: () => get<ProviderRoute[] | null>("/api/v1/providers/active"),
   presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],

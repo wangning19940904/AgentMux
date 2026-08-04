@@ -1,22 +1,39 @@
 import { ServerCog, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { activeRemoteID, api, RemoteHost, setActiveRemoteID } from "./api";
+import {
+  activeRemoteID,
+  api,
+  REMOTE_HOSTS_CHANGED_EVENT,
+  RemoteHost,
+  setActiveRemoteID,
+} from "./api";
 import { useI18n } from "./i18n";
 
 export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
   const { t } = useI18n();
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
   const activeID = activeRemoteID();
 
   useEffect(() => {
-    api.remoteHosts()
-      .then((items) => {
-        setHosts(items ?? []);
-        if (activeID && !items.some((item) => item.id === activeID)) {
-          setActiveRemoteID("");
-        }
-      })
-      .catch(() => setHosts([]));
+    const load = () => {
+      api.remoteHosts()
+        .then((items) => {
+          const next = items ?? [];
+          setHosts(next);
+          setLoadFailed(false);
+          if (activeID && !next.some((item) => item.id === activeID)) {
+            setActiveRemoteID("");
+          }
+        })
+        .catch(() => {
+          setHosts([]);
+          setLoadFailed(true);
+        });
+    };
+    load();
+    window.addEventListener(REMOTE_HOSTS_CHANGED_EVENT, load);
+    return () => window.removeEventListener(REMOTE_HOSTS_CHANGED_EVENT, load);
   }, [activeID]);
 
   const active = hosts.find((host) => host.id === activeID);
@@ -36,10 +53,11 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
         >
           <option value="">{t("remote.localMachine")}</option>
           {hosts.map((host) => (
-            <option key={host.id} value={host.id}>
+            <option key={host.id} value={host.id} disabled={!host.trusted}>
               {host.name}{host.trusted ? "" : ` · ${t("remote.untrustedShort")}`}
             </option>
           ))}
+          {loadFailed && <option disabled>{t("remote.loadFailed")}</option>}
           {activeID && !active && <option value={activeID}>{t("remote.unavailable")}</option>}
         </select>
       </label>

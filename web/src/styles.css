@@ -1189,6 +1189,8 @@ textarea:focus {
   min-width: 0;
   padding: 15px 18px;
   border-top: 1px solid var(--border);
+  cursor: default;
+  user-select: none;
 }
 
 .agent-registry-row:first-of-type {
@@ -1311,19 +1313,182 @@ textarea:focus {
   border-radius: var(--radius);
 }
 
-.injected-prompt-preview {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--bg-muted, rgba(127, 127, 127, 0.08));
-  border: 1px dashed var(--border);
-  border-radius: var(--radius);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.markdown-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.markdown-mode-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
   font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
+  font-weight: 700;
+}
+
+.markdown-mode-toggle button:hover {
+  color: var(--text);
+}
+
+.markdown-mode-toggle button.active {
+  color: var(--accent-strong);
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.markdown-editor {
+  min-height: 190px;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.markdown-preview {
+  min-height: 190px;
+  padding: 14px 16px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--bg-muted, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.65;
   word-break: break-word;
+}
+
+.markdown-preview-empty {
+  color: var(--muted);
+}
+
+.markdown-preview > :first-child {
+  margin-top: 0;
+}
+
+.markdown-preview > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview h6 {
+  margin: 1.15em 0 0.55em;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.markdown-preview h1 {
+  font-size: 1.55em;
+}
+
+.markdown-preview h2 {
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.35em;
+}
+
+.markdown-preview h3 {
+  font-size: 1.16em;
+}
+
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview ol,
+.markdown-preview blockquote,
+.markdown-preview pre,
+.markdown-preview table {
+  margin: 0 0 0.85em;
+}
+
+.markdown-preview ul,
+.markdown-preview ol {
+  padding-left: 1.6em;
+}
+
+.markdown-preview li + li {
+  margin-top: 0.22em;
+}
+
+.markdown-preview blockquote {
+  padding: 0.15em 0 0.15em 0.9em;
+  color: var(--text-soft);
+  border-left: 3px solid var(--accent);
+}
+
+.markdown-preview code {
+  padding: 0.15em 0.35em;
+  background: color-mix(in srgb, var(--bg-subtle) 80%, var(--border));
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.92em;
+}
+
+.markdown-preview pre {
+  padding: 11px 13px;
+  overflow-x: auto;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.markdown-preview pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-preview a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown-preview th {
+  background: var(--bg-subtle);
+}
+
+.markdown-preview input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+  margin-right: 0.35em;
+}
+
+.injected-prompt-preview {
+  min-height: 0;
   max-height: 220px;
-  overflow-y: auto;
+  border-style: dashed;
 }
 
 .agent-section header {

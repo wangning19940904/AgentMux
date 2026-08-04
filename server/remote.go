@@ -19,11 +19,43 @@ func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
 	s.mux.HandleFunc("GET /api/v1/remote/discovered-hosts", s.handleRemoteDiscoveredHosts)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts", s.handleRemoteHostUpsert)
+	s.mux.HandleFunc("POST /api/v1/remote/hosts/import", s.handleRemoteHostImport)
 	s.mux.HandleFunc("DELETE /api/v1/remote/hosts", s.handleRemoteHostDelete)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/test", s.handleRemoteHostTest)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		s.mux.HandleFunc(method+" /api/v1/remote/proxy/{id}/{path...}", s.handleRemoteProxy)
 	}
+}
+
+func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) {
+	if s.remote == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		return
+	}
+	var req struct {
+		Name            string `json:"name"`
+		Host            string `json:"host"`
+		Port            int    `json:"port"`
+		User            string `json:"user"`
+		KeyPath         string `json:"key_path"`
+		SSHAlias        string `json:"ssh_alias"`
+		RemoteAddr      string `json:"remote_addr"`
+		APIToken        string `json:"api_token"`
+		TrustOnFirstUse bool   `json:"trust_on_first_use"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	result, err := s.remote.Import(r.Context(), remotepkg.Host{
+		Name: req.Name, Host: req.Host, Port: req.Port, User: req.User,
+		KeyPath: req.KeyPath, SSHAlias: req.SSHAlias, RemoteAddr: req.RemoteAddr, APIToken: req.APIToken,
+	}, req.TrustOnFirstUse)
+	if err != nil {
+		writeRemoteConnectionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleRemoteHostsList(w http.ResponseWriter, _ *http.Request) {
@@ -55,6 +87,7 @@ func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) 
 		Port          int    `json:"port"`
 		User          string `json:"user"`
 		KeyPath       string `json:"key_path"`
+		SSHAlias      string `json:"ssh_alias"`
 		RemoteAddr    string `json:"remote_addr"`
 		APIToken      string `json:"api_token"`
 		ClearAPIToken bool   `json:"clear_api_token"`
@@ -65,7 +98,7 @@ func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) 
 	}
 	host, err := s.remote.Upsert(remotepkg.Host{
 		ID: req.ID, Name: req.Name, Host: req.Host, Port: req.Port,
-		User: req.User, KeyPath: req.KeyPath, RemoteAddr: req.RemoteAddr,
+		User: req.User, KeyPath: req.KeyPath, SSHAlias: req.SSHAlias, RemoteAddr: req.RemoteAddr,
 		APIToken: req.APIToken,
 	}, req.ClearAPIToken)
 	if err != nil {
@@ -114,23 +147,26 @@ func (s *Server) handleRemoteHostTest(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.remote.Test(r.Context(), id, req.TrustOnFirstUse)
 	if err != nil {
-		code := http.StatusBadGateway
-		var unknown *remotepkg.UnknownHostKeyError
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			code = http.StatusNotFound
-		case errors.As(err, &unknown):
-			code = http.StatusConflict
-			writeJSON(w, code, map[string]any{
-				"error": unknown.Error(), "code": "host_key_untrusted",
-				"host_key_fingerprint": unknown.Fingerprint,
-			})
-			return
-		}
-		writeJSON(w, code, map[string]string{"error": err.Error()})
+		writeRemoteConnectionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func writeRemoteConnectionError(w http.ResponseWriter, err error) {
+	code := http.StatusBadGateway
+	var unknown *remotepkg.UnknownHostKeyError
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		code = http.StatusNotFound
+	case errors.As(err, &unknown):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": unknown.Error(), "code": "host_key_untrusted",
+			"host_key_fingerprint": unknown.Fingerprint,
+		})
+		return
+	}
+	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
 func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {

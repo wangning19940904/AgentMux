@@ -22,6 +22,7 @@ type DiscoveredHost struct {
 	Port         int    `json:"port"`
 	User         string `json:"user"`
 	KeyPath      string `json:"key_path,omitempty"`
+	SSHAlias     string `json:"ssh_alias"`
 	Source       string `json:"source"`
 	ProxyJump    string `json:"proxy_jump,omitempty"`
 	ProxyCommand bool   `json:"proxy_command,omitempty"`
@@ -256,7 +257,7 @@ func isConcreteSSHAlias(candidate string) bool {
 
 func resolveSSHHost(alias, source string, directives []sshConfigDirective, home, currentUser string) DiscoveredHost {
 	host := DiscoveredHost{
-		Name: alias, Host: alias, Port: 22, User: currentUser, Source: source,
+		Name: alias, Host: alias, Port: 22, User: currentUser, SSHAlias: alias, Source: source,
 	}
 	active := true
 	hostSet, portSet, userSet, keySet, proxySet, proxyCommandSet := false, false, false, false, false, false

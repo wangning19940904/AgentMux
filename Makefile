@@ -16,13 +16,14 @@ CMD         := ./cmd/amux
 HOOK_BINARY := agentmux-hook
 HOOK_CMD    := ./cmd/agentmux-hook
 DIST        := dist
+REMOTE_ASSETS := desktop/build/remote-assets
 VERSION     ?= 0.1.0
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 HOOK_LDFLAGS := -s -w
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 WAILS       ?= $(HOME)/go/bin/wails
 
-.PHONY: all build web release cross desktop menubar test vet clean tidy
+.PHONY: all build web release cross remote-assets desktop menubar test vet clean tidy
 
 all: release
 
@@ -56,23 +57,40 @@ cross: web
 	done
 	@echo "artifacts in $(DIST)/"
 
+# CLI payloads used by the desktop Console to bootstrap SSH machines without
+# requiring a pre-existing AgentMux installation on the target.
+remote-assets: web
+	@mkdir -p $(REMOTE_ASSETS)
+	@for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
+		os=$${p%/*}; arch=$${p#*/}; out="$(REMOTE_ASSETS)/amux-$$os-$$arch"; \
+		echo "building remote installer $$out"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -tags embedweb -ldflags "$(LDFLAGS)" -o "$$out" $(CMD) || exit 1; \
+	done
+
 # Wails desktop app. Requires: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 # and a frontend symlink: ln -s ../web desktop/frontend
-desktop: web
+desktop: web remote-assets
 	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
 	@mkdir -p desktop/build
 	@cp assets/branding/agentmux-logo.png desktop/build/appicon.png
 	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
+	@for app_dir in desktop/build/bin/*.app; do \
+		[ -d "$$app_dir" ] || continue; \
+		mkdir -p "$$app_dir/Contents/Resources/agentmux-remote"; \
+		cp $(REMOTE_ASSETS)/amux-* "$$app_dir/Contents/Resources/agentmux-remote/"; \
+	done
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
-		macos_dir="desktop/build/bin/agentmux-desktop.app/Contents/MacOS"; \
-		if [ -d "$$macos_dir" ]; then \
+		for app_dir in desktop/build/bin/*.app; do \
+			[ -d "$$app_dir" ] || continue; \
+			macos_dir="$$app_dir/Contents/MacOS"; \
 			cp macos-menubar/AgentMuxMenuBar "$$macos_dir/AgentMuxMenuBar"; \
 			cp $(HOOK_BINARY) "$$macos_dir/$(HOOK_BINARY)"; \
 			codesign --force --sign - "$$macos_dir/AgentMuxMenuBar"; \
 			codesign --force --sign - "$$macos_dir/$(HOOK_BINARY)"; \
-			codesign --force --deep --sign - "desktop/build/bin/agentmux-desktop.app"; \
-		fi; \
+			codesign --force --deep --sign - "$$app_dir"; \
+		done; \
 	fi
 
 # macOS menu bar app (SwiftUI). macOS only.
@@ -90,7 +108,7 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -rf $(DIST) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentMuxMenuBar
+	rm -rf $(DIST) $(REMOTE_ASSETS) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentMuxMenuBar
 
 # Codesign + notarize macOS artifacts. Set these env vars first:
 #   MACOS_SIGN_IDENTITY  e.g. "Developer ID Application: Your Name (TEAMID)"

@@ -94,6 +94,21 @@ func TestCLICheckEndpointRejectsUnknownTool(t *testing.T) {
 	}
 }
 
+func TestCLISkillSyncEndpointRejectsUnknownTool(t *testing.T) {
+	s, _ := newTestServer(t)
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/tools/cli/skills/sync", cliInstallRequest{ID: "curl"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if errText, _ := body["error"].(string); errText == "" {
+		t.Fatalf("expected rejected result: %+v", body)
+	}
+}
+
 func TestFrameworkCheckEndpointRejectsUnknownFramework(t *testing.T) {
 	s, _ := newTestServer(t)
 	rec := doJSON(t, s, http.MethodPost, "/api/v1/frameworks/check", frameworkInstallRequest{Kind: "not-a-framework"})

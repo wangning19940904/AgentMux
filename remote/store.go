@@ -28,6 +28,7 @@ type Host struct {
 	Port               int    `json:"port"`
 	User               string `json:"user"`
 	KeyPath            string `json:"key_path,omitempty"`
+	SSHAlias           string `json:"ssh_alias,omitempty"`
 	RemoteAddr         string `json:"remote_addr"`
 	APIToken           string `json:"api_token,omitempty"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
@@ -41,6 +42,7 @@ type HostView struct {
 	Port               int    `json:"port"`
 	User               string `json:"user"`
 	KeyPath            string `json:"key_path,omitempty"`
+	SSHAlias           string `json:"ssh_alias,omitempty"`
 	RemoteAddr         string `json:"remote_addr"`
 	APITokenSet        bool   `json:"api_token_set"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
@@ -50,7 +52,7 @@ type HostView struct {
 func (h Host) View() HostView {
 	return HostView{
 		ID: h.ID, Name: h.Name, Host: h.Host, Port: h.Port, User: h.User,
-		KeyPath: h.KeyPath, RemoteAddr: h.RemoteAddr, APITokenSet: h.APIToken != "",
+		KeyPath: h.KeyPath, SSHAlias: h.SSHAlias, RemoteAddr: h.RemoteAddr, APITokenSet: h.APIToken != "",
 		HostKeyFingerprint: h.HostKeyFingerprint, Trusted: h.HostKeyFingerprint != "",
 	}
 }
@@ -155,6 +157,10 @@ func (s *Store) Upsert(host Host, clearAPIToken bool) (Host, error) {
 			current.Host == host.Host && current.Port == host.Port {
 			host.HostKeyFingerprint = current.HostKeyFingerprint
 		}
+		if host.SSHAlias == "" && current.Host == host.Host &&
+			current.Port == host.Port && current.User == host.User {
+			host.SSHAlias = current.SSHAlias
+		}
 	}
 	normalized, err := normalizeHost(host)
 	if err != nil {
@@ -250,6 +256,7 @@ func normalizeHost(host Host) (Host, error) {
 	host.Host = strings.TrimSpace(host.Host)
 	host.User = strings.TrimSpace(host.User)
 	host.KeyPath = strings.TrimSpace(host.KeyPath)
+	host.SSHAlias = strings.TrimSpace(host.SSHAlias)
 	host.RemoteAddr = strings.TrimSpace(host.RemoteAddr)
 	host.APIToken = strings.TrimSpace(host.APIToken)
 	host.HostKeyFingerprint = strings.TrimSpace(host.HostKeyFingerprint)
@@ -261,6 +268,9 @@ func normalizeHost(host Host) (Host, error) {
 	}
 	if strings.ContainsAny(host.Name, "\r\n\x00") {
 		return Host{}, fmt.Errorf("name contains unsupported control characters")
+	}
+	if host.SSHAlias != "" && !isConcreteSSHAlias(host.SSHAlias) {
+		return Host{}, fmt.Errorf("ssh_alias must be a concrete SSH Config host alias")
 	}
 	if host.Host == "" || strings.ContainsAny(host.Host, "/ \t\r\n") ||
 		strings.Contains(host.Host, "://") {

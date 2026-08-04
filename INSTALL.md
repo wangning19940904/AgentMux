@@ -107,7 +107,9 @@ make desktop        # builds the native app via the desktop build tag
 ```
 
 On macOS, `make desktop` also builds and bundles the menu bar helper so the
-desktop app can show a status item while it is running.
+desktop app can show a status item while it is running. It also bundles
+Linux/macOS amd64/arm64 CLI payloads used by **Machines → Import** to install
+AgentMux on an SSH target when the remote service is missing.
 
 The desktop shell starts the daemon in-process and renders the same WebUI.
 

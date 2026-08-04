@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -87,6 +88,7 @@ func openRuntimeStore(cfg *config.Config) (*store.Store, error) {
 
 type daemonOptions struct {
 	addrOverride string
+	sqlitePath   string
 	printConfig  bool
 	printReady   bool
 	printWebUI   bool
@@ -95,7 +97,11 @@ type daemonOptions struct {
 }
 
 func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
-	cfg, st, configPath, err := bootstrapWithPathRequired(!opts.allowDefault)
+	cfg, configPath, err := loadConfig(!opts.allowDefault)
+	if err != nil {
+		return err
+	}
+	st, err := openDaemonStore(cfg, opts.sqlitePath)
 	if err != nil {
 		return err
 	}
@@ -155,6 +161,17 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+func openDaemonStore(cfg *config.Config, sqlitePath string) (*store.Store, error) {
+	if strings.TrimSpace(sqlitePath) == "" {
+		return openRuntimeStore(cfg)
+	}
+	path, err := config.ExpandPath(sqlitePath)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite-path: %w", err)
+	}
+	return store.Open(path)
 }
 
 func serveCmd() *cobra.Command {

@@ -4,9 +4,10 @@ import "github.com/spf13/cobra"
 
 func clientCmd() *cobra.Command {
 	var (
-		addr string
-		web  bool
-		open bool
+		addr       string
+		sqlitePath string
+		web        bool
+		open       bool
 	)
 	cmd := &cobra.Command{
 		Use:   "client",
@@ -20,6 +21,7 @@ func clientCmd() *cobra.Command {
 			}
 			return runDaemon(cmd, daemonOptions{
 				addrOverride: addr,
+				sqlitePath:   sqlitePath,
 				printConfig:  true,
 				printReady:   true,
 				printWebUI:   web,
@@ -29,6 +31,7 @@ func clientCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "", "override server listen address from config")
+	cmd.Flags().StringVar(&sqlitePath, "sqlite-path", "", "use a local SQLite store (intended for self-contained remote clients)")
 	cmd.Flags().BoolVar(&web, "web", false, "print the WebUI URL after startup")
 	cmd.Flags().BoolVar(&open, "open", false, "open the WebUI in a browser")
 	return cmd

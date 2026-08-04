@@ -1,5 +1,7 @@
-import { Bot, Cable, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
+import { Bot, Cable, Eye, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type AgentInstance, type Channel, type Provider, type ProviderRoute, type Trigger } from "../api";
 import { ChannelAvatar } from "../ChannelAvatar";
 import { useI18n } from "../i18n";
@@ -268,7 +270,12 @@ export function AgentsPanel() {
           {items.map((item) => {
             const channelCount = channelItems.filter((ch) => ch.agent_id === item.id).length;
             return (
-              <article className="agent-registry-row" key={item.id}>
+              <article
+                className="agent-registry-row"
+                key={item.id}
+                onDoubleClick={() => editAgent(item)}
+                title={t("agents.doubleClickToEdit")}
+              >
                 <div className="agent-list-main">
                   <span className="provider-icon">
                     <Bot size={15} />
@@ -369,6 +376,7 @@ function AgentForm({
 }) {
   const [directoryBusy, setDirectoryBusy] = useState("");
   const [directoryNotice, setDirectoryNotice] = useState("");
+  const [promptView, setPromptView] = useState<"edit" | "preview">(readOnly ? "preview" : "edit");
   const injectedPrompt = useMemo(() => {
     const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
     const clis = (draft.clis ?? [])
@@ -504,18 +512,51 @@ function AgentForm({
               onChange={(event) => onUpdate("memory_scope", event.target.value)}
             />
           </label>
-          <label className="field wide">
-            <span>{t("agents.systemPrompt")}</span>
-            <textarea
-              disabled={readOnly}
-              rows={3}
-              value={draft.system_prompt ?? ""}
-              onChange={(event) => onUpdate("system_prompt", event.target.value)}
-            />
-          </label>
+          <div className="field wide agent-prompt-field">
+            <div className="field-label-row">
+              <span>{t("agents.systemPrompt")}</span>
+              <div className="markdown-mode-toggle" role="group" aria-label={t("agents.markdownViewMode")}>
+                <button
+                  className={promptView === "edit" ? "active" : ""}
+                  type="button"
+                  aria-pressed={promptView === "edit"}
+                  onClick={() => setPromptView("edit")}
+                >
+                  <Pencil size={13} />
+                  {t("agents.markdownEdit")}
+                </button>
+                <button
+                  className={promptView === "preview" ? "active" : ""}
+                  type="button"
+                  aria-pressed={promptView === "preview"}
+                  onClick={() => setPromptView("preview")}
+                >
+                  <Eye size={14} />
+                  {t("agents.markdownPreview")}
+                </button>
+              </div>
+            </div>
+            {promptView === "edit" ? (
+              <textarea
+                className="markdown-editor"
+                disabled={readOnly}
+                rows={8}
+                value={draft.system_prompt ?? ""}
+                onChange={(event) => onUpdate("system_prompt", event.target.value)}
+                placeholder={t("agents.markdownPlaceholder")}
+              />
+            ) : (
+              <MarkdownPreview content={draft.system_prompt ?? ""} empty={t("agents.markdownPreviewEmpty")} />
+            )}
+            <small>{t("agents.markdownHelp")}</small>
+          </div>
           <div className="field wide">
             <span>{t("agents.injectedPrompt")}</span>
-            <pre className="injected-prompt-preview">{injectedPrompt || t("agents.injectedPromptEmpty")}</pre>
+            <MarkdownPreview
+              className="injected-prompt-preview"
+              content={injectedPrompt}
+              empty={t("agents.injectedPromptEmpty")}
+            />
             <small>{t("agents.injectedPromptHelp")}</small>
           </div>
         </div>
@@ -717,6 +758,28 @@ function Summary({ label, value }: { label: string; value: number }) {
     <div className="summary-stat">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function MarkdownPreview({
+  className = "",
+  content,
+  empty,
+}: {
+  className?: string;
+  content: string;
+  empty: string;
+}) {
+  if (!content.trim()) {
+    return <div className={`markdown-preview markdown-preview-empty ${className}`.trim()}>{empty}</div>;
+  }
+
+  return (
+    <div className={`markdown-preview ${className}`.trim()}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

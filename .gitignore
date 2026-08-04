@@ -14,6 +14,9 @@ web/dist/
 # Local third-party reference checkouts
 /external/cc-connect/
 /external/cc-switch/
+/external/ccusage/
+/external/codeburn/
+/external/cc-statistics/
 
 # Local data / databases
 *.db

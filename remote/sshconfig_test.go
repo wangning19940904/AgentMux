@@ -59,6 +59,9 @@ Host bastion
 	if build.Host != "10.0.0.8" || build.User != "deploy" || build.Port != 2222 {
 		t.Fatalf("build = %+v", build)
 	}
+	if build.SSHAlias != "build" {
+		t.Fatalf("build SSH alias = %q", build.SSHAlias)
+	}
 	if build.KeyPath != filepath.Join(sshDir, "build_ed25519") {
 		t.Fatalf("build key = %q", build.KeyPath)
 	}
