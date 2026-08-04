@@ -79,6 +79,13 @@ var marketplace = []MarketplaceSkill{
 		Trusted:     true,
 	},
 	{
+		Name: "agent-browser", Category: "browser", Source: "vercel-labs", Repo: "vercel-labs/agent-browser",
+		Path:        "skills/agent-browser",
+		Description: "Automate websites and Electron apps with the agent-browser CLI and its version-matched bundled skills.",
+		URL:         "https://github.com/vercel-labs/agent-browser/tree/main/skills/agent-browser",
+		Trusted:     true,
+	},
+	{
 		Name: "brooks-lint", Category: "development", Source: "awesome-codex-skills", Repo: "hyhmrright/brooks-lint",
 		Path:        "skills/brooks-lint",
 		Description: "Run engineering-quality reviews grounded in classic software engineering books.",

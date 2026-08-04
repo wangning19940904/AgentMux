@@ -37,6 +37,123 @@ func TestInstallCLIUsesWhitelistAndVerifiesCommand(t *testing.T) {
 	}
 }
 
+func TestInstallAgentBrowserRunsBrowserSetup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	bin := t.TempDir()
+	setupMarker := filepath.Join(bin, "browser-installed")
+	agentBrowser := filepath.Join(bin, "agent-browser")
+	writeExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\ncat > '"+agentBrowser+"' <<'EOS'\n#!/bin/sh\nif [ \"$1\" = \"install\" ]; then touch '"+setupMarker+"'; echo browser-installed; exit 0; fi\necho 'agent-browser 1.2.3'\nEOS\nchmod +x '"+agentBrowser+"'\necho cli-installed\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	res := InstallCLI(context.Background(), "agent-browser", "install")
+	if !res.OK || !strings.Contains(res.Version, "1.2.3") {
+		t.Fatalf("install result = %+v", res)
+	}
+	if res.Command != "npm install -g agent-browser@latest && agent-browser install" {
+		t.Fatalf("command = %q", res.Command)
+	}
+	if _, err := os.Stat(setupMarker); err != nil {
+		t.Fatalf("browser setup did not run: %v", err)
+	}
+}
+
+func TestCLICatalogIncludesAgentBrowser(t *testing.T) {
+	spec, ok := LookupCLI("agent-browser")
+	if !ok {
+		t.Fatal("agent-browser missing from CLI catalog")
+	}
+	if spec.Bin != "agent-browser" || spec.Package != "agent-browser" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	if strings.Join(spec.PostInstallCommand, " ") != "agent-browser install" {
+		t.Fatalf("post-install command = %v", spec.PostInstallCommand)
+	}
+}
+
+func TestCLICatalogIncludesCISCLIWithVersionMatchedSkill(t *testing.T) {
+	spec, ok := LookupCLI("cis-cli")
+	if !ok {
+		t.Fatal("cis-cli missing from CLI catalog")
+	}
+	if spec.Bin != "cis-cli" || spec.Package != "@byted/cis-cli" || spec.Registry != "https://bnpm.byted.org/" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	if len(spec.LinkedSkills) != 1 {
+		t.Fatalf("linked skills = %+v", spec.LinkedSkills)
+	}
+	linked := spec.LinkedSkills[0]
+	if linked.ID != "cis-cli" || !linked.MatchCLIVersion || linked.Source != "skills.byted.org/default/public/cis-cli" {
+		t.Fatalf("linked skill = %+v", linked)
+	}
+	if strings.Join(linked.InstallCommand, " ") != "cis-cli install-skills --dir {agentmux_skills_dir} --force" {
+		t.Fatalf("skill install command = %v", linked.InstallCommand)
+	}
+}
+
+func TestDetectCLIReportsLinkedSkillVersionDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	writeExecutable(t, filepath.Join(bin, "cis-cli"), "#!/bin/sh\necho '0.41.0'\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	skillDir := filepath.Join(home, ".agentmux", "tools", "skills", "cis-cli")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: cis-cli\nversion: \"0.40.0\"\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, _ := LookupCLI("cis-cli")
+	st := DetectCLI(context.Background(), spec)
+	if len(st.LinkedSkills) != 1 || !st.LinkedSkills[0].Installed || st.LinkedSkills[0].InSync {
+		t.Fatalf("status = %+v", st)
+	}
+	if !strings.Contains(st.LinkedSkills[0].Detail, "does not match") {
+		t.Fatalf("detail = %q", st.LinkedSkills[0].Detail)
+	}
+}
+
+func TestSyncCLILinkedSkillsInstallsIntoAgentMuxLibrary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeExecutable(t, filepath.Join(bin, "cis-cli"), `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo '0.41.0'
+  exit 0
+fi
+if [ "$1" = "install-skills" ] && [ "$2" = "--dir" ]; then
+  mkdir -p "$3/cis-cli"
+  printf '%s\n' '---' 'name: cis-cli' 'version: "0.41.0"' '---' > "$3/cis-cli/SKILL.md"
+  echo 'skills-synced'
+  exit 0
+fi
+exit 1
+`)
+
+	res := SyncCLILinkedSkills(context.Background(), "cis-cli")
+	if !res.OK || res.Action != "sync-skills" || len(res.LinkedSkills) != 1 || !res.LinkedSkills[0].OK {
+		t.Fatalf("sync result = %+v", res)
+	}
+	wantDir := filepath.Join(home, ".agentmux", "tools", "skills")
+	if !strings.Contains(res.Command, "cis-cli install-skills --dir "+wantDir+" --force") {
+		t.Fatalf("command = %q", res.Command)
+	}
+	if res.LinkedSkills[0].Version != "0.41.0" {
+		t.Fatalf("linked skill = %+v", res.LinkedSkills[0])
+	}
+}
+
 func TestCheckCLIUpdateDetectsAvailableVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")

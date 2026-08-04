@@ -34,7 +34,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
-- **SSH 远程控制** — 在本机保存远程机器档案，通过 SSH 隧道切换到另一台 AgentMux，直接复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **SSH 远程控制** — 从 SSH Config 一键导入远程机器，验证 SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
 
 ## 架构
 
@@ -141,6 +141,7 @@ POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
 GET    /api/v1/remote/hosts                    # 本机保存的 SSH 机器（敏感字段脱敏）
 GET    /api/v1/remote/discovered-hosts         # 从 ~/.ssh/config 发现可导入的 Host 别名
 POST   /api/v1/remote/hosts                    # 新建/更新 SSH 机器
+POST   /api/v1/remote/hosts/import             # 验证 SSH、探测/安装 AgentMux 后导入
 DELETE /api/v1/remote/hosts?id=                # 删除 SSH 机器
 POST   /api/v1/remote/hosts/test?id=           # 测试连接并确认主机指纹
 
@@ -187,7 +188,8 @@ POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall
 ## 安全说明
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
-- SSH 远程控制仅支持私钥/`ssh-agent`，不保存 SSH 密码；首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
+- SSH 远程控制优先使用私钥/`ssh-agent`；从 SSH Config 导入的主机也可回退到系统 OpenSSH 的非交互认证（例如 GSSAPI），且不保存 SSH 密码。首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
+- 自动安装的远程 AgentMux 使用独立的 `~/.agentmux/agentmux.db` SQLite 存储，无需在目标机安装 PostgreSQL；本机与常规服务端仍默认使用 PostgreSQL。
 - Provider API key 在 PostgreSQL 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
 - SSH 采集器为本地工具便利使用 `InsecureIgnoreHostKey`;在不可信网络中使用前请固定 host key。
 - Observability 内容不会明文写入 PostgreSQL：已知 Secret、Authorization、Cookie、API Key 与隐藏 reasoning 在持久化前删除；macOS 主密钥位于 Keychain，其他平台未显式配置安全密钥时自动退化为 metadata-only。

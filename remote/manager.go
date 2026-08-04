@@ -21,7 +21,7 @@ import (
 
 type cachedClient struct {
 	host   Host
-	client *ssh.Client
+	client remoteClient
 }
 
 // Manager owns persisted profiles and reusable SSH connections.
@@ -29,6 +29,7 @@ type Manager struct {
 	store   *Store
 	log     *slog.Logger
 	timeout time.Duration
+	install func(context.Context, remoteClient, Host) error
 	mu      sync.Mutex
 	clients map[string]*cachedClient
 }
@@ -39,6 +40,12 @@ type TestResult struct {
 	LatencyMS          int64          `json:"latency_ms"`
 	HostKeyFingerprint string         `json:"host_key_fingerprint"`
 	Status             map[string]any `json:"status,omitempty"`
+	Installed          bool           `json:"installed,omitempty"`
+}
+
+type ImportResult struct {
+	Host HostView `json:"host"`
+	TestResult
 }
 
 type UnknownHostKeyError struct {
@@ -58,7 +65,8 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 		timeout = 10 * time.Second
 	}
 	return &Manager{
-		store: store, log: log, timeout: timeout, clients: map[string]*cachedClient{},
+		store: store, log: log, timeout: timeout, install: installRemoteAgentMux,
+		clients: map[string]*cachedClient{},
 	}, nil
 }
 
@@ -87,6 +95,65 @@ func (m *Manager) Delete(id string) error {
 	return m.store.Delete(id)
 }
 
+// Import verifies a discovered SSH target before persisting it. A successful
+// import always leaves the host ready for the Console: SSH works, the host key
+// is pinned, and the remote AgentMux status endpoint is reachable. When SSH is
+// healthy but the loopback service is absent, the matching bundled CLI is
+// installed and started automatically.
+func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bool) (ImportResult, error) {
+	if candidate.ID == "" {
+		candidate.ID = "pending-import"
+	}
+	host, err := normalizeHost(candidate)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	existing, found := m.find(host)
+	if found {
+		host.ID = existing.ID
+		if host.APIToken == "" {
+			host.APIToken = existing.APIToken
+		}
+		host.HostKeyFingerprint = existing.HostKeyFingerprint
+	}
+	started := time.Now()
+	client, fingerprint, err := m.dial(ctx, host, trustOnFirstUse)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	keepClient := false
+	defer func() {
+		if !keepClient {
+			_ = client.Close()
+		}
+	}()
+	if host.HostKeyFingerprint == "" {
+		if !trustOnFirstUse {
+			return ImportResult{}, &UnknownHostKeyError{Fingerprint: fingerprint}
+		}
+		host.HostKeyFingerprint = fingerprint
+	}
+
+	status, installed, err := m.ensureService(ctx, client, host)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	if !found {
+		host.ID = ""
+	}
+	saved, err := m.store.Upsert(host, false)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	m.cache(saved, client)
+	keepClient = true
+	result := TestResult{
+		OK: true, Name: saved.Name, LatencyMS: time.Since(started).Milliseconds(),
+		HostKeyFingerprint: saved.HostKeyFingerprint, Status: status, Installed: installed,
+	}
+	return ImportResult{Host: saved.View(), TestResult: result}, nil
+}
+
 func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (TestResult, error) {
 	host, ok := m.store.Get(id)
 	if !ok {
@@ -112,24 +179,66 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 			return TestResult{}, err
 		}
 	}
-	status, err := requestStatus(ctx, client, host)
+	status, installed, err := m.ensureService(ctx, client, host)
 	if err != nil {
 		return TestResult{}, err
 	}
-	m.mu.Lock()
-	if current := m.clients[id]; current != nil {
-		_ = current.client.Close()
-	}
-	m.clients[id] = &cachedClient{host: host, client: client}
-	m.mu.Unlock()
+	m.cache(host, client)
 	keepClient = true
 	return TestResult{
 		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
-		HostKeyFingerprint: host.HostKeyFingerprint, Status: status,
+		HostKeyFingerprint: host.HostKeyFingerprint, Status: status, Installed: installed,
 	}, nil
 }
 
-func requestStatus(ctx context.Context, client *ssh.Client, host Host) (map[string]any, error) {
+func (m *Manager) ensureService(ctx context.Context, client remoteClient, host Host) (map[string]any, bool, error) {
+	status, err := requestStatus(ctx, client, host)
+	if err == nil {
+		return status, false, nil
+	}
+	var unavailable *ServiceUnavailableError
+	if !errors.As(err, &unavailable) {
+		return nil, false, err
+	}
+	if m.install == nil {
+		return nil, false, err
+	}
+	if m.log != nil {
+		m.log.Info("remote AgentMux is not running; installing it", "remote", host.Name)
+	}
+	if installErr := m.install(ctx, client, host); installErr != nil {
+		return nil, false, fmt.Errorf("install remote AgentMux: %w", installErr)
+	}
+	deadline := time.Now().Add(12 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		status, lastErr = requestStatus(ctx, client, host)
+		if lastErr == nil {
+			return status, true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	logText, _ := remoteAgentMuxLog(ctx, client)
+	if logText != "" {
+		return nil, false, fmt.Errorf("start remote AgentMux: %v; remote log: %s", lastErr, logText)
+	}
+	return nil, false, fmt.Errorf("start remote AgentMux: %w", lastErr)
+}
+
+// ServiceUnavailableError means the SSH connection succeeded but nothing
+// accepted the configured AgentMux loopback connection. HTTP errors are not
+// classified this way because they usually indicate an already-running
+// service with an authentication or configuration problem.
+type ServiceUnavailableError struct{ Err error }
+
+func (e *ServiceUnavailableError) Error() string { return "reach remote AgentMux: " + e.Err.Error() }
+func (e *ServiceUnavailableError) Unwrap() error { return e.Err }
+
+func requestStatus(ctx context.Context, client remoteClient, host Host) (map[string]any, error) {
 	transport := &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -147,7 +256,7 @@ func requestStatus(ctx context.Context, client *ssh.Client, host Host) (map[stri
 	}
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach remote AgentMux: %w", err)
+		return nil, &ServiceUnavailableError{Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -159,6 +268,25 @@ func requestStatus(ctx context.Context, client *ssh.Client, host Host) (map[stri
 		return nil, fmt.Errorf("decode remote status: %w", err)
 	}
 	return status, nil
+}
+
+func (m *Manager) find(candidate Host) (Host, bool) {
+	for _, host := range m.store.List() {
+		if strings.EqualFold(strings.TrimSpace(host.Host), strings.TrimSpace(candidate.Host)) &&
+			host.Port == candidate.Port && strings.TrimSpace(host.User) == strings.TrimSpace(candidate.User) {
+			return host, true
+		}
+	}
+	return Host{}, false
+}
+
+func (m *Manager) cache(host Host, client remoteClient) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current := m.clients[host.ID]; current != nil && current.client != client {
+		_ = current.client.Close()
+	}
+	m.clients[host.ID] = &cachedClient{host: host, client: client}
 }
 
 // DialContext opens a TCP connection from the SSH host to the configured
@@ -186,11 +314,12 @@ func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn
 	return nil, errors.New("open SSH tunnel failed")
 }
 
-func (m *Manager) client(ctx context.Context, host Host) (*ssh.Client, error) {
+func (m *Manager) client(ctx context.Context, host Host) (remoteClient, error) {
 	m.mu.Lock()
 	if cached := m.clients[host.ID]; cached != nil &&
 		cached.host.Host == host.Host && cached.host.Port == host.Port &&
 		cached.host.User == host.User && cached.host.KeyPath == host.KeyPath &&
+		cached.host.SSHAlias == host.SSHAlias &&
 		cached.host.HostKeyFingerprint == host.HostKeyFingerprint {
 		client := cached.client
 		m.mu.Unlock()
@@ -213,14 +342,13 @@ func (m *Manager) client(ctx context.Context, host Host) (*ssh.Client, error) {
 	return client, nil
 }
 
-func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (*ssh.Client, string, error) {
-	auth, cleanup, err := authMethods(host)
-	if err != nil {
-		return nil, "", err
-	}
+func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (remoteClient, string, error) {
+	auth, cleanup, authErr := authMethods(host)
 	defer cleanup()
 	var observedFingerprint string
+	var observedKey ssh.PublicKey
 	callback := func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		observedKey = key
 		observedFingerprint = ssh.FingerprintSHA256(key)
 		if host.HostKeyFingerprint == "" {
 			if trustOnFirstUse {
@@ -245,11 +373,41 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (*s
 		User: host.User, Auth: auth, HostKeyCallback: callback, Timeout: m.timeout,
 	})
 	_ = raw.SetDeadline(time.Time{})
-	if err != nil {
-		_ = raw.Close()
-		return nil, observedFingerprint, fmt.Errorf("SSH handshake %s: %w", address, err)
+	if err == nil {
+		return &nativeSSHClient{client: ssh.NewClient(conn, chans, reqs)}, observedFingerprint, nil
 	}
-	return ssh.NewClient(conn, chans, reqs), observedFingerprint, nil
+	_ = raw.Close()
+
+	// OpenSSH can provide non-interactive authentication methods that the Go
+	// client cannot, notably GSSAPI on enterprise SSH hosts and credentials
+	// supplied by platform integrations. Only fall back after the native key
+	// exchange has verified (or collected) the exact server host key.
+	if observedKey != nil && isSSHAuthenticationError(err) {
+		fallback, fallbackErr := newOpenSSHRemoteClient(host, observedKey, m.timeout)
+		if fallbackErr == nil {
+			if _, fallbackErr = fallback.Run(ctx, "true", nil); fallbackErr == nil {
+				return fallback, observedFingerprint, nil
+			}
+			_ = fallback.Close()
+		}
+		if authErr != nil {
+			err = authErr
+		}
+		if fallbackErr != nil {
+			return nil, observedFingerprint, fmt.Errorf(
+				"SSH authentication %s: native client: %v; system OpenSSH: %w",
+				address, err, fallbackErr,
+			)
+		}
+	}
+	if authErr != nil && isSSHAuthenticationError(err) {
+		return nil, observedFingerprint, authErr
+	}
+	return nil, observedFingerprint, fmt.Errorf("SSH handshake %s: %w", address, err)
+}
+
+func isSSHAuthenticationError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "unable to authenticate")
 }
 
 func authMethods(host Host) ([]ssh.AuthMethod, func(), error) {
@@ -277,7 +435,7 @@ func authMethods(host Host) ([]ssh.AuthMethod, func(), error) {
 	}
 	if host.KeyPath != "" {
 		if err := addKey(host.KeyPath, true); err != nil {
-			return nil, cleanup, err
+			return methods, cleanup, err
 		}
 	}
 	if socket := strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK")); socket != "" {
@@ -295,8 +453,7 @@ func authMethods(host Host) ([]ssh.AuthMethod, func(), error) {
 		}
 	}
 	if len(methods) == 0 {
-		cleanup()
-		return nil, func() {}, errors.New("no SSH key available; set key_path or load a key into ssh-agent")
+		return methods, cleanup, errors.New("no SSH key available; set key_path, load a key into ssh-agent, or use an SSH Config alias supported by system OpenSSH")
 	}
 	return methods, cleanup, nil
 }

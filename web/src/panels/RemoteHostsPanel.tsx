@@ -18,6 +18,7 @@ import {
   activeRemoteID,
   api,
   DiscoveredRemoteHost,
+  notifyRemoteHostsChanged,
   RemoteConnectionError,
   RemoteHost,
   RemoteTestResult,
@@ -60,8 +61,10 @@ export function RemoteHostsPanel() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [testingID, setTestingID] = useState("");
+  const [importingName, setImportingName] = useState("");
   const [testResults, setTestResults] = useState<Record<string, RemoteTestResult>>({});
   const [pendingFingerprints, setPendingFingerprints] = useState<Record<string, string>>({});
+  const [pendingImportFingerprints, setPendingImportFingerprints] = useState<Record<string, string>>({});
 
   const load = async () => {
     setLoading(true);
@@ -92,24 +95,37 @@ export function RemoteHostsPanel() {
     void loadDiscovered();
   }, []);
 
-  const addDiscovered = (host: DiscoveredRemoteHost) => {
-    setForm({
-      ...emptyForm(),
-      name: host.name,
-      host: host.host,
-      port: host.port,
-      user: host.user,
-      key_path: host.key_path ?? "",
-    });
+  const importDiscovered = async (host: DiscoveredRemoteHost, trustOnFirstUse = false) => {
+    setImportingName(host.name);
     setMessage("");
     setError("");
-    window.requestAnimationFrame(() => {
-      document.querySelector(".remote-host-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+    try {
+      const result = await api.importRemoteHost(host, trustOnFirstUse);
+      setPendingImportFingerprints((current) => {
+        const next = { ...current };
+        delete next[host.name];
+        return next;
+      });
+      setMessage(result.installed ? t("remote.importInstalled") : t("remote.importSucceeded"));
+      await load();
+      notifyRemoteHostsChanged();
+    } catch (cause) {
+      if (
+        cause instanceof RemoteConnectionError &&
+        cause.code === "host_key_untrusted" &&
+        cause.fingerprint
+      ) {
+        setPendingImportFingerprints((current) => ({ ...current, [host.name]: cause.fingerprint! }));
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      setImportingName("");
+    }
   };
 
-  const isConfigured = (candidate: DiscoveredRemoteHost) =>
-    hosts.some(
+  const configuredHost = (candidate: DiscoveredRemoteHost) =>
+    hosts.find(
       (host) =>
         host.host.toLowerCase() === candidate.host.toLowerCase() &&
         host.port === candidate.port &&
@@ -143,6 +159,7 @@ export function RemoteHostsPanel() {
       setMessage(t("remote.saved"));
       setForm(null);
       await load();
+      notifyRemoteHostsChanged();
       if (!saved.trusted) {
         setMessage(t("remote.savedTestHint"));
       }
@@ -164,7 +181,9 @@ export function RemoteHostsPanel() {
         return next;
       });
       setMessage(t("remote.testSucceeded").replace("{latency}", String(result.latency_ms)));
+      if (result.installed) setMessage(t("remote.testInstalled"));
       await load();
+      notifyRemoteHostsChanged();
     } catch (cause) {
       if (
         cause instanceof RemoteConnectionError &&
@@ -187,6 +206,7 @@ export function RemoteHostsPanel() {
       await api.deleteRemoteHost(host.id);
       setMessage(t("remote.deleted"));
       await load();
+      notifyRemoteHostsChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -355,8 +375,10 @@ export function RemoteHostsPanel() {
             </div>
           )}
           {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
-            const configured = isConfigured(host);
+            const configured = configuredHost(host);
             const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
+            const pendingFingerprint = pendingImportFingerprints[host.name];
+            const importing = importingName === host.name;
             return (
               <article key={host.name} className="remote-host-card remote-discovered-card">
                 <div className="remote-host-icon">
@@ -379,17 +401,36 @@ export function RemoteHostsPanel() {
                     {host.proxy_jump && <span>ProxyJump: {host.proxy_jump}</span>}
                     {host.proxy_command && <span>ProxyCommand</span>}
                   </div>
+                  {pendingFingerprint && (
+                    <div className="host-key-confirmation">
+                      <Fingerprint size={18} />
+                      <div>
+                        <strong>{t("remote.confirmFingerprint")}</strong>
+                        <code>{pendingFingerprint}</code>
+                        <span>{t("remote.confirmFingerprintHint")}</span>
+                      </div>
+                      <button className="action" onClick={() => void importDiscovered(host, true)}>
+                        {t("remote.trustInstallAndConnect")}
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="remote-host-actions">
                   <button
-                    className={configured ? "ghost-action" : "action"}
+                    className={configured?.trusted ? "ghost-action" : "action"}
                     type="button"
-                    disabled={configured || requiresProxy}
+                    disabled={Boolean(configured?.trusted) || requiresProxy || importing}
                     title={requiresProxy ? t("remote.proxyUnsupported") : undefined}
-                    onClick={() => addDiscovered(host)}
+                    onClick={() => void importDiscovered(host)}
                   >
-                    {configured ? <CheckCircle2 size={14} /> : <Plus size={14} />}
-                    {configured ? t("remote.imported") : t("remote.import")}
+                    {configured?.trusted ? <CheckCircle2 size={14} /> : <Plus size={14} />}
+                    {importing
+                      ? t("remote.importing")
+                      : configured?.trusted
+                        ? t("remote.imported")
+                        : configured
+                          ? t("remote.finishImport")
+                          : t("remote.import")}
                   </button>
                 </div>
               </article>
