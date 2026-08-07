@@ -239,7 +239,7 @@ export function RemoteHostsPanel() {
         delete next[host.id];
         return next;
       });
-      setMessage(t("remote.testSucceeded").replace("{latency}", String(result.latency_ms)));
+      setMessage(t("remote.testSucceeded", { latency: result.latency_ms }));
       if (result.installed) setMessage(t("remote.testInstalled"));
       const next = await load();
       if (next) notifyRemoteHostsChanged(next);
@@ -259,7 +259,7 @@ export function RemoteHostsPanel() {
   };
 
   const remove = async (host: RemoteHost) => {
-    if (!window.confirm(t("remote.deleteConfirm").replace("{name}", host.name))) return;
+    if (!window.confirm(t("remote.deleteConfirm", { name: host.name }))) return;
     try {
       if (activeRemoteID() === host.id) setActiveRemoteID("");
       await api.deleteRemoteHost(host.id);
@@ -287,9 +287,9 @@ export function RemoteHostsPanel() {
         [host.id]: { ...result, status },
       }));
       const version = result.version || status?.version || "";
-      let nextMessage = t("remote.updateSucceeded").replace("{version}", version);
+      let nextMessage = t("remote.updateSucceeded", { version });
       if (result.backup_path) {
-        nextMessage += ` ${t("remote.updateBackup").replace("{path}", result.backup_path)}`;
+        nextMessage += ` ${t("remote.updateBackup", { path: result.backup_path })}`;
       }
       setMessage(nextMessage);
     } catch (cause) {
@@ -682,7 +682,7 @@ export function RemoteHostsPanel() {
                       <RefreshCw size={18} />
                       <div>
                         <strong>{t("remote.update")}</strong>
-                        <span>{t("remote.updateConfirm").replace("{name}", host.name)}</span>
+                        <span>{t("remote.updateConfirm", { name: host.name })}</span>
                       </div>
                       <div className="remote-update-confirm-actions">
                         <button

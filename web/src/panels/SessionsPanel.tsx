@@ -283,7 +283,7 @@ export function SessionsPanel() {
         <div className="surface-header sessions-toolbar">
           <div>
             <h2>{t("sessions.title")}</h2>
-            <span className="muted">{t("sessions.resultCount").replace("{count}", String(filtered.length))}</span>
+            <span className="muted">{t("sessions.resultCount", { count: filtered.length })}</span>
           </div>
           <div className="control-row">
             <select value={source} onChange={(event) => setSource(event.target.value)} aria-label={t("sessions.source")}>

@@ -1780,7 +1780,7 @@ const messages: Record<Language, Record<string, string>> = {
 
 const I18nContext = createContext({
   language: "en" as Language,
-  t: (key: string) => key,
+  t: (key: string, _params?: Record<string, string | number>) => key,
 });
 
 export function I18nProvider({
@@ -1790,8 +1790,16 @@ export function I18nProvider({
   language: Language;
   children: ReactNode;
 }) {
-  function t(key: string) {
-    return messages[language][key] ?? messages.en[key] ?? key;
+  // t resolves a key in the active language (falling back to English, then the
+  // key itself) and substitutes {name} placeholders from params.
+  function t(key: string, params?: Record<string, string | number>) {
+    let text = messages[language][key] ?? messages.en[key] ?? key;
+    if (params) {
+      for (const [name, value] of Object.entries(params)) {
+        text = text.split(`{${name}}`).join(String(value));
+      }
+    }
+    return text;
   }
 
   return <I18nContext.Provider value={{ language, t }}>{children}</I18nContext.Provider>;

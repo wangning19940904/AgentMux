@@ -388,7 +388,7 @@ export function GatewayPanel() {
         kind: "success",
         text:
           models.length > 0
-            ? t("gateway.modelsFetched").replace("{count}", String(models.length))
+            ? t("gateway.modelsFetched", { count: models.length })
             : t("gateway.modelsFetchEmpty"),
       });
     } catch (error) {
@@ -632,7 +632,7 @@ export function GatewayPanel() {
                       />
                     )}
                     {modelOptions.length > 0 && (
-                      <small>{t("gateway.modelOptionsHint").replace("{count}", String(modelOptions.length))}</small>
+                      <small>{t("gateway.modelOptionsHint", { count: modelOptions.length })}</small>
                     )}
                   </label>
 				  <label className="field">

@@ -233,22 +233,20 @@ export function ProvidersPanel() {
     const models = alert.models?.join(", ") || alert.model || "—";
     switch (alert.type) {
       case "new_models":
-        return t("providers.monitorNewModels")
-          .replace("{provider}", alert.provider_name)
-          .replace("{models}", models);
+        return t("providers.monitorNewModels", { provider: alert.provider_name, models });
       case "removed_models":
-        return t("providers.monitorRemovedModels")
-          .replace("{provider}", alert.provider_name)
-          .replace("{models}", models);
+        return t("providers.monitorRemovedModels", { provider: alert.provider_name, models });
       case "model_error":
-        return t("providers.monitorModelError")
-          .replace("{provider}", alert.provider_name)
-          .replace("{model}", alert.model || "—")
-          .replace("{error}", alert.message || "—");
+        return t("providers.monitorModelError", {
+          provider: alert.provider_name,
+          model: alert.model || "—",
+          error: alert.message || "—",
+        });
       default:
-        return t("providers.monitorProviderError")
-          .replace("{provider}", alert.provider_name)
-          .replace("{error}", alert.message || "—");
+        return t("providers.monitorProviderError", {
+          provider: alert.provider_name,
+          error: alert.message || "—",
+        });
     }
   }
 
@@ -286,7 +284,7 @@ export function ProvidersPanel() {
                 <span>
                   <Bell size={15} />
                   <strong>
-                    {t("providers.monitorAlerts").replace("{count}", String(monitor.data?.alerts.length ?? 0))}
+                    {t("providers.monitorAlerts", { count: monitor.data?.alerts.length ?? 0 })}
                   </strong>
                 </span>
                 <button
@@ -420,11 +418,12 @@ export function ProvidersPanel() {
                   <span>
                     <strong>{status.provider_name}</strong>
                     <small>
-                      {t("providers.monitorCatalogCount").replace("{count}", String(status.catalog_count))}
+                      {t("providers.monitorCatalogCount", { count: status.catalog_count })}
                       {status.checked_models > 0
-                        ? ` · ${t("providers.monitorHealthCount")
-                            .replace("{healthy}", String(status.healthy_models))
-                            .replace("{total}", String(status.checked_models))}`
+                        ? ` · ${t("providers.monitorHealthCount", {
+                            healthy: status.healthy_models,
+                            total: status.checked_models,
+                          })}`
                         : ""}
                     </small>
                     {status.message && <small title={status.message}>{status.message}</small>}
