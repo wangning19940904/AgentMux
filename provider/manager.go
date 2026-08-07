@@ -5,7 +5,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -137,27 +136,6 @@ func (m *Manager) Clear(ctx context.Context, tool string) error {
 		return fmt.Errorf("missing tool")
 	}
 	return m.st.ClearActiveProvider(ctx, tool)
-}
-
-// providerJSON is the on-disk JSON shape (also used by presets import).
-type providerJSON struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Category       string            `json:"category,omitempty"`
-	BaseURL        string            `json:"base_url"`
-	Model          string            `json:"model"`
-	Extra          map[string]string `json:"extra,omitempty"`
-	SettingsConfig map[string]any    `json:"settings_config,omitempty"`
-	Meta           core.ProviderMeta `json:"meta,omitempty"`
-}
-
-// MarshalProvider renders a provider as compact JSON (used by export).
-func MarshalProvider(p *core.Provider) ([]byte, error) {
-	return json.Marshal(providerJSON{
-		ID: p.ID, Name: p.Name, Category: p.Category, BaseURL: p.BaseURL,
-		Model: p.Model, Extra: p.Extra,
-		SettingsConfig: p.SettingsConfig, Meta: p.Meta,
-	})
 }
 
 // ImportPreset creates a provider from a built-in preset id.

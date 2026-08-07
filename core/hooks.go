@@ -35,17 +35,6 @@ const (
 	HookError               HookEvent = "error"
 )
 
-// HookEvents lists all lifecycle events, for UIs that offer a picker.
-func HookEvents() []HookEvent {
-	return []HookEvent{
-		HookMessageReceived, HookMessageSent, HookSessionStarted,
-		HookSessionEnded, HookCronTriggered, HookWebhookTriggered,
-		HookPermission, HookTaskQueued, HookTaskStarted, HookTaskSteered, HookTaskTakenOver,
-		HookTaskInterrupted, HookTaskCompleted, HookInteractionResolved,
-		HookThreadBound, HookError,
-	}
-}
-
 // Hook is a single configured lifecycle reaction.
 type Hook struct {
 	Event   HookEvent

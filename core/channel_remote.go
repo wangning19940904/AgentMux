@@ -851,10 +851,6 @@ func (e *Engine) openRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 	e.emit(ctx, HookMessageSent, data)
 }
 
-func CodexThreadDeepLink(threadID string) string {
-	return "codex://threads/" + strings.TrimSpace(threadID)
-}
-
 func (e *Engine) recoverRemoteTasks(rt *channelRuntime) {
 	if rt == nil || !rt.remoteControlEnabled() || e.channelControl == nil {
 		return

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -438,8 +437,4 @@ func joinQuotedIdentifiers(values []string) string {
 		quoted[index] = quoteIdentifier(value)
 	}
 	return strings.Join(quoted, ",")
-}
-
-func sortMigrationTables(report *SQLiteMigrationReport) {
-	sort.SliceStable(report.Tables, func(i, j int) bool { return report.Tables[i].Name < report.Tables[j].Name })
 }

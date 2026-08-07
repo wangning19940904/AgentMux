@@ -524,22 +524,6 @@ func (s *Store) recordObservation(ctx context.Context, envelope core.Observation
 	return true, nil
 }
 
-func (s *Store) observationEventRecorded(ctx context.Context, eventID, dedupeKey string) (bool, error) {
-	query := `SELECT 1 FROM observation_events WHERE event_id=?`
-	args := []any{eventID}
-	if strings.TrimSpace(dedupeKey) != "" {
-		query += ` OR dedupe_key=?`
-		args = append(args, dedupeKey)
-	}
-	query += ` LIMIT 1`
-	var found int
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
-}
-
 // observationTraceUsageTx applies the same request/attempt source selection as
 // the long-term Usage materializer while the event transaction is still open.
 // This keeps Trace cards and details from summing internal, OTel and Proxy

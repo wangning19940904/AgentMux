@@ -435,13 +435,6 @@ func (e *Engine) handleRuntimeSettingsCommand(sess AgentSession, text string, re
 	return true
 }
 
-// handleModelCommand is retained for package tests and third-party callers
-// that still use the model-only callback. New engine paths call the richer
-// handleRuntimeSettingsCommand above.
-func (e *Engine) handleModelCommand(sess AgentSession, text string, reply func(string), picker func(ModelPickerState) bool) bool {
-	return e.handleRuntimeSettingsCommand(sess, text, reply, nil, picker)
-}
-
 func (e *Engine) handleRuntimeSettingsAction(ctx context.Context, sess AgentSession, msg *Message, agentDefaults *RuntimeSettings, agentID string, update func(RuntimeSettingsPickerState) bool, reply func(string)) bool {
 	if msg == nil || msg.RuntimeSettingsAction == nil {
 		return false
@@ -494,40 +487,6 @@ func (e *Engine) handleRuntimeSettingsAction(ctx context.Context, sess AgentSess
 		}
 	}
 	return true
-}
-
-func parseModelCommand(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-	fields := strings.Fields(text)
-	if len(fields) == 0 || fields[0] != "/model" {
-		return "", false
-	}
-	if len(fields) == 1 {
-		return "", true
-	}
-	return fields[1], true
-}
-
-func formatModelStatus(models ModelSwitchingSession) string {
-	current := models.CurrentModel()
-	if current == "" {
-		current = "(runtime default)"
-	}
-	def := models.DefaultModel()
-	if def == "" {
-		def = "(runtime default)"
-	}
-	return "Current model: " + current + "\nDefault model: " + def + "\n\n" + formatAvailableModels(models.SupportedModels())
-}
-
-func formatAvailableModels(models []string) string {
-	if len(models) == 0 {
-		return "Available models: none configured."
-	}
-	return "Available models:\n- " + strings.Join(models, "\n- ")
 }
 
 func modelPickerState(models ModelSwitchingSession) ModelPickerState {

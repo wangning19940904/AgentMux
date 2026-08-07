@@ -109,9 +109,6 @@ func (s *Server) SetWorkspaceInitializer(initializer core.WorkspaceInitializer) 
 	s.workspace = initializer
 }
 
-// SetSessions attaches the Claude/Codex session manager. Nil disables routes.
-func (s *Server) SetSessions(svc *sessionstore.Service) { s.sessions = svc }
-
 // SetProviderService attaches the takeover-aware provider service (local
 // routing REST + hot-switch path).
 func (s *Server) SetProviderService(svc *providerpkg.Service) {

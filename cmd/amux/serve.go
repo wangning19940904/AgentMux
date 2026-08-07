@@ -29,28 +29,6 @@ func loadConfig(required bool) (*config.Config, string, error) {
 	return cfg, path, nil
 }
 
-// bootstrap loads config + opens the store. Shared by serve/web/client.
-func bootstrap() (*config.Config, *store.Store, error) {
-	cfg, st, _, err := bootstrapWithPath()
-	return cfg, st, err
-}
-
-func bootstrapWithPath() (*config.Config, *store.Store, string, error) {
-	return bootstrapWithPathRequired(true)
-}
-
-func bootstrapWithPathRequired(required bool) (*config.Config, *store.Store, string, error) {
-	cfg, path, err := loadConfig(required)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	st, err := openRuntimeStore(cfg)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	return cfg, st, path, nil
-}
-
 // bootstrapStore opens just the store, tolerating a missing config file. Used
 // by commands that only need the DB (provider, usage) so they work without a
 // config.toml present.

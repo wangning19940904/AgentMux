@@ -501,14 +501,6 @@ backup="$HOME/.agentmux/backups/agentmux-pre-postgres-$(date +%Y%m%d-%H%M%S).db"
 	return nil
 }
 
-func startRemoteService(ctx context.Context, client remoteClient, remoteOS, addr string) error {
-	databaseURL, err := prepareRemotePostgres(ctx, client, remoteOS)
-	if err != nil {
-		return err
-	}
-	return startRemoteServiceAt(ctx, client, remoteOS, addr, databaseURL)
-}
-
 func startRemoteServiceAt(ctx context.Context, client remoteClient, remoteOS, addr, databaseURL string) error {
 	serviceDatabaseURL := systemdQuoteArg(databaseURL)
 	shellDatabaseURL := shellQuote(databaseURL)

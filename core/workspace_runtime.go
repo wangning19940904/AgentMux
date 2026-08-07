@@ -98,18 +98,3 @@ func (e *Engine) initializeWorkspace(ctx context.Context, opts WorkspaceInitOpti
 	}
 	return workDir, nil
 }
-
-func (rt *channelRuntime) prepareWorkspace(ctx context.Context) (string, error) {
-	if rt == nil {
-		return "", fmt.Errorf("channel runtime is nil")
-	}
-	opts := rt.workspace
-	if opts.WorkDir == "" {
-		opts.WorkDir = rt.workDir
-	}
-	return rt.engine().initializeWorkspace(ctx, opts, rt.workDir)
-}
-
-func (rt *channelRuntime) engine() *Engine {
-	return rt.owner
-}

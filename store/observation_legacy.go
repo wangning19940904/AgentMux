@@ -265,10 +265,6 @@ type legacyUsageRow struct {
 	Host             string
 }
 
-func (s *Store) loadLegacyUsageRows(ctx context.Context) ([]legacyUsageRow, error) {
-	return s.loadLegacyUsageRowsAfter(ctx, 0, 0)
-}
-
 func (s *Store) loadLegacyUsageRowsAfter(ctx context.Context, after int64, limit int) ([]legacyUsageRow, error) {
 	query := `SELECT rowid,
 		COALESCE(source,''),COALESCE(session_id,''),COALESCE(conversation_id,''),COALESCE(trace_id,''),

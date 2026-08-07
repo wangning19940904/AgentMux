@@ -92,10 +92,6 @@ func NewManager(options Options) (*Manager, error) {
 	}, nil
 }
 
-func errorsNoAssets() error {
-	return fmt.Errorf("AgentMux native integration assets were not found; set AGENTMUX_INTEGRATION_ASSETS")
-}
-
 // DefaultAssetsDir locates source-tree or packaged marketplace assets without
 // reading or changing any user configuration.
 func DefaultAssetsDir() string {

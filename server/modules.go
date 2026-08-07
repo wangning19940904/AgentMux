@@ -37,7 +37,7 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"connect": core.RegisteredPlatforms(),
 		"router":  core.RegisteredAgents(),
-		"ledger":  core.RegisteredCollectors(),
+		"ledger":  s.cfg.Usage.Sources,
 		"memory":  core.RegisteredMemories(),
 		"skills":  core.RegisteredSkillManagers(),
 		"mcp":     core.RegisteredMCPRegistries(),

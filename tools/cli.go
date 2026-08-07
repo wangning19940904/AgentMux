@@ -154,13 +154,6 @@ var cliCatalog = []CLISpec{
 	},
 }
 
-// CLICatalog returns the managed CLI catalog.
-func CLICatalog() []CLISpec {
-	out := make([]CLISpec, len(cliCatalog))
-	copy(out, cliCatalog)
-	return out
-}
-
 // DetectCLIs detects all managed CLIs.
 func DetectCLIs(ctx context.Context) []CLIStatus {
 	out := make([]CLIStatus, 0, len(cliCatalog))

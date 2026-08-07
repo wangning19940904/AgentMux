@@ -490,11 +490,6 @@ func (e *Engine) channelRuntime(id string) *channelRuntime {
 	return e.channels[id]
 }
 
-func (e *Engine) duplicateChannelMessage(msg *Message) bool {
-	rt := e.channelRuntime(msg.ChannelID)
-	return rt != nil && rt.duplicateMessage(msg)
-}
-
 // handleChannelMessage routes an inbound message from an attached channel to
 // the bound agent and streams responses back through the channel's platform.
 func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, data map[string]string) {

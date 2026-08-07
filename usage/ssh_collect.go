@@ -32,7 +32,7 @@ func (e *Engine) CollectSSH(ctx context.Context, since time.Time) error {
 			if root == "" {
 				continue
 			}
-			col, err := parser.NewCollector(src, root, nil)
+			col, err := parser.NewCollector(src, root)
 			if err != nil {
 				continue
 			}

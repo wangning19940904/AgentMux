@@ -31,12 +31,8 @@ type toolProgress struct {
 	steps []toolStep
 }
 
-// add records a new tool invocation and returns its index so a later result can
-// be attached to it.
-func (t *toolProgress) add(name, input string) int {
-	return t.addWithID("", name, input)
-}
-
+// addWithID records a new tool invocation and returns its index so a later
+// result can be attached to it. The adapter's stable call id may be empty.
 func (t *toolProgress) addWithID(id, name, input string) int {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -46,15 +42,9 @@ func (t *toolProgress) addWithID(id, name, input string) int {
 	return len(t.steps) - 1
 }
 
-// attachResult records a result summary for the most recent step lacking one
-// (Claude's tool_result frames arrive after the matching tool_use and carry no
-// reliable id we can map, so newest-open-step ordering is the best heuristic).
-func (t *toolProgress) attachResult(result string, failed bool) {
-	t.attachResultForID("", result, failed)
-}
-
 // attachResultForID uses the adapter's stable call id when available, falling
-// back to newest-open ordering for partial generic CLIs.
+// back to newest-open ordering (Claude's tool_result frames arrive after the
+// matching tool_use without a reliable id, so newest-open is the heuristic).
 func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 	result = strings.TrimSpace(result)
 	if id = strings.TrimSpace(id); id != "" {

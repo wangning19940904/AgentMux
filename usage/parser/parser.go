@@ -4,7 +4,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"time"
@@ -14,9 +13,8 @@ import (
 
 // NewCollector builds a collector for the named source. root overrides the
 // default data location (used by SSH-synced data, where remote files are
-// rsynced into a local staging dir); paths is reserved for per-source path
-// overrides.
-func NewCollector(source, root string, paths map[string]string) (core.UsageCollector, error) {
+// rsynced into a local staging dir).
+func NewCollector(source, root string) (core.UsageCollector, error) {
 	switch source {
 	case "claude":
 		return &claudeCollector{root: root}, nil
@@ -50,5 +48,3 @@ func skipUnmodified(d os.DirEntry, since time.Time) bool {
 	}
 	return info.ModTime().Before(since)
 }
-
-var _ = context.Background

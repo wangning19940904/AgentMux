@@ -17,8 +17,8 @@ func TestToolProgressRenderEmptyPassthrough(t *testing.T) {
 
 func TestToolProgressRendersCompactSummaryAfterAnswer(t *testing.T) {
 	var tp toolProgress
-	tp.add("执行命令", "bytedcli codebase list --format json")
-	tp.attachResult("found 12 codebases", false)
+	tp.addWithID("", "执行命令", "bytedcli codebase list --format json")
+	tp.attachResultForID("", "found 12 codebases", false)
 
 	out := tp.render("", "这是笑话", true)
 	for _, want := range []string{
@@ -39,7 +39,7 @@ func TestToolProgressRendersCompactSummaryAfterAnswer(t *testing.T) {
 
 func TestToolProgressInProgressMarker(t *testing.T) {
 	var tp toolProgress
-	tp.add("Read", "a.go")
+	tp.addWithID("", "Read", "a.go")
 	out := tp.render("", "", false)
 	if !strings.Contains(out, "进行中") || !strings.Contains(out, "调用摘要：a.go") || !strings.Contains(out, "结果摘要：执行中…") {
 		t.Fatalf("streaming render should mark in-progress:\n%s", out)
@@ -49,10 +49,10 @@ func TestToolProgressInProgressMarker(t *testing.T) {
 func TestToolProgressSummarizesManyStepsAtFixedHeight(t *testing.T) {
 	var tp toolProgress
 	for i := 0; i < 5; i++ {
-		tp.add("Tool", "arg")
+		tp.addWithID("", "Tool", "arg")
 	}
-	tp.attachResult("ok", false)
-	tp.attachResult("failed", true)
+	tp.attachResultForID("", "ok", false)
+	tp.attachResultForID("", "failed", true)
 	out := tp.render("", "answer", true)
 	if !strings.Contains(out, "工具执行 (5，详情已折叠)") || !strings.Contains(out, "✓ 1 · ✗ 1 · ⏳ 3") {
 		t.Fatalf("expected total count 5, got:\n%s", out)
@@ -67,8 +67,8 @@ func TestToolProgressSummarizesManyStepsAtFixedHeight(t *testing.T) {
 
 func TestToolProgressSummaryIsBoundedAndEscapesCardMarkup(t *testing.T) {
 	var tp toolProgress
-	tp.add("Bash", "run <unsafe> "+strings.Repeat("x", toolInputPreviewRunes))
-	tp.attachResult("ok & "+strings.Repeat("y", toolResultPreviewRunes), false)
+	tp.addWithID("", "Bash", "run <unsafe> "+strings.Repeat("x", toolInputPreviewRunes))
+	tp.attachResultForID("", "ok & "+strings.Repeat("y", toolResultPreviewRunes), false)
 	out := tp.render("", "done", true)
 	for _, want := range []string{"run &lt;unsafe&gt;", "ok &amp;", "…"} {
 		if !strings.Contains(out, want) {
@@ -105,10 +105,10 @@ func TestToolProgressFinishedThinkingSummaryIsQuotedAndSecondary(t *testing.T) {
 
 func TestToolProgressAttachResultTargetsNewestOpen(t *testing.T) {
 	var tp toolProgress
-	tp.add("A", "")
-	tp.add("B", "")
-	tp.attachResult("resB", false)
-	tp.attachResult("resA", true)
+	tp.addWithID("", "A", "")
+	tp.addWithID("", "B", "")
+	tp.attachResultForID("", "resB", false)
+	tp.attachResultForID("", "resA", true)
 	if tp.steps[1].result != "resB" || tp.steps[1].failed {
 		t.Fatalf("step B = %#v", tp.steps[1])
 	}
