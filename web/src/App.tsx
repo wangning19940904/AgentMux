@@ -3,7 +3,6 @@ import type { ErrorInfo, ReactNode } from "react";
 import {
   Activity,
   Blocks,
-  BookOpen,
   Bot,
   Boxes,
   Brain,
@@ -13,7 +12,6 @@ import {
   DatabaseZap,
   ExternalLink,
   Gauge,
-  KeyRound,
   Languages,
   LayoutGrid,
   Moon,
@@ -26,7 +24,6 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  TerminalSquare,
   Workflow,
 } from "lucide-react";
 import { ProvidersPanel } from "./panels/ProvidersPanel";
@@ -305,21 +302,6 @@ function Shell({
             );
           })}
         </nav>
-
-        <div className="sidebar-tools">
-          <button>
-            <KeyRound size={17} />
-            <span>{t("app.apiKeys")}</span>
-          </button>
-          <button>
-            <TerminalSquare size={17} />
-            <span>{t("app.auditLogs")}</span>
-          </button>
-          <button>
-            <BookOpen size={17} />
-            <span>{t("app.docs")}</span>
-          </button>
-        </div>
 
         <div className="account">
           <div className="avatar">AN</div>
