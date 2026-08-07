@@ -85,15 +85,15 @@ func cursorArgs(prompt, _, model, approvalMode string) []string {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	switch approvalMode {
-	case core.ApprovalModeAuto:
-		args = append(args, "--auto-review")
-	case core.ApprovalModePlan:
-		args = append(args, "--plan")
-	case core.ApprovalModeYolo:
-		args = append(args, "--yolo")
-	}
+	args = append(args, cursorApprovalArgs[approvalMode]...)
 	return append(args, prompt)
+}
+
+// cursorApprovalArgs maps each approval mode to its cursor-agent CLI flags.
+var cursorApprovalArgs = map[string][]string{
+	core.ApprovalModeAuto: {"--auto-review"},
+	core.ApprovalModePlan: {"--plan"},
+	core.ApprovalModeYolo: {"--yolo"},
 }
 
 var cursorANSISequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)

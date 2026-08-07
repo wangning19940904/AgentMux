@@ -1122,14 +1122,6 @@ func (s *codexSession) withStderr(err error) error {
 	return s.client.withStderr(err)
 }
 
-func codexBuildEnv(extra map[string]string) []string {
-	env := os.Environ()
-	for key, value := range extra {
-		env = append(env, key+"="+value)
-	}
-	return env
-}
-
 type codexEventMapper struct {
 	answer         string
 	thinking       string

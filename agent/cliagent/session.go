@@ -4,14 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
 
+	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 	"github.com/wangning19940904/AgentMux/core"
 )
 
@@ -21,46 +19,13 @@ const (
 )
 
 type session struct {
-	agent    *Agent
-	workDir  string
-	id       string
-	settings *core.RuntimeSettingsSelection
+	runner.Settings
+	agent   *Agent
+	workDir string
+	id      string
 }
 
 func (s *session) ID() string { return s.id }
-
-func (s *session) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabilities {
-	return s.settings.RuntimeSettingsCapabilities()
-}
-func (s *session) CurrentRuntimeSettings() core.RuntimeSettings {
-	return s.settings.CurrentRuntimeSettings()
-}
-func (s *session) DefaultRuntimeSettings() core.RuntimeSettings {
-	return s.settings.DefaultRuntimeSettings()
-}
-func (s *session) SetRuntimeSetting(setting core.RuntimeSetting, value string) error {
-	return s.settings.SetRuntimeSetting(setting, value)
-}
-func (s *session) ResetRuntimeSetting(setting core.RuntimeSetting) error {
-	return s.settings.ResetRuntimeSetting(setting)
-}
-func (s *session) ModelSwitchingSupported() bool {
-	return len(s.RuntimeSettingsCapabilities().Models) > 0
-}
-func (s *session) CurrentModel() string { return s.CurrentRuntimeSettings().Model }
-func (s *session) DefaultModel() string { return s.DefaultRuntimeSettings().Model }
-func (s *session) SupportedModels() []string {
-	options := s.RuntimeSettingsCapabilities().Models
-	models := make([]string, 0, len(options))
-	for _, option := range options {
-		models = append(models, option.Value)
-	}
-	return models
-}
-func (s *session) SetModel(model string) error {
-	return s.SetRuntimeSetting(core.RuntimeSettingModel, model)
-}
-func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
 
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
 	out := make(chan *core.Event, 16)
@@ -77,11 +42,11 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = s.workDir
-	env := buildEnv(s.agent.env)
+	env := runner.BuildEnv(s.agent.env)
 	if s.agent.spec.ApprovalEnv != nil {
-		env = overrideEnv(env, s.agent.spec.ApprovalEnv(settings.ApprovalMode))
+		env = runner.OverrideEnv(env, s.agent.spec.ApprovalEnv(settings.ApprovalMode))
 	}
-	cmd.Env = withTraceparent(env, core.ObservationTraceparent(ctx))
+	cmd.Env = runner.WithTraceparent(env, core.ObservationTraceparent(ctx))
 	stderr := &tailBuffer{limit: stderrTailLimit}
 
 	var stateMu sync.Mutex
@@ -290,54 +255,6 @@ func (w *mappedLineWriter) mapLine(line []byte) {
 
 func (s *session) RespondPermission(ctx context.Context, allow bool) error { return nil }
 func (s *session) Close(ctx context.Context) error                         { return nil }
-
-func buildEnv(extra map[string]string) []string {
-	env := os.Environ()
-	for k, v := range extra {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	return env
-}
-
-func overrideEnv(env []string, overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return env
-	}
-	filtered := make([]string, 0, len(env)+len(overrides))
-	for _, value := range env {
-		key, _, ok := strings.Cut(value, "=")
-		if ok {
-			if _, replaced := overrides[key]; replaced {
-				continue
-			}
-		}
-		filtered = append(filtered, value)
-	}
-	for key, value := range overrides {
-		filtered = append(filtered, key+"="+value)
-	}
-	return filtered
-}
-
-func withTraceparent(env []string, traceparent string) []string {
-	if traceparent == "" {
-		return env
-	}
-	filtered := make([]string, 0, len(env)+1)
-	for _, value := range env {
-		if strings.HasPrefix(value, "TRACEPARENT=") {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	return append(filtered, "TRACEPARENT="+traceparent)
-}
-
-func randID() string {
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
 
 // PlainTextMapper treats every output line as plain assistant text.
 func PlainTextMapper(line []byte) *core.Event {

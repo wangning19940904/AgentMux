@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 	"github.com/wangning19940904/AgentMux/core"
 )
 
@@ -153,7 +154,7 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 		defaultModel = catalog.DefaultModel
 	}
 	models := mergeValues([]string{defaultModel}, a.supportedModels, catalog.Models)
-	settings := core.NewRuntimeSettingsSelection(core.RuntimeSettings{
+	settings := runner.NewSettings(core.RuntimeSettings{
 		Model: defaultModel, ReasoningEffort: a.defaultReasoningEffort,
 		ServiceTier: a.defaultServiceTier, ApprovalMode: a.defaultApprovalMode,
 	}, core.RuntimeSettingsCapabilities{
@@ -162,7 +163,7 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 		ServiceTiers:     core.RuntimeOptions(a.supportedServiceTiers),
 		ApprovalModes:    core.RuntimeOptions(a.supportedApprovalModes),
 	})
-	return &session{agent: a, workDir: workDir, id: a.spec.Name + "-" + randID(), settings: settings}, nil
+	return &session{Settings: settings, agent: a, workDir: workDir, id: a.spec.Name + "-" + runner.RandID()}, nil
 }
 
 func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelCatalog {
@@ -185,7 +186,7 @@ func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelC
 	}
 	cmd := exec.CommandContext(discoveryCtx, bin, append([]string(nil), a.spec.ModelCatalogArgs...)...)
 	cmd.Dir = workDir
-	cmd.Env = overrideEnv(buildEnv(a.env), map[string]string{"NO_COLOR": "1", "TERM": "dumb"})
+	cmd.Env = runner.OverrideEnv(runner.BuildEnv(a.env), map[string]string{"NO_COLOR": "1", "TERM": "dumb"})
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		var catalog ModelCatalog
