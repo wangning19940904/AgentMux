@@ -3,6 +3,7 @@ import { AlertTriangle, Bell, CheckCircle2, Clock, Power, PowerOff, RefreshCw, S
 import { api, Provider, ProviderMonitorAlert, ProviderMonitorConfig } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { usePolling } from "../hooks/usePolling";
 
 // providerProtocol reports the upstream wire protocol a provider speaks. With
 // the unified translation layer a provider only declares its own protocol; the
@@ -121,13 +122,7 @@ export function ProvidersPanel() {
     if (monitor.data?.config) setMonitorConfig(monitor.data.config);
   }, [monitor.data?.config]);
 
-  useEffect(() => {
-    if (!monitorConfig.enabled) return;
-    const timer = window.setInterval(() => {
-      void monitor.reload();
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [monitor.reload, monitorConfig.enabled]);
+  usePolling(monitor.reload, 30_000, { enabled: monitorConfig.enabled });
 
   async function importPreset(p: Provider) {
     setBusy(p.id);
