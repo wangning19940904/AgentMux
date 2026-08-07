@@ -22,6 +22,7 @@ import (
 	"github.com/wangning19940904/AgentMux/server"
 	"github.com/wangning19940904/AgentMux/skills"
 	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/tools"
 	"github.com/wangning19940904/AgentMux/usage"
 	"github.com/wangning19940904/AgentMux/workspace"
 )
@@ -76,9 +77,27 @@ func AttachRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 		}
 	}
 	connectSvc := core.NewConnectService(log, eng, st)
+	connectSvc.SetCLINoteResolver(cliNotes)
 	srv.SetSender(eng)
 	srv.SetConnect(connectSvc)
 	return eng, connectSvc, nil
+}
+
+// cliNotes resolves managed-CLI catalog descriptions for prompt injection.
+func cliNotes(ids []string) []core.CLINote {
+	var notes []core.CLINote
+	for _, id := range ids {
+		spec, ok := tools.LookupCLI(id)
+		if !ok {
+			continue
+		}
+		name := spec.Name
+		if name == "" {
+			name = spec.ID
+		}
+		notes = append(notes, core.CLINote{Name: name, Note: spec.Note})
+	}
+	return notes
 }
 
 // attachObservability builds the observation runtime and fans it out to the

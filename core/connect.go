@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/wangning19940904/AgentMux/tools"
 )
 
 // ConnectService supervises console-managed channels and triggers: it loads
@@ -17,14 +15,26 @@ import (
 // cron triggers and fans engine lifecycle events out to event triggers. It is
 // the runtime behind the console's "Channels & Triggers" panel.
 type ConnectService struct {
-	log   *slog.Logger
-	eng   *Engine
-	store ConnectStore
-	sched *Scheduler
+	log      *slog.Logger
+	eng      *Engine
+	store    ConnectStore
+	sched    *Scheduler
+	cliNotes CLINoteResolver
 
 	mu                sync.Mutex
 	ctx               context.Context
 	unsubscribeEvents func()
+}
+
+// CLINoteResolver maps managed CLI ids to display notes for prompt
+// injection. It is injected by the daemon bootstrap so core does not depend
+// on the tools catalog.
+type CLINoteResolver func(ids []string) []CLINote
+
+// SetCLINoteResolver installs the CLI catalog lookup used when composing
+// agent system prompts. A nil resolver disables CLI notes.
+func (c *ConnectService) SetCLINoteResolver(resolver CLINoteResolver) {
+	c.cliNotes = resolver
 }
 
 // NewConnectService wires the service onto an engine and store. It registers
@@ -449,21 +459,13 @@ func (c *ConnectService) agentChannelLogPaths(ctx context.Context, agentID strin
 	return paths
 }
 
-// agentCLINotes resolves the catalog description for each enabled CLI id.
+// agentCLINotes resolves the catalog description for each enabled CLI id
+// through the injected resolver.
 func (c *ConnectService) agentCLINotes(ids []string) []CLINote {
-	var notes []CLINote
-	for _, id := range ids {
-		spec, ok := tools.LookupCLI(id)
-		if !ok {
-			continue
-		}
-		name := spec.Name
-		if name == "" {
-			name = spec.ID
-		}
-		notes = append(notes, CLINote{Name: name, Note: spec.Note})
+	if c.cliNotes == nil {
+		return nil
 	}
-	return notes
+	return c.cliNotes(ids)
 }
 
 func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInstance) []string {
