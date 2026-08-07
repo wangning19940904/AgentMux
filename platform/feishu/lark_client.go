@@ -854,19 +854,23 @@ func buildRuntimeSettingsPickerCard(msg *core.Message, state core.RuntimeSetting
 	elements := []map[string]any{
 		{
 			"tag": "markdown",
-			"content": fmt.Sprintf("**设置范围**：%s\n**模型**：`%s`\n**思考强度**：`%s`\n**速度**：`%s`", scopeLabel,
-				modelPickerDisplay(state.Settings.Model), modelPickerDisplay(state.Settings.ReasoningEffort), modelPickerDisplay(state.Settings.ServiceTier)),
+			"content": fmt.Sprintf("**设置范围**：%s\n**模型**：`%s`\n**思考强度**：`%s`\n**速度**：`%s`\n**审批模式**：`%s`", scopeLabel,
+				modelPickerDisplay(state.Settings.Model), modelPickerDisplay(state.Settings.ReasoningEffort), modelPickerDisplay(state.Settings.ServiceTier), modelPickerDisplay(state.Settings.ApprovalMode)),
 		},
 	}
 	if state.Notice != "" {
 		elements = append(elements, map[string]any{"tag": "markdown", "content": "<font color='red'>" + state.Notice + "</font>"})
 	}
 	if state.AgentDefaultsEditable {
-		elements = append(elements, runtimeSettingsScopeRow(msg, state.Scope))
+		elements = append(elements, runtimeSettingsSelector(msg, state, core.RuntimeSettingScope, "设置范围", []core.RuntimeOption{
+			{Value: string(core.RuntimeSettingsScopeConversation), Label: "当前会话"},
+			{Value: string(core.RuntimeSettingsScopeAgent), Label: "Agent 默认"},
+		})...)
 	}
-	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingModel, "模型", state.Capabilities.Models)...)
-	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingReasoningEffort, "思考强度", state.Capabilities.ReasoningEfforts)...)
-	elements = append(elements, runtimeSettingsRows(msg, state, core.RuntimeSettingServiceTier, "速度", state.Capabilities.ServiceTiers)...)
+	elements = append(elements, runtimeSettingsSelector(msg, state, core.RuntimeSettingModel, "模型", state.Capabilities.Models)...)
+	elements = append(elements, runtimeSettingsSelector(msg, state, core.RuntimeSettingReasoningEffort, "思考强度", state.Capabilities.ReasoningEfforts)...)
+	elements = append(elements, runtimeSettingsSelector(msg, state, core.RuntimeSettingServiceTier, "速度", state.Capabilities.ServiceTiers)...)
+	elements = append(elements, runtimeSettingsSelector(msg, state, core.RuntimeSettingApprovalMode, "审批模式", state.Capabilities.ApprovalModes)...)
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{"wide_screen_mode": true},
@@ -1022,65 +1026,55 @@ func interactionActionValue(msg *core.Message, task core.ChannelTask, interactio
 	}
 }
 
-func runtimeSettingsScopeRow(msg *core.Message, current core.RuntimeSettingsScope) map[string]any {
-	return runtimeSettingsButtonRow(msg, []runtimeSettingsButton{
-		{label: "当前会话", primary: current == core.RuntimeSettingsScopeConversation, action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeConversation, Setting: core.RuntimeSettingScope}},
-		{label: "Agent 默认", primary: current == core.RuntimeSettingsScopeAgent, action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeAgent, Setting: core.RuntimeSettingScope}},
-	})
-}
-
-type runtimeSettingsButton struct {
-	label   string
-	primary bool
-	action  core.RuntimeSettingsAction
-}
-
-func runtimeSettingsRows(msg *core.Message, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, title string, options []core.RuntimeOption) []map[string]any {
+func runtimeSettingsSelector(msg *core.Message, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, title string, options []core.RuntimeOption) []map[string]any {
 	if len(options) == 0 {
 		if reason := state.Unsupported[setting]; reason != "" {
 			return []map[string]any{{"tag": "markdown", "content": "**" + title + "**：" + reason}}
 		}
 		return nil
 	}
-	rows := []map[string]any{{"tag": "markdown", "content": "**" + title + "**"}}
-	selected := state.Settings.Value(setting)
-	for i := 0; i < len(options); i += 2 {
-		end := i + 2
-		if end > len(options) {
-			end = len(options)
-		}
-		buttons := make([]runtimeSettingsButton, 0, end-i)
-		for _, option := range options[i:end] {
-			label := option.Label
-			if label == "" {
-				label = option.Value
-			}
-			if option.Value == selected {
-				label += " 当前"
-			}
-			buttons = append(buttons, runtimeSettingsButton{
-				label: label, primary: option.Value == selected,
-				action: core.RuntimeSettingsAction{Scope: state.Scope, Setting: setting, Value: option.Value},
-			})
-		}
-		rows = append(rows, runtimeSettingsButtonRow(msg, buttons))
-	}
-	return rows
-}
 
-func runtimeSettingsButtonRow(msg *core.Message, buttons []runtimeSettingsButton) map[string]any {
-	columns := make([]map[string]any, 0, len(buttons))
-	for _, button := range buttons {
-		buttonType := "default"
-		if button.primary {
-			buttonType = "primary"
-		}
-		columns = append(columns, map[string]any{
-			"tag": "column", "width": "weighted", "weight": 1, "vertical_align": "top",
-			"elements": []map[string]any{modelPickerButton(button.label, buttonType, runtimeSettingsActionValue(msg, button.action))},
-		})
+	selected := state.Settings.Value(setting)
+	if setting == core.RuntimeSettingScope {
+		selected = string(state.Scope)
 	}
-	return map[string]any{"tag": "column_set", "flex_mode": "stretch", "background_style": "default", "columns": columns}
+	selectOptions := make([]map[string]any, 0, len(options))
+	hasSelected := false
+	for _, option := range options {
+		label := option.Label
+		if label == "" {
+			label = option.Value
+		}
+		selectOptions = append(selectOptions, map[string]any{
+			"text":  map[string]any{"tag": "plain_text", "content": label},
+			"value": option.Value,
+		})
+		if option.Value == selected {
+			hasSelected = true
+		}
+	}
+
+	selector := map[string]any{
+		"tag":         "select_static",
+		"width":       "fill",
+		"placeholder": map[string]any{"tag": "plain_text", "content": "选择" + title},
+		"options":     selectOptions,
+		"behaviors": []map[string]any{
+			{
+				"type": "callback",
+				"value": runtimeSettingsActionValue(msg, core.RuntimeSettingsAction{
+					Scope: state.Scope, Setting: setting,
+				}),
+			},
+		},
+	}
+	if hasSelected {
+		selector["initial_option"] = selected
+	}
+	return []map[string]any{
+		{"tag": "markdown", "content": "**" + title + "**"},
+		selector,
+	}
 }
 
 func runtimeSettingsActionValue(msg *core.Message, action core.RuntimeSettingsAction) map[string]any {
@@ -1474,6 +1468,14 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 	if action == runtimeSettingsAction {
 		scope := core.RuntimeSettingsScope(stringValue(value["scope"]))
 		setting := core.RuntimeSetting(stringValue(value["setting"]))
+		selectedValue := stringValue(value["value"])
+		if selectedValue == "" {
+			selectedValue = event.Event.Action.Option
+		}
+		if setting == core.RuntimeSettingScope && selectedValue != "" {
+			scope = core.RuntimeSettingsScope(selectedValue)
+			selectedValue = ""
+		}
 		if scope == "" {
 			scope = core.RuntimeSettingsScopeConversation
 		}
@@ -1482,7 +1484,7 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 		}
 		msg.LogOnly = false
 		msg.RuntimeSettingsAction = &core.RuntimeSettingsAction{
-			Scope: scope, Setting: setting, Value: stringValue(value["value"]), Reset: boolValue(value["reset"]),
+			Scope: scope, Setting: setting, Value: selectedValue, Reset: boolValue(value["reset"]),
 		}
 		return msg, true
 	}

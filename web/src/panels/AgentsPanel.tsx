@@ -1,8 +1,22 @@
-import { Bot, Cable, Eye, FolderOpen, FolderPlus, Link2, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
+import { ArrowUp, Bot, Cable, CheckCircle2, ExternalLink, Eye, Folder, FolderOpen, FolderPlus, Link2, LogIn, Pencil, Plus, RefreshCw, Save, Trash2, Workflow, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, type AgentInstance, type Channel, type Provider, type ProviderRoute, type Trigger } from "../api";
+import {
+  activeRemoteID,
+  api,
+  isDesktopApp,
+  openExternalURL,
+  type AgentInstance,
+  type Channel,
+  type FrameworkAuthStatus,
+  type FrameworkLoginResult,
+  type Provider,
+  type ProviderRoute,
+  type SystemDirectoryListing,
+  type Trigger,
+} from "../api";
 import { ChannelAvatar } from "../ChannelAvatar";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -20,6 +34,7 @@ const EMPTY_AGENT: AgentInstance = {
   default_model: "",
   default_reasoning_effort: "",
   default_service_tier: "",
+  default_approval_mode: "",
   memory_scope: "",
   channel_bindings: [],
   schedules: [],
@@ -123,8 +138,9 @@ export function AgentsPanel() {
         provider_tool: nextRuntimeRouteTool,
         provider_id: key === "runtime_id" ? "" : current.provider_id,
         default_model: routeChanged ? "" : current.default_model,
-		default_reasoning_effort: routeChanged ? "" : current.default_reasoning_effort,
-		default_service_tier: routeChanged ? "" : current.default_service_tier,
+        default_reasoning_effort: routeChanged ? "" : current.default_reasoning_effort,
+        default_service_tier: routeChanged ? "" : current.default_service_tier,
+        default_approval_mode: key === "runtime_id" ? "" : current.default_approval_mode,
       };
     });
   }
@@ -175,7 +191,13 @@ export function AgentsPanel() {
   }
 
   const readOnly = isConfigManaged(draft);
-  const canSave = Boolean(drawerDraft && drawerDraft.name.trim() && drawerDraft.runtime_id && !readOnly);
+  const canSave = Boolean(
+    drawerDraft &&
+      drawerDraft.name.trim() &&
+      drawerDraft.runtime_id &&
+      (drawerMode === "edit" || runtimeOptions.includes(drawerDraft.runtime_id)) &&
+      !readOnly
+  );
   const noticeClass = notice.toLowerCase().includes("failed") || notice.toLowerCase().includes("error") ? " error" : "";
 
   return (
@@ -376,7 +398,14 @@ function AgentForm({
 }) {
   const [directoryBusy, setDirectoryBusy] = useState("");
   const [directoryNotice, setDirectoryNotice] = useState("");
+  const [remoteDirectoryPickerOpen, setRemoteDirectoryPickerOpen] = useState(false);
   const [promptView, setPromptView] = useState<"edit" | "preview">(readOnly ? "preview" : "edit");
+  const [authStatus, setAuthStatus] = useState<FrameworkAuthStatus | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authNotice, setAuthNotice] = useState("");
+  const [loginBusy, setLoginBusy] = useState("");
+  const [loginResult, setLoginResult] = useState<FrameworkLoginResult | null>(null);
+  const [loginCode, setLoginCode] = useState("");
   const injectedPrompt = useMemo(() => {
     const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
     const clis = (draft.clis ?? [])
@@ -395,8 +424,8 @@ function AgentForm({
     : undefined;
   const modelProvider = overrideProvider ?? routeProvider;
   const modelOptions = providerModelOptions(modelProvider);
-	const reasoningOptions = runtimeProviderOptions(modelProvider, "supported_reasoning_efforts");
-	const serviceTierOptions = runtimeProviderOptions(modelProvider, "supported_service_tiers");
+  const reasoningOptions = runtimeProviderOptions(modelProvider, "supported_reasoning_efforts");
+  const serviceTierOptions = runtimeProviderOptions(modelProvider, "supported_service_tiers");
   const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
   const providerStatus = draft.provider_id
     ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
@@ -425,9 +454,104 @@ function AgentForm({
     }
   }, [draft.default_model, modelOptions.join("\u0000"), onUpdate, readOnly]);
 
+  useEffect(() => {
+    let active = true;
+    setAuthStatus(null);
+    setAuthNotice("");
+    setLoginResult(null);
+    setLoginCode("");
+    if (!usingLocalLogin || !draft.runtime_id) {
+      setAuthBusy(false);
+      return () => {
+        active = false;
+      };
+    }
+    setAuthBusy(true);
+    void api.frameworkAuth(draft.runtime_id)
+      .then((status) => {
+        if (active) setAuthStatus(status);
+      })
+      .catch((err) => {
+        if (active) setAuthNotice(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (active) setAuthBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [draft.runtime_id, usingLocalLogin]);
+
+  useEffect(() => {
+    if (!loginResult || !usingLocalLogin || !draft.runtime_id) return;
+    let active = true;
+    const interval = window.setInterval(() => {
+      void api.frameworkAuth(draft.runtime_id).then((status) => {
+        if (!active) return;
+        setAuthStatus(status);
+        if (status.state === "authenticated") {
+          setAuthNotice(t("agents.loginComplete"));
+          window.clearInterval(interval);
+        }
+      }).catch(() => undefined);
+    }, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [draft.runtime_id, loginResult?.session_id, usingLocalLogin, t]);
+
+  async function refreshFrameworkAuth() {
+    if (!draft.runtime_id) return;
+    setAuthBusy(true);
+    setAuthNotice("");
+    try {
+      const status = await api.frameworkAuth(draft.runtime_id);
+      setAuthStatus(status);
+      if (status.state === "authenticated") setAuthNotice(t("agents.loginComplete"));
+    } catch (err) {
+      setAuthNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function startFrameworkLogin() {
+    if (!draft.runtime_id) return;
+    setLoginBusy("start");
+    setAuthNotice("");
+    setLoginResult(null);
+    setLoginCode("");
+    try {
+      setLoginResult(await api.startFrameworkLogin(draft.runtime_id));
+    } catch (err) {
+      setAuthNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoginBusy("");
+    }
+  }
+
+  async function completeFrameworkLogin() {
+    if (!loginResult || !loginCode.trim()) return;
+    setLoginBusy("complete");
+    setAuthNotice("");
+    try {
+      await api.completeFrameworkLogin(loginResult.session_id, loginCode.trim());
+      setAuthNotice(t("agents.loginCodeSubmitted"));
+    } catch (err) {
+      setAuthNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoginBusy("");
+    }
+  }
+
   async function selectWorkDir() {
-    setDirectoryBusy("select");
     setDirectoryNotice("");
+    if (activeRemoteID()) {
+      setRemoteDirectoryPickerOpen(true);
+      return;
+    }
+    setDirectoryBusy("select");
     try {
       const selected = await api.selectDirectory(draft.work_dir ?? "");
       if (selected.path) {
@@ -441,22 +565,20 @@ function AgentForm({
     }
   }
 
-  async function createWorkDir() {
-    setDirectoryBusy("create");
-    setDirectoryNotice("");
-    try {
-      const created = await api.ensureDirectory(draft.work_dir ?? "");
-      onUpdate("work_dir", created.path);
-      setDirectoryNotice(t("agents.workDirCreated"));
-    } catch (err) {
-      setDirectoryNotice(workDirErrorMessage(err, t));
-    } finally {
-      setDirectoryBusy("");
-    }
-  }
-
   return (
     <>
+      {remoteDirectoryPickerOpen && (
+        <RemoteDirectoryPicker
+          initialPath={draft.work_dir ?? ""}
+          onClose={() => setRemoteDirectoryPickerOpen(false)}
+          onSelect={(path) => {
+            onUpdate("work_dir", path);
+            setDirectoryNotice(t("agents.workDirSelected"));
+            setRemoteDirectoryPickerOpen(false);
+          }}
+          t={t}
+        />
+      )}
       <section className="agent-section">
         <header>
           <Workflow size={17} />
@@ -469,7 +591,17 @@ function AgentForm({
           </label>
           <label className="field">
             <span>{t("agents.runtime")}</span>
-            <select disabled={readOnly} value={draft.runtime_id} onChange={(event) => onUpdate("runtime_id", event.target.value)}>
+            <select
+              disabled={readOnly || (drawerMode === "create" && runtimeOptions.length === 0)}
+              value={draft.runtime_id}
+              onChange={(event) => onUpdate("runtime_id", event.target.value)}
+            >
+              {runtimeOptions.length === 0 && <option value="">{t("agents.noInstalledRuntime")}</option>}
+              {drawerMode === "edit" && draft.runtime_id && !runtimeOptions.includes(draft.runtime_id) && (
+                <option value={draft.runtime_id} disabled>
+                  {runtimeLabel(draft.runtime_id)} ({t("gateway.frameworkNotInstalled")})
+                </option>
+              )}
               {runtimeOptions.map((runtime) => (
                 <option key={runtime} value={runtime}>
                   {runtimeLabel(runtime)}
@@ -490,16 +622,6 @@ function AgentForm({
                 aria-label={t("agents.selectWorkDir")}
               >
                 <FolderOpen size={15} />
-              </button>
-              <button
-                className="ghost-action icon-action"
-                disabled={readOnly || directoryBusy === "create"}
-                onClick={createWorkDir}
-                title={t("agents.createWorkDir")}
-                type="button"
-                aria-label={t("agents.createWorkDir")}
-              >
-                <FolderPlus size={15} />
               </button>
             </div>
             {directoryNotice && <small className="directory-notice">{directoryNotice}</small>}
@@ -596,11 +718,79 @@ function AgentForm({
             <small>{providerStatus}</small>
           </label>
           {usingLocalLogin && (
-            <div className="agent-route-notice">
-              <strong>
-                {t("agents.routeMissingTitle")} {runtimeLabel(selectedRouteTool)}
+            <div className={`agent-route-notice${authStatus?.state === "authenticated" ? " success" : ""}`}>
+              <strong className="agent-route-notice-title">
+                {authBusy ? (
+                  <><RefreshCw className="spin" size={14} /> {t("agents.loginChecking")} {runtimeLabel(draft.runtime_id)}</>
+                ) : authStatus?.state === "authenticated" ? (
+                  <><CheckCircle2 size={14} /> {t("agents.localLoginReadyTitle")}</>
+                ) : (
+                  <><LogIn size={14} /> {t("agents.runtimeNotReadyTitle")}</>
+                )}
               </strong>
-              <span>{t("agents.routeMissingLocalLogin")}</span>
+              <span>
+                {authStatus?.state === "authenticated"
+                  ? t("agents.localLoginReady")
+                  : authStatus?.state === "unauthenticated"
+                    ? t("agents.runtimeLoggedOut")
+                    : authStatus && !authStatus.login_supported
+                      ? t("agents.runtimeProviderRequired")
+                      : t("agents.runtimeAuthUnknown")}
+              </span>
+              {authStatus?.state !== "authenticated" && (
+                <div className="agent-route-actions">
+                  {authStatus?.login_supported && (
+                    <button className="action" disabled={authBusy || Boolean(loginBusy)} onClick={startFrameworkLogin} type="button">
+                      <LogIn size={14} />
+                      {loginBusy === "start" ? t("agents.loginStarting") : t("agents.loginFramework")}
+                    </button>
+                  )}
+                  <button className="ghost-action" onClick={() => { window.location.hash = "#providers"; }} type="button">
+                    {t("agents.configureProvider")}
+                  </button>
+                  <button className="ghost-action" disabled={authBusy} onClick={refreshFrameworkAuth} type="button">
+                    <RefreshCw className={authBusy ? "spin" : ""} size={14} />
+                    {t("agents.refreshLoginStatus")}
+                  </button>
+                </div>
+              )}
+              {loginResult?.login_url && authStatus?.state !== "authenticated" && (
+                <div className="agent-login-result">
+                  <span>{t("agents.loginLinkReady")}</span>
+                  <a
+                    href={loginResult.login_url}
+                    onClick={(event) => {
+                      if (!isDesktopApp()) return;
+                      event.preventDefault();
+                      void openExternalURL(loginResult.login_url).catch((err) => {
+                        setAuthNotice(err instanceof Error ? err.message : String(err));
+                      });
+                    }}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <ExternalLink size={14} />
+                    {t("agents.openLoginLink")}
+                  </a>
+                  {loginResult.verification_code && (
+                    <span>{t("agents.verificationCode")} <code>{loginResult.verification_code}</code></span>
+                  )}
+                  {loginResult.input_required && (
+                    <div className="agent-login-code-row">
+                      <input
+                        aria-label={t("agents.loginCodePlaceholder")}
+                        onChange={(event) => setLoginCode(event.target.value)}
+                        placeholder={t("agents.loginCodePlaceholder")}
+                        value={loginCode}
+                      />
+                      <button className="ghost-action" disabled={!loginCode.trim() || Boolean(loginBusy)} onClick={completeFrameworkLogin} type="button">
+                        {loginBusy === "complete" ? t("common.save") : t("agents.submitLoginCode")}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {authNotice && <span className="agent-auth-detail">{authNotice}</span>}
             </div>
           )}
           <label className="field">
@@ -619,22 +809,30 @@ function AgentForm({
             </select>
             <small>{defaultModelStatus}</small>
           </label>
-		  <label className="field">
-			<span>{t("agents.defaultReasoningEffort")}</span>
-			<select disabled={readOnly || reasoningOptions.length === 0} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
-			  <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
-			  {reasoningOptions.map((value) => <option key={value} value={value}>{value}</option>)}
-			</select>
-			<small>{t("agents.defaultReasoningEffortHelp")}</small>
-		  </label>
-		  <label className="field">
-			<span>{t("agents.defaultServiceTier")}</span>
-			<select disabled={readOnly || serviceTierOptions.length === 0} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
-			  <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
-			  {serviceTierOptions.map((value) => <option key={value} value={value}>{serviceTierLabel(value)}</option>)}
-			</select>
-			<small>{t("agents.defaultServiceTierHelp")}</small>
-		  </label>
+          <label className="field">
+            <span>{t("agents.defaultReasoningEffort")}</span>
+            <select disabled={readOnly || reasoningOptions.length === 0} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
+              <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
+              {reasoningOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+            <small>{t("agents.defaultReasoningEffortHelp")}</small>
+          </label>
+          <label className="field">
+            <span>{t("agents.defaultServiceTier")}</span>
+            <select disabled={readOnly || serviceTierOptions.length === 0} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
+              <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
+              {serviceTierOptions.map((value) => <option key={value} value={value}>{serviceTierLabel(value)}</option>)}
+            </select>
+            <small>{t("agents.defaultServiceTierHelp")}</small>
+          </label>
+          <label className="field">
+            <span>{t("agents.defaultApprovalMode")}</span>
+            <select disabled={readOnly || approvalModesForRuntime(draft.runtime_id).length === 0} value={draft.default_approval_mode ?? ""} onChange={(event) => onUpdate("default_approval_mode", event.target.value)}>
+              <option value="">{t("agents.defaultApprovalModePlaceholder")}</option>
+              {approvalModesForRuntime(draft.runtime_id).map((value) => <option key={value} value={value}>{t(approvalModeLabelKey(value))}</option>)}
+            </select>
+            <small>{t("agents.defaultApprovalModeHelp")}</small>
+          </label>
         </div>
       </section>
 
@@ -750,6 +948,261 @@ function AgentForm({
         </button>
       </div>
     </>
+  );
+}
+
+function RemoteDirectoryPicker({
+  initialPath,
+  onClose,
+  onSelect,
+  t,
+}: {
+  initialPath: string;
+  onClose: () => void;
+  onSelect: (path: string) => void;
+  t: (key: string) => string;
+}) {
+  const [listing, setListing] = useState<SystemDirectoryListing | null>(null);
+  const [path, setPath] = useState(initialPath);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newDirectoryName, setNewDirectoryName] = useState("");
+  const [createError, setCreateError] = useState("");
+
+  async function openPath(nextPath: string, fallbackToHome = false) {
+    setBusy(true);
+    setError("");
+    setListing(null);
+    setCreateOpen(false);
+    setNewDirectoryName("");
+    setCreateError("");
+    try {
+      let next: SystemDirectoryListing;
+      try {
+        next = await api.directories(nextPath);
+      } catch (err) {
+        if (!fallbackToHome || !nextPath.trim()) throw err;
+        next = await api.directories("");
+      }
+      setListing(next);
+      setPath(next.path);
+    } catch (err) {
+      setError(workDirErrorMessage(err, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createDirectory() {
+    if (!listing || busy) return;
+    const name = newDirectoryName.trim();
+    if (!name) {
+      setCreateError(t("agents.remoteWorkDirNameRequired"));
+      return;
+    }
+    if (name === "." || name === ".." || name.includes("/")) {
+      setCreateError(t("agents.remoteWorkDirNameInvalid"));
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setCreateError("");
+    const basePath = listing.path === "/" ? "" : listing.path.replace(/\/+$/, "");
+    try {
+      const created = await api.ensureDirectory(`${basePath}/${name}`);
+      await openPath(created.path);
+    } catch (err) {
+      setCreateError(workDirErrorMessage(err, t));
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void openPath(initialPath, true);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (createOpen) {
+        setCreateOpen(false);
+        setNewDirectoryName("");
+        setCreateError("");
+        return;
+      }
+      onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [createOpen, onClose]);
+
+  return createPortal(
+    <div className="remote-directory-picker-layer">
+      <button
+        aria-label={t("common.close")}
+        className="remote-directory-picker-backdrop"
+        onClick={onClose}
+        type="button"
+      />
+      <section
+        aria-labelledby="remote-directory-picker-title"
+        aria-modal="true"
+        className="remote-directory-picker"
+        role="dialog"
+      >
+        <header className="remote-directory-picker-head">
+          <div>
+            <h3 id="remote-directory-picker-title">{t("agents.remoteWorkDirTitle")}</h3>
+            <p>{t("agents.remoteWorkDirHint")}</p>
+          </div>
+          <button className="ghost-action icon-action" onClick={onClose} title={t("common.close")} type="button">
+            <X size={15} />
+          </button>
+        </header>
+
+        <form
+          className="remote-directory-path-bar"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void openPath(path);
+          }}
+        >
+          <input
+            aria-label={t("agents.remoteWorkDirPath")}
+            autoFocus
+            onChange={(event) => {
+              setPath(event.target.value);
+              setCreateOpen(false);
+              setNewDirectoryName("");
+              setCreateError("");
+            }}
+            placeholder={t("agents.remoteWorkDirPath")}
+            spellCheck={false}
+            value={path}
+          />
+          <button className="ghost-action" disabled={busy} type="submit">
+            <FolderOpen size={15} />
+            {t("agents.remoteWorkDirOpen")}
+          </button>
+          <button
+            className="ghost-action"
+            disabled={busy || !listing || path.trim() !== listing.path}
+            onClick={() => {
+              setCreateOpen(true);
+              setNewDirectoryName("");
+              setCreateError("");
+            }}
+            type="button"
+          >
+            <FolderPlus size={15} />
+            {t("agents.remoteWorkDirCreate")}
+          </button>
+        </form>
+
+        <div className="remote-directory-list">
+          {createOpen && listing && (
+            <form
+              className="remote-directory-create-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void createDirectory();
+              }}
+            >
+              <FolderPlus size={17} />
+              <input
+                aria-label={t("agents.remoteWorkDirCreatePlaceholder")}
+                autoFocus
+                disabled={busy}
+                onChange={(event) => {
+                  setNewDirectoryName(event.target.value);
+                  setCreateError("");
+                }}
+                placeholder={t("agents.remoteWorkDirCreatePlaceholder")}
+                spellCheck={false}
+                value={newDirectoryName}
+              />
+              <button className="action" disabled={busy || !newDirectoryName.trim()} type="submit">
+                {t("agents.remoteWorkDirCreate")}
+              </button>
+              <button
+                aria-label={t("common.close")}
+                className="ghost-action icon-action"
+                disabled={busy}
+                onClick={() => {
+                  setCreateOpen(false);
+                  setNewDirectoryName("");
+                  setCreateError("");
+                }}
+                title={t("common.close")}
+                type="button"
+              >
+                <X size={14} />
+              </button>
+              {createError && (
+                <small className="remote-directory-create-error" role="alert">
+                  {createError}
+                </small>
+              )}
+            </form>
+          )}
+          {listing?.parent_path && (
+            <button
+              className="remote-directory-row parent"
+              disabled={busy}
+              onClick={() => void openPath(listing.parent_path ?? "")}
+              type="button"
+            >
+              <ArrowUp size={16} />
+              <span>
+                <strong>{t("agents.remoteWorkDirParent")}</strong>
+                <small>{listing.parent_path}</small>
+              </span>
+            </button>
+          )}
+          {busy && <div className="remote-directory-state">{t("common.loading")}</div>}
+          {!busy && error && <div className="session-notice error">{error}</div>}
+          {!busy && !error && listing?.entries.length === 0 && (
+            <div className="remote-directory-state">{t("agents.remoteWorkDirEmpty")}</div>
+          )}
+          {!busy && !error && listing?.entries.map((entry) => (
+            <button
+              className="remote-directory-row"
+              disabled={busy}
+              key={entry.path}
+              onClick={() => void openPath(entry.path)}
+              type="button"
+            >
+              <Folder size={16} />
+              <span>
+                <strong>{entry.name}</strong>
+                <small>{entry.path}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <footer className="remote-directory-picker-actions">
+          <span title={listing?.path}>{listing?.path ?? ""}</span>
+          <div>
+            <button className="ghost-action" onClick={onClose} type="button">
+              {t("common.close")}
+            </button>
+            <button
+              className="action"
+              disabled={!listing || busy}
+              onClick={() => listing && onSelect(listing.path)}
+              type="button"
+            >
+              <FolderOpen size={15} />
+              {t("agents.remoteWorkDirChoose")}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>,
+    document.body,
   );
 }
 
@@ -878,7 +1331,7 @@ function toggleID(items: string[], id: string): string[] {
 }
 
 function newAgent(runtimeOptions: string[]): AgentInstance {
-  const runtime = runtimeOptions[0] ?? "codex";
+  const runtime = runtimeOptions[0] ?? "";
   return copyAgent({
     ...EMPTY_AGENT,
     runtime_id: runtime,
@@ -1026,4 +1479,28 @@ function copyAgent(agent: AgentInstance): AgentInstance {
     mcp_servers: [...(agent.mcp_servers ?? [])],
     skills: [...(agent.skills ?? [])],
   };
+}
+
+function approvalModesForRuntime(runtimeID: string) {
+  switch (runtimeID) {
+    case "claude":
+    case "claudecode":
+    case "qoder":
+    case "codex":
+      return ["manual", "auto_edit", "auto", "plan", "yolo"];
+    case "gemini":
+    case "opencode":
+    case "iflow":
+      return ["manual", "auto_edit", "plan", "yolo"];
+    case "cursor":
+      return ["manual", "auto", "plan", "yolo"];
+    case "kimi":
+      return ["auto"];
+    default:
+      return [];
+  }
+}
+
+function approvalModeLabelKey(mode: string) {
+  return `approval.${mode}`;
 }

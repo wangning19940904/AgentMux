@@ -258,7 +258,7 @@ func slackRuntimeSettingsBlocks(state core.RuntimeSettingsPickerState) []slackap
 		scope = "Agent 默认（仅后续会话）"
 	}
 	blocks := []slackapi.Block{slackapi.NewSectionBlock(
-		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("*运行时设置*\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`", scope, slackDisplay(state.Settings.Model), slackDisplay(state.Settings.ReasoningEffort), slackDisplay(state.Settings.ServiceTier)), false, false), nil, nil,
+		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("*运行时设置*\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`\n审批：`%s`", scope, slackDisplay(state.Settings.Model), slackDisplay(state.Settings.ReasoningEffort), slackDisplay(state.Settings.ServiceTier), slackDisplay(state.Settings.ApprovalMode)), false, false), nil, nil,
 	)}
 	if state.Notice != "" {
 		blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", ":warning: "+state.Notice, false, false), nil, nil))
@@ -272,6 +272,7 @@ func slackRuntimeSettingsBlocks(state core.RuntimeSettingsPickerState) []slackap
 	blocks = append(blocks, slackSettingBlock("model", "模型", state, core.RuntimeSettingModel, state.Capabilities.Models)...)
 	blocks = append(blocks, slackSettingBlock("effort", "思考强度", state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
 	blocks = append(blocks, slackSettingBlock("tier", "速度", state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
+	blocks = append(blocks, slackSettingBlock("approval", "审批模式", state, core.RuntimeSettingApprovalMode, state.Capabilities.ApprovalModes)...)
 	return blocks
 }
 

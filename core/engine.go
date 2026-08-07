@@ -418,12 +418,20 @@ func (e *Engine) handleRuntimeSettingsCommand(sess AgentSession, text string, re
 		err = settings.SetRuntimeSetting(cmd.Setting, cmd.Value)
 	}
 	if err != nil {
-		reply(err.Error())
+		if cmd.Setting == RuntimeSettingApprovalMode {
+			reply(formatApprovalModeCommandError(err, settings))
+		} else {
+			reply(err.Error())
+		}
 		return true
 	}
 	// The command response itself is the refreshed menu/status; interactive
 	// pickers use handleRuntimeSettingsAction and edit their existing message.
-	reply(formatRuntimeSettingsStatus(settings))
+	if cmd.Setting == RuntimeSettingApprovalMode {
+		reply(formatApprovalModeCommandResult(settings, cmd.Reset))
+	} else {
+		reply(formatRuntimeSettingsStatus(settings))
+	}
 	return true
 }
 
@@ -676,8 +684,9 @@ func (e *Engine) beginSpeechReply(ctx context.Context, renderer any, msg *Messag
 }
 
 func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream ReplyStream, speech SpeechReply, events <-chan *Event, data map[string]string) {
-	var answer, thinking, rendered string
+	var answer, completedAnswer, thinking, rendered, persistentOutput string
 	var failed bool
+	var answerAfterLastTool bool
 	var tools toolProgress
 	for ev := range events {
 		e.updateRemoteTaskFromEvent(data, ev)
@@ -708,6 +717,8 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				rendered = body
 			}
 		case EventToolUse:
+			answerAfterLastTool = false
+			completedAnswer = ""
 			// Native adapters provide ToolCallID, allowing parallel and
 			// out-of-order results to close the correct rendered step.
 			if ev.ToolName != "" {
@@ -726,7 +737,21 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			if ev.Text == "" || ev.Text == "NO_REPLY" {
 				continue
 			}
-			answer = ev.Text
+			answerAfterLastTool = true
+			// Cursor sometimes reconnects after a complete answer and emits short
+			// acknowledgements before the process hits WritableIterable-is-closed.
+			// Retain the most informative post-tool answer for that narrow recovery
+			// path while continuing to render the newest answer normally.
+			if len(strings.TrimSpace(ev.Text)) > len(strings.TrimSpace(completedAnswer)) {
+				completedAnswer = ev.Text
+			}
+			if ev.Metadata["clear_persistent"] == "true" {
+				persistentOutput = ""
+			}
+			if ev.Metadata["persistent"] == "true" {
+				persistentOutput = ev.Text
+			}
+			answer = mergePersistentOutput(ev.Text, persistentOutput)
 			if speech != nil {
 				if err := speech.Update(ctx, answer, false); err != nil {
 					e.log.Warn("speech update", "err", err)
@@ -740,9 +765,21 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				rendered = body
 			}
 		case EventError:
+			if shouldPreserveCompletedCursorAnswer(ev, completedAnswer, answerAfterLastTool, tools) {
+				// Cursor can emit WriteIterableClosedError after the assistant has
+				// already completed every tool and produced its final user-facing
+				// answer. Preserve that answer instead of replacing a successful
+				// operation with a red transport-error card. The original EventError
+				// still passes through the observation wrapper before it reaches this
+				// renderer, and this warning keeps the local runtime symptom visible.
+				persistentOutput = ""
+				answer = strings.TrimSpace(completedAnswer)
+				e.log.Warn("ignored cursor stream close after completed answer", "err", ev.Err)
+				continue
+			}
 			e.emit(ctx, HookError, withError(data, ev.Err))
 			failed = true
-			answer = "error: " + errString(ev.Err)
+			answer = mergePersistentOutput("error: "+errString(ev.Err), persistentOutput)
 		}
 	}
 
@@ -757,6 +794,32 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			e.log.Warn("speech finalize", "err", err)
 		}
 	}
+}
+
+func shouldPreserveCompletedCursorAnswer(ev *Event, answer string, answerAfterLastTool bool, tools toolProgress) bool {
+	if ev == nil || ev.Err == nil || ev.Metadata["runtime"] != "cursor" {
+		return false
+	}
+	if strings.TrimSpace(answer) == "" || !answerAfterLastTool || !tools.settledSuccessfully() {
+		return false
+	}
+	return strings.Contains(strings.ToLower(ev.Err.Error()), "writableiterable is closed")
+}
+
+func mergePersistentOutput(answer, persistent string) string {
+	answer = strings.TrimSpace(answer)
+	persistent = strings.TrimSpace(persistent)
+	if persistent == "" || answer == persistent || strings.Contains(answer, persistent) {
+		return answer
+	}
+	if answer == "" {
+		return persistent
+	}
+	// Persistent output represents an action the user must take while the
+	// assistant keeps streaming (for example, a device-login URL). Keep it at
+	// the top of the card so subsequent answer growth cannot push it below a
+	// long tool trace or beyond the mobile viewport.
+	return persistent + "\n\n---\n\n" + answer
 }
 
 func (e *Engine) emitMessageStreamOnce(ctx context.Context, mr StreamMessageReplier, msg *Message, text string, failed bool) {

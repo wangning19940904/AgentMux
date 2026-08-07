@@ -150,6 +150,13 @@ CREATE INDEX IF NOT EXISTS idx_observation_spans_model_request
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp);
 `,
 		},
+		{
+			version: 5,
+			name:    "agent_approval_mode",
+			sql: `
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS default_approval_mode TEXT;
+`,
+		},
 	}
 }
 

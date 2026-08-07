@@ -44,6 +44,29 @@ func TestDetectCLIUsesLookPath(t *testing.T) {
 	}
 }
 
+func TestIsInstalledCLIOnlyChecksExecutableAvailability(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), "#!/bin/sh\nexit 9\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+
+	if !IsInstalled("codex") {
+		t.Fatal("executable Codex runtime was reported as not installed")
+	}
+	if IsInstalled("claudecode") {
+		t.Fatal("missing Claude Code runtime was reported as installed")
+	}
+	if IsInstalled("does-not-exist") {
+		t.Fatal("unknown runtime was reported as installed")
+	}
+}
+
 func TestDetectCLIReadsNormalizedVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
@@ -59,6 +82,158 @@ func TestDetectCLIReadsNormalizedVersion(t *testing.T) {
 	st := Detect(spec, DetectPrereqs())
 	if !st.Installed || st.Version != "2.1.211" || st.Detail != "" {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestCheckAuthDistinguishesLoggedInAndLoggedOutCLIs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), `#!/bin/sh
+if [ "$1 $2 $3" = "auth status --json" ]; then
+  printf '%s\n' '{"loggedIn":true,"email":"must-not-leak@example.test"}'
+  exit 0
+fi
+exit 2
+`)
+	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), `#!/bin/sh
+if [ "$1 $2" = "login status" ]; then
+  echo 'Not logged in'
+  exit 1
+fi
+exit 2
+`)
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CODEX_API_KEY", "")
+
+	claude := CheckAuth(context.Background(), "claudecode")
+	if claude.State != AuthStateAuthenticated || !claude.LoginSupported || strings.Contains(claude.Detail, "example.test") {
+		t.Fatalf("Claude auth status = %+v", claude)
+	}
+	codex := CheckAuth(context.Background(), "codex")
+	if codex.State != AuthStateUnauthenticated || !codex.LoginSupported {
+		t.Fatalf("Codex auth status = %+v", codex)
+	}
+}
+
+func TestStartLoginReturnsBrowserURLAndVerificationCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), `#!/bin/sh
+if [ "$1 $2" = "login --device-auth" ]; then
+  echo 'Open https://auth.example.test/device'
+  printf 'Code: \033[94mABCD-EFGH\033[0m\n'
+  exit 0
+fi
+exit 2
+`)
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+
+	result, err := StartLogin("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.LoginURL != "https://auth.example.test/device" || result.VerificationCode != "ABCD-EFGH" || result.SessionID == "" {
+		t.Fatalf("login result = %+v", result)
+	}
+}
+
+func TestCompleteLoginWritesPastedCodeToWaitingCLI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), `#!/bin/sh
+if [ "$1 $2" = "auth login" ]; then
+  echo 'Visit https://claude.example.test/oauth'
+  read code
+  [ "$code" = "returned-code" ]
+  exit $?
+fi
+exit 2
+`)
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+
+	result, err := StartLogin("claudecode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.InputRequired || result.LoginURL != "https://claude.example.test/oauth" {
+		t.Fatalf("login result = %+v", result)
+	}
+	if err := CompleteLogin(result.SessionID, "returned-code"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNormalizeSDKVersionIgnoresWarningNumbers(t *testing.T) {
+	raw := "WARNING: could not inspect cwd (os error 2)\ncodex-cli 0.145.0\n"
+	if got := normalizeSDKVersion(raw); got != "0.145.0" {
+		t.Fatalf("normalized version = %q, want 0.145.0", got)
+	}
+	if got := normalizeSDKVersion("failed after 30 seconds with error 2"); got != "" {
+		t.Fatalf("warning-only output normalized to %q", got)
+	}
+}
+
+func TestFrameworkCommandsSurviveDeletedDaemonWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("deleted working directory test")
+	}
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), "#!/bin/sh\npwd >/dev/null || exit 7\necho 'codex-cli 0.145.0'\n")
+	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\npwd >/dev/null || exit 7\necho '0.146.0'\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+
+	staleDir, err := os.MkdirTemp("", "agentmux-deleted-cwd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(staleDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	if err := os.Remove(staleDir); err != nil {
+		t.Fatal(err)
+	}
+
+	status := Detect(Spec{Kind: "codex", KindType: KindCLI, Bin: "codex"}, Prereqs{})
+	if !status.Installed || status.Version != "0.145.0" || status.Detail != "" {
+		t.Fatalf("status from deleted daemon cwd = %+v", status)
+	}
+	latest, err := npmPackageVersion(context.Background(), "@openai/codex")
+	if err != nil || latest != "0.146.0" {
+		t.Fatalf("npm version from deleted daemon cwd = %q, err = %v", latest, err)
 	}
 }
 
@@ -113,6 +288,86 @@ func TestDetectCLIFindsUserLocalBinaryAndRefreshesPath(t *testing.T) {
 	}
 	if _, err := exec.LookPath("cursor-agent"); err != nil {
 		t.Fatalf("user-local bin was not added to PATH: %v", err)
+	}
+}
+
+func TestDetectCLIsAndPrereqsFromNVMForBackgroundService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix nvm layout test")
+	}
+	home := t.TempDir()
+	nvmBin := filepath.Join(home, ".nvm", "versions", "node", "v24.13.0", "bin")
+	if err := os.MkdirAll(nvmBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFrameworkExecutable(t, filepath.Join(nvmBin, "node"), "#!/bin/sh\necho 'v24.13.0'\n")
+	writeFrameworkExecutable(t, filepath.Join(nvmBin, "npm"), "#!/bin/sh\necho '11.6.2'\n")
+	writeFrameworkExecutable(t, filepath.Join(nvmBin, "claude"), "#!/bin/sh\necho '2.1.211 (Claude Code)'\n")
+	writeFrameworkExecutable(t, filepath.Join(nvmBin, "codex"), "#!/bin/sh\necho 'codex-cli 0.144.1'\n")
+	t.Setenv("HOME", home)
+	t.Setenv("NVM_DIR", "")
+	t.Setenv("PNPM_HOME", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("PATH", t.TempDir())
+
+	pre := DetectPrereqs()
+	if !pre.Node || !pre.NPM || pre.NodePth != filepath.Join(nvmBin, "node") || pre.NPMPath != filepath.Join(nvmBin, "npm") {
+		t.Fatalf("prereqs = %+v", pre)
+	}
+	for _, bin := range []string{"claude", "codex"} {
+		if path, err := exec.LookPath(bin); err != nil || path != filepath.Join(nvmBin, bin) {
+			t.Fatalf("startup PATH did not expose %s: path=%q err=%v", bin, path, err)
+		}
+	}
+	for kind, version := range map[string]string{"claudecode": "2.1.211", "codex": "0.144.1"} {
+		spec, ok := Lookup(kind)
+		if !ok {
+			t.Fatalf("%s missing from catalog", kind)
+		}
+		status := Detect(spec, pre)
+		if !status.Installed || status.Version != version {
+			t.Fatalf("%s status = %+v", kind, status)
+		}
+	}
+}
+
+func TestUpdateCodexConfiguresPNPMHomeForBackgroundService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script and pnpm layout test")
+	}
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	pnpmHome := filepath.Join(home, ".local", "share", "pnpm")
+	for _, dir := range []string{localBin, pnpmHome} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versionFile := filepath.Join(home, "codex-version")
+	if err := os.WriteFile(versionFile, []byte("0.145.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFrameworkExecutable(t, filepath.Join(pnpmHome, "codex"), "#!/bin/sh\n"+
+		"if [ \"$1\" = \"update\" ]; then\n"+
+		"  if [ \"$PNPM_HOME\" != '"+pnpmHome+"' ]; then echo 'PNPM_HOME missing' >&2; exit 8; fi\n"+
+		"  echo '0.146.0' > '"+versionFile+"'\n"+
+		"  echo updated\n"+
+		"  exit 0\n"+
+		"fi\n"+
+		"read version < '"+versionFile+"'\n"+
+		"printf '%s\\n' \"$version\"\n")
+	writeFrameworkExecutable(t, filepath.Join(localBin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '0.146.0'; exit 0; fi\nexit 1\n")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("PNPM_HOME", "")
+	t.Setenv("PATH", t.TempDir())
+
+	res := Update(context.Background(), "codex")
+	if !res.OK || res.Error != "" || res.Version != "0.146.0" || res.Command != "codex update" {
+		t.Fatalf("update result = %+v", res)
+	}
+	if got := os.Getenv("PNPM_HOME"); got != pnpmHome {
+		t.Fatalf("PNPM_HOME = %q, want %q", got, pnpmHome)
 	}
 }
 
@@ -268,6 +523,39 @@ func TestCursorInstallerVersion(t *testing.T) {
 	}
 	if !frameworkUpdateAvailable(Spec{LatestURL: "https://cursor.com/install"}, "2026.07.09-a3815c0", "2026.07.09-fffffff") {
 		t.Fatal("different native build identifiers should be treated as an available update")
+	}
+}
+
+func TestCursorUpdateUsesOfficialInstallerAndExactNativeBuild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	versionFile := filepath.Join(home, "cursor-version")
+	if err := os.WriteFile(versionFile, []byte("2026.07.23-fffffff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFrameworkExecutable(t, filepath.Join(localBin, "cursor-agent"), "#!/bin/sh\nread version < '"+versionFile+"'\nprintf '%s\\n' \"$version\"\n")
+	fakeBin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(fakeBin, "bash"), "#!/bin/sh\necho '2026.07.23-0000000' > '"+versionFile+"'\necho installed\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", fakeBin)
+
+	spec, ok := Lookup("cursor")
+	if !ok {
+		t.Fatal("cursor missing from catalog")
+	}
+	res := updateCLI(context.Background(), spec, UpdateCheck{
+		CurrentVersion: "2026.07.23-fffffff",
+		LatestVersion:  "2026.07.23-0000000",
+	})
+	if !res.OK || res.Error != "" || res.Version != "2026.07.23-0000000" ||
+		res.Command != "bash -c curl https://cursor.com/install -fsS | bash" {
+		t.Fatalf("update result = %+v", res)
 	}
 }
 

@@ -26,12 +26,14 @@ type cachedClient struct {
 
 // Manager owns persisted profiles and reusable SSH connections.
 type Manager struct {
-	store   *Store
-	log     *slog.Logger
-	timeout time.Duration
-	install func(context.Context, remoteClient, Host) error
-	mu      sync.Mutex
-	clients map[string]*cachedClient
+	store    *Store
+	log      *slog.Logger
+	timeout  time.Duration
+	install  func(context.Context, remoteClient, Host) error
+	update   func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error)
+	mu       sync.Mutex
+	clients  map[string]*cachedClient
+	updateMu sync.Mutex
 }
 
 type TestResult struct {
@@ -46,6 +48,22 @@ type TestResult struct {
 type ImportResult struct {
 	Host HostView `json:"host"`
 	TestResult
+}
+
+type UpdateResult struct {
+	OK                 bool           `json:"ok"`
+	Name               string         `json:"name"`
+	LatencyMS          int64          `json:"latency_ms"`
+	HostKeyFingerprint string         `json:"host_key_fingerprint"`
+	PreviousVersion    string         `json:"previous_version,omitempty"`
+	Version            string         `json:"version,omitempty"`
+	Platform           string         `json:"platform"`
+	Arch               string         `json:"arch"`
+	SHA256             string         `json:"sha256"`
+	DataPath           string         `json:"data_path"`
+	DatabaseURL        string         `json:"database_url,omitempty"`
+	BackupPath         string         `json:"backup_path,omitempty"`
+	Status             map[string]any `json:"status,omitempty"`
 }
 
 type UnknownHostKeyError struct {
@@ -66,6 +84,7 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 	}
 	return &Manager{
 		store: store, log: log, timeout: timeout, install: installRemoteAgentMux,
+		update:  updateRemoteAgentMux,
 		clients: map[string]*cachedClient{},
 	}, nil
 }
@@ -189,6 +208,95 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
 		HostKeyFingerprint: host.HostKeyFingerprint, Status: status, Installed: installed,
 	}, nil
+}
+
+// Status reads the remote health endpoint without installing, updating, or
+// restarting anything. The Console uses it to show live versions in the host
+// list as soon as the page opens.
+func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
+	host, ok := m.store.Get(id)
+	if !ok {
+		return TestResult{}, os.ErrNotExist
+	}
+	started := time.Now()
+	client, err := m.client(ctx, host)
+	if err != nil {
+		return TestResult{}, err
+	}
+	status, err := requestStatus(ctx, client, host)
+	if err != nil {
+		return TestResult{}, err
+	}
+	return TestResult{
+		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
+		HostKeyFingerprint: host.HostKeyFingerprint, Status: status,
+	}, nil
+}
+
+// Update replaces the remote CLI with the binary bundled in the local Console,
+// migrates a legacy SQLite store into PostgreSQL, and takes a backup. Only one
+// update is allowed at a time so repeated button clicks cannot race service
+// stop/start operations.
+func (m *Manager) Update(ctx context.Context, id string) (UpdateResult, error) {
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
+
+	host, ok := m.store.Get(id)
+	if !ok {
+		return UpdateResult{}, os.ErrNotExist
+	}
+	if m.update == nil {
+		return UpdateResult{}, errors.New("remote AgentMux updates are unavailable")
+	}
+	started := time.Now()
+	client, err := m.client(ctx, host)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	previousStatus, _ := requestStatus(ctx, client, host)
+	artifact, err := m.update(ctx, client, host)
+	if err != nil {
+		return UpdateResult{}, fmt.Errorf("update remote AgentMux: %w", err)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	var status map[string]any
+	var lastErr error
+	for time.Now().Before(deadline) {
+		status, lastErr = requestStatus(ctx, client, host)
+		if lastErr == nil {
+			version := artifact.Version
+			if version == "" {
+				version = statusVersion(status)
+			}
+			return UpdateResult{
+				OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
+				HostKeyFingerprint: host.HostKeyFingerprint,
+				PreviousVersion:    statusVersion(previousStatus), Version: version,
+				Platform: artifact.Platform, Arch: artifact.Arch, SHA256: artifact.SHA256,
+				DataPath: artifact.DataPath, DatabaseURL: artifact.DatabaseURL,
+				BackupPath: artifact.BackupPath, Status: status,
+			}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return UpdateResult{}, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	logText, _ := remoteAgentMuxLog(ctx, client)
+	if logText != "" {
+		return UpdateResult{}, fmt.Errorf("verify updated remote AgentMux: %v; remote log: %s", lastErr, logText)
+	}
+	return UpdateResult{}, fmt.Errorf("verify updated remote AgentMux: %w", lastErr)
+}
+
+func statusVersion(status map[string]any) string {
+	if status == nil {
+		return ""
+	}
+	version, _ := status["version"].(string)
+	return strings.TrimSpace(version)
 }
 
 func (m *Manager) ensureService(ctx context.Context, client remoteClient, host Host) (map[string]any, bool, error) {

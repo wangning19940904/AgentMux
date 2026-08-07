@@ -44,6 +44,12 @@ type channelRuntime struct {
 	controlTasks map[string]*channelControlState
 	clearConfirm map[string]time.Time
 	threadLists  map[string][]NativeThread
+	pendingTurns map[string]pendingInitialTurn
+}
+
+type pendingInitialTurn struct {
+	message         *Message
+	requiredSetting RuntimeSetting
 }
 
 func (rt *channelRuntime) setState(state, errMsg string) {
@@ -163,7 +169,7 @@ func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
 		return
 	}
 	defaults := rt.defaultSettings
-	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier} {
+	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier, RuntimeSettingApprovalMode} {
 		value := defaults.Value(setting)
 		if value == "" || !settings.RuntimeSettingsCapabilities().Supports(setting) {
 			continue
@@ -307,6 +313,7 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		controlTasks:    map[string]*channelControlState{},
 		clearConfirm:    map[string]time.Time{},
 		threadLists:     map[string][]NativeThread{},
+		pendingTurns:    map[string]pendingInitialTurn{},
 		state:           ChannelStateRunning,
 		started:         time.Now(),
 	}
@@ -533,7 +540,9 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	}
 	defer e.persistConversationTurn(ctx, conv, sess)
 	defaults := rt.runtimeDefaults()
+	actionApplied := false
 	if e.handleRuntimeSettingsAction(ctx, sess, msg, &defaults, rt.workspace.AgentID, func(state RuntimeSettingsPickerState) bool {
+		actionApplied = state.Notice == ""
 		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
 		if !ok {
 			return false
@@ -552,8 +561,14 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 			rt.setRuntimeDefaults(defaults)
 		}
 		e.emit(ctx, HookMessageSent, data)
+		if actionApplied {
+			if pending := rt.takePendingInitialTurn(msg, *msg.RuntimeSettingsAction); pending != nil {
+				e.handleChannelMessage(ctx, pending, eventData(pending))
+			}
+		}
 		return
 	}
+	settingsCommand, settingsCommandParsed := parseRuntimeSettingsCommand(msg.Text)
 	if e.handleRuntimeSettingsCommand(sess, msg.Text, func(text string) {
 		if err := rt.platform.Reply(ctx, msg, text); err != nil {
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
@@ -582,7 +597,27 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		return true
 	}) {
 		e.emit(ctx, HookMessageSent, data)
+		if settingsCommandParsed && runtimeSettingsCommandApplied(sess, settingsCommand) {
+			if pending := rt.takePendingInitialTurn(msg, RuntimeSettingsAction{
+				Scope: RuntimeSettingsScopeConversation, Setting: settingsCommand.Setting,
+			}); pending != nil {
+				e.handleChannelMessage(ctx, pending, eventData(pending))
+			}
+		}
 		return
+	}
+	if created && conv != nil && conv.MessageCount == 0 {
+		setting, required := rt.initialRuntimeConfigurationSetting(sess)
+		if required {
+			rt.storePendingInitialTurn(msg, setting)
+		}
+		if required && rt.promptInitialRuntimeConfiguration(ctx, sess, msg, setting) {
+			e.emit(ctx, HookMessageSent, data)
+			return
+		}
+		if required {
+			rt.discardPendingInitialTurn(msg)
+		}
 	}
 
 	agentMsg := channelMessageForAgent(rt.channel, msg)
@@ -616,6 +651,127 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		}
 	}, data)
 	e.emit(ctx, HookMessageSent, data)
+}
+
+func (rt *channelRuntime) initialRuntimeConfigurationSetting(sess AgentSession) (RuntimeSetting, bool) {
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok {
+		return "", false
+	}
+	caps := settings.RuntimeSettingsCapabilities()
+	if strings.TrimSpace(settings.CurrentRuntimeSettings().Model) == "" && len(caps.Models) > 1 {
+		return RuntimeSettingModel, true
+	}
+	// Approval mode is owned by the bound Agent. Only ask when the Agent has no
+	// usable default; legacy channel-level approval_mode values are ignored.
+	agentDefault := strings.TrimSpace(rt.defaultSettings.ApprovalMode)
+	if len(caps.ApprovalModes) > 1 && (agentDefault == "" || !runtimeOptionContains(caps.ApprovalModes, agentDefault)) {
+		return RuntimeSettingApprovalMode, true
+	}
+	return "", false
+}
+
+func (rt *channelRuntime) promptInitialRuntimeConfiguration(ctx context.Context, sess AgentSession, msg *Message, setting RuntimeSetting) bool {
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok {
+		return false
+	}
+	state := runtimeSettingsPickerState(settings, RuntimeSettingsScopeConversation, RuntimeSettings{}, false)
+	command := "/approval <模式>"
+	if setting == RuntimeSettingModel {
+		state.Notice = "这是新工作目录的首次对话。请先选择模型；选择后将自动继续刚才的消息。"
+		command = "/model <模型>"
+	} else {
+		state.Notice = "这是新工作目录的首次对话。请先确认审批模式；选择后将自动继续刚才的消息。"
+	}
+	if picker, ok := rt.platform.(RuntimeSettingsPickerReplier); ok {
+		if err := picker.ReplyRuntimeSettingsPicker(ctx, msg, state); err == nil {
+			return true
+		} else {
+			rt.owner.log.Warn("reply first-workspace runtime settings picker", "channel", rt.channel.Name, "setting", setting, "err", err)
+		}
+	}
+	values := runtimeOptionValues(settings.RuntimeSettingsCapabilities().Options(setting))
+	text := state.Notice + "\n可选值：" + strings.Join(values, ", ") + "\n发送 " + command + " 完成配置。"
+	if err := rt.platform.Reply(ctx, msg, text); err != nil {
+		rt.owner.log.Error("channel runtime settings configuration reply", "channel", rt.channel.Name, "setting", setting, "err", err)
+	}
+	return true
+}
+
+func (rt *channelRuntime) storePendingInitialTurn(msg *Message, requiredSetting RuntimeSetting) {
+	if rt == nil || msg == nil {
+		return
+	}
+	key := ResolveConversationKey(msg)
+	if key == "" {
+		return
+	}
+	clone := *msg
+	if len(msg.Images) > 0 {
+		clone.Images = make([][]byte, len(msg.Images))
+		for i, image := range msg.Images {
+			clone.Images[i] = append([]byte(nil), image...)
+		}
+	}
+	clone.RuntimeSettingsAction = nil
+	clone.AgentInteractionAction = nil
+	clone.InteractionMessageID = ""
+	clone.Callback = nil
+	clone.LogOnly = false
+
+	rt.mu.Lock()
+	if rt.pendingTurns == nil {
+		rt.pendingTurns = map[string]pendingInitialTurn{}
+	}
+	rt.pendingTurns[key] = pendingInitialTurn{message: &clone, requiredSetting: requiredSetting}
+	rt.mu.Unlock()
+}
+
+func (rt *channelRuntime) discardPendingInitialTurn(msg *Message) {
+	if rt == nil || msg == nil {
+		return
+	}
+	key := ResolveConversationKey(msg)
+	rt.mu.Lock()
+	pending, ok := rt.pendingTurns[key]
+	if ok && pending.message != nil && pending.message.ID == msg.ID {
+		delete(rt.pendingTurns, key)
+	}
+	rt.mu.Unlock()
+}
+
+func (rt *channelRuntime) takePendingInitialTurn(msg *Message, action RuntimeSettingsAction) *Message {
+	if rt == nil || msg == nil || action.Setting == RuntimeSettingScope {
+		return nil
+	}
+	if action.Scope != "" && action.Scope != RuntimeSettingsScopeConversation {
+		return nil
+	}
+	key := ResolveConversationKey(msg)
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	pending, ok := rt.pendingTurns[key]
+	if !ok || pending.requiredSetting != action.Setting {
+		return nil
+	}
+	delete(rt.pendingTurns, key)
+	return pending.message
+}
+
+func runtimeSettingsCommandApplied(sess AgentSession, command runtimeSettingsCommand) bool {
+	if command.List {
+		return false
+	}
+	settings, ok := RuntimeSettingsForSession(sess)
+	if !ok || !settings.RuntimeSettingsCapabilities().Supports(command.Setting) {
+		return false
+	}
+	current := settings.CurrentRuntimeSettings().Value(command.Setting)
+	if command.Reset {
+		return current == settings.DefaultRuntimeSettings().Value(command.Setting)
+	}
+	return current == command.Value
 }
 
 func (e *Engine) addChannelAckReaction(ctx context.Context, rt *channelRuntime, msg *Message) string {

@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   activeRemoteID,
   api,
@@ -55,26 +55,66 @@ export function RemoteHostsPanel() {
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredRemoteHost[]>([]);
   const [form, setForm] = useState<RemoteForm | null>(null);
+  const [hostDialogOpen, setHostDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [discoveryLoading, setDiscoveryLoading] = useState(true);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryError, setDiscoveryError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [testingID, setTestingID] = useState("");
+  const [updatingID, setUpdatingID] = useState("");
+  const [confirmingUpdateID, setConfirmingUpdateID] = useState("");
+  const [checkingVersions, setCheckingVersions] = useState<Record<string, boolean>>({});
   const [importingName, setImportingName] = useState("");
   const [testResults, setTestResults] = useState<Record<string, RemoteTestResult>>({});
   const [pendingFingerprints, setPendingFingerprints] = useState<Record<string, string>>({});
   const [pendingImportFingerprints, setPendingImportFingerprints] = useState<Record<string, string>>({});
+  const hostsRequestVersion = useRef(0);
+  const statusScanVersion = useRef(0);
 
-  const load = async () => {
+  const inspectVersions = (nextHosts: RemoteHost[], hostsVersion: number) => {
+    const scanVersion = ++statusScanVersion.current;
+    const trustedHosts = nextHosts.filter((host) => host.trusted);
+    setCheckingVersions(Object.fromEntries(trustedHosts.map((host) => [host.id, true])));
+    void Promise.allSettled(
+      trustedHosts.map(async (host) => {
+        try {
+          const result = await api.statusRemoteHost(host.id);
+          if (
+            scanVersion === statusScanVersion.current &&
+            hostsVersion === hostsRequestVersion.current
+          ) {
+            setTestResults((current) => ({ ...current, [host.id]: result }));
+          }
+        } finally {
+          if (scanVersion === statusScanVersion.current) {
+            setCheckingVersions((current) => {
+              const next = { ...current };
+              delete next[host.id];
+              return next;
+            });
+          }
+        }
+      }),
+    );
+  };
+
+  const load = async (): Promise<RemoteHost[] | null> => {
+    const version = ++hostsRequestVersion.current;
     setLoading(true);
     try {
-      setHosts(await api.remoteHosts());
+      const next = await api.remoteHosts();
+      if (version !== hostsRequestVersion.current) return null;
+      setHosts(next);
+      inspectVersions(next, version);
       setError("");
+      return next;
     } catch (cause) {
+      if (version !== hostsRequestVersion.current) return null;
       setError(cause instanceof Error ? cause.message : String(cause));
+      return null;
     } finally {
-      setLoading(false);
+      if (version === hostsRequestVersion.current) setLoading(false);
     }
   };
 
@@ -92,8 +132,24 @@ export function RemoteHostsPanel() {
 
   useEffect(() => {
     void load();
-    void loadDiscovered();
   }, []);
+
+  useEffect(() => {
+    if (!hostDialogOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setHostDialogOpen(false);
+        setForm(null);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [hostDialogOpen]);
 
   const importDiscovered = async (host: DiscoveredRemoteHost, trustOnFirstUse = false) => {
     setImportingName(host.name);
@@ -107,8 +163,8 @@ export function RemoteHostsPanel() {
         return next;
       });
       setMessage(result.installed ? t("remote.importInstalled") : t("remote.importSucceeded"));
-      await load();
-      notifyRemoteHostsChanged();
+      const next = await load();
+      if (next) notifyRemoteHostsChanged(next);
     } catch (cause) {
       if (
         cause instanceof RemoteConnectionError &&
@@ -145,6 +201,7 @@ export function RemoteHostsPanel() {
       api_token_set: host.api_token_set,
       clear_api_token: false,
     });
+    setHostDialogOpen(true);
     setMessage("");
     setError("");
   };
@@ -158,8 +215,9 @@ export function RemoteHostsPanel() {
       const saved = await api.upsertRemoteHost(form);
       setMessage(t("remote.saved"));
       setForm(null);
-      await load();
-      notifyRemoteHostsChanged();
+      setHostDialogOpen(false);
+      const next = await load();
+      if (next) notifyRemoteHostsChanged(next);
       if (!saved.trusted) {
         setMessage(t("remote.savedTestHint"));
       }
@@ -169,6 +227,7 @@ export function RemoteHostsPanel() {
   };
 
   const test = async (host: RemoteHost, trustOnFirstUse = false) => {
+    statusScanVersion.current += 1;
     setTestingID(host.id);
     setMessage("");
     setError("");
@@ -182,8 +241,8 @@ export function RemoteHostsPanel() {
       });
       setMessage(t("remote.testSucceeded").replace("{latency}", String(result.latency_ms)));
       if (result.installed) setMessage(t("remote.testInstalled"));
-      await load();
-      notifyRemoteHostsChanged();
+      const next = await load();
+      if (next) notifyRemoteHostsChanged(next);
     } catch (cause) {
       if (
         cause instanceof RemoteConnectionError &&
@@ -205,10 +264,38 @@ export function RemoteHostsPanel() {
       if (activeRemoteID() === host.id) setActiveRemoteID("");
       await api.deleteRemoteHost(host.id);
       setMessage(t("remote.deleted"));
-      await load();
-      notifyRemoteHostsChanged();
+      const next = await load();
+      if (next) notifyRemoteHostsChanged(next);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const updateRemote = async (host: RemoteHost) => {
+    statusScanVersion.current += 1;
+    setConfirmingUpdateID("");
+    setUpdatingID(host.id);
+    setMessage("");
+    setError("");
+    try {
+      const result = await api.updateRemoteHost(host.id);
+      const status = result.status
+        ? { ...result.status, version: result.version || result.status.version }
+        : result.status;
+      setTestResults((current) => ({
+        ...current,
+        [host.id]: { ...result, status },
+      }));
+      const version = result.version || status?.version || "";
+      let nextMessage = t("remote.updateSucceeded").replace("{version}", version);
+      if (result.backup_path) {
+        nextMessage += ` ${t("remote.updateBackup").replace("{path}", result.backup_path)}`;
+      }
+      setMessage(nextMessage);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUpdatingID("");
     }
   };
 
@@ -216,6 +303,19 @@ export function RemoteHostsPanel() {
     setActiveRemoteID(id);
     window.location.hash = "#overview";
     window.location.reload();
+  };
+
+  const closeHostDialog = () => {
+    setHostDialogOpen(false);
+    setForm(null);
+  };
+
+  const openAddDialog = () => {
+    setForm(null);
+    setMessage("");
+    setError("");
+    setHostDialogOpen(true);
+    void loadDiscovered();
   };
 
   return (
@@ -226,7 +326,7 @@ export function RemoteHostsPanel() {
             <h2>{t("remote.title")}</h2>
             <p className="subtle-copy">{t("remote.subtitle")}</p>
           </div>
-          <button className="action" onClick={() => setForm(emptyForm())}>
+          <button className="action" onClick={openAddDialog}>
             <Plus size={15} />
             {t("remote.add")}
           </button>
@@ -238,18 +338,48 @@ export function RemoteHostsPanel() {
         )}
       </section>
 
-      {form && (
-        <section className="surface">
+      {hostDialogOpen && (
+        <button
+          aria-label={t("common.close")}
+          className="remote-host-dialog-backdrop"
+          onClick={closeHostDialog}
+          type="button"
+        />
+      )}
+
+      {hostDialogOpen && form && (
+        <section
+          aria-labelledby="remote-host-dialog-title"
+          aria-modal="true"
+          className="surface remote-host-dialog"
+          role="dialog"
+        >
           <div className="surface-header">
             <div>
-              <h2>{form.id ? t("remote.edit") : t("remote.add")}</h2>
+              <h2 id="remote-host-dialog-title">{form.id ? t("remote.edit") : t("remote.add")}</h2>
               <p className="subtle-copy">{t("remote.formHint")}</p>
             </div>
-            <button className="ghost-action" onClick={() => setForm(null)} aria-label={t("common.close")}>
+            <button className="ghost-action" onClick={closeHostDialog} aria-label={t("common.close")}>
               <X size={15} />
               {t("common.close")}
             </button>
           </div>
+          {!form.id && (
+            <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
+              <button
+                aria-selected="false"
+                onClick={() => setForm(null)}
+                role="tab"
+                type="button"
+              >
+                {t("remote.discovered")}
+              </button>
+              <button aria-selected="true" className="active" role="tab" type="button">
+                {t("remote.manualAdd")}
+              </button>
+            </div>
+          )}
+          {error && <div className="remote-feedback error">{error}</div>}
           <form className="surface-body remote-host-form" onSubmit={save}>
             <div className="field-grid">
               <label className="field">
@@ -340,10 +470,16 @@ export function RemoteHostsPanel() {
         </section>
       )}
 
-      <section className="surface">
+      {hostDialogOpen && !form && (
+      <section
+        aria-labelledby="remote-host-dialog-title"
+        aria-modal="true"
+        className="surface remote-host-dialog remote-discovery-dialog"
+        role="dialog"
+      >
         <div className="surface-header">
           <div>
-            <h2>{t("remote.discovered")}</h2>
+            <h2 id="remote-host-dialog-title">{t("remote.add")}</h2>
             <p className="subtle-copy">{t("remote.discoveredHint")}</p>
           </div>
           <div className="remote-discovery-summary">
@@ -357,8 +493,39 @@ export function RemoteHostsPanel() {
               <RefreshCw size={14} className={discoveryLoading ? "spin" : ""} />
               {t("common.refresh")}
             </button>
+            <button className="ghost-action" onClick={closeHostDialog} aria-label={t("common.close")}>
+              <X size={15} />
+              {t("common.close")}
+            </button>
           </div>
         </div>
+        <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
+          <button aria-selected="true" className="active" role="tab" type="button">
+            {t("remote.discovered")}
+          </button>
+          <button
+            aria-selected="false"
+            onClick={() => setForm(emptyForm())}
+            role="tab"
+            type="button"
+          >
+            {t("remote.manualAdd")}
+          </button>
+        </div>
+        {(message || error) && (
+          <div className={`remote-feedback ${error ? "error" : "success"}`}>
+            {error || message}
+          </div>
+        )}
+        {!discoveryLoading && discoveredHosts.some((host) => host.proxy_jump || host.proxy_command) && (
+          <div className="remote-proxy-note">
+            <ShieldAlert size={17} />
+            <div>
+              <strong>{t("remote.proxyRequired")}</strong>
+              <span>{t("remote.proxyUnsupported")}</span>
+            </div>
+          </div>
+        )}
         <div className="remote-host-list remote-discovered-list">
           {discoveryLoading && <div className="empty-state">{t("common.loading")}</div>}
           {!discoveryLoading && discoveryError && (
@@ -438,6 +605,7 @@ export function RemoteHostsPanel() {
           })}
         </div>
       </section>
+      )}
 
       <section className="surface">
         <div className="surface-header">
@@ -459,6 +627,7 @@ export function RemoteHostsPanel() {
           {hosts.map((host) => {
             const pendingFingerprint = pendingFingerprints[host.id];
             const result = testResults[host.id];
+            const checkingVersion = checkingVersions[host.id];
             const active = activeRemoteID() === host.id;
             return (
               <article key={host.id} className={`remote-host-card${active ? " active" : ""}`}>
@@ -484,7 +653,16 @@ export function RemoteHostsPanel() {
                         <Fingerprint size={13} />{host.host_key_fingerprint}
                       </span>
                     )}
-                    {result && <span>{result.latency_ms} ms · AgentMux {result.status?.version ?? ""}</span>}
+                    {host.trusted && (
+                      <span>
+                        <RefreshCw size={13} className={checkingVersion ? "spin" : ""} />
+                        {t("remote.version")}: {result?.status?.version
+                          ? `v${result.status.version}`
+                          : checkingVersion
+                            ? t("remote.versionChecking")
+                            : t("remote.versionUnavailable")}
+                      </span>
+                    )}
                   </div>
                   {pendingFingerprint && (
                     <div className="host-key-confirmation">
@@ -497,6 +675,26 @@ export function RemoteHostsPanel() {
                       <button className="action" onClick={() => void test(host, true)}>
                         {t("remote.trustAndConnect")}
                       </button>
+                    </div>
+                  )}
+                  {confirmingUpdateID === host.id && (
+                    <div className="host-key-confirmation remote-update-confirmation">
+                      <RefreshCw size={18} />
+                      <div>
+                        <strong>{t("remote.update")}</strong>
+                        <span>{t("remote.updateConfirm").replace("{name}", host.name)}</span>
+                      </div>
+                      <div className="remote-update-confirm-actions">
+                        <button
+                          className="ghost-action"
+                          onClick={() => setConfirmingUpdateID("")}
+                        >
+                          {t("remote.cancelUpdate")}
+                        </button>
+                        <button className="action" onClick={() => void updateRemote(host)}>
+                          {t("remote.confirmUpdate")}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -512,11 +710,24 @@ export function RemoteHostsPanel() {
                   </button>
                   <button
                     className="ghost-action"
-                    disabled={testingID === host.id}
+                    disabled={testingID === host.id || updatingID === host.id}
                     onClick={() => void test(host)}
                   >
                     <PlugZap size={14} />
                     {testingID === host.id ? t("remote.testing") : t("remote.test")}
+                  </button>
+                  <button
+                    className="ghost-action"
+                    disabled={!host.trusted || updatingID === host.id || testingID === host.id}
+                    onClick={() => {
+                      setConfirmingUpdateID(host.id);
+                      setMessage("");
+                      setError("");
+                    }}
+                    title={host.trusted ? t("remote.update") : t("remote.testFirst")}
+                  >
+                    <RefreshCw size={14} className={updatingID === host.id ? "spin" : ""} />
+                    {updatingID === host.id ? t("remote.updating") : t("remote.update")}
                   </button>
                   <button className="ghost-action" onClick={() => edit(host)}>
                     <Pencil size={14} />

@@ -25,16 +25,29 @@ func parseRuntimeSettingsCommand(text string) (runtimeSettingsCommand, bool) {
 		setting = RuntimeSettingReasoningEffort
 	case "/fast":
 		setting = RuntimeSettingServiceTier
+	case "/approval", "/permissions", "/yolo":
+		setting = RuntimeSettingApprovalMode
 	default:
 		return runtimeSettingsCommand{}, false
 	}
-	if len(fields) == 1 || fields[1] == "list" || fields[1] == "current" {
+	if len(fields) == 1 || fields[1] == "list" || fields[1] == "current" || fields[1] == "status" || fields[1] == "help" {
 		return runtimeSettingsCommand{Setting: setting, List: true}, true
 	}
 	if fields[1] == "reset" {
 		return runtimeSettingsCommand{Setting: setting, Reset: true}, true
 	}
 	value := fields[1]
+	if setting == RuntimeSettingApprovalMode {
+		value = strings.ToLower(value)
+	}
+	if fields[0] == "/yolo" {
+		switch value {
+		case "on", "enable", "enabled":
+			value = ApprovalModeYolo
+		case "off", "disable", "disabled":
+			value = ApprovalModeManual
+		}
+	}
 	if setting == RuntimeSettingServiceTier {
 		resolved, reset := resolveFastCommand(value)
 		if reset {
@@ -43,6 +56,34 @@ func parseRuntimeSettingsCommand(text string) (runtimeSettingsCommand, bool) {
 		value = resolved
 	}
 	return runtimeSettingsCommand{Setting: setting, Value: value}, true
+}
+
+func formatApprovalModeCommandResult(settings RuntimeSettingsSession, reset bool) string {
+	current := settings.CurrentRuntimeSettings().ApprovalMode
+	label := runtimeSettingDisplay(current)
+	if current != "" {
+		label = runtimeOptionLabel(current) + "（" + current + "）"
+	}
+	action := "审批模式已切换为："
+	if reset {
+		action = "审批模式已恢复为默认值："
+	}
+	lines := []string{action + label, "作用范围：当前会话"}
+	if current == ApprovalModeYolo {
+		lines = append(lines, "⚠️ 当前会话将跳过审批并使用该运行时提供的最高权限。", "恢复手动审批：/yolo off")
+	} else {
+		lines = append(lines, "切换完全免审批：/yolo on")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatApprovalModeCommandError(err error, settings RuntimeSettingsSession) string {
+	options := runtimeOptionValues(settings.RuntimeSettingsCapabilities().ApprovalModes)
+	text := "无法切换审批模式：" + err.Error()
+	if len(options) > 0 {
+		text += "\n可用模式：" + strings.Join(options, ", ")
+	}
+	return text + "\n用法：/approval <模式>"
 }
 
 func resolveFastCommand(value string) (string, bool) {
@@ -76,6 +117,12 @@ func formatRuntimeSettingsStatus(settings RuntimeSettingsSession) string {
 			"Default speed: "+runtimeSettingDisplay(defaults.ServiceTier),
 		)
 	}
+	if len(caps.ApprovalModes) > 0 {
+		lines = append(lines,
+			"Approval mode: "+runtimeSettingDisplay(current.ApprovalMode),
+			"Default approval: "+runtimeSettingDisplay(defaults.ApprovalMode),
+		)
+	}
 	sections := []string{strings.Join(lines, "\n")}
 	if len(caps.Models) > 0 {
 		sections = append(sections, "Available models:\n- "+strings.Join(runtimeOptionValues(caps.Models), "\n- "))
@@ -85,6 +132,9 @@ func formatRuntimeSettingsStatus(settings RuntimeSettingsSession) string {
 	}
 	if len(caps.ServiceTiers) > 0 {
 		sections = append(sections, "Speed modes: "+strings.Join(runtimeOptionValues(caps.ServiceTiers), ", "))
+	}
+	if len(caps.ApprovalModes) > 0 {
+		sections = append(sections, "Approval modes: "+strings.Join(runtimeOptionValues(caps.ApprovalModes), ", "))
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -107,6 +157,9 @@ func runtimeSettingsPickerState(settings RuntimeSettingsSession, scope RuntimeSe
 	}
 	if len(caps.ServiceTiers) == 0 {
 		unsupported[RuntimeSettingServiceTier] = "当前运行时不支持快速模式"
+	}
+	if len(caps.ApprovalModes) == 0 {
+		unsupported[RuntimeSettingApprovalMode] = "当前运行时不支持审批模式切换"
 	}
 	return RuntimeSettingsPickerState{
 		Scope:                 scope,

@@ -11,6 +11,7 @@ declare global {
           GetLaunchAtLogin?: () => Promise<LaunchAtLoginStatus>;
           SetLaunchAtLogin?: (enabled: boolean) => Promise<LaunchAtLoginStatus>;
           OpenLocalWebUI?: () => Promise<void>;
+          OpenExternalURL?: (url: string) => Promise<void>;
         };
       };
     };
@@ -29,8 +30,10 @@ export function setActiveRemoteID(id: string) {
   else localStorage.removeItem(ACTIVE_REMOTE_KEY);
 }
 
-export function notifyRemoteHostsChanged() {
-  window.dispatchEvent(new Event(REMOTE_HOSTS_CHANGED_EVENT));
+export function notifyRemoteHostsChanged(hosts?: RemoteHost[]) {
+  window.dispatchEvent(new CustomEvent<RemoteHost[] | undefined>(REMOTE_HOSTS_CHANGED_EVENT, {
+    detail: hosts,
+  }));
 }
 
 function apiPath(path: string) {
@@ -278,6 +281,17 @@ export interface LaunchAtLoginStatus {
   enabled: boolean;
 }
 
+export interface SystemDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface SystemDirectoryListing {
+  path: string;
+  parent_path?: string;
+  entries: SystemDirectoryEntry[];
+}
+
 export interface Status {
   ok: boolean;
   projects: number;
@@ -325,6 +339,17 @@ export interface RemoteImportResult extends RemoteTestResult {
   host: RemoteHost;
 }
 
+export interface RemoteUpdateResult extends RemoteTestResult {
+  previous_version?: string;
+  version?: string;
+  platform: string;
+  arch: string;
+  sha256: string;
+  data_path: string;
+  database_url?: string;
+  backup_path?: string;
+}
+
 export class RemoteConnectionError extends Error {
   code?: string;
   fingerprint?: string;
@@ -366,6 +391,7 @@ export interface AgentInstance {
   default_model?: string;
   default_reasoning_effort?: string;
   default_service_tier?: string;
+  default_approval_mode?: string;
   memory_scope?: string;
   env?: Record<string, string>;
   channel_bindings?: AgentChannelBinding[];
@@ -592,6 +618,22 @@ export interface FrameworkPrereqs {
 export interface FrameworksResponse {
   prereqs: FrameworkPrereqs;
   frameworks: Framework[];
+}
+
+export interface FrameworkAuthStatus {
+  kind: string;
+  state: "authenticated" | "unauthenticated" | "unknown";
+  installed: boolean;
+  login_supported: boolean;
+  detail?: string;
+}
+
+export interface FrameworkLoginResult {
+  kind: string;
+  session_id: string;
+  login_url: string;
+  verification_code?: string;
+  input_required?: boolean;
 }
 
 export interface FrameworkInstallResult {
@@ -1043,9 +1085,19 @@ export interface ObservationTraceFilters {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path));
+  const res = await fetch(apiPath(path), { cache: "no-store" });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+async function getChecked<T>(path: string): Promise<T> {
+  const res = await fetch(apiPath(path), { cache: "no-store" });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -1182,6 +1234,20 @@ async function testRemoteHost(id: string, trustOnFirstUse: boolean): Promise<Rem
   return payload as unknown as RemoteTestResult;
 }
 
+async function updateRemoteHost(id: string): Promise<RemoteUpdateResult> {
+  return postChecked<RemoteUpdateResult>(
+    `/api/v1/remote/hosts/update?id=${encodeURIComponent(id)}`,
+    {},
+  );
+}
+
+async function statusRemoteHost(id: string): Promise<RemoteTestResult> {
+  return postChecked<RemoteTestResult>(
+    `/api/v1/remote/hosts/status?id=${encodeURIComponent(id)}`,
+    {},
+  );
+}
+
 async function importRemoteHost(
   host: DiscoveredRemoteHost,
   trustOnFirstUse: boolean,
@@ -1247,6 +1313,15 @@ export async function openLocalWebUI(): Promise<void> {
   await open();
 }
 
+export async function openExternalURL(url: string): Promise<void> {
+  const open = window.go?.main?.App?.OpenExternalURL;
+  if (open) {
+    await open(url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
   const extra =
     provider.extra && typeof provider.extra === "object" && !Array.isArray(provider.extra)
@@ -1297,6 +1372,8 @@ export const api = {
   deleteRemoteHost: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
   testRemoteHost,
+  statusRemoteHost,
+  updateRemoteHost,
 
   status: () => get<Status>("/api/v1/status"),
   platforms: () => get<string[]>("/api/v1/platforms"),
@@ -1355,11 +1432,32 @@ export const api = {
       provider_id: providerID,
     }),
   selectDirectory: (defaultDirectory = "") => selectSystemDirectory(defaultDirectory),
-  ensureDirectory: (path: string) =>
-    postChecked<{ path: string }>("/api/v1/system/directories", { path }),
+  directories: (path = "") => {
+    const remoteID = activeRemoteID();
+    return remoteID
+      ? getChecked<SystemDirectoryListing>(
+          `/api/v1/remote/directories?id=${encodeURIComponent(remoteID)}&path=${encodeURIComponent(path)}`
+        )
+      : getChecked<SystemDirectoryListing>(`/api/v1/system/directories?path=${encodeURIComponent(path)}`);
+  },
+  ensureDirectory: (path: string) => {
+    const remoteID = activeRemoteID();
+    return postChecked<{ path: string }>(
+      remoteID
+        ? `/api/v1/remote/directories?id=${encodeURIComponent(remoteID)}`
+        : "/api/v1/system/directories",
+      { path },
+    );
+  },
 
   // AgentMux Frameworks: detect & install agent frameworks
   frameworks: () => get<FrameworksResponse>("/api/v1/frameworks"),
+  frameworkAuth: (kind: string) =>
+    getChecked<FrameworkAuthStatus>(`/api/v1/frameworks/auth?kind=${encodeURIComponent(kind)}`),
+  startFrameworkLogin: (kind: string) =>
+    postChecked<FrameworkLoginResult>("/api/v1/frameworks/login", { kind }),
+  completeFrameworkLogin: (sessionID: string, code: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/frameworks/login/complete", { session_id: sessionID, code }),
   installFramework: (kind: string, action: "install" | "update" = "install") =>
     postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
   checkFrameworkUpdate: (kind: string) =>
@@ -1425,7 +1523,11 @@ export const api = {
 
   // AgentMux Connect: channels & triggers
   channels: () => get<Channel[] | null>("/api/v1/channels"),
-  upsertChannel: (ch: Partial<Channel>) => postChecked<Channel>("/api/v1/channels", ch),
+  upsertChannel: (ch: Partial<Channel>) =>
+    postChecked<Channel>("/api/v1/remote/channels/claim", {
+      target_id: activeRemoteID(),
+      channel: ch,
+    }),
   deleteChannel: (id: string) => del<{ ok: boolean }>(`/api/v1/channels?id=${encodeURIComponent(id)}`),
   restartChannel: (id: string) =>
     postChecked<{ ok: boolean }>(`/api/v1/channels/restart?id=${encodeURIComponent(id)}`, {}),

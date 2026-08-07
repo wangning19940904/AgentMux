@@ -62,6 +62,9 @@ func TestRemoteHostCRUDRedactsSecrets(t *testing.T) {
 	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "top-secret") {
 		t.Fatalf("list status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("list Cache-Control = %q, want no-store", got)
+	}
 
 	request = httptest.NewRequest(http.MethodDelete, "/api/v1/remote/hosts?id="+id, nil)
 	recorder = httptest.NewRecorder()
@@ -85,6 +88,47 @@ func TestRemoteProxyRejectsNestedProxying(t *testing.T) {
 	}
 }
 
+func TestRemoteDirectoryEndpointsValidateHost(t *testing.T) {
+	server := newRemoteTestServer(t)
+	for _, test := range []struct {
+		method string
+		path   string
+		body   io.Reader
+		status int
+	}{
+		{method: http.MethodGet, path: "/api/v1/remote/directories", status: http.StatusBadRequest},
+		{method: http.MethodGet, path: "/api/v1/remote/directories?id=missing", status: http.StatusNotFound},
+		{method: http.MethodPost, path: "/api/v1/remote/directories", body: strings.NewReader(`{"path":"/tmp/demo"}`), status: http.StatusBadRequest},
+	} {
+		request := httptest.NewRequest(test.method, test.path, test.body)
+		recorder := httptest.NewRecorder()
+		server.mux.ServeHTTP(recorder, request)
+		if recorder.Code != test.status {
+			t.Fatalf("%s %s: status = %d, want %d; body = %s", test.method, test.path, recorder.Code, test.status, recorder.Body.String())
+		}
+	}
+}
+
+func TestRemoteUpdateEndpointValidatesHost(t *testing.T) {
+	server := newRemoteTestServer(t)
+	for _, test := range []struct {
+		path   string
+		status int
+	}{
+		{path: "/api/v1/remote/hosts/status", status: http.StatusBadRequest},
+		{path: "/api/v1/remote/hosts/status?id=missing", status: http.StatusNotFound},
+		{path: "/api/v1/remote/hosts/update", status: http.StatusBadRequest},
+		{path: "/api/v1/remote/hosts/update?id=missing", status: http.StatusNotFound},
+	} {
+		request := httptest.NewRequest(http.MethodPost, test.path, nil)
+		recorder := httptest.NewRecorder()
+		server.mux.ServeHTTP(recorder, request)
+		if recorder.Code != test.status {
+			t.Fatalf("POST %s: status = %d, want %d; body = %s", test.path, recorder.Code, test.status, recorder.Body.String())
+		}
+	}
+}
+
 func TestRemoteDiscoveredHostsReadsUserSSHConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -103,6 +147,9 @@ func TestRemoteDiscoveredHostsReadsUserSSHConfig(t *testing.T) {
 	server.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 	var hosts []map[string]any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &hosts); err != nil {

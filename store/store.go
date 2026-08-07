@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	default_model TEXT,
 	default_reasoning_effort TEXT,
 	default_service_tier TEXT,
+	default_approval_mode TEXT,
 	memory_scope TEXT,
 	env TEXT,
 	channel_bindings TEXT,
@@ -384,6 +385,9 @@ func (s *Store) migrateSQLite() error {
 		return err
 	}
 	if err := s.ensureColumn("agent_instances", "default_service_tier", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "default_approval_mode", "TEXT"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("agent_instances", "clis", "TEXT"); err != nil {

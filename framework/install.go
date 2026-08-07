@@ -78,7 +78,7 @@ func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult 
 		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, command[0], command[1:]...)
+	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	res.Log = string(out)
@@ -97,7 +97,14 @@ func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult 
 		res.Error = "update command completed but the installed version could not be verified"
 		return res
 	}
-	if !sdkVersionGreater(res.Version, check.CurrentVersion) {
+	advanced := sdkVersionGreater(res.Version, check.CurrentVersion)
+	if spec.LatestURL != "" {
+		// Native builds such as Cursor use date+hash identifiers. Hashes are not
+		// ordered, so success means the installer selected the exact build exposed
+		// by the official latest-version endpoint.
+		advanced = res.Version == check.LatestVersion
+	}
+	if !advanced {
 		res.Error = fmt.Sprintf(
 			"update command completed but version did not advance (still %s; latest %s)",
 			res.Version, check.LatestVersion,
@@ -162,7 +169,7 @@ func install(ctx context.Context, kind, action string) InstallResult {
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(runCtx, "npm", args...)
+	cmd := frameworkCommandContext(runCtx, "npm", args...)
 	cmd.Dir = SidecarDir()
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
@@ -214,7 +221,7 @@ func installCLI(ctx context.Context, spec Spec) InstallResult {
 		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, command[0], command[1:]...)
+	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	res.Log = string(out)

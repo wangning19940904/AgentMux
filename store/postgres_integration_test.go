@@ -208,6 +208,12 @@ func TestPostgresMigratesLegacySQLite(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := source.UpsertObservationInsight(context.Background(), ObservationInsight{
+		ID: "insight_migrate", RuleID: "test-rule", Title: "SQLite boolean",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := source.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +233,13 @@ func TestPostgresMigratesLegacySQLite(t *testing.T) {
 	}
 	if trace == nil || trace.EventCount != 1 {
 		t.Fatalf("migrated trace = %+v", trace)
+	}
+	insights, err := target.ListObservationInsights(context.Background(), ObservationInsightFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(insights) != 1 || insights[0].ID != "insight_migrate" || !insights[0].OnlySuggestion {
+		t.Fatalf("migrated insights = %+v", insights)
 	}
 	usage, err := target.QueryUsage(context.Background(), now.Add(-time.Hour))
 	if err != nil {

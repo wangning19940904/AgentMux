@@ -31,7 +31,7 @@ const FEISHU_FIELDS = [
 
 const FEISHU_DEFAULTS = {
   reply_scope: "dm_and_mentions",
-  reply_mode: "stream_message",
+  reply_mode: "stream_card",
   ack_reaction_enabled: "true",
   ack_reaction_emojis: "OK,THUMBSUP,MUSCLE,THANKS",
   meeting_voice_enabled: "false",
@@ -583,6 +583,7 @@ function ChannelEditor({
               const runtimeID = agents.find((agent) => agent.id === agentID)?.runtime_id;
               const config = { ...(draft.config ?? {}) };
               if (runtimeID !== "codex") config.codex_control_enabled = "false";
+              delete config.approval_mode;
               update({ agent_id: agentID, config });
             }}
           >
@@ -656,6 +657,7 @@ function FeishuChannelOptions({
 
   return (
     <div className="channel-options">
+      <p className="subtle-copy">{t("connect.exclusiveConnectionHint")}</p>
       <div className="field-grid">
         <label className="field">
           <span>{t("connect.replyScope")}</span>
@@ -892,7 +894,7 @@ function preferredDefaultPlatform(platforms: string[]) {
 }
 
 function defaultChannelConfig(type: string) {
-  return type === "feishu" || type === "lark" ? { ...FEISHU_DEFAULTS } : {};
+	return type === "feishu" || type === "lark" ? { ...FEISHU_DEFAULTS } : {};
 }
 
 function configValue(config: Record<string, string>, key: string, fallback: string) {

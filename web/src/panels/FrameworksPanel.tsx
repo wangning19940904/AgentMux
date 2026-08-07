@@ -79,7 +79,7 @@ export function FrameworksPanel() {
     try {
       const res = await api.installFramework(kind, action);
       setResult(res);
-      setNotice(res.ok ? t("frameworks.installed") : res.error || t("frameworks.installFailed"));
+      setNotice(res.ok ? t("frameworks.installed") : frameworkInstallFailureNotice(res, t));
       await frameworks.reload();
       forgetCheck(kind);
     } catch (err) {
@@ -161,6 +161,19 @@ export function FrameworksPanel() {
   );
 }
 
+function frameworkInstallFailureNotice(
+  result: FrameworkInstallResult,
+  t: (key: string) => string,
+): string {
+  const summary = result.error || t("frameworks.installFailed");
+  const lines = (result.log || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const detail = lines[lines.length - 1];
+  return detail && !summary.includes(detail) ? `${summary}: ${detail}` : summary;
+}
+
 function FrameworkCard({
   item,
   busy,
@@ -238,7 +251,7 @@ function FrameworkCard({
             <span className="status-badge version-badge mono">{t("frameworks.currentVersion")} · v{item.version}</span>
           )}
           {item.installed && updateStatus && (
-            <span className={`status-badge ${updateStatusClass}`}>{updateStatus}</span>
+            <span className={`status-badge ${updateStatusClass}`} title={check?.error || undefined}>{updateStatus}</span>
           )}
         </span>
         {showAction && (

@@ -86,6 +86,27 @@ func TestManagerTrustsHostKeyAndReachesRemoteAgentMux(t *testing.T) {
 	if !ok || host.HostKeyFingerprint != result.HostKeyFingerprint {
 		t.Fatalf("saved host trust = %+v, ok = %v", host, ok)
 	}
+	observed, err := manager.Status(ctx, saved.ID)
+	if err != nil || observed.Status["version"] != "test" {
+		t.Fatalf("status result = %+v, err = %v", observed, err)
+	}
+	manager.update = func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error) {
+		return remoteUpdateArtifact{
+			Platform: "linux", Arch: "amd64", Version: "test-build", SHA256: "abc123",
+			DataPath:    "/home/tester/.agentnexus/agentnexus.db",
+			DatabaseURL: remoteLinuxPostgresURL,
+			BackupPath:  "/home/tester/.agentmux/backups/pre-update.db",
+		}, nil
+	}
+	updated, err := manager.Update(ctx, saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.OK || updated.PreviousVersion != "test" || updated.Version != "test-build" ||
+		updated.DataPath != "/home/tester/.agentnexus/agentnexus.db" ||
+		updated.DatabaseURL != remoteLinuxPostgresURL || updated.Status["version"] != "test" {
+		t.Fatalf("update result = %+v", updated)
+	}
 
 	if err := manager.Delete(saved.ID); err != nil {
 		t.Fatal(err)

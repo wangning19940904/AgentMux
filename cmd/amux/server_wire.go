@@ -32,6 +32,7 @@ func newServer(cfg *config.Config, st *store.Store) (*server.Server, *provider.S
 		return eng.ReportRange(ctx, period, since, until)
 	}
 	srv := server.New(cfg, logger, st, svc, reporter)
+	srv.SetVersion(version)
 	srv.SetProviderService(svc)
 	srv.SetPresets(provider.Presets())
 	srv.SetModules(

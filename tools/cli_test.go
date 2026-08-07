@@ -2,6 +2,9 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -89,6 +92,66 @@ func TestCLICatalogIncludesCISCLIWithVersionMatchedSkill(t *testing.T) {
 	}
 	if strings.Join(linked.InstallCommand, " ") != "cis-cli install-skills --dir {agentmux_skills_dir} --force" {
 		t.Fatalf("skill install command = %v", linked.InstallCommand)
+	}
+}
+
+func TestCLICatalogIncludesGitHubCLI(t *testing.T) {
+	spec, ok := LookupCLI("github-cli")
+	if !ok {
+		t.Fatal("github-cli missing from CLI catalog")
+	}
+	if spec.Name != "GitHub CLI" || spec.Bin != "gh" || spec.Package != "gh" {
+		t.Fatalf("spec = %+v", spec)
+	}
+	if strings.Join(spec.InstallCommand, " ") != "brew install gh" {
+		t.Fatalf("install command = %v", spec.InstallCommand)
+	}
+	if strings.Join(spec.UpdateCommand, " ") != "brew upgrade gh" {
+		t.Fatalf("update command = %v", spec.UpdateCommand)
+	}
+	if spec.LatestVersionURL != "https://api.github.com/repos/cli/cli/releases/latest" {
+		t.Fatalf("latest version URL = %q", spec.LatestVersionURL)
+	}
+}
+
+func TestInstallGitHubCLIUsesHomebrew(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	bin := t.TempDir()
+	gh := filepath.Join(bin, "gh")
+	writeExecutable(t, filepath.Join(bin, "brew"), fmt.Sprintf(`#!/bin/sh
+if [ "$1" != "install" ] || [ "$2" != "gh" ]; then
+  exit 2
+fi
+cat > %q <<'EOS'
+#!/bin/sh
+echo 'gh version 2.93.0 (test)'
+EOS
+chmod +x %q
+echo installed
+`, gh, gh))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	res := InstallCLI(context.Background(), "github-cli", "install")
+	if !res.OK || res.Command != "brew install gh" || !strings.Contains(res.Version, "2.93.0") {
+		t.Fatalf("install result = %+v", res)
+	}
+}
+
+func TestLatestCLIVersionUsesReleaseEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept"); got != "application/vnd.github+json" {
+			t.Errorf("Accept header = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tag_name":"v2.94.0"}`))
+	}))
+	defer server.Close()
+
+	got, err := latestCLIVersion(context.Background(), CLISpec{LatestVersionURL: server.URL})
+	if err != nil || got != "v2.94.0" {
+		t.Fatalf("latest version = %q, err = %v", got, err)
 	}
 }
 

@@ -1,5 +1,5 @@
 import { ServerCog, Settings2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   activeRemoteID,
   api,
@@ -13,28 +13,62 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
   const { t } = useI18n();
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
+  const requestVersion = useRef(0);
   const activeID = activeRemoteID();
 
+  const applyHosts = useCallback((items: RemoteHost[]) => {
+    const next = items ?? [];
+    setHosts(next);
+    setLoadFailed(false);
+    const selectedID = activeRemoteID();
+    if (selectedID && !next.some((item) => item.id === selectedID)) {
+      setActiveRemoteID("");
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    const version = ++requestVersion.current;
+    try {
+      const next = await api.remoteHosts();
+      if (version !== requestVersion.current) return;
+      applyHosts(next ?? []);
+    } catch {
+      if (version !== requestVersion.current) return;
+      setHosts([]);
+      setLoadFailed(true);
+    }
+  }, [applyHosts]);
+
   useEffect(() => {
-    const load = () => {
-      api.remoteHosts()
-        .then((items) => {
-          const next = items ?? [];
-          setHosts(next);
-          setLoadFailed(false);
-          if (activeID && !next.some((item) => item.id === activeID)) {
-            setActiveRemoteID("");
-          }
-        })
-        .catch(() => {
-          setHosts([]);
-          setLoadFailed(true);
-        });
+    const handleHostsChanged = (event: Event) => {
+      const next = (event as CustomEvent<RemoteHost[] | undefined>).detail;
+      if (Array.isArray(next)) {
+        // A successful mutation already fetched this exact snapshot. Apply it
+        // directly and invalidate any older request still in flight.
+        requestVersion.current += 1;
+        applyHosts(next);
+        return;
+      }
+      void load();
     };
-    load();
-    window.addEventListener(REMOTE_HOSTS_CHANGED_EVENT, load);
-    return () => window.removeEventListener(REMOTE_HOSTS_CHANGED_EVENT, load);
-  }, [activeID]);
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    const intervalID = window.setInterval(handleVisible, 15_000);
+
+    void load();
+    window.addEventListener(REMOTE_HOSTS_CHANGED_EVENT, handleHostsChanged);
+    window.addEventListener("focus", load);
+    window.addEventListener("pageshow", load);
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => {
+      window.clearInterval(intervalID);
+      window.removeEventListener(REMOTE_HOSTS_CHANGED_EVENT, handleHostsChanged);
+      window.removeEventListener("focus", load);
+      window.removeEventListener("pageshow", load);
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
+  }, [applyHosts, load]);
 
   const active = hosts.find((host) => host.id === activeID);
 
@@ -46,6 +80,8 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
         <select
           value={activeID}
           aria-label={t("remote.currentMachine")}
+          onFocus={() => void load()}
+          onPointerDown={() => void load()}
           onChange={(event) => {
             setActiveRemoteID(event.target.value);
             window.location.reload();

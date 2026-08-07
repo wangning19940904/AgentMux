@@ -44,11 +44,23 @@ func (a *App) startup(ctx context.Context) {
 		cfg = config.Default()
 	}
 	a.setAPITarget(cfg.Server.Addr)
-	st, err := openDesktopStore(a.ctx, cfg)
+	a.startMenuBar(log, cfg.Server.Addr)
+	go a.runDesktopBackend(log, cfg)
+}
+
+const desktopStoreRetryInterval = 2 * time.Second
+
+// runDesktopBackend keeps the native shell useful when PostgreSQL and
+// AgentMux are both launched at login. Service startup order is not stable on
+// macOS, so a failed first connection must not permanently strand the WebView
+// behind the asset proxy's "desktop API is starting" response.
+func (a *App) runDesktopBackend(log *slog.Logger, cfg *config.Config) {
+	st, err := waitForDesktopStore(a.ctx, cfg, desktopStoreRetryInterval, log, openDesktopStore)
 	if err != nil {
-		log.Error("open store", "err", err)
 		return
 	}
+	defer st.Close()
+
 	svc := provider.NewService(log, st, cfg.Provider.ProxyAddr)
 	ue := usage.NewEngine(cfg, st, log)
 	reporter := func(ctx context.Context, period string, since, until time.Time) (any, error) {
@@ -117,12 +129,42 @@ func (a *App) startup(ctx context.Context) {
 	if err := svc.RestoreProxyState(a.ctx); err != nil {
 		log.Warn("local routing restore failed", "err", err)
 	}
-	go func() {
-		if err := srv.ListenAndServe(a.ctx); err != nil {
-			log.Error("serve desktop API", "err", err)
+	if err := srv.ListenAndServe(a.ctx); err != nil && a.ctx.Err() == nil {
+		log.Error("serve desktop API", "err", err)
+	}
+}
+
+func waitForDesktopStore(
+	ctx context.Context,
+	cfg *config.Config,
+	retryInterval time.Duration,
+	log *slog.Logger,
+	open func(context.Context, *config.Config) (*store.Store, error),
+) (*store.Store, error) {
+	if retryInterval <= 0 {
+		retryInterval = desktopStoreRetryInterval
+	}
+	for {
+		st, err := open(ctx, cfg)
+		if err == nil {
+			return st, nil
 		}
-	}()
-	a.startMenuBar(log, cfg.Server.Addr)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if log != nil {
+			log.Warn("desktop database unavailable; retrying", "err", err, "retry_in", retryInterval)
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func desktopConfiguredSecrets(cfg *config.Config) []string {

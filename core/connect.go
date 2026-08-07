@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +149,31 @@ func (c *ConnectService) RestartChannel(ctx context.Context, id string) error {
 	return c.eng.AttachChannel(c.baseCtx(), *ch, agent, workDir, workspace)
 }
 
+// RestartChannelsForAgent refreshes every enabled channel bound to agentID.
+// Agent records can change independently from Channel records, so relying on
+// Channel.UpdatedAt alone would leave the old in-memory runtime serving new
+// messages until the daemon or channel was restarted manually.
+func (c *ConnectService) RestartChannelsForAgent(ctx context.Context, agentID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	channels, err := c.store.ListChannels(ctx)
+	if err != nil {
+		return err
+	}
+	var restartErrs []error
+	for _, ch := range channels {
+		if !ch.Enabled || ch.AgentID != agentID {
+			continue
+		}
+		if err := c.RestartChannel(ctx, ch.ID); err != nil {
+			restartErrs = append(restartErrs, fmt.Errorf("restart channel %q: %w", ch.Name, err))
+		}
+	}
+	return errors.Join(restartErrs...)
+}
+
 // ChannelStatuses reports the live state of attached channels.
 func (c *ConnectService) ChannelStatuses() []ChannelStatus {
 	return c.eng.ChannelStatuses()
@@ -276,6 +303,7 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		Model:           inst.DefaultModel,
 		ReasoningEffort: inst.DefaultReasoningEffort,
 		ServiceTier:     inst.DefaultServiceTier,
+		ApprovalMode:    inst.DefaultApprovalMode,
 	}
 	if runtimeDefaults.ReasoningEffort == "" {
 		runtimeDefaults.ReasoningEffort = providerDefaults.ReasoningEffort
@@ -303,6 +331,12 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	}
 	if runtimeDefaults.ServiceTier != "" {
 		cfg["service_tier"] = runtimeDefaults.ServiceTier
+	}
+	if runtimeDefaults.ApprovalMode != "" {
+		cfg["approval_mode"] = runtimeDefaults.ApprovalMode
+	}
+	if modes := ApprovalModeValuesForRuntime(inst.RuntimeID); len(modes) > 0 {
+		cfg["supported_approval_modes"] = modes
 	}
 	if models := c.agentModelOptions(ctx, inst); len(models) > 0 {
 		cfg["supported_models"] = models

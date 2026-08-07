@@ -214,7 +214,7 @@ func discordRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
 	if state.Scope == core.RuntimeSettingsScopeAgent {
 		scope = "Agent 默认（仅后续会话）"
 	}
-	text := fmt.Sprintf("**运行时设置**\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`", scope, discordDisplay(state.Settings.Model), discordDisplay(state.Settings.ReasoningEffort), discordDisplay(state.Settings.ServiceTier))
+	text := fmt.Sprintf("**运行时设置**\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`\n审批：`%s`", scope, discordDisplay(state.Settings.Model), discordDisplay(state.Settings.ReasoningEffort), discordDisplay(state.Settings.ServiceTier), discordDisplay(state.Settings.ApprovalMode))
 	if state.Notice != "" {
 		text += "\n> " + state.Notice
 	}
@@ -232,6 +232,7 @@ func discordRuntimeSettingsComponents(state core.RuntimeSettingsPickerState) []d
 	rows = append(rows, discordSettingRow("model", "选择模型", state, core.RuntimeSettingModel, state.Capabilities.Models)...)
 	rows = append(rows, discordSettingRow("effort", "选择思考强度", state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
 	rows = append(rows, discordSettingRow("tier", "选择速度", state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
+	rows = append(rows, discordSettingRow("approval", "选择审批模式", state, core.RuntimeSettingApprovalMode, state.Capabilities.ApprovalModes)...)
 	if len(rows) > 5 {
 		return rows[:5]
 	}

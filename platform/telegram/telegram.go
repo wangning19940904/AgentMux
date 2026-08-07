@@ -235,7 +235,7 @@ func telegramRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
 	if state.Scope == core.RuntimeSettingsScopeAgent {
 		scope = "Agent 默认（仅后续会话）"
 	}
-	text := fmt.Sprintf("运行时设置\n范围：%s\n模型：%s\n思考：%s\n速度：%s", scope, telegramDisplay(state.Settings.Model), telegramDisplay(state.Settings.ReasoningEffort), telegramDisplay(state.Settings.ServiceTier))
+	text := fmt.Sprintf("运行时设置\n范围：%s\n模型：%s\n思考：%s\n速度：%s\n审批：%s", scope, telegramDisplay(state.Settings.Model), telegramDisplay(state.Settings.ReasoningEffort), telegramDisplay(state.Settings.ServiceTier), telegramDisplay(state.Settings.ApprovalMode))
 	if state.Notice != "" {
 		text += "\n提示：" + state.Notice
 	}
@@ -258,6 +258,7 @@ func telegramRuntimeSettingsKeyboard(p *Platform, state core.RuntimeSettingsPick
 	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingModel, state.Capabilities.Models)...)
 	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
 	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
+	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingApprovalMode, state.Capabilities.ApprovalModes)...)
 	return rows
 }
 

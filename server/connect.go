@@ -286,11 +286,43 @@ func (s *Server) handleChannelUpsert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	s.channelClaimMu.Lock()
+	defer s.channelClaimMu.Unlock()
+	if isExclusiveLongConnection(ch) {
+		channels, err := s.st.ListChannels(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		conflicts := collectChannelClaimConflicts(nil, "", "local machine", "", ch, channels)
+		if err := s.disableChannelClaimConflicts(r.Context(), conflicts); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 	if err := s.st.UpsertChannel(r.Context(), &ch); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	s.reloadChannels(r.Context())
+	ch.Config = redactStringMap(ch.Config)
+	writeJSON(w, http.StatusOK, &ch)
+}
+
+func (s *Server) handleChannelValidate(w http.ResponseWriter, r *http.Request) {
+	if s.st == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store unavailable"})
+		return
+	}
+	var ch core.Channel
+	if err := json.NewDecoder(r.Body).Decode(&ch); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.normalizeChannel(r.Context(), &ch); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	ch.Config = redactStringMap(ch.Config)
 	writeJSON(w, http.StatusOK, &ch)
 }
@@ -544,6 +576,15 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 	if err := normalizeChannelConfig(ch); err != nil {
 		return err
 	}
+	if ch.AgentID != "" {
+		agent, err := s.st.GetAgentInstance(ctx, ch.AgentID)
+		if err != nil {
+			return err
+		}
+		if agent == nil {
+			return fmt.Errorf("bound Agent %q was not found", ch.AgentID)
+		}
+	}
 	if core.CodexRemoteControlEnabled(*ch) {
 		if ch.AgentID == "" {
 			return fmt.Errorf("Codex remote control requires a bound Agent")
@@ -581,6 +622,9 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 }
 
 func normalizeChannelConfig(ch *core.Channel) error {
+	// Approval defaults belong to the bound Agent. Strip the retired channel
+	// key whenever a channel is created or saved so old records migrate lazily.
+	delete(ch.Config, "approval_mode")
 	if ch.Type != "feishu" && ch.Type != "lark" {
 		return nil
 	}

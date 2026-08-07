@@ -4,7 +4,10 @@ package tools
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +42,7 @@ type CLISpec struct {
 	InstallCommand     []string             `json:"install_command,omitempty"`
 	PostInstallCommand []string             `json:"post_install_command,omitempty"`
 	UpdateCommand      []string             `json:"update_command,omitempty"`
+	LatestVersionURL   string               `json:"-"`
 	LinkedSkills       []CLILinkedSkillSpec `json:"linked_skills,omitempty"`
 	Note               string               `json:"note,omitempty"`
 }
@@ -140,6 +144,13 @@ var cliCatalog = []CLISpec{
 			},
 		},
 		Note: "ByteDance enterprise services CLI with a version-matched companion Skill managed as one unit.",
+	},
+	{
+		ID: "github-cli", Name: "GitHub CLI", Bin: "gh", Package: "gh",
+		InstallCommand:   []string{"brew", "install", "gh"},
+		UpdateCommand:    []string{"brew", "upgrade", "gh"},
+		LatestVersionURL: "https://api.github.com/repos/cli/cli/releases/latest",
+		Note:             "GitHub's official CLI for pull requests, issues, Actions, and repositories.",
 	},
 }
 
@@ -394,11 +405,47 @@ func runCLICommands(ctx context.Context, spec CLISpec, commands [][]string) (str
 }
 
 func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {
+	if spec.LatestVersionURL != "" {
+		return latestReleaseVersion(ctx, spec.LatestVersionURL)
+	}
 	args := []string{"view", spec.Package, "version", "--silent"}
 	if spec.Registry != "" {
 		args = append(args, "--registry="+spec.Registry)
 	}
 	return commandOutputWithEnv(ctx, cliEnv(spec), "npm", args...)
+}
+
+func latestReleaseVersion(ctx context.Context, url string) (string, error) {
+	runCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(runCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("latest-version endpoint returned %s", resp.Status)
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&release); err != nil {
+		return "", fmt.Errorf("decode latest release: %w", err)
+	}
+	if strings.TrimSpace(release.TagName) == "" {
+		return "", fmt.Errorf("latest-version endpoint returned no tag_name")
+	}
+	return release.TagName, nil
 }
 
 func detectLinkedSkills(spec CLISpec, cliVersion string) []CLILinkedSkillStatus {

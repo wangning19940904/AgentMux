@@ -163,6 +163,23 @@ GET  /api/v1/observability/integrations        # Plugin/OTel/Transcript/Proxy Do
 POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall|doctor}
 ```
 
+### 渠道审批命令
+
+在飞书/Lark 等绑定 Agent 的渠道中，可以直接切换当前会话的审批模式；命令由 AgentMux 处理，不会转发给 Agent：
+
+| 命令 | 效果 |
+| --- | --- |
+| `/approval` | 打开运行时设置卡或查看当前状态 |
+| `/approval manual` | 切换为手动审批 |
+| `/approval auto_edit` | 自动批准文件编辑 |
+| `/approval auto` | 使用运行时的智能自动审批 |
+| `/approval plan` | 切换为只读规划 |
+| `/approval yolo`、`/yolo on` | 当前会话完全免审批 |
+| `/yolo off` | 恢复当前会话的手动审批 |
+| `/approval reset` | 恢复 Agent/运行时默认审批模式 |
+
+不同 Agent runtime 支持的模式不同；不支持的命令会返回该 runtime 的可用模式列表。
+
 ## 构建
 
 | 目标 | 命令 | 说明 |

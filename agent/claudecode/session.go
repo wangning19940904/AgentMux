@@ -44,9 +44,11 @@ func newSessionResume(a *Agent, workDir, resumeID string) (*session, error) {
 		settings: core.NewRuntimeSettingsSelection(core.RuntimeSettings{
 			Model:           a.defaultModel,
 			ReasoningEffort: a.defaultReasoningEffort,
+			ApprovalMode:    a.defaultApprovalMode,
 		}, core.RuntimeSettingsCapabilities{
 			Models:           core.RuntimeOptions(a.supportedModels),
 			ReasoningEfforts: core.RuntimeOptions(a.supportedReasoningEfforts),
+			ApprovalModes:    core.RuntimeOptions(a.supportedApprovalModes),
 		}),
 	}, nil
 }
@@ -150,6 +152,18 @@ func (s *session) args(text string) []string {
 	}
 	if effort := s.CurrentRuntimeSettings().ReasoningEffort; effort != "" {
 		args = append(args, "--effort", effort)
+	}
+	switch s.CurrentRuntimeSettings().ApprovalMode {
+	case core.ApprovalModeManual:
+		args = append(args, "--permission-mode", "manual")
+	case core.ApprovalModeAutoEdit:
+		args = append(args, "--permission-mode", "acceptEdits")
+	case core.ApprovalModeAuto:
+		args = append(args, "--permission-mode", "auto")
+	case core.ApprovalModePlan:
+		args = append(args, "--permission-mode", "plan")
+	case core.ApprovalModeYolo:
+		args = append(args, "--dangerously-skip-permissions")
 	}
 	// Resume prior context when we already know the native session id, so the
 	// conversation carries across turns and process restarts.
