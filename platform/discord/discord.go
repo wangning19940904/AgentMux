@@ -15,6 +15,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/platform/settingsui"
 )
 
 // discordMaxLen keeps messages under Discord's 2000-char hard limit.
@@ -210,11 +211,10 @@ type discordRuntimeSettingsAction struct {
 }
 
 func discordRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
-	scope := "当前会话"
-	if state.Scope == core.RuntimeSettingsScopeAgent {
-		scope = "Agent 默认（仅后续会话）"
-	}
-	text := fmt.Sprintf("**运行时设置**\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`\n审批：`%s`", scope, discordDisplay(state.Settings.Model), discordDisplay(state.Settings.ReasoningEffort), discordDisplay(state.Settings.ServiceTier), discordDisplay(state.Settings.ApprovalMode))
+	text := settingsui.SummaryText(state, settingsui.Format{
+		Bold: func(s string) string { return "**" + s + "**" },
+		Code: func(s string) string { return "`" + s + "`" },
+	})
 	if state.Notice != "" {
 		text += "\n> " + state.Notice
 	}
@@ -223,64 +223,43 @@ func discordRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
 
 func discordRuntimeSettingsComponents(state core.RuntimeSettingsPickerState) []discordgo.MessageComponent {
 	rows := make([]discordgo.MessageComponent, 0, 5)
-	if state.AgentDefaultsEditable {
-		rows = append(rows, discordSettingsSelect("scope", "设置范围", []discordSettingOption{
-			{label: "当前会话", action: discordRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeConversation), Setting: string(core.RuntimeSettingScope)}},
-			{label: "Agent 默认", action: discordRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeAgent), Setting: string(core.RuntimeSettingScope)}},
-		}, string(state.Scope)))
+	for _, group := range settingsui.Groups(state) {
+		if len(group.Options) == 0 {
+			continue
+		}
+		placeholder := group.Title
+		if group.Setting != core.RuntimeSettingScope {
+			placeholder = "选择" + group.Title
+		}
+		rows = append(rows, discordSettingsSelect(group, placeholder))
 	}
-	rows = append(rows, discordSettingRow("model", "选择模型", state, core.RuntimeSettingModel, state.Capabilities.Models)...)
-	rows = append(rows, discordSettingRow("effort", "选择思考强度", state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
-	rows = append(rows, discordSettingRow("tier", "选择速度", state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
-	rows = append(rows, discordSettingRow("approval", "选择审批模式", state, core.RuntimeSettingApprovalMode, state.Capabilities.ApprovalModes)...)
+	// Discord allows at most five component rows per message.
 	if len(rows) > 5 {
 		return rows[:5]
 	}
 	return rows
 }
 
-type discordSettingOption struct {
-	label  string
-	action discordRuntimeSettingsAction
-}
-
-func discordSettingRow(id, placeholder string, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, options []core.RuntimeOption) []discordgo.MessageComponent {
-	if len(options) == 0 {
-		return nil
-	}
-	entries := make([]discordSettingOption, 0, len(options))
-	for _, option := range options {
-		label := option.Label
-		if label == "" {
-			label = option.Value
-		}
-		entries = append(entries, discordSettingOption{label: label, action: discordRuntimeSettingsAction{Scope: string(state.Scope), Setting: string(setting), Value: option.Value}})
-	}
+func discordSettingsSelect(group settingsui.Group, placeholder string) discordgo.MessageComponent {
+	entries := group.Options
 	// Discord limits a single select menu to 25 options. Keep the interactive
 	// card valid and leave the universal /model command as the fallback for
 	// unusually large provider catalogs.
 	if len(entries) > 25 {
 		entries = entries[:25]
 	}
-	return []discordgo.MessageComponent{discordSettingsSelect(id, placeholder, entries, state.Settings.Value(setting))}
-}
-
-func discordSettingsSelect(id, placeholder string, entries []discordSettingOption, selected string) discordgo.MessageComponent {
 	options := make([]discordgo.SelectMenuOption, 0, len(entries))
 	for _, entry := range entries {
-		encoded, _ := json.Marshal(entry.action)
-		options = append(options, discordgo.SelectMenuOption{Label: entry.label, Value: string(encoded), Default: entry.action.Value == selected || (entry.action.Setting == string(core.RuntimeSettingScope) && entry.action.Scope == selected)})
+		action := discordRuntimeSettingsAction{
+			Scope: string(entry.Action.Scope), Setting: string(entry.Action.Setting),
+			Value: entry.Action.Value, Reset: entry.Action.Reset,
+		}
+		encoded, _ := json.Marshal(action)
+		options = append(options, discordgo.SelectMenuOption{Label: entry.Label, Value: string(encoded), Default: entry.Selected})
 	}
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{
-		CustomID: "agentmux_settings_" + id, Placeholder: placeholder, Options: options,
+		CustomID: "agentmux_settings_" + group.ID, Placeholder: placeholder, Options: options,
 	}}}
-}
-
-func discordDisplay(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "runtime default"
-	}
-	return value
 }
 
 // Stop is a no-op; the Start goroutine closes the session on ctx cancellation.

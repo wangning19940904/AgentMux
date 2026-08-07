@@ -16,6 +16,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/platform/settingsui"
 )
 
 func init() {
@@ -253,75 +254,46 @@ type slackRuntimeSettingsAction struct {
 }
 
 func slackRuntimeSettingsBlocks(state core.RuntimeSettingsPickerState) []slackapi.Block {
-	scope := "当前会话"
-	if state.Scope == core.RuntimeSettingsScopeAgent {
-		scope = "Agent 默认（仅后续会话）"
-	}
+	summary := settingsui.SummaryText(state, settingsui.Format{
+		Bold: func(s string) string { return "*" + s + "*" },
+		Code: func(s string) string { return "`" + s + "`" },
+	})
 	blocks := []slackapi.Block{slackapi.NewSectionBlock(
-		slackapi.NewTextBlockObject("mrkdwn", fmt.Sprintf("*运行时设置*\n范围：%s\n模型：`%s`\n思考：`%s`\n速度：`%s`\n审批：`%s`", scope, slackDisplay(state.Settings.Model), slackDisplay(state.Settings.ReasoningEffort), slackDisplay(state.Settings.ServiceTier), slackDisplay(state.Settings.ApprovalMode)), false, false), nil, nil,
+		slackapi.NewTextBlockObject("mrkdwn", summary, false, false), nil, nil,
 	)}
 	if state.Notice != "" {
 		blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", ":warning: "+state.Notice, false, false), nil, nil))
 	}
-	if state.AgentDefaultsEditable {
-		blocks = append(blocks, slackSettingsSelect("scope", "设置范围", []slackSettingOption{
-			{label: "当前会话", action: slackRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeConversation), Setting: string(core.RuntimeSettingScope)}},
-			{label: "Agent 默认", action: slackRuntimeSettingsAction{Scope: string(core.RuntimeSettingsScopeAgent), Setting: string(core.RuntimeSettingScope)}},
-		}, string(state.Scope)))
+	for _, group := range settingsui.Groups(state) {
+		if group.Unsupported != "" {
+			blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", "*"+group.Title+"*："+group.Unsupported, false, false), nil, nil))
+			continue
+		}
+		blocks = append(blocks, slackSettingsSelect(group))
 	}
-	blocks = append(blocks, slackSettingBlock("model", "模型", state, core.RuntimeSettingModel, state.Capabilities.Models)...)
-	blocks = append(blocks, slackSettingBlock("effort", "思考强度", state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
-	blocks = append(blocks, slackSettingBlock("tier", "速度", state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
-	blocks = append(blocks, slackSettingBlock("approval", "审批模式", state, core.RuntimeSettingApprovalMode, state.Capabilities.ApprovalModes)...)
 	return blocks
 }
 
-type slackSettingOption struct {
-	label  string
-	action slackRuntimeSettingsAction
-}
-
-func slackSettingBlock(id, title string, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, options []core.RuntimeOption) []slackapi.Block {
-	if len(options) == 0 {
-		if reason := state.Unsupported[setting]; reason != "" {
-			return []slackapi.Block{slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", "*"+title+"*："+reason, false, false), nil, nil)}
-		}
-		return nil
-	}
-	entries := make([]slackSettingOption, 0, len(options))
-	for _, option := range options {
-		label := option.Label
-		if label == "" {
-			label = option.Value
-		}
-		entries = append(entries, slackSettingOption{label: label, action: slackRuntimeSettingsAction{Scope: string(state.Scope), Setting: string(setting), Value: option.Value}})
-	}
-	return []slackapi.Block{slackSettingsSelect(id, title, entries, state.Settings.Value(setting))}
-}
-
-func slackSettingsSelect(id, title string, entries []slackSettingOption, selected string) slackapi.Block {
-	options := make([]*slackapi.OptionBlockObject, 0, len(entries))
+func slackSettingsSelect(group settingsui.Group) slackapi.Block {
+	options := make([]*slackapi.OptionBlockObject, 0, len(group.Options))
 	var initial *slackapi.OptionBlockObject
-	for _, entry := range entries {
-		data, _ := json.Marshal(entry.action)
-		option := slackapi.NewOptionBlockObject(string(data), slackapi.NewTextBlockObject("plain_text", entry.label, false, false), nil)
+	for _, entry := range group.Options {
+		action := slackRuntimeSettingsAction{
+			Scope: string(entry.Action.Scope), Setting: string(entry.Action.Setting),
+			Value: entry.Action.Value, Reset: entry.Action.Reset,
+		}
+		data, _ := json.Marshal(action)
+		option := slackapi.NewOptionBlockObject(string(data), slackapi.NewTextBlockObject("plain_text", entry.Label, false, false), nil)
 		options = append(options, option)
-		if entry.action.Value == selected || (entry.action.Setting == string(core.RuntimeSettingScope) && entry.action.Scope == selected) {
+		if entry.Selected {
 			initial = option
 		}
 	}
-	selectElement := slackapi.NewOptionsSelectBlockElement("static_select", slackapi.NewTextBlockObject("plain_text", title, false, false), "agentmux_settings_"+id, options...)
+	selectElement := slackapi.NewOptionsSelectBlockElement("static_select", slackapi.NewTextBlockObject("plain_text", group.Title, false, false), "agentmux_settings_"+group.ID, options...)
 	if initial != nil {
 		selectElement.WithInitialOption(initial)
 	}
-	return slackapi.NewActionBlock("agentmux_settings_"+id, selectElement)
-}
-
-func slackDisplay(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "runtime default"
-	}
-	return value
+	return slackapi.NewActionBlock("agentmux_settings_"+group.ID, selectElement)
 }
 
 // Stop is a no-op; RunContext exits on ctx cancellation.
