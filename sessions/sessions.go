@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -263,6 +264,40 @@ func matches(value string, allowed ...string) bool {
 
 type claudeScanner struct{}
 
+// sessionMetaCache memoizes per-file session summaries keyed by path. A file
+// whose size and mtime are unchanged since the last scan reuses the cached
+// Meta, so periodic console refreshes stat files instead of re-parsing every
+// transcript line.
+var sessionMetaCache sync.Map // path -> sessionMetaCacheEntry
+
+type sessionMetaCacheEntry struct {
+	size    int64
+	modTime time.Time
+	meta    Meta
+}
+
+// cachedSessionMeta returns a cached Meta for path when the file is unchanged,
+// otherwise it runs parse and stores the result.
+func cachedSessionMeta(path string, d os.DirEntry, parse func(string) (Meta, []Message, error)) (Meta, error) {
+	info, err := d.Info()
+	if err == nil {
+		if value, ok := sessionMetaCache.Load(path); ok {
+			entry := value.(sessionMetaCacheEntry)
+			if entry.size == info.Size() && entry.modTime.Equal(info.ModTime()) {
+				return entry.meta, nil
+			}
+		}
+	}
+	meta, _, err := parse(path)
+	if err != nil {
+		return Meta{}, err
+	}
+	if info != nil {
+		sessionMetaCache.Store(path, sessionMetaCacheEntry{size: info.Size(), modTime: info.ModTime(), meta: meta})
+	}
+	return meta, nil
+}
+
 func (s *claudeScanner) List(ctx context.Context) ([]Meta, error) {
 	var out []Meta
 	for _, root := range claudeRoots() {
@@ -279,7 +314,7 @@ func (s *claudeScanner) List(ctx context.Context) ([]Meta, error) {
 				return ctx.Err()
 			default:
 			}
-			meta, _, err := parseClaudeFile(path)
+			meta, err := cachedSessionMeta(path, d, parseClaudeFile)
 			if err == nil && meta.SessionID != "" {
 				out = append(out, meta)
 			}
@@ -396,7 +431,7 @@ func (s *codexScanner) List(ctx context.Context) ([]Meta, error) {
 				return ctx.Err()
 			default:
 			}
-			meta, _, err := parseCodexFileSummary(path)
+			meta, err := cachedSessionMeta(path, d, parseCodexFileSummary)
 			if err == nil && meta.SessionID != "" && meta.Available {
 				out = append(out, meta)
 			}
