@@ -57,7 +57,9 @@ clients (CLI / WebUI / Wails / menubar)
    └── server/      Console API + embedded WebUI (go:embed)
 ```
 
-`core` 永不导入 `platform/`、`agent/`、`provider/`、`usage/`、`memory/`、`skills/`、`mcp/`、`guard/`;各适配器在自身 `init()` 中通过 registry 自注册。Memory/Skills/MCP/Guard 四个模块已落地骨架实现(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),并通过 `/api/v1` 暴露给 Console。
+`core` 不导入 `platform/`、`agent/`、`provider/`、`usage/`、`memory/`、`skills/`、`mcp/`、`guard/` 等适配器包(目前仅依赖 `tools/` 做 CLI 探测);各适配器在自身 `init()` 中通过 registry 自注册。
+
+Memory/Skills/MCP/Guard 四个模块当前为 **Console 管理层实现**(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),通过 `/api/v1` 提供 CRUD 与评估接口,但尚未接入 Agent 对话回路:Memory 不会自动检索注入上下文、Guard 不拦截运行中的工具调用、MCP 配置不会下发生成到各 Agent 的原生配置文件、Skills 的启用状态仅保存在内存中。
 
 ## 快速开始
 
