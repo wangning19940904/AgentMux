@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,21 +30,21 @@ type systemDirectoryListResponse struct {
 func (s *Server) handleSystemDirectoryList(w http.ResponseWriter, r *http.Request) {
 	path, err := resolveSystemDirectoryPath(r.URL.Query().Get("path"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !info.IsDir() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is not a directory"})
+		writeErr(w, http.StatusBadRequest, "path is not a directory")
 		return
 	}
 	items, err := os.ReadDir(path)
 	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusForbidden, err.Error())
 		return
 	}
 	entries := make([]systemDirectoryEntry, 0, len(items))
@@ -69,26 +68,25 @@ func (s *Server) handleSystemDirectoryList(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleSystemDirectoryEnsure(w http.ResponseWriter, r *http.Request) {
 	var req systemDirectoryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	path, err := normalizeSystemDirectoryPath(req.Path)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !info.IsDir() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is not a directory"})
+		writeErr(w, http.StatusBadRequest, "path is not a directory")
 		return
 	}
 	writeJSON(w, http.StatusOK, systemDirectoryResponse{Path: path})

@@ -158,12 +158,11 @@ type channelClaimConflict struct {
 
 func (s *Server) handleChannelClaim(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
 		return
 	}
 	var req channelClaimRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	req.TargetID = strings.TrimSpace(req.TargetID)
@@ -173,12 +172,12 @@ func (s *Server) handleChannelClaim(w http.ResponseWriter, r *http.Request) {
 
 	if req.TargetID == "" {
 		if err := s.normalizeChannel(r.Context(), &req.Channel); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	} else {
 		if s.channelPeers == nil || !channelPeerExists(s.channelPeers.Targets(), req.TargetID) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "remote host not found"})
+			writeErr(w, http.StatusNotFound, "remote host not found")
 			return
 		}
 		if _, err := s.channelPeers.ValidateChannel(r.Context(), req.TargetID, req.Channel); err != nil {
@@ -218,7 +217,7 @@ func (s *Server) handleChannelClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.st.UpsertChannel(r.Context(), &req.Channel); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.reloadChannels(r.Context())
@@ -331,5 +330,5 @@ func writeChannelClaimError(w http.ResponseWriter, err error) {
 	if errors.As(err, &peerErr) && peerErr.Status >= 400 && peerErr.Status < 500 {
 		status = peerErr.Status
 	}
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	writeErr(w, status, err.Error())
 }

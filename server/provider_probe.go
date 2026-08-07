@@ -44,18 +44,17 @@ type providerProbeResult struct {
 }
 
 func (s *Server) handleProviderProbe(w http.ResponseWriter, r *http.Request) {
-	var p core.Provider
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	p, ok := decodeJSON[core.Provider](w, r)
+	if !ok {
 		return
 	}
 	if err := normalizeProviderAPIKey(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	result, err := probeProviderModels(r.Context(), &p)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

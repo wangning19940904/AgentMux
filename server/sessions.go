@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -21,12 +20,12 @@ func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 	surface := strings.TrimSpace(r.URL.Query().Get("surface"))
 	items, err := s.sessions.List(r.Context(), providerID, surface)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items, err = s.enrichSessionRows(r.Context(), items, providerID, surface)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -47,7 +46,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	if conversationID := strings.TrimSpace(r.URL.Query().Get("conversation_id")); conversationID != "" {
 		conversation, providerID, err := s.resolveConversationSession(r.Context(), conversationID)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusNotFound, err.Error())
 			return
 		}
 		if conversation.NativeSessionID == "" {
@@ -64,7 +63,7 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.sessions.Messages(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -76,25 +75,24 @@ func (s *Server) handleSessionMessageSend(w http.ResponseWriter, r *http.Request
 		ConversationID string `json:"conversation_id"`
 		Text           string `json:"text"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	req.ChannelID = strings.TrimSpace(req.ChannelID)
 	req.ConversationID = strings.TrimSpace(req.ConversationID)
 	req.Text = strings.TrimSpace(req.Text)
 	if req.ChannelID == "" || req.ConversationID == "" || req.Text == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "channel_id, conversation_id and text are required"})
+		writeErr(w, http.StatusBadRequest, "channel_id, conversation_id and text are required")
 		return
 	}
 	sender, ok := s.sender.(core.ConversationSender)
 	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "conversation chat is unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "conversation chat is unavailable")
 		return
 	}
 	answer, err := sender.SendToConversation(r.Context(), req.ChannelID, req.ConversationID, req.Text)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "answer": answer})
@@ -102,17 +100,16 @@ func (s *Server) handleSessionMessageSend(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleSessionResume(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sessions not enabled"})
+		writeErr(w, http.StatusServiceUnavailable, "sessions not enabled")
 		return
 	}
-	var req sessionstore.ResumeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	req, ok := decodeJSON[sessionstore.ResumeRequest](w, r)
+	if !ok {
 		return
 	}
 	res, err := s.sessions.Resume(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -120,7 +117,7 @@ func (s *Server) handleSessionResume(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "sessions not enabled"})
+		writeErr(w, http.StatusServiceUnavailable, "sessions not enabled")
 		return
 	}
 	req := sessionstore.ResumeRequest{
@@ -130,10 +127,10 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		SourcePath: r.URL.Query().Get("source_path"),
 	}
 	if err := s.sessions.Delete(r.Context(), req); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) enrichSessionRows(

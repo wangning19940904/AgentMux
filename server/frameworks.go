@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -45,13 +44,12 @@ type frameworkInstallRequest struct {
 
 func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) {
 	var req frameworkInstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	kind := strings.TrimSpace(req.Kind)
 	if kind == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "framework kind is required"})
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
 		return
 	}
 
@@ -85,13 +83,12 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleFrameworkCheck(w http.ResponseWriter, r *http.Request) {
 	var req frameworkInstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	kind := strings.TrimSpace(req.Kind)
 	if kind == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "framework kind is required"})
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
 		return
 	}
 	writeJSON(w, http.StatusOK, framework.CheckUpdate(r.Context(), kind))
@@ -100,7 +97,7 @@ func (s *Server) handleFrameworkCheck(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFrameworkAuthStatus(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	if kind == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "framework kind is required"})
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -111,13 +108,12 @@ func (s *Server) handleFrameworkLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind string `json:"kind"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	result, err := framework.StartLogin(req.Kind)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -129,13 +125,12 @@ func (s *Server) handleFrameworkLoginComplete(w http.ResponseWriter, r *http.Req
 		SessionID string `json:"session_id"`
 		Code      string `json:"code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	if err := framework.CompleteLogin(req.SessionID, req.Code); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
