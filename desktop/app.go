@@ -5,26 +5,16 @@ package main
 
 import (
 	"context"
-	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/wangning19940904/AgentMux/config"
-	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/guard"
-	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
-	"github.com/wangning19940904/AgentMux/mcp"
-	"github.com/wangning19940904/AgentMux/memory"
-	observationpkg "github.com/wangning19940904/AgentMux/observability"
-	"github.com/wangning19940904/AgentMux/provider"
-	"github.com/wangning19940904/AgentMux/server"
-	"github.com/wangning19940904/AgentMux/skills"
-	"github.com/wangning19940904/AgentMux/store"
-	"github.com/wangning19940904/AgentMux/usage"
-	"github.com/wangning19940904/AgentMux/workspace"
-	"log/slog"
 	"time"
+
+	"github.com/wangning19940904/AgentMux/bootstrap"
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/provider"
+	"github.com/wangning19940904/AgentMux/store"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -61,62 +51,10 @@ func (a *App) runDesktopBackend(log *slog.Logger, cfg *config.Config) {
 	}
 	defer st.Close()
 
-	svc := provider.NewService(log, st, cfg.Provider.ProxyAddr)
-	ue := usage.NewEngine(cfg, st, log)
-	reporter := func(ctx context.Context, period string, since, until time.Time) (any, error) {
-		return ue.ReportRange(ctx, period, since, until)
-	}
-	initializer := workspace.New()
-	srv := server.New(cfg, log, st, svc, reporter)
-	srv.SetProviderService(svc)
-	srv.SetPresets(provider.Presets())
-	srv.SetModules(memory.New(st), skills.New(), mcp.New(st), guard.New(st, core.GuardAsk))
-	srv.SetWorkspaceInitializer(initializer)
-	go ue.Start(a.ctx, time.Duration(cfg.Observability.BackfillDays)*24*time.Hour)
-	var observationRuntime *observationpkg.Runtime
-	if cfg.Observability.Enabled {
-		home, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			log.Error("resolve observability home", "err", homeErr)
-		} else if runtimeValue, runtimeErr := observationpkg.NewRuntime(log, cfg.Observability, st, home, desktopConfiguredSecrets(cfg)); runtimeErr != nil {
-			log.Error("build observability runtime", "err", runtimeErr)
-		} else {
-			observationRuntime = runtimeValue
-			var nativeManager *nativeintegration.Manager
-			if manager, managerErr := nativeintegration.NewManager(nativeintegration.Options{HomeDir: home}); managerErr != nil {
-				log.Warn("native observation integrations unavailable", "err", managerErr)
-			} else {
-				nativeManager = manager
-			}
-			srv.SetObservability(cfg.Observability, runtimeValue.Recorder, runtimeValue.Insights, nativeManager, runtimeValue.Ingest)
-			// Heavy DB-bound initialization; run off the startup path so the
-			// desktop HTTP API binds immediately even on large stores.
-			go func() {
-				if runtimeErr := runtimeValue.Start(a.ctx); runtimeErr != nil && a.ctx.Err() == nil {
-					log.Warn("start observability runtime", "err", runtimeErr)
-				}
-			}()
-		}
-	}
-	if eng, err := server.BuildEngine(log, cfg, initializer); err != nil {
+	srv, svc, ue := bootstrap.NewServer(log, cfg, st, "")
+	if eng, connectSvc, err := bootstrap.AttachRuntime(a.ctx, log, cfg, st, srv, svc, ue, false); err != nil {
 		log.Error("build engine", "err", err)
 	} else {
-		eng.SetConversationStore(st)
-		if observationRuntime != nil {
-			eng.SetObservationBus(observationRuntime.Bus)
-			eng.SetUsageSink(ue.Record)
-			eng.SetObservationChildTelemetry(core.ObservationChildTelemetry{
-				Endpoint: observationpkg.LocalOTLPEndpoint(cfg.Server.Addr), Token: observationRuntime.IngestToken,
-				CaptureContent: cfg.Observability.CaptureContent == "full",
-			})
-			svc.Proxy().SetTraceCostEstimator(ue.ProxyCost)
-			svc.Proxy().SetTraceObserver(func(ctx context.Context, trace core.ProxyTrace, requestBody, responseBody []byte) error {
-				return errors.Join(ue.RecordProxy(ctx, trace), observationRuntime.ObserveProxyTrace(ctx, trace, requestBody, responseBody))
-			})
-		}
-		connectSvc := core.NewConnectService(log, eng, st)
-		srv.SetSender(eng)
-		srv.SetConnect(connectSvc)
 		go func() {
 			if err := eng.Start(a.ctx); err != nil {
 				log.Error("engine stopped", "err", err)
@@ -165,21 +103,6 @@ func waitForDesktopStore(
 		case <-timer.C:
 		}
 	}
-}
-
-func desktopConfiguredSecrets(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	values := []string{cfg.Bridge.Token}
-	for _, project := range cfg.Projects {
-		for _, value := range project.Env {
-			if value != "" {
-				values = append(values, value)
-			}
-		}
-	}
-	return values
 }
 
 func (a *App) shutdown(ctx context.Context) {
