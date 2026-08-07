@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -37,7 +36,7 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"connect": core.RegisteredPlatforms(),
 		"router":  core.RegisteredAgents(),
-		"ledger":  core.RegisteredCollectors(),
+		"ledger":  s.cfg.Usage.Sources,
 		"memory":  core.RegisteredMemories(),
 		"skills":  core.RegisteredSkillManagers(),
 		"mcp":     core.RegisteredMCPRegistries(),
@@ -53,7 +52,7 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
 	if s.memory == nil {
-		writeJSON(w, http.StatusOK, []any{})
+		serviceUnavailable(w, "memory")
 		return
 	}
 	scope := r.URL.Query().Get("scope")
@@ -61,7 +60,7 @@ func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	res, err := s.memory.Search(r.Context(), scope, query, limit)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -69,17 +68,16 @@ func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMemoryPut(w http.ResponseWriter, r *http.Request) {
 	if s.memory == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "memory not enabled"})
+		serviceUnavailable(w, "memory")
 		return
 	}
-	var e core.MemoryEntry
-	if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	e, ok := decodeJSON[core.MemoryEntry](w, r)
+	if !ok {
 		return
 	}
 	id, err := s.memory.Put(r.Context(), &e)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
@@ -87,25 +85,28 @@ func (s *Server) handleMemoryPut(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMemoryDelete(w http.ResponseWriter, r *http.Request) {
 	if s.memory == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "memory not enabled"})
+		serviceUnavailable(w, "memory")
 		return
 	}
-	id := r.URL.Query().Get("id")
+	id, ok := requireQuery(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := s.memory.Delete(r.Context(), id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleSkillsList(w http.ResponseWriter, r *http.Request) {
 	if s.skills == nil {
-		writeJSON(w, http.StatusOK, []any{})
+		serviceUnavailable(w, "skills")
 		return
 	}
 	res, err := s.skills.List(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -119,31 +120,30 @@ type marketplaceSkillManager interface {
 func (s *Server) handleSkillsMarketplace(w http.ResponseWriter, r *http.Request) {
 	mgr, ok := s.skills.(marketplaceSkillManager)
 	if !ok || mgr == nil {
-		writeJSON(w, http.StatusOK, []any{})
+		serviceUnavailable(w, "skills marketplace")
 		return
 	}
 	res, err := mgr.Marketplace(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("source"), r.URL.Query().Get("category"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleSkillInstall(w http.ResponseWriter, r *http.Request) {
-	mgr, ok := s.skills.(marketplaceSkillManager)
-	if !ok || mgr == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "skills marketplace not enabled"})
+	mgr, mgrOK := s.skills.(marketplaceSkillManager)
+	if !mgrOK || mgr == nil {
+		serviceUnavailable(w, "skills marketplace")
 		return
 	}
-	var req skillpkg.InstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	req, ok := decodeJSON[skillpkg.InstallRequest](w, r)
+	if !ok {
 		return
 	}
 	res, err := mgr.InstallMarketplace(r.Context(), req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -151,32 +151,32 @@ func (s *Server) handleSkillInstall(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSkillToggle(w http.ResponseWriter, r *http.Request) {
 	if s.skills == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "skills not enabled"})
+		serviceUnavailable(w, "skills")
 		return
 	}
-	var req struct {
+	type toggleRequest struct {
 		Name    string `json:"name"`
 		Enabled bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	req, ok := decodeJSON[toggleRequest](w, r)
+	if !ok {
 		return
 	}
 	if err := s.skills.SetEnabled(r.Context(), req.Name, req.Enabled); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request) {
 	if s.mcp == nil {
-		writeJSON(w, http.StatusOK, []any{})
+		serviceUnavailable(w, "mcp registry")
 		return
 	}
 	res, err := s.mcp.List(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -184,16 +184,15 @@ func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMCPUpsert(w http.ResponseWriter, r *http.Request) {
 	if s.mcp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "mcp registry not enabled"})
+		serviceUnavailable(w, "mcp registry")
 		return
 	}
-	var m core.MCPServer
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	m, ok := decodeJSON[core.MCPServer](w, r)
+	if !ok {
 		return
 	}
 	if err := s.mcp.Upsert(r.Context(), &m); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, &m)
@@ -201,25 +200,28 @@ func (s *Server) handleMCPUpsert(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMCPDelete(w http.ResponseWriter, r *http.Request) {
 	if s.mcp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "mcp registry not enabled"})
+		serviceUnavailable(w, "mcp registry")
 		return
 	}
-	name := r.URL.Query().Get("name")
+	name, ok := requireQuery(w, r, "name")
+	if !ok {
+		return
+	}
 	if err := s.mcp.Delete(r.Context(), name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleGuardPolicies(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil {
-		writeJSON(w, http.StatusOK, []any{})
+		serviceUnavailable(w, "guard store")
 		return
 	}
 	res, err := s.st.ListGuardPolicies(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -227,17 +229,16 @@ func (s *Server) handleGuardPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGuardEvaluate(w http.ResponseWriter, r *http.Request) {
 	if s.guard == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "guard not enabled"})
+		serviceUnavailable(w, "guard")
 		return
 	}
-	var req core.GuardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	req, ok := decodeJSON[core.GuardRequest](w, r)
+	if !ok {
 		return
 	}
 	decision, err := s.guard.Evaluate(r.Context(), &req)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"decision": string(decision)})

@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework"
 )
 
 func (s *Server) handleAgentInstancesList(w http.ResponseWriter, r *http.Request) {
 	items, err := s.agentInstances(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -27,25 +28,30 @@ func (s *Server) handleAgentInstancesList(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
 		return
 	}
-	var a core.AgentInstance
-	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	a, ok := decodeJSON[core.AgentInstance](w, r)
+	if !ok {
 		return
 	}
 	if err := s.normalizeAgentInstance(r.Context(), &a); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.st.UpsertAgentInstance(r.Context(), &a); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
 		if err := s.provider.Switch(r.Context(), a.ProviderID, a.ProviderTool); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "agent saved, but provider route failed: " + err.Error()})
+			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: " + err.Error())
+			return
+		}
+	}
+	if s.connect != nil {
+		if err := s.connect.RestartChannelsForAgent(r.Context(), a.ID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "agent saved, but bound channels failed to restart: " + err.Error())
 			return
 		}
 	}
@@ -56,12 +62,12 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Request) {
 	if s.workspace == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace initializer unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "workspace initializer unavailable")
 		return
 	}
 	var opts core.WorkspaceInitOptions
 	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	opts.AgentID = strings.TrimSpace(opts.AgentID)
@@ -73,11 +79,11 @@ func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Re
 	if opts.AgentID != "" {
 		inst, ok, err := s.findAgentInstance(r.Context(), opts.AgentID)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if !ok {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+			writeErr(w, http.StatusNotFound, "agent not found")
 			return
 		}
 		if opts.RuntimeID == "" {
@@ -95,7 +101,7 @@ func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Re
 	}
 	res, err := s.workspace.InitializeWorkspace(r.Context(), opts)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -103,23 +109,28 @@ func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "store unavailable")
 		return
 	}
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+	id, ok := requireQuery(w, r, "id")
+	if !ok {
 		return
 	}
 	if strings.HasPrefix(id, "config:") {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config-managed agents must be edited in config.toml"})
+		writeErr(w, http.StatusBadRequest, "config-managed agents must be edited in config.toml")
 		return
 	}
 	if err := s.st.DeleteAgentInstance(r.Context(), id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if s.connect != nil {
+		if err := s.connect.RestartChannelsForAgent(r.Context(), id); err != nil {
+			writeErr(w, http.StatusInternalServerError, "agent deleted, but bound channels failed to restart: " + err.Error())
+			return
+		}
+	}
+	writeOK(w)
 }
 
 func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, error) {
@@ -172,6 +183,7 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.DefaultModel = strings.TrimSpace(a.DefaultModel)
 	a.DefaultReasoningEffort = strings.TrimSpace(a.DefaultReasoningEffort)
 	a.DefaultServiceTier = strings.TrimSpace(a.DefaultServiceTier)
+	a.DefaultApprovalMode = strings.TrimSpace(a.DefaultApprovalMode)
 	a.MemoryScope = strings.TrimSpace(a.MemoryScope)
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
@@ -183,6 +195,20 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 		return fmt.Errorf("unknown agent runtime %q", a.RuntimeID)
 	}
 	newRecord := strings.TrimSpace(a.ID) == ""
+	creatingRecord := newRecord
+	if !newRecord && s.st != nil {
+		existing, err := s.st.GetAgentInstance(ctx, a.ID)
+		if err != nil {
+			return fmt.Errorf("load existing agent: %w", err)
+		}
+		creatingRecord = existing == nil
+	}
+	if creatingRecord && !agentRuntimeAvailable(a.RuntimeID) {
+		return fmt.Errorf("agent runtime %q is not installed on this machine", a.RuntimeID)
+	}
+	if a.DefaultApprovalMode != "" && !core.ApprovalModeSupported(a.RuntimeID, a.DefaultApprovalMode) {
+		return fmt.Errorf("approval mode %q is not supported by %s", a.DefaultApprovalMode, a.RuntimeID)
+	}
 	if newRecord {
 		a.ID = "agent-" + randHex(6)
 	}
@@ -264,7 +290,7 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 }
 
 func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *core.AgentInstance) error {
-	if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" {
+	if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" && a.DefaultApprovalMode == "" {
 		return nil
 	}
 	p, err := s.agentProvider(ctx, a)
@@ -356,6 +382,26 @@ func knownAgentRuntime(id string) bool {
 		}
 	}
 	return false
+}
+
+func availableAgentRuntimes() []string {
+	registered := core.RegisteredAgents()
+	available := make([]string, 0, len(registered))
+	for _, id := range registered {
+		if agentRuntimeAvailable(id) {
+			available = append(available, id)
+		}
+	}
+	return available
+}
+
+func agentRuntimeAvailable(id string) bool {
+	if _, catalogued := framework.Lookup(id); catalogued {
+		return framework.IsInstalled(id)
+	}
+	// Third-party adapters do not have a built-in framework specification. A
+	// successful registration is their declaration that they are runnable.
+	return core.HasAgent(id)
 }
 
 func randHex(n int) string {

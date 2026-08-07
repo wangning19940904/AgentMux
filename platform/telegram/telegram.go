@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/platform/settingsui"
 )
 
 func init() {
@@ -231,11 +232,7 @@ func (p *Platform) sendSettingsPicker(ctx context.Context, chatID, text string, 
 }
 
 func telegramRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
-	scope := "当前会话"
-	if state.Scope == core.RuntimeSettingsScopeAgent {
-		scope = "Agent 默认（仅后续会话）"
-	}
-	text := fmt.Sprintf("运行时设置\n范围：%s\n模型：%s\n思考：%s\n速度：%s", scope, telegramDisplay(state.Settings.Model), telegramDisplay(state.Settings.ReasoningEffort), telegramDisplay(state.Settings.ServiceTier))
+	text := settingsui.SummaryText(state, settingsui.Format{})
 	if state.Notice != "" {
 		text += "\n提示：" + state.Notice
 	}
@@ -249,41 +246,30 @@ type tgInlineButton struct {
 
 func telegramRuntimeSettingsKeyboard(p *Platform, state core.RuntimeSettingsPickerState) [][]tgInlineButton {
 	rows := make([][]tgInlineButton, 0)
-	if state.AgentDefaultsEditable {
-		rows = append(rows, []tgInlineButton{
-			telegramSettingButton(p, "当前会话", core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeConversation, Setting: core.RuntimeSettingScope}),
-			telegramSettingButton(p, "Agent 默认", core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeAgent, Setting: core.RuntimeSettingScope}),
-		})
-	}
-	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingModel, state.Capabilities.Models)...)
-	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingReasoningEffort, state.Capabilities.ReasoningEfforts)...)
-	rows = append(rows, telegramSettingRows(p, state, core.RuntimeSettingServiceTier, state.Capabilities.ServiceTiers)...)
-	return rows
-}
-
-func telegramSettingRows(p *Platform, state core.RuntimeSettingsPickerState, setting core.RuntimeSetting, options []core.RuntimeOption) [][]tgInlineButton {
-	if len(options) == 0 {
-		return nil
-	}
-	rows := make([][]tgInlineButton, 0, (len(options)+1)/2)
-	selected := state.Settings.Value(setting)
-	for i := 0; i < len(options); i += 2 {
-		end := i + 2
-		if end > len(options) {
-			end = len(options)
+	for _, group := range settingsui.Groups(state) {
+		if len(group.Options) == 0 {
+			continue
 		}
-		row := make([]tgInlineButton, 0, end-i)
-		for _, option := range options[i:end] {
-			label := option.Label
-			if label == "" {
-				label = option.Value
+		if group.Setting == core.RuntimeSettingScope {
+			row := make([]tgInlineButton, 0, len(group.Options))
+			for _, option := range group.Options {
+				row = append(row, telegramSettingButton(p, option.Label, option.Action))
 			}
-			if option.Value == selected {
-				label += " 当前"
-			}
-			row = append(row, telegramSettingButton(p, label, core.RuntimeSettingsAction{Scope: state.Scope, Setting: setting, Value: option.Value}))
+			rows = append(rows, row)
+			continue
 		}
-		rows = append(rows, row)
+		for i := 0; i < len(group.Options); i += 2 {
+			end := min(i+2, len(group.Options))
+			row := make([]tgInlineButton, 0, end-i)
+			for _, option := range group.Options[i:end] {
+				label := option.Label
+				if option.Selected {
+					label += " 当前"
+				}
+				row = append(row, telegramSettingButton(p, label, option.Action))
+			}
+			rows = append(rows, row)
+		}
 	}
 	return rows
 }
@@ -323,13 +309,6 @@ func (p *Platform) answerCallback(ctx context.Context, id string) {
 	if err == nil && resp != nil {
 		_ = resp.Body.Close()
 	}
-}
-
-func telegramDisplay(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return "runtime default"
-	}
-	return value
 }
 
 // Stop is a no-op; the poll loop exits on ctx cancellation.

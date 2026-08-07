@@ -86,9 +86,9 @@ func (m *FSManager) List(ctx context.Context) ([]core.Skill, error) {
 	return out, nil
 }
 
-// Install is a stub for the filesystem provider: it validates that ref points
-// to a directory containing a SKILL.md and returns its parsed metadata.
-// Network-backed installation belongs to a git/registry provider.
+// Install copies a local skill directory (must contain a SKILL.md) into the
+// first managed root and returns its parsed metadata. Network-backed
+// installation belongs to a git/registry provider.
 func (m *FSManager) Install(ctx context.Context, ref string) (*core.Skill, error) {
 	src := expand(ref)
 	p := filepath.Join(src, "SKILL.md")
@@ -114,7 +114,8 @@ func (m *FSManager) Install(ctx context.Context, ref string) (*core.Skill, error
 	return &s, nil
 }
 
-// SetEnabled toggles a skill by name (in-memory for the fs provider).
+// SetEnabled toggles a skill by name. The fs provider keeps this state
+// in-memory only, so toggles do not survive a daemon restart.
 func (m *FSManager) SetEnabled(ctx context.Context, name string, enabled bool) error {
 	m.disabled[name] = !enabled
 	return nil

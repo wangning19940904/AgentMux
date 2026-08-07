@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 	"github.com/wangning19940904/AgentMux/core"
 )
 
@@ -17,6 +18,7 @@ import (
 // --print --output-format stream-json, which yields newline-delimited JSON
 // events that we map to core.Event.
 type session struct {
+	runner.Settings
 	agent   *Agent
 	workDir string
 	id      string
@@ -24,7 +26,6 @@ type session struct {
 	mu       sync.Mutex
 	nativeID string // claude-native session id, discovered from stream output
 	resumeID string // native id to resume on the next Send (persisted context)
-	settings *core.RuntimeSettingsSelection
 }
 
 func newSession(a *Agent, workDir string) (*session, error) {
@@ -36,55 +37,24 @@ func newSessionResume(a *Agent, workDir, resumeID string) (*session, error) {
 		workDir, _ = os.Getwd()
 	}
 	return &session{
-		agent:    a,
-		workDir:  workDir,
-		id:       "claude-" + randID(),
-		nativeID: resumeID,
-		resumeID: resumeID,
-		settings: core.NewRuntimeSettingsSelection(core.RuntimeSettings{
+		Settings: runner.NewSettings(core.RuntimeSettings{
 			Model:           a.defaultModel,
 			ReasoningEffort: a.defaultReasoningEffort,
+			ApprovalMode:    a.defaultApprovalMode,
 		}, core.RuntimeSettingsCapabilities{
 			Models:           core.RuntimeOptions(a.supportedModels),
 			ReasoningEfforts: core.RuntimeOptions(a.supportedReasoningEfforts),
+			ApprovalModes:    core.RuntimeOptions(a.supportedApprovalModes),
 		}),
+		agent:    a,
+		workDir:  workDir,
+		id:       "claude-" + runner.RandID(),
+		nativeID: resumeID,
+		resumeID: resumeID,
 	}, nil
 }
 
 func (s *session) ID() string { return s.id }
-
-func (s *session) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabilities {
-	return s.settings.RuntimeSettingsCapabilities()
-}
-func (s *session) CurrentRuntimeSettings() core.RuntimeSettings {
-	return s.settings.CurrentRuntimeSettings()
-}
-func (s *session) DefaultRuntimeSettings() core.RuntimeSettings {
-	return s.settings.DefaultRuntimeSettings()
-}
-func (s *session) SetRuntimeSetting(setting core.RuntimeSetting, value string) error {
-	return s.settings.SetRuntimeSetting(setting, value)
-}
-func (s *session) ResetRuntimeSetting(setting core.RuntimeSetting) error {
-	return s.settings.ResetRuntimeSetting(setting)
-}
-func (s *session) ModelSwitchingSupported() bool {
-	return len(s.RuntimeSettingsCapabilities().Models) > 0
-}
-func (s *session) CurrentModel() string { return s.CurrentRuntimeSettings().Model }
-func (s *session) DefaultModel() string { return s.DefaultRuntimeSettings().Model }
-func (s *session) SupportedModels() []string {
-	options := s.RuntimeSettingsCapabilities().Models
-	models := make([]string, 0, len(options))
-	for _, option := range options {
-		models = append(models, option.Value)
-	}
-	return models
-}
-func (s *session) SetModel(model string) error {
-	return s.SetRuntimeSetting(core.RuntimeSettingModel, model)
-}
-func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
 
 // NativeSessionID returns the claude-native session id discovered so far.
 func (s *session) NativeSessionID() string {
@@ -101,8 +71,9 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 
 	cmd := exec.CommandContext(ctx, claudeBinary(), args...)
 	cmd.Dir = s.workDir
+	// Drop CLAUDECODE so a nested claude can launch (INSTALL.md gotcha).
 	cmd.Env = withObservationTelemetry(
-		withObservationTraceparent(buildEnv(s.agent.env), core.ObservationTraceparent(ctx)),
+		runner.WithTraceparent(runner.BuildEnv(s.agent.env, "CLAUDECODE"), core.ObservationTraceparent(ctx)),
 		core.ObservationChildTelemetryFromContext(ctx),
 	)
 
@@ -140,6 +111,15 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	return out, nil
 }
 
+// claudeApprovalArgs maps each approval mode to its claude CLI flags.
+var claudeApprovalArgs = map[string][]string{
+	core.ApprovalModeManual:   {"--permission-mode", "manual"},
+	core.ApprovalModeAutoEdit: {"--permission-mode", "acceptEdits"},
+	core.ApprovalModeAuto:     {"--permission-mode", "auto"},
+	core.ApprovalModePlan:     {"--permission-mode", "plan"},
+	core.ApprovalModeYolo:     {"--dangerously-skip-permissions"},
+}
+
 func (s *session) args(text string) []string {
 	args := []string{"--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
 	if s.agent.systemPrompt != "" {
@@ -151,6 +131,7 @@ func (s *session) args(text string) []string {
 	if effort := s.CurrentRuntimeSettings().ReasoningEffort; effort != "" {
 		args = append(args, "--effort", effort)
 	}
+	args = append(args, claudeApprovalArgs[s.CurrentRuntimeSettings().ApprovalMode]...)
 	// Resume prior context when we already know the native session id, so the
 	// conversation carries across turns and process restarts.
 	s.mu.Lock()
@@ -374,36 +355,6 @@ func parseSessionID(b []byte) string {
 	return l.SessionID
 }
 
-func buildEnv(extra map[string]string) []string {
-	env := os.Environ()
-	// Unset CLAUDECODE so a nested claude can launch (INSTALL.md gotcha).
-	filtered := env[:0]
-	for _, e := range env {
-		if len(e) >= 11 && e[:11] == "CLAUDECODE=" {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	for k, v := range extra {
-		filtered = append(filtered, fmt.Sprintf("%s=%s", k, v))
-	}
-	return filtered
-}
-
-func withObservationTraceparent(env []string, traceparent string) []string {
-	if traceparent == "" {
-		return env
-	}
-	filtered := make([]string, 0, len(env)+1)
-	for _, value := range env {
-		if strings.HasPrefix(value, "TRACEPARENT=") {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	return append(filtered, "TRACEPARENT="+traceparent)
-}
-
 func withObservationTelemetry(env []string, telemetry core.ObservationChildTelemetry) []string {
 	if telemetry.Endpoint == "" || telemetry.Token == "" {
 		return env
@@ -439,18 +390,7 @@ func withObservationTelemetry(env []string, telemetry core.ObservationChildTelem
 		// and tool content are already available through the narrower gates.
 		"OTEL_LOG_RAW_API_BODIES": "0",
 	}
-	filtered := make([]string, 0, len(env)+len(overrides))
-	for _, value := range env {
-		key, _, _ := strings.Cut(value, "=")
-		if _, replaced := overrides[key]; replaced {
-			continue
-		}
-		filtered = append(filtered, value)
-	}
-	for key, value := range overrides {
-		filtered = append(filtered, key+"="+value)
-	}
-	return filtered
+	return runner.OverrideEnv(env, overrides)
 }
 
 // toolSummaryMax bounds the length of tool input/result summaries so a single

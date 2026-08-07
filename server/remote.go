@@ -17,19 +17,73 @@ import (
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
+	s.mux.HandleFunc("POST /api/v1/remote/channels/claim", s.handleChannelClaim)
+	s.mux.HandleFunc("GET /api/v1/remote/directories", s.handleRemoteDirectoryList)
+	s.mux.HandleFunc("POST /api/v1/remote/directories", s.handleRemoteDirectoryEnsure)
 	s.mux.HandleFunc("GET /api/v1/remote/discovered-hosts", s.handleRemoteDiscoveredHosts)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts", s.handleRemoteHostUpsert)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/import", s.handleRemoteHostImport)
 	s.mux.HandleFunc("DELETE /api/v1/remote/hosts", s.handleRemoteHostDelete)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/test", s.handleRemoteHostTest)
+	s.mux.HandleFunc("POST /api/v1/remote/hosts/status", s.handleRemoteHostStatus)
+	s.mux.HandleFunc("POST /api/v1/remote/hosts/update", s.handleRemoteHostUpdate)
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		s.mux.HandleFunc(method+" /api/v1/remote/proxy/{id}/{path...}", s.handleRemoteProxy)
 	}
 }
 
+func (s *Server) handleRemoteDirectoryList(w http.ResponseWriter, r *http.Request) {
+	if s.remote == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	listing, err := s.remote.ListDirectories(r.Context(), id, r.URL.Query().Get("path"))
+	if err != nil {
+		writeRemoteFilesystemError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, listing)
+}
+
+func (s *Server) handleRemoteDirectoryEnsure(w http.ResponseWriter, r *http.Request) {
+	if s.remote == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	var req systemDirectoryRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	path, err := s.remote.EnsureDirectory(r.Context(), id, req.Path)
+	if err != nil {
+		writeRemoteFilesystemError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, systemDirectoryResponse{Path: path})
+}
+
+func writeRemoteFilesystemError(w http.ResponseWriter, err error) {
+	code := http.StatusBadGateway
+	if errors.Is(err, os.ErrNotExist) {
+		code = http.StatusNotFound
+	}
+	writeErr(w, code, err.Error())
+}
+
 func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	var req struct {
@@ -43,8 +97,7 @@ func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) 
 		APIToken        string `json:"api_token"`
 		TrustOnFirstUse bool   `json:"trust_on_first_use"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	result, err := s.remote.Import(r.Context(), remotepkg.Host{
@@ -59,17 +112,19 @@ func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleRemoteHostsList(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.remote.List())
 }
 
 func (s *Server) handleRemoteDiscoveredHosts(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	hosts, err := remotepkg.DiscoverSSHHosts("")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, hosts)
@@ -77,7 +132,7 @@ func (s *Server) handleRemoteDiscoveredHosts(w http.ResponseWriter, _ *http.Requ
 
 func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	var req struct {
@@ -92,8 +147,7 @@ func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) 
 		APIToken      string `json:"api_token"`
 		ClearAPIToken bool   `json:"clear_api_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	host, err := s.remote.Upsert(remotepkg.Host{
@@ -102,7 +156,7 @@ func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) 
 		APIToken: req.APIToken,
 	}, req.ClearAPIToken)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, host)
@@ -110,12 +164,12 @@ func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleRemoteHostDelete(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	if err := s.remote.Delete(id); err != nil {
@@ -123,20 +177,20 @@ func (s *Server) handleRemoteHostDelete(w http.ResponseWriter, r *http.Request) 
 		if errors.Is(err, os.ErrNotExist) {
 			code = http.StatusNotFound
 		}
-		writeJSON(w, code, map[string]string{"error": err.Error()})
+		writeErr(w, code, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleRemoteHostTest(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
 	var req struct {
@@ -146,6 +200,43 @@ func (s *Server) handleRemoteHostTest(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
 	result, err := s.remote.Test(r.Context(), id, req.TrustOnFirstUse)
+	if err != nil {
+		writeRemoteConnectionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRemoteHostStatus(w http.ResponseWriter, r *http.Request) {
+	if s.remote == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	result, err := s.remote.Status(r.Context(), id)
+	if err != nil {
+		writeRemoteConnectionError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRemoteHostUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.remote == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	result, err := s.remote.Update(r.Context(), id)
 	if err != nil {
 		writeRemoteConnectionError(w, err)
 		return
@@ -166,27 +257,27 @@ func writeRemoteConnectionError(w http.ResponseWriter, err error) {
 		})
 		return
 	}
-	writeJSON(w, code, map[string]string{"error": err.Error()})
+	writeErr(w, code, err.Error())
 }
 
 func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "remote SSH control unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	path := strings.TrimPrefix(r.PathValue("path"), "/")
 	if id == "" || path == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "remote host and API path are required"})
+		writeErr(w, http.StatusBadRequest, "remote host and API path are required")
 		return
 	}
 	if path == "remote" || strings.HasPrefix(path, "remote/") {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "nested remote proxying is not allowed"})
+		writeErr(w, http.StatusForbidden, "nested remote proxying is not allowed")
 		return
 	}
 	host, ok := s.remote.Get(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "remote host not found"})
+		writeErr(w, http.StatusNotFound, "remote host not found")
 		return
 	}
 	targetPath := "/api/v1/" + path

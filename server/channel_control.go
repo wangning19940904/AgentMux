@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,17 +25,17 @@ func (s *Server) handleChannelConversations(w http.ResponseWriter, r *http.Reque
 	}
 	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
 	if channelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "channel_id is required"})
+		writeErr(w, http.StatusBadRequest, "channel_id is required")
 		return
 	}
 	conversations, err := s.st.ListConversations(r.Context(), "channel:"+channelID, false)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	tasks, err := s.st.ListChannelTasks(r.Context(), channelID, "", true)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	activeByConversation := map[string]*core.ChannelTask{}
@@ -99,7 +98,7 @@ func (s *Server) handleChannelTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.st.ListChannelTasks(r.Context(), strings.TrimSpace(r.URL.Query().Get("channel_id")),
 		strings.TrimSpace(r.URL.Query().Get("conversation_id")), false)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, tasks)
@@ -115,7 +114,7 @@ func (s *Server) handleChannelInteractions(w http.ResponseWriter, r *http.Reques
 		strings.TrimSpace(r.URL.Query().Get("conversation_id")),
 		r.URL.Query().Get("pending") != "false")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, interactions)
@@ -123,28 +122,27 @@ func (s *Server) handleChannelInteractions(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleChannelInteractionRespond(w http.ResponseWriter, r *http.Request) {
 	if !isLoopbackRequest(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "interaction responses are accepted only from the local console"})
+		writeErr(w, http.StatusForbidden, "interaction responses are accepted only from the local console")
 		return
 	}
 	if s.connect == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "connect runtime is not running"})
+		writeErr(w, http.StatusServiceUnavailable, "connect runtime is not running")
 		return
 	}
-	var action core.AgentInteractionAction
-	if err := json.NewDecoder(r.Body).Decode(&action); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	action, ok := decodeJSON[core.AgentInteractionAction](w, r)
+	if !ok {
 		return
 	}
 	if err := s.connect.ResolveChannelInteractionLocal(r.Context(), action); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleChannelConversationBind(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil || s.connect == nil || s.sessions == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "channel/session runtime is unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "channel/session runtime is unavailable")
 		return
 	}
 	var req struct {
@@ -152,18 +150,17 @@ func (s *Server) handleChannelConversationBind(w http.ResponseWriter, r *http.Re
 		ConversationID string `json:"conversation_id"`
 		ThreadID       string `json:"thread_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	conversation, err := s.channelConversation(r, req.ChannelID, req.ConversationID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	items, err := s.sessions.List(r.Context(), "codex", "app-server")
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "list Codex threads: " + err.Error()})
+		writeErr(w, http.StatusBadGateway, "list Codex threads: " + err.Error())
 		return
 	}
 	var found bool
@@ -181,11 +178,11 @@ func (s *Server) handleChannelConversationBind(w http.ResponseWriter, r *http.Re
 		break
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Codex thread was not found"})
+		writeErr(w, http.StatusNotFound, "Codex thread was not found")
 		return
 	}
 	if err := s.connect.BindChannelConversation(r.Context(), req.ChannelID, req.ConversationID, req.ThreadID); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "thread_id": strings.TrimSpace(req.ThreadID)})
@@ -193,7 +190,7 @@ func (s *Server) handleChannelConversationBind(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleChannelConversationOpen(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "session service is unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "session service is unavailable")
 		return
 	}
 	var req struct {
@@ -201,22 +198,21 @@ func (s *Server) handleChannelConversationOpen(w http.ResponseWriter, r *http.Re
 		ConversationID string `json:"conversation_id"`
 		ThreadID       string `json:"thread_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	threadID := strings.TrimSpace(req.ThreadID)
 	if threadID == "" {
 		conversation, err := s.channelConversation(r, req.ChannelID, req.ConversationID)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		threadID = conversation.NativeSessionID
 	}
 	result, err := s.sessions.OpenCodexThread(r.Context(), threadID)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

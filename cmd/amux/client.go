@@ -31,7 +31,7 @@ func clientCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "", "override server listen address from config")
-	cmd.Flags().StringVar(&sqlitePath, "sqlite-path", "", "use a local SQLite store (intended for self-contained remote clients)")
+	cmd.Flags().StringVar(&sqlitePath, "sqlite-path", "", "use a legacy local SQLite store instead of PostgreSQL")
 	cmd.Flags().BoolVar(&web, "web", false, "print the WebUI URL after startup")
 	cmd.Flags().BoolVar(&open, "open", false, "open the WebUI in a browser")
 	return cmd

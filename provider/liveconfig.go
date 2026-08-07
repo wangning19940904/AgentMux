@@ -17,13 +17,6 @@ import (
 	"github.com/wangning19940904/AgentMux/store"
 )
 
-// WriteLiveConfig writes a tool's live config file to point at provider p.
-// It mirrors cc-switch's "write to live files on switch" behavior, using an
-// atomic temp+rename write. Only the provider-relevant keys are touched.
-func WriteLiveConfig(tool string, p *core.Provider) error {
-	return WriteLiveConfigForSwitch(tool, p, nil)
-}
-
 // WriteLiveConfigForSwitch writes tool's live config for p, additionally
 // cleaning keys the previous provider (prev, may be nil) left behind.
 func WriteLiveConfigForSwitch(tool string, p, prev *core.Provider) error {

@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -136,6 +137,29 @@ func (a *App) OpenLocalWebUI() {
 		return
 	}
 	wailsruntime.BrowserOpenURL(a.ctx, a.localWebUIURL())
+}
+
+// OpenExternalURL opens a validated web link in the user's default browser.
+// Login links contain short-lived OAuth/device challenges and must leave the
+// embedded WebView without allowing arbitrary local schemes.
+func (a *App) OpenExternalURL(raw string) error {
+	if a.ctx == nil {
+		return fmt.Errorf("desktop app is not ready")
+	}
+	target, err := externalBrowserURL(raw)
+	if err != nil {
+		return err
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, target)
+	return nil
+}
+
+func externalBrowserURL(raw string) (string, error) {
+	target, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || target.Host == "" || target.Scheme != "https" && target.Scheme != "http" {
+		return "", fmt.Errorf("invalid external web URL")
+	}
+	return target.String(), nil
 }
 
 func (a *App) localWebUIURL() string {

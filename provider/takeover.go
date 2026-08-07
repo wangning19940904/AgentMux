@@ -62,24 +62,6 @@ func restoreLiveFiles(blobRaw string) error {
 	return restoreOwnedLiveFiles(blobRaw)
 }
 
-// liveAlreadyProxied detects a live config that already points at a local
-// proxy (placeholder token or loopback URL), so enable never backs up a
-// proxied state as if it were the user's original (cc-switch's strict-backup
-// guard).
-func liveAlreadyProxied(files []string) bool {
-	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		content := string(data)
-		if strings.Contains(content, ProxyManagedToken) {
-			return true
-		}
-	}
-	return false
-}
-
 // writeClaudeTakeoverConfig rewrites ~/.claude/settings.json to point at the
 // proxy: base URL -> the Claude-specific proxy prefix, credential ->
 // placeholder, model overrides cleared (the proxy maps tiers per provider),

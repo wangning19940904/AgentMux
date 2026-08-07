@@ -196,10 +196,28 @@ func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.Observa
 	if err != nil {
 		return 0, err
 	}
-	rows, err := s.loadLegacyProxyRows(ctx)
-	if err != nil {
-		return 0, err
+	secured := 0
+	// Stream the compatibility table in bounded batches instead of loading it
+	// wholesale; large stores hold hundreds of thousands of proxy rows.
+	var cursor int64
+	for {
+		rows, err := s.loadLegacyProxyRowsAfter(ctx, cursor, legacyObservationImportBatchSize)
+		if err != nil {
+			return secured, err
+		}
+		if len(rows) == 0 {
+			return secured, nil
+		}
+		cursor = rows[len(rows)-1].RowID
+		batchSecured, err := s.secureLegacyProxyBatch(ctx, secure, correlations, rows)
+		secured += batchSecured
+		if err != nil {
+			return secured, err
+		}
 	}
+}
+
+func (s *Store) secureLegacyProxyBatch(ctx context.Context, secure core.ObservationHandler, correlations legacyCorrelationIndex, rows []legacyProxyRow) (int, error) {
 	secured := 0
 	for _, row := range rows {
 		detail := strings.TrimSpace(row.Error)
@@ -263,10 +281,6 @@ type legacyUsageRow struct {
 	Tool             string
 	CostUSD          float64
 	Host             string
-}
-
-func (s *Store) loadLegacyUsageRows(ctx context.Context) ([]legacyUsageRow, error) {
-	return s.loadLegacyUsageRowsAfter(ctx, 0, 0)
 }
 
 func (s *Store) loadLegacyUsageRowsAfter(ctx context.Context, after int64, limit int) ([]legacyUsageRow, error) {
@@ -400,10 +414,6 @@ type legacyProxyRow struct {
 	CacheWriteTokens int64
 	RequestBytes     int64
 	ResponseBytes    int64
-}
-
-func (s *Store) loadLegacyProxyRows(ctx context.Context) ([]legacyProxyRow, error) {
-	return s.loadLegacyProxyRowsAfter(ctx, 0, 0)
 }
 
 func (s *Store) loadLegacyProxyRowsAfter(ctx context.Context, after int64, limit int) ([]legacyProxyRow, error) {

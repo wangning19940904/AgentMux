@@ -13,7 +13,16 @@ const (
 	RuntimeSettingModel           RuntimeSetting = "model"
 	RuntimeSettingReasoningEffort RuntimeSetting = "reasoning_effort"
 	RuntimeSettingServiceTier     RuntimeSetting = "service_tier"
+	RuntimeSettingApprovalMode    RuntimeSetting = "approval_mode"
 	RuntimeSettingScope           RuntimeSetting = "scope"
+)
+
+const (
+	ApprovalModeManual   = "manual"
+	ApprovalModeAutoEdit = "auto_edit"
+	ApprovalModeAuto     = "auto"
+	ApprovalModePlan     = "plan"
+	ApprovalModeYolo     = "yolo"
 )
 
 // RuntimeSettings holds the values that can change the behavior of a turn.
@@ -22,6 +31,7 @@ type RuntimeSettings struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	ServiceTier     string `json:"service_tier,omitempty"`
+	ApprovalMode    string `json:"approval_mode,omitempty"`
 }
 
 func (s RuntimeSettings) Value(setting RuntimeSetting) string {
@@ -32,6 +42,8 @@ func (s RuntimeSettings) Value(setting RuntimeSetting) string {
 		return s.ReasoningEffort
 	case RuntimeSettingServiceTier:
 		return s.ServiceTier
+	case RuntimeSettingApprovalMode:
+		return s.ApprovalMode
 	default:
 		return ""
 	}
@@ -46,6 +58,8 @@ func (s *RuntimeSettings) Set(setting RuntimeSetting, value string) {
 		s.ReasoningEffort = value
 	case RuntimeSettingServiceTier:
 		s.ServiceTier = value
+	case RuntimeSettingApprovalMode:
+		s.ApprovalMode = value
 	}
 }
 
@@ -62,6 +76,7 @@ type RuntimeSettingsCapabilities struct {
 	Models           []RuntimeOption `json:"models,omitempty"`
 	ReasoningEfforts []RuntimeOption `json:"reasoning_efforts,omitempty"`
 	ServiceTiers     []RuntimeOption `json:"service_tiers,omitempty"`
+	ApprovalModes    []RuntimeOption `json:"approval_modes,omitempty"`
 }
 
 func (c RuntimeSettingsCapabilities) Options(setting RuntimeSetting) []RuntimeOption {
@@ -72,6 +87,8 @@ func (c RuntimeSettingsCapabilities) Options(setting RuntimeSetting) []RuntimeOp
 		return append([]RuntimeOption(nil), c.ReasoningEfforts...)
 	case RuntimeSettingServiceTier:
 		return append([]RuntimeOption(nil), c.ServiceTiers...)
+	case RuntimeSettingApprovalMode:
+		return append([]RuntimeOption(nil), c.ApprovalModes...)
 	default:
 		return nil
 	}
@@ -121,10 +138,14 @@ func RuntimeSettingsSelectionFromConfig(cfg map[string]any) *RuntimeSettingsSele
 	if value, ok := cfg["service_tier"].(string); ok {
 		defaults.ServiceTier = value
 	}
+	if value, ok := cfg["approval_mode"].(string); ok {
+		defaults.ApprovalMode = value
+	}
 	return NewRuntimeSettingsSelection(defaults, RuntimeSettingsCapabilities{
 		Models:           RuntimeOptions(runtimeSettingValues(cfg["supported_models"])),
 		ReasoningEfforts: RuntimeOptions(runtimeSettingValues(cfg["supported_reasoning_efforts"])),
 		ServiceTiers:     RuntimeOptions(runtimeSettingValues(cfg["supported_service_tiers"])),
+		ApprovalModes:    RuntimeOptions(runtimeSettingValues(cfg["supported_approval_modes"])),
 	})
 }
 
@@ -216,6 +237,9 @@ func mergeRuntimeSettings(defaults, overrides RuntimeSettings) RuntimeSettings {
 	if overrides.ServiceTier != "" {
 		current.ServiceTier = overrides.ServiceTier
 	}
+	if overrides.ApprovalMode != "" {
+		current.ApprovalMode = overrides.ApprovalMode
+	}
 	return current
 }
 
@@ -267,6 +291,8 @@ func runtimeSettingLabel(setting RuntimeSetting) string {
 		return "reasoning effort"
 	case RuntimeSettingServiceTier:
 		return "service tier"
+	case RuntimeSettingApprovalMode:
+		return "approval mode"
 	default:
 		return string(setting)
 	}
@@ -278,6 +304,16 @@ func runtimeOptionLabel(value string) string {
 		return "快速"
 	case "default", "standard", "normal", "flex":
 		return "普通"
+	case ApprovalModeManual:
+		return "手动审批"
+	case ApprovalModeAutoEdit:
+		return "自动批准编辑"
+	case ApprovalModeAuto:
+		return "智能自动审批"
+	case ApprovalModePlan:
+		return "只读规划"
+	case ApprovalModeYolo:
+		return "YOLO（全部允许）"
 	default:
 		return value
 	}
@@ -287,6 +323,7 @@ func normalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	settings.Model = strings.TrimSpace(settings.Model)
 	settings.ReasoningEffort = strings.TrimSpace(settings.ReasoningEffort)
 	settings.ServiceTier = strings.TrimSpace(settings.ServiceTier)
+	settings.ApprovalMode = strings.TrimSpace(settings.ApprovalMode)
 	return settings
 }
 
@@ -294,6 +331,7 @@ func normalizeRuntimeCapabilities(c RuntimeSettingsCapabilities) RuntimeSettings
 	c.Models = normalizeRuntimeOptions(c.Models)
 	c.ReasoningEfforts = normalizeRuntimeOptions(c.ReasoningEfforts)
 	c.ServiceTiers = normalizeRuntimeOptions(c.ServiceTiers)
+	c.ApprovalModes = normalizeRuntimeOptions(c.ApprovalModes)
 	return c
 }
 
@@ -320,7 +358,42 @@ func copyRuntimeCapabilities(c RuntimeSettingsCapabilities) RuntimeSettingsCapab
 		Models:           append([]RuntimeOption(nil), c.Models...),
 		ReasoningEfforts: append([]RuntimeOption(nil), c.ReasoningEfforts...),
 		ServiceTiers:     append([]RuntimeOption(nil), c.ServiceTiers...),
+		ApprovalModes:    append([]RuntimeOption(nil), c.ApprovalModes...),
 	}
+}
+
+// ApprovalModeValuesForRuntime is the truthful, shared capability catalog
+// used by adapters, API validation and channel configuration UIs.
+func ApprovalModeValuesForRuntime(runtimeID string) []string {
+	switch strings.ToLower(strings.TrimSpace(runtimeID)) {
+	case "claude", "claudecode", "claude-code", "claudecode-cli", "qoder":
+		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
+	case "codex", "codex-cli":
+		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
+	case "gemini", "opencode", "iflow":
+		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModePlan, ApprovalModeYolo}
+	case "cursor":
+		return []string{ApprovalModeManual, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
+	case "kimi":
+		// Kimi's current --prompt transport always uses its non-interactive auto
+		// policy and rejects --yolo/--plan alongside --prompt.
+		return []string{ApprovalModeAuto}
+	default:
+		return nil
+	}
+}
+
+func ApprovalModeOptionsForRuntime(runtimeID string) []RuntimeOption {
+	return RuntimeOptions(ApprovalModeValuesForRuntime(runtimeID))
+}
+
+func ApprovalModeSupported(runtimeID, mode string) bool {
+	for _, candidate := range ApprovalModeValuesForRuntime(runtimeID) {
+		if candidate == strings.TrimSpace(mode) {
+			return true
+		}
+	}
+	return false
 }
 
 // RuntimeSettingsForSession returns the richer runtime-settings capability

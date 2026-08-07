@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 )
 
 // codexAppClient owns one long-lived app-server process for a Codex Agent.
@@ -44,7 +46,7 @@ func newCodexAppClient(ctx context.Context, agent *codexAgent, workDir string) (
 	}
 	cmd := exec.Command(name, codexAppServerArgs(ctx)...)
 	cmd.Dir = workDir
-	cmd.Env = codexBuildEnv(agent.env)
+	cmd.Env = runner.BuildEnv(agent.env)
 	client := &codexAppClient{
 		cmd: cmd, nextID: 1, pending: map[int]chan codexRPCResponse{},
 		sessions: map[string]*codexSession{}, done: make(chan struct{}),

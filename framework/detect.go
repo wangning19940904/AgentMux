@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,16 +36,35 @@ var processPathMu sync.Mutex
 
 // DetectPrereqs probes for node and npm on PATH.
 func DetectPrereqs() Prereqs {
+	// SDK registration invokes prerequisite detection during daemon startup.
+	// Refresh all existing user executable directories here so CLI adapters are
+	// routable even before the frameworks page performs per-binary detection.
+	refreshUserExecutablePath()
 	var p Prereqs
-	if path, err := exec.LookPath("node"); err == nil {
+	if path, err := resolveCLIExecutable("node"); err == nil {
 		p.Node = true
 		p.NodePth = path
 	}
-	if path, err := exec.LookPath("npm"); err == nil {
+	if path, err := resolveCLIExecutable("npm"); err == nil {
 		p.NPM = true
 		p.NPMPath = path
 	}
 	return p
+}
+
+func refreshUserExecutablePath() {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+	processPathMu.Lock()
+	defer processPathMu.Unlock()
+	ensurePNPMHome(home)
+	for _, dir := range userExecutableDirs(home) {
+		if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+			appendProcessPath(dir)
+		}
+	}
 }
 
 // Detect returns the status of a single framework spec.
@@ -66,7 +86,7 @@ func Detect(s Spec, pre Prereqs) Status {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+		out, err := frameworkCommandContext(ctx, binary, args...).CombinedOutput()
 		if err != nil {
 			st.Detail = strings.TrimSpace(string(out))
 			if st.Detail == "" {
@@ -91,11 +111,45 @@ func Detect(s Spec, pre Prereqs) Status {
 	return st
 }
 
-// resolveCLIExecutable also recognizes the standard user-local bin directory
-// used by native installers such as Cursor. Adding that directory to the
-// current process PATH makes a freshly installed CLI immediately routable
-// without requiring the daemon to restart.
+// IsInstalled reports whether a catalogued framework can be launched on the
+// current host. Unlike Detect, it deliberately avoids running version commands
+// so callers can use it on latency-sensitive paths such as Agent creation.
+func IsInstalled(kind string) bool {
+	s, ok := Lookup(kind)
+	if !ok || !s.Supported {
+		return false
+	}
+	switch s.KindType {
+	case KindCLI:
+		if s.Bin == "" {
+			return false
+		}
+		_, err := resolveCLIExecutable(s.Bin)
+		return err == nil
+	case KindSDK:
+		if s.Language != "node" {
+			return false
+		}
+		if _, err := resolveCLIExecutable("node"); err != nil {
+			return false
+		}
+		installed, _ := nodePackageInstalled(s.Packages)
+		return installed
+	default:
+		return false
+	}
+}
+
+// resolveCLIExecutable also recognizes common user-level executable
+// directories. Background services do not load interactive shell startup
+// files, so their PATH commonly omits native-installer and version-manager
+// locations even though the same commands work in an SSH terminal. Adding the
+// matching directory to the current process PATH also makes the CLI immediately
+// routable without requiring the daemon to restart.
 func resolveCLIExecutable(bin string) (string, error) {
+	processPathMu.Lock()
+	defer processPathMu.Unlock()
+
 	if path, err := exec.LookPath(bin); err == nil {
 		return path, nil
 	}
@@ -103,27 +157,108 @@ func resolveCLIExecutable(bin string) (string, error) {
 	if err != nil || home == "" {
 		return "", exec.ErrNotFound
 	}
-	candidate := filepath.Join(home, ".local", "bin", bin)
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() {
-		return "", exec.ErrNotFound
+	ensurePNPMHome(home)
+	for _, dir := range userExecutableDirs(home) {
+		candidate, lookErr := exec.LookPath(filepath.Join(dir, bin))
+		if lookErr != nil {
+			continue
+		}
+		appendProcessPath(dir)
+		return candidate, nil
 	}
+	return "", exec.ErrNotFound
+}
 
-	processPathMu.Lock()
-	defer processPathMu.Unlock()
-	dir := filepath.Dir(candidate)
+func appendProcessPath(dir string) {
 	pathValue := os.Getenv("PATH")
 	for _, existing := range filepath.SplitList(pathValue) {
 		if filepath.Clean(existing) == filepath.Clean(dir) {
-			return candidate, nil
+			return
 		}
 	}
 	if pathValue == "" {
 		_ = os.Setenv("PATH", dir)
 	} else {
-		_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+pathValue)
+		_ = os.Setenv("PATH", pathValue+string(os.PathListSeparator)+dir)
 	}
-	return candidate, nil
+}
+
+// ensurePNPMHome repairs the environment inherited by background services.
+// pnpm's shell setup normally exports PNPM_HOME, but service managers do not
+// source the user's interactive shell profile. Merely finding a pnpm-installed
+// CLI on PATH is not enough: a native updater such as `codex update` invokes
+// `pnpm add -g`, which refuses to run without a global bin directory.
+func ensurePNPMHome(home string) {
+	if strings.TrimSpace(os.Getenv("PNPM_HOME")) != "" {
+		return
+	}
+	candidates := make([]string, 0, 2)
+	if dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dataHome != "" {
+		candidates = append(candidates, filepath.Join(dataHome, "pnpm"))
+	}
+	candidates = append(candidates, filepath.Join(home, ".local", "share", "pnpm"))
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			_ = os.Setenv("PNPM_HOME", candidate)
+			return
+		}
+	}
+}
+
+func userExecutableDirs(home string) []string {
+	dirs := []string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+		filepath.Join(home, ".npm", "bin"),
+		filepath.Join(home, ".volta", "bin"),
+		filepath.Join(home, ".bun", "bin"),
+		filepath.Join(home, ".asdf", "shims"),
+		filepath.Join(home, ".nodenv", "shims"),
+		filepath.Join(home, ".local", "share", "mise", "shims"),
+		filepath.Join(home, ".local", "share", "fnm", "aliases", "default", "bin"),
+		filepath.Join(home, ".fnm", "aliases", "default", "bin"),
+	}
+	if pnpmHome := strings.TrimSpace(os.Getenv("PNPM_HOME")); pnpmHome != "" {
+		dirs = append(dirs, pnpmHome)
+	} else {
+		dirs = append(dirs, filepath.Join(home, ".local", "share", "pnpm"))
+	}
+	if nvmDir := strings.TrimSpace(os.Getenv("NVM_DIR")); nvmDir != "" {
+		dirs = append(dirs, nvmNodeBinDirs(nvmDir)...)
+	}
+	dirs = append(dirs, nvmNodeBinDirs(filepath.Join(home, ".nvm"))...)
+
+	seen := make(map[string]bool, len(dirs))
+	unique := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		cleaned := filepath.Clean(dir)
+		if seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		unique = append(unique, cleaned)
+	}
+	return unique
+}
+
+func nvmNodeBinDirs(nvmDir string) []string {
+	dirs, _ := filepath.Glob(filepath.Join(nvmDir, "versions", "node", "*", "bin"))
+	// Prefer the newest installed Node runtime when a service has no selected
+	// nvm version. nvm release directory names are semantic versions prefixed by
+	// "v", so use the existing version comparator with a lexical fallback.
+	sort.SliceStable(dirs, func(i, j int) bool {
+		left := strings.TrimPrefix(filepath.Base(filepath.Dir(dirs[i])), "v")
+		right := strings.TrimPrefix(filepath.Base(filepath.Dir(dirs[j])), "v")
+		switch {
+		case sdkVersionGreater(left, right):
+			return true
+		case sdkVersionGreater(right, left):
+			return false
+		default:
+			return dirs[i] > dirs[j]
+		}
+	})
+	return dirs
 }
 
 // DetectAll returns the status of every framework in the catalog.

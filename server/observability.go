@@ -138,11 +138,11 @@ func (s *Server) authorizeObservabilityRequest(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleObservationNonce(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "observability is not configured"})
+		writeErr(w, http.StatusServiceUnavailable, "observability is not configured")
 		return
 	}
 	if !requestIsLoopback(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "observability console session is loopback-only"})
+		writeErr(w, http.StatusForbidden, "observability console session is loopback-only")
 		return
 	}
 	nonce := randomObservationCredential()
@@ -160,14 +160,13 @@ func (s *Server) handleObservationNonce(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleObservationSession(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil || !requestIsLoopback(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "observability console session is unavailable"})
+		writeErr(w, http.StatusForbidden, "observability console session is unavailable")
 		return
 	}
 	var request struct {
 		Nonce string `json:"nonce"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &request) {
 		return
 	}
 	now := time.Now()
@@ -176,7 +175,7 @@ func (s *Server) handleObservationSession(w http.ResponseWriter, r *http.Request
 	delete(s.obs.nonces, request.Nonce)
 	if !ok || now.After(expires) {
 		s.obs.mu.Unlock()
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired nonce"})
+		writeErr(w, http.StatusUnauthorized, "invalid or expired nonce")
 		return
 	}
 	session := randomObservationCredential()
@@ -221,7 +220,7 @@ func randomObservationCredential() string {
 
 func (s *Server) handleObservationIngest(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil || s.obs.ingest == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "observation ingest unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "observation ingest unavailable")
 		return
 	}
 	s.obs.ingest.HandleHTTP(w, r)
@@ -229,7 +228,7 @@ func (s *Server) handleObservationIngest(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleObservationOTLPTraces(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil || s.obs.ingest == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OTLP ingest unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "OTLP ingest unavailable")
 		return
 	}
 	s.obs.ingest.HandleOTLPTraces(w, r)
@@ -248,7 +247,7 @@ func (s *Server) handleObservationTraces(w http.ResponseWriter, r *http.Request)
 	}
 	traces, err := s.st.ListObservationTraces(r.Context(), filter)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, traces)
@@ -270,21 +269,21 @@ func (s *Server) handleObservationTrace(w http.ResponseWriter, r *http.Request) 
 	traceID := r.PathValue("trace_id")
 	trace, err := s.st.GetObservationTrace(r.Context(), traceID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if trace == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "trace not found"})
+		writeErr(w, http.StatusNotFound, "trace not found")
 		return
 	}
 	spans, err := s.st.ListObservationSpans(r.Context(), traceID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	events, err := s.st.ListObservationEvents(r.Context(), traceID, 0, 5000)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	details := make([]observationSpanDetail, len(spans))
@@ -334,14 +333,14 @@ func (s *Server) handleObservationOverview(w http.ResponseWriter, r *http.Reques
 	since := time.Now().UTC().Add(-24 * time.Hour)
 	traces, err := s.st.ListObservationTraces(r.Context(), store.ObservationTraceFilter{Since: since, Limit: 1000})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	var spansCount, eventsCount, modelRequests, toolCalls, failed, partial int64
 	usage := core.ObservationUsage{}
 	usageRecords, err := s.st.QueryObservationUsage(r.Context(), since)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	for _, record := range usageRecords {
@@ -431,7 +430,7 @@ func (s *Server) handleObservationInsights(w http.ResponseWriter, r *http.Reques
 		RuleID: r.URL.Query().Get("rule_id"), Limit: queryInt(r, "limit", 100),
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, insights)
@@ -506,12 +505,12 @@ func (s *Server) handleObservationIntegrations(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleObservationIntegrationAction(w http.ResponseWriter, r *http.Request) {
 	if s.obs == nil || s.obs.native == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "native integration manager unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "native integration manager unavailable")
 		return
 	}
 	host := nativeintegration.Host(r.PathValue("host"))
 	if !host.Valid() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported integration host"})
+		writeErr(w, http.StatusBadRequest, "unsupported integration host")
 		return
 	}
 	action := r.PathValue("action")
@@ -519,11 +518,11 @@ func (s *Server) handleObservationIntegrationAction(w http.ResponseWriter, r *ht
 		lease, acquired, leaseErr := s.st.AcquireObservationResourceLease(r.Context(), "native-integration:"+string(host), "agentmux-api", "", 2*time.Minute,
 			map[string]any{"action": action})
 		if leaseErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": leaseErr.Error()})
+			writeErr(w, http.StatusInternalServerError, leaseErr.Error())
 			return
 		}
 		if !acquired {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "native integration is being changed by another owner"})
+			writeErr(w, http.StatusConflict, "native integration is being changed by another owner")
 			return
 		}
 		defer func() {
@@ -544,7 +543,7 @@ func (s *Server) handleObservationIntegrationAction(w http.ResponseWriter, r *ht
 	case "doctor":
 		result, err = s.obs.native.Doctor(r.Context(), host)
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported integration action"})
+		writeErr(w, http.StatusBadRequest, "unsupported integration action")
 		return
 	}
 	if nativeResult, ok := result.(nativeintegration.Result); ok && s.st != nil {

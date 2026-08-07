@@ -42,8 +42,9 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 clients (CLI / WebUI / Wails / menubar)
         |  HTTP /api/v1 (+ WS bridge)
    Go daemon
+   ├── bootstrap/   shared daemon wiring for CLI serve/web and the desktop shell
    ├── core/        interfaces + plugin registry + Engine + hooks + bridge
-   ├── platform/    Connect:IM adapters (feishu, telegram, webhook, ...)
+   ├── platform/    Connect:IM adapters (feishu, telegram, webhook, ...) + settingsui
    ├── agent/       Router:agent adapters (claudecode, codex, cursor, gemini, ...)
    ├── provider/    provider mgmt + presets + failover proxy + live-config writer
    ├── usage/       Ledger:parsers + pricing + aggregation + SSH collector
@@ -57,7 +58,9 @@ clients (CLI / WebUI / Wails / menubar)
    └── server/      Console API + embedded WebUI (go:embed)
 ```
 
-`core` 永不导入 `platform/`、`agent/`、`provider/`、`usage/`、`memory/`、`skills/`、`mcp/`、`guard/`;各适配器在自身 `init()` 中通过 registry 自注册。Memory/Skills/MCP/Guard 四个模块已落地骨架实现(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),并通过 `/api/v1` 暴露给 Console。
+`core` 不导入任何适配器包(`platform/`、`agent/`、`provider/`、`usage/`、`tools/`、`memory/`、`skills/`、`mcp/`、`guard/`):各适配器在自身 `init()` 中通过 registry 自注册,CLI 目录探测等能力由 `bootstrap/` 以接口注入。
+
+Memory/Skills/MCP/Guard 四个模块当前为 **Console 管理层实现**(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),通过 `/api/v1` 提供 CRUD 与评估接口,但尚未接入 Agent 对话回路:Memory 不会自动检索注入上下文、Guard 不拦截运行中的工具调用、MCP 配置不会下发生成到各 Agent 的原生配置文件、Skills 的启用状态仅保存在内存中。
 
 ## 快速开始
 
@@ -162,6 +165,23 @@ GET  /api/v1/observability/settings            # 保留期、密钥与 Exporter 
 GET  /api/v1/observability/integrations        # Plugin/OTel/Transcript/Proxy Doctor
 POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall|doctor}
 ```
+
+### 渠道审批命令
+
+在飞书/Lark 等绑定 Agent 的渠道中，可以直接切换当前会话的审批模式；命令由 AgentMux 处理，不会转发给 Agent：
+
+| 命令 | 效果 |
+| --- | --- |
+| `/approval` | 打开运行时设置卡或查看当前状态 |
+| `/approval manual` | 切换为手动审批 |
+| `/approval auto_edit` | 自动批准文件编辑 |
+| `/approval auto` | 使用运行时的智能自动审批 |
+| `/approval plan` | 切换为只读规划 |
+| `/approval yolo`、`/yolo on` | 当前会话完全免审批 |
+| `/yolo off` | 恢复当前会话的手动审批 |
+| `/approval reset` | 恢复 Agent/运行时默认审批模式 |
+
+不同 Agent runtime 支持的模式不同；不支持的命令会返回该 runtime 的可用模式列表。
 
 ## 构建
 

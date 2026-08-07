@@ -2,12 +2,12 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
-
-	"github.com/wangning19940904/AgentMux/tools"
 )
 
 // ConnectService supervises console-managed channels and triggers: it loads
@@ -15,14 +15,26 @@ import (
 // cron triggers and fans engine lifecycle events out to event triggers. It is
 // the runtime behind the console's "Channels & Triggers" panel.
 type ConnectService struct {
-	log   *slog.Logger
-	eng   *Engine
-	store ConnectStore
-	sched *Scheduler
+	log      *slog.Logger
+	eng      *Engine
+	store    ConnectStore
+	sched    *Scheduler
+	cliNotes CLINoteResolver
 
 	mu                sync.Mutex
 	ctx               context.Context
 	unsubscribeEvents func()
+}
+
+// CLINoteResolver maps managed CLI ids to display notes for prompt
+// injection. It is injected by the daemon bootstrap so core does not depend
+// on the tools catalog.
+type CLINoteResolver func(ids []string) []CLINote
+
+// SetCLINoteResolver installs the CLI catalog lookup used when composing
+// agent system prompts. A nil resolver disables CLI notes.
+func (c *ConnectService) SetCLINoteResolver(resolver CLINoteResolver) {
+	c.cliNotes = resolver
 }
 
 // NewConnectService wires the service onto an engine and store. It registers
@@ -145,6 +157,31 @@ func (c *ConnectService) RestartChannel(ctx context.Context, id string) error {
 	}
 	agent, workDir, workspace := c.resolveAgent(ctx, ch.AgentID)
 	return c.eng.AttachChannel(c.baseCtx(), *ch, agent, workDir, workspace)
+}
+
+// RestartChannelsForAgent refreshes every enabled channel bound to agentID.
+// Agent records can change independently from Channel records, so relying on
+// Channel.UpdatedAt alone would leave the old in-memory runtime serving new
+// messages until the daemon or channel was restarted manually.
+func (c *ConnectService) RestartChannelsForAgent(ctx context.Context, agentID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	channels, err := c.store.ListChannels(ctx)
+	if err != nil {
+		return err
+	}
+	var restartErrs []error
+	for _, ch := range channels {
+		if !ch.Enabled || ch.AgentID != agentID {
+			continue
+		}
+		if err := c.RestartChannel(ctx, ch.ID); err != nil {
+			restartErrs = append(restartErrs, fmt.Errorf("restart channel %q: %w", ch.Name, err))
+		}
+	}
+	return errors.Join(restartErrs...)
 }
 
 // ChannelStatuses reports the live state of attached channels.
@@ -276,6 +313,7 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		Model:           inst.DefaultModel,
 		ReasoningEffort: inst.DefaultReasoningEffort,
 		ServiceTier:     inst.DefaultServiceTier,
+		ApprovalMode:    inst.DefaultApprovalMode,
 	}
 	if runtimeDefaults.ReasoningEffort == "" {
 		runtimeDefaults.ReasoningEffort = providerDefaults.ReasoningEffort
@@ -303,6 +341,12 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	}
 	if runtimeDefaults.ServiceTier != "" {
 		cfg["service_tier"] = runtimeDefaults.ServiceTier
+	}
+	if runtimeDefaults.ApprovalMode != "" {
+		cfg["approval_mode"] = runtimeDefaults.ApprovalMode
+	}
+	if modes := ApprovalModeValuesForRuntime(inst.RuntimeID); len(modes) > 0 {
+		cfg["supported_approval_modes"] = modes
 	}
 	if models := c.agentModelOptions(ctx, inst); len(models) > 0 {
 		cfg["supported_models"] = models
@@ -415,21 +459,13 @@ func (c *ConnectService) agentChannelLogPaths(ctx context.Context, agentID strin
 	return paths
 }
 
-// agentCLINotes resolves the catalog description for each enabled CLI id.
+// agentCLINotes resolves the catalog description for each enabled CLI id
+// through the injected resolver.
 func (c *ConnectService) agentCLINotes(ids []string) []CLINote {
-	var notes []CLINote
-	for _, id := range ids {
-		spec, ok := tools.LookupCLI(id)
-		if !ok {
-			continue
-		}
-		name := spec.Name
-		if name == "" {
-			name = spec.ID
-		}
-		notes = append(notes, CLINote{Name: name, Note: spec.Note})
+	if c.cliNotes == nil {
+		return nil
 	}
-	return notes
+	return c.cliNotes(ids)
 }
 
 func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInstance) []string {

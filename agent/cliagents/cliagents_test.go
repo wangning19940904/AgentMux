@@ -50,14 +50,195 @@ func TestModelArgsForVerifiedCLIs(t *testing.T) {
 	}{
 		{
 			name: "cursor",
-			got:  cursorArgs("hello", "", "sonnet-4"),
-			want: []string{"agent", "--print", "--output-format", "stream-json", "--model", "sonnet-4", "hello"},
+			got:  cursorArgs("hello", "", "sonnet-4", core.ApprovalModeManual),
+			want: []string{"agent", "--print", "--output-format", "stream-json", "--trust", "--model", "sonnet-4", "hello"},
 		},
 	}
 	for _, tt := range tests {
 		if !reflect.DeepEqual(tt.got, tt.want) {
 			t.Fatalf("%s args = %#v, want %#v", tt.name, tt.got, tt.want)
 		}
+	}
+}
+
+func TestCursorStreamEventsMapNestedAssistantText(t *testing.T) {
+	events := cursorStreamEvents([]byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}`))
+	if len(events) != 1 || events[0].Type != core.EventOutput || events[0].Text != "hello world" {
+		t.Fatalf("assistant events = %#v", events)
+	}
+	if events[0].Metadata["transport"] != "stream-json" || events[0].Metadata["coverage"] != "structured" {
+		t.Fatalf("assistant metadata = %#v", events[0].Metadata)
+	}
+}
+
+func TestCursorStreamEventsMapToolStartAndCompletion(t *testing.T) {
+	started := cursorStreamEvents([]byte(`{
+		"type":"tool_call","subtype":"started","call_id":"call-1",
+		"tool_call":{"shellToolCall":{"args":{"command":"printf cursor-probe","timeout":30000},"description":"print probe"},"toolCallId":"call-1","startedAtMs":"1000"}
+	}`))
+	if len(started) != 1 || started[0].Type != core.EventToolUse || started[0].ToolCallID != "call-1" ||
+		started[0].ToolName != "执行命令" || started[0].ToolInput != "printf cursor-probe" || started[0].ToolInputRaw == "" {
+		t.Fatalf("tool start = %#v", started)
+	}
+
+	completed := cursorStreamEvents([]byte(`{
+		"type":"tool_call","subtype":"completed","call_id":"call-1",
+		"tool_call":{"shellToolCall":{"result":{"success":{"exitCode":0,"stdout":"cursor-probe","stderr":"","interleavedOutput":"cursor-probe"}}},"toolCallId":"call-1","startedAtMs":"1000","completedAtMs":"1325"}
+	}`))
+	if len(completed) != 1 || completed[0].Type != core.EventToolUse || completed[0].ToolCallID != "call-1" ||
+		completed[0].ToolName != "" || completed[0].ToolResult != "exit 0 · cursor-probe" || completed[0].DurationMs != 325 || completed[0].Err != nil {
+		t.Fatalf("tool completion = %#v", completed)
+	}
+}
+
+func TestCursorStreamEventsExposeAuthorizationOutput(t *testing.T) {
+	events := cursorStreamEvents([]byte(`{
+		"type":"tool_call","subtype":"completed","call_id":"call-auth",
+		"tool_call":{"shellToolCall":{"result":{"success":{"exitCode":0,"stderr":"To login, open https://login.example/device?code=ABCD-EFGH\nVerification code: ABCD-EFGH\nWaiting for authorization..."}}},"toolCallId":"call-auth"}
+	}`))
+	if len(events) != 2 || events[0].Type != core.EventToolUse || events[1].Type != core.EventOutput {
+		t.Fatalf("authorization events = %#v", events)
+	}
+	if !strings.Contains(events[1].Text, "https://login.example/device?code=ABCD-EFGH") || !strings.Contains(events[1].Text, "ABCD-EFGH") {
+		t.Fatalf("authorization output = %q", events[1].Text)
+	}
+	if strings.Contains(events[1].Text, "Waiting for authorization") {
+		t.Fatalf("authorization output should contain only actionable details: %q", events[1].Text)
+	}
+}
+
+func TestCursorStreamEventsMapFinalUsageAndSafeProgress(t *testing.T) {
+	result := cursorStreamEvents([]byte(`{
+		"type":"result","subtype":"success","is_error":false,"duration_ms":900,"result":"done","request_id":"request-1",
+		"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":3,"cacheWriteTokens":2}
+	}`))
+	if len(result) != 1 || result[0].Type != core.EventFinal || result[0].Text != "done" || result[0].DurationMs != 900 ||
+		result[0].Usage == nil || result[0].Usage.TotalTokens != 20 || result[0].Usage.RequestID != "request-1" ||
+		result[0].Metadata["clear_persistent"] != "true" {
+		t.Fatalf("result events = %#v", result)
+	}
+
+	reconnecting := cursorStreamEvents([]byte(`{"type":"connection","subtype":"reconnecting","attempt":2}`))
+	if len(reconnecting) != 1 || reconnecting[0].Type != core.EventThinking || !strings.Contains(reconnecting[0].Text, "第 2 次重连") {
+		t.Fatalf("connection events = %#v", reconnecting)
+	}
+	// Raw Cursor thinking deltas are private model reasoning, not a supported
+	// user-facing summary, and must remain suppressed.
+	if thinking := cursorStreamEvents([]byte(`{"type":"thinking","subtype":"delta","text":"private chain of thought"}`)); len(thinking) != 0 {
+		t.Fatalf("raw thinking leaked: %#v", thinking)
+	}
+}
+
+func TestCursorStderrMapperPreservesMultilineLoginDetails(t *testing.T) {
+	mapper := newCursorStderrMapper()
+	source := mapper([]byte("Source: https://skills.byted.org/sre/spacex"))
+	noise := mapper([]byte("Downloading file 431 of 500 from skills.byted.org"))
+	first := mapper([]byte("To login, open https://login.example/device"))
+	second := mapper([]byte("Verification code: ABCD-EFGH"))
+	third := mapper([]byte("Waiting for authorization..."))
+	if source != nil || noise != nil {
+		t.Fatalf("ordinary stderr must not become assistant output: %#v / %#v", source, noise)
+	}
+	if first == nil || second == nil || third == nil || third.Type != core.EventOutput {
+		t.Fatalf("stderr events = %#v / %#v / %#v", first, second, third)
+	}
+	if third.Metadata["persistent"] != "true" {
+		t.Fatalf("authorization stderr was not marked persistent: %#v", third.Metadata)
+	}
+	if third.Metadata["priority"] != "action_required" {
+		t.Fatalf("authorization stderr was not prioritized: %#v", third.Metadata)
+	}
+	for _, want := range []string{"https://login.example/device", "ABCD-EFGH", "授权完成后任务会自动继续"} {
+		if !strings.Contains(third.Text, want) {
+			t.Fatalf("stderr output %q missing %q", third.Text, want)
+		}
+	}
+	for _, hidden := range []string{"Downloading file", "https://skills.byted.org/sre/spacex", "Waiting for authorization"} {
+		if strings.Contains(third.Text, hidden) {
+			t.Fatalf("stderr output %q leaked noisy detail %q", third.Text, hidden)
+		}
+	}
+}
+
+func TestParseCursorModelCatalog(t *testing.T) {
+	output := "\x1b[2mAvailable models\x1b[22m\r\n\r\n" +
+		"\x1b[36mauto\x1b[39m \x1b[2m- Auto\x1b[22m\r\n" +
+		"\x1b[36mgpt-5.6-sol\x1b[39m \x1b[2m- GPT-5.6 Sol (default)\x1b[22m\r\n" +
+		"claude-opus-4-8 - Claude Opus 4.8 (current, default)\r\n\r\n" +
+		"Tip: use --model <id> to switch.\r\n"
+	catalog, err := parseCursorModelCatalog([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"auto", "gpt-5.6-sol", "claude-opus-4-8"}
+	if !reflect.DeepEqual(catalog.Models, want) || catalog.DefaultModel != "claude-opus-4-8" {
+		t.Fatalf("catalog = %#v, want models %#v with default claude-opus-4-8", catalog, want)
+	}
+}
+
+func TestParseCursorModelCatalogRejectsUnexpectedOutput(t *testing.T) {
+	if _, err := parseCursorModelCatalog([]byte("authentication required")); err == nil {
+		t.Fatal("unexpected model-list output must not replace a cached/static catalog")
+	}
+}
+
+func TestCursorModelForSettingsEncodesEffortAndFast(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings core.RuntimeSettings
+		want     string
+	}{
+		{
+			name:     "adds overrides",
+			settings: core.RuntimeSettings{Model: "claude-opus-4-8[context=1m]", ReasoningEffort: "xhigh", ServiceTier: "priority"},
+			want:     "claude-opus-4-8[context=1m,effort=xhigh,fast=true]",
+		},
+		{
+			name:     "replaces aliases without duplicates",
+			settings: core.RuntimeSettings{Model: "gpt-5.6-sol[reasoning=low,fast=false,context=200k]", ReasoningEffort: "high", ServiceTier: "fast"},
+			want:     "gpt-5.6-sol[effort=high,fast=true,context=200k]",
+		},
+		{
+			name:     "explicit normal speed",
+			settings: core.RuntimeSettings{Model: "gpt-5.6-sol", ServiceTier: "default"},
+			want:     "gpt-5.6-sol[fast=false]",
+		},
+		{
+			name:     "runtime default has no model flag",
+			settings: core.RuntimeSettings{ReasoningEffort: "high", ServiceTier: "priority"},
+			want:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cursorModelForSettings(tt.settings); got != tt.want {
+				t.Fatalf("model = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApprovalModesMapToNativeCLIFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{"cursor-yolo", cursorArgs("hello", "", "", core.ApprovalModeYolo), []string{"agent", "--print", "--output-format", "stream-json", "--trust", "--yolo", "hello"}},
+		{"gemini-auto-edit", geminiArgs("hello", "", "", core.ApprovalModeAutoEdit), []string{"-p", "hello", "--output-format", "stream-json", "--approval-mode", "auto_edit"}},
+		{"qoder-yolo", qoderArgs("hello", "", "", core.ApprovalModeYolo), []string{"-p", "hello", "-f", "stream-json", "--permission-mode", "bypass_permissions"}},
+		{"iflow-manual", iflowArgs("hello", "", "", core.ApprovalModeManual), []string{"-i", "-r", "-o", "hello"}},
+	}
+	for _, tt := range tests {
+		if !reflect.DeepEqual(tt.got, tt.want) {
+			t.Fatalf("%s args = %#v, want %#v", tt.name, tt.got, tt.want)
+		}
+	}
+	if got := opencodeApprovalEnv(core.ApprovalModeYolo)["OPENCODE_CONFIG_CONTENT"]; got != `{"permission":"allow"}` {
+		t.Fatalf("OpenCode YOLO config = %q", got)
+	}
+	if got := iflowApprovalEnv(core.ApprovalModeAutoEdit)["IFLOW_approvalMode"]; got != "autoEdit" {
+		t.Fatalf("iFlow auto-edit config = %q", got)
 	}
 }
 
@@ -144,6 +325,31 @@ func TestCodexTurnStartCarriesModelEffortAndServiceTier(t *testing.T) {
 	params := s.turnStartParams("thread-1", "hello")
 	if params["model"] != "gpt-5" || params["effort"] != "xhigh" || params["serviceTier"] != "priority" {
 		t.Fatalf("turn params = %#v", params)
+	}
+}
+
+func TestCodexApprovalModesMapToTurnPolicy(t *testing.T) {
+	s := &codexSession{
+		defaultApprovalMode:    core.ApprovalModeManual,
+		supportedApprovalModes: core.ApprovalModeValuesForRuntime("codex"),
+	}
+	params := s.turnStartParams("thread-1", "hello")
+	if params["approvalPolicy"] != "on-request" || params["sandbox"] != "readOnly" {
+		t.Fatalf("manual policy = %#v", params)
+	}
+	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeYolo); err != nil {
+		t.Fatal(err)
+	}
+	params = s.turnStartParams("thread-1", "hello")
+	if params["approvalPolicy"] != "never" || params["sandbox"] != "dangerFullAccess" {
+		t.Fatalf("YOLO policy = %#v", params)
+	}
+	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeAuto); err != nil {
+		t.Fatal(err)
+	}
+	params = s.turnStartParams("thread-1", "hello")
+	if params["approvalPolicy"] != "on-request" || params["sandbox"] != "workspaceWrite" || params["approvalsReviewer"] != "auto_review" {
+		t.Fatalf("auto-review policy = %#v", params)
 	}
 }
 

@@ -23,7 +23,7 @@ func TestClaudeCollectorWithRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	col, err := NewCollector("claude", root, nil)
+	col, err := NewCollector("claude", root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestCollectorSinceFilter(t *testing.T) {
 	old := `{"type":"assistant","timestamp":"2025-01-01T10:00:00Z","sessionId":"a","message":{"model":"opus","usage":{"input_tokens":1}}}`
 	_ = os.WriteFile(filepath.Join(projDir, "s.jsonl"), []byte(old+"\n"), 0o644)
 
-	col, _ := NewCollector("claude", root, nil)
+	col, _ := NewCollector("claude", root)
 	recs, _ := col.Collect(context.Background(), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	if len(recs) != 0 {
 		t.Fatalf("since filter: got %d, want 0", len(recs))

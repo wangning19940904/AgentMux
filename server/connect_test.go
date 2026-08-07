@@ -117,6 +117,7 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		Config: map[string]string{
 			"app_id":                            "cli_test",
 			"app_secret":                        "secret",
+			"approval_mode":                     "prompt",
 			core.ChannelConfigAckReaction:       "yes",
 			core.ChannelConfigAckReactionEmojis: " OK, THANKS, ",
 		},
@@ -131,6 +132,9 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 	}
 	if saved.Config["app_secret"] != "<redacted>" {
 		t.Fatalf("saved secret = %q", saved.Config["app_secret"])
+	}
+	if _, ok := saved.Config["approval_mode"]; ok {
+		t.Fatalf("legacy channel approval_mode was not removed: %+v", saved.Config)
 	}
 	want := map[string]string{
 		core.ChannelConfigReplyScope:        core.ReplyScopeDMAndMentions,
@@ -263,6 +267,7 @@ func TestPlatformsIncludeLarkAlias(t *testing.T) {
 }
 
 func TestAgentDefaultModelValidation(t *testing.T) {
+	addTestRuntimeToPath(t, "codex")
 	s, st := newTestServerWithProvider(t)
 	ctx := context.Background()
 	p := &core.Provider{

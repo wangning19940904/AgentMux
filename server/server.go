@@ -5,10 +5,11 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/config"
@@ -22,6 +23,7 @@ import (
 // Server is the management/bridge HTTP server.
 type Server struct {
 	cfg             *config.Config
+	version         string
 	log             *slog.Logger
 	st              *store.Store
 	provider        core.ProviderManager
@@ -39,6 +41,8 @@ type Server struct {
 	obs             *observabilityRuntime
 	providerMonitor *providerMonitor
 	remote          *remotepkg.Manager
+	channelPeers    channelPeerClient
+	channelClaimMu  sync.Mutex
 	mux             *http.ServeMux
 	httpSrv         *http.Server
 }
@@ -51,6 +55,7 @@ type UsageReporter func(ctx context.Context, period string, since, until time.Ti
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
 	s := &Server{
 		cfg:      cfg,
+		version:  "0.1.0",
 		log:      log,
 		st:       st,
 		provider: pm,
@@ -70,9 +75,17 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		}
 	} else {
 		s.remote = remoteManager
+		s.channelPeers = &remoteChannelPeerClient{manager: remoteManager}
 	}
 	s.routes()
 	return s
+}
+
+// SetVersion exposes the build version through the status endpoint.
+func (s *Server) SetVersion(value string) {
+	if strings.TrimSpace(value) != "" {
+		s.version = strings.TrimSpace(value)
+	}
 }
 
 // SetSender attaches the engine as the bridge message sender.
@@ -94,9 +107,6 @@ func (s *Server) SetModules(mem core.MemoryStore, sk core.SkillManager, mcp core
 func (s *Server) SetWorkspaceInitializer(initializer core.WorkspaceInitializer) {
 	s.workspace = initializer
 }
-
-// SetSessions attaches the Claude/Codex session manager. Nil disables routes.
-func (s *Server) SetSessions(svc *sessionstore.Service) { s.sessions = svc }
 
 // SetProviderService attaches the takeover-aware provider service (local
 // routing REST + hot-switch path).
@@ -141,10 +151,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/proxy/config", s.handleProxyConfigUpdate)
 	s.mux.HandleFunc("GET /api/v1/system/claude-3p", s.handleClaude3PStatus)
 	s.mux.HandleFunc("POST /api/v1/system/claude-3p", s.handleClaude3PToggle)
+	s.mux.HandleFunc("GET /api/v1/system/directories", s.handleSystemDirectoryList)
 	s.mux.HandleFunc("POST /api/v1/system/directories", s.handleSystemDirectoryEnsure)
 	s.mux.HandleFunc("GET /api/v1/frameworks", s.handleFrameworksList)
+	s.mux.HandleFunc("GET /api/v1/frameworks/auth", s.handleFrameworkAuthStatus)
 	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
 	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
+	s.mux.HandleFunc("POST /api/v1/frameworks/login", s.handleFrameworkLogin)
+	s.mux.HandleFunc("POST /api/v1/frameworks/login/complete", s.handleFrameworkLoginComplete)
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)
 	s.mux.HandleFunc("GET /api/v1/sessions/messages", s.handleSessionMessages)
 	s.mux.HandleFunc("POST /api/v1/sessions/messages", s.handleSessionMessageSend)
@@ -156,6 +170,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
 	s.mux.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
 	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
+	s.mux.HandleFunc("POST /api/v1/channels/validate", s.handleChannelValidate)
 	s.mux.HandleFunc("DELETE /api/v1/channels", s.handleChannelDelete)
 	s.mux.HandleFunc("POST /api/v1/channels/restart", s.handleChannelRestart)
 	s.mux.HandleFunc("GET /api/v1/channel-conversations", s.handleChannelConversations)
@@ -238,17 +253,11 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"projects": len(s.cfg.Projects),
-		"version":  "0.1.0",
+		"version":  s.version,
 	})
 }
 
@@ -257,7 +266,7 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, core.RegisteredAgents())
+	writeJSON(w, http.StatusOK, availableAgentRuntimes())
 }
 
 func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +276,7 @@ func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
 	}
 	ps, err := s.provider.List(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	for _, p := range ps {
@@ -278,20 +287,19 @@ func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
 	if s.provider == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
 		return
 	}
-	var p core.Provider
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	p, ok := decodeJSON[core.Provider](w, r)
+	if !ok {
 		return
 	}
 	if err := normalizeProviderAPIKeyForSave(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.provider.Upsert(r.Context(), &p); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	annotateProviderAPIKey(&p)
@@ -299,20 +307,19 @@ func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+	id, ok := requireQuery(w, r, "id")
+	if !ok {
 		return
 	}
 	if s.provider == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
 		return
 	}
 	if err := s.provider.Delete(r.Context(), id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +329,7 @@ func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Reque
 	}
 	routes, err := s.provider.ActiveRoutes(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	for i := range routes {
@@ -333,19 +340,18 @@ func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) handleProviderClearRoute(w http.ResponseWriter, r *http.Request) {
 	if s.provider == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
 		return
 	}
-	tool := r.URL.Query().Get("tool")
-	if tool == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tool"})
+	tool, ok := requireQuery(w, r, "tool")
+	if !ok {
 		return
 	}
 	if err := s.provider.Clear(r.Context(), tool); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleProviderPresets(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +360,7 @@ func (s *Server) handleProviderPresets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 	if s.provider == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider manager unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
 		return
 	}
 	var req struct {
@@ -363,8 +369,7 @@ func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 		Meta          core.ProviderMeta `json:"meta"`
 		LocalTakeover *bool             `json:"local_takeover,omitempty"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	route := core.ProviderRoute{
@@ -381,10 +386,10 @@ func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 		err = s.provider.SwitchRoute(r.Context(), route)
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -392,19 +397,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Project string `json:"project"`
 		Text    string `json:"text"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	if s.sender == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no sender wired"})
+		writeErr(w, http.StatusServiceUnavailable, "no sender wired")
 		return
 	}
 	if err := s.sender.SendToProject(r.Context(), req.Project, req.Text); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
@@ -414,16 +418,16 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	since, err := parseUsageDate(r.URL.Query().Get("from"), false)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	until, err := parseUsageDate(r.URL.Query().Get("to"), true)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "usage date range must start on or before the end date"})
+		writeErr(w, http.StatusBadRequest, "usage date range must start on or before the end date")
 		return
 	}
 	if s.usageFn == nil {
@@ -432,7 +436,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	rep, err := s.usageFn(r.Context(), period, since, until)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, rep)

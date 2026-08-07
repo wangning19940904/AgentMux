@@ -26,7 +26,7 @@ func TestCodexCollectorParsesNestedCumulativeUsageAndDeduplicates(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	collector, err := NewCollector("codex", root, nil)
+	collector, err := NewCollector("codex", root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCodexCollectorUsesLastUsageWhenCumulativeCounterResets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collector, _ := NewCollector("codex", root, nil)
+	collector, _ := NewCollector("codex", root)
 	records, err := collector.Collect(context.Background(), time.Time{})
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestCodexCollectorKeepsLegacyTopLevelTokenCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collector, _ := NewCollector("codex", root, nil)
+	collector, _ := NewCollector("codex", root)
 	records, err := collector.Collect(context.Background(), time.Time{})
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestCodexCollectorSkipsFilesOlderThanSince(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	collector, _ := NewCollector("codex", root, nil)
+	collector, _ := NewCollector("codex", root)
 
 	// A since after the file's mtime must skip it entirely (no records).
 	since := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)

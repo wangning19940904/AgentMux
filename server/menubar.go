@@ -98,7 +98,7 @@ func (s *Server) handleMenubarSettingsGet(w http.ResponseWriter, r *http.Request
 	settings := defaultMenubarSettings()
 	if s.st != nil {
 		if raw, ok, err := s.st.GetSetting(r.Context(), menubarSettingsKey); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		} else if ok && raw != "" {
 			if err := json.Unmarshal([]byte(raw), &settings); err != nil {
@@ -113,22 +113,21 @@ func (s *Server) handleMenubarSettingsGet(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleMenubarSettingsPut(w http.ResponseWriter, r *http.Request) {
 	var settings MenubarSettings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &settings) {
 		return
 	}
 	settings.normalize()
 	if s.st == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no store wired"})
+		writeErr(w, http.StatusServiceUnavailable, "no store wired")
 		return
 	}
 	blob, err := json.Marshal(settings)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := s.st.SetSetting(r.Context(), menubarSettingsKey, string(blob)); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)

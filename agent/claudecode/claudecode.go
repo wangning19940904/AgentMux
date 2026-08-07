@@ -21,15 +21,25 @@ func init() {
 			capabilities := settings.RuntimeSettingsCapabilities()
 			a.defaultModel = defaults.Model
 			a.defaultReasoningEffort = defaults.ReasoningEffort
+			a.defaultApprovalMode = defaults.ApprovalMode
 			for _, option := range capabilities.Models {
 				a.supportedModels = append(a.supportedModels, option.Value)
 			}
 			for _, option := range capabilities.ReasoningEfforts {
 				a.supportedReasoningEfforts = append(a.supportedReasoningEfforts, option.Value)
 			}
+			for _, option := range capabilities.ApprovalModes {
+				a.supportedApprovalModes = append(a.supportedApprovalModes, option.Value)
+			}
 		}
 		if len(a.supportedReasoningEfforts) == 0 {
 			a.supportedReasoningEfforts = []string{"low", "medium", "high", "max"}
+		}
+		if a.defaultApprovalMode == "" {
+			a.defaultApprovalMode = core.ApprovalModeManual
+		}
+		if len(a.supportedApprovalModes) == 0 {
+			a.supportedApprovalModes = core.ApprovalModeValuesForRuntime("claudecode")
 		}
 		if env, ok := cfg["env"].(map[string]string); ok {
 			a.env = env
@@ -43,8 +53,10 @@ type Agent struct {
 	systemPrompt              string
 	defaultModel              string
 	defaultReasoningEffort    string
+	defaultApprovalMode       string
 	supportedModels           []string
 	supportedReasoningEfforts []string
+	supportedApprovalModes    []string
 	env                       map[string]string
 }
 

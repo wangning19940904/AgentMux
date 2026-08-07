@@ -994,7 +994,7 @@ func (m *providerMonitor) trimAlertsLocked() {
 
 func (s *Server) handleProviderMonitorGet(w http.ResponseWriter, _ *http.Request) {
 	if s.providerMonitor == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider monitor unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider monitor unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.providerMonitor.Snapshot())
@@ -1002,17 +1002,16 @@ func (s *Server) handleProviderMonitorGet(w http.ResponseWriter, _ *http.Request
 
 func (s *Server) handleProviderMonitorPut(w http.ResponseWriter, r *http.Request) {
 	if s.providerMonitor == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider monitor unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider monitor unavailable")
 		return
 	}
 	var cfg ProviderMonitorConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &cfg) {
 		return
 	}
 	snapshot, err := s.providerMonitor.UpdateConfig(r.Context(), cfg)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
@@ -1020,7 +1019,7 @@ func (s *Server) handleProviderMonitorPut(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleProviderMonitorRun(w http.ResponseWriter, r *http.Request) {
 	if s.providerMonitor == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider monitor unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider monitor unavailable")
 		return
 	}
 	snapshot, err := s.providerMonitor.RunOnce(r.Context())
@@ -1036,12 +1035,12 @@ func (s *Server) handleProviderMonitorRun(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleProviderMonitorAlertDismiss(w http.ResponseWriter, r *http.Request) {
 	if s.providerMonitor == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider monitor unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "provider monitor unavailable")
 		return
 	}
 	snapshot, err := s.providerMonitor.DismissAlert(r.Context(), strings.TrimSpace(r.URL.Query().Get("id")))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)

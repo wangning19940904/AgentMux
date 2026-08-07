@@ -98,15 +98,18 @@ func (e *InsightEngine) Run(ctx context.Context, since time.Time) ([]store.Obser
 	hooks := map[string]*insightHookStats{}
 	models := map[string]*insightModelStats{}
 	recentCutoff := time.Now().UTC().Add(-24 * time.Hour)
-	spansByTrace := make(map[string][]store.ObservationSpan, len(traces))
+	traceIDs := make([]string, 0, len(traces))
+	for _, trace := range traces {
+		traceIDs = append(traceIDs, trace.TraceID)
+	}
+	spansByTrace, err := e.store.ListObservationSpansForTraces(ctx, traceIDs)
+	if err != nil {
+		return nil, err
+	}
 	selectedModels := map[string]insightSpanSelection{}
 	selectedTools := map[string]insightSpanSelection{}
 	for _, trace := range traces {
-		spans, err := e.store.ListObservationSpans(ctx, trace.TraceID)
-		if err != nil {
-			return nil, err
-		}
-		spansByTrace[trace.TraceID] = spans
+		spans := spansByTrace[trace.TraceID]
 		for _, span := range spans {
 			var key string
 			var selections map[string]insightSpanSelection

@@ -177,9 +177,11 @@ func (a *fakeAgent) ListSessions(ctx context.Context) ([]string, error) { return
 func (a *fakeAgent) Stop(ctx context.Context) error                     { return nil }
 
 type modelAgent struct {
-	mu       sync.Mutex
-	last     *modelSession
-	sessions int
+	mu           sync.Mutex
+	last         *modelSession
+	sessions     int
+	defaultModel string
+	models       []string
 }
 
 func (a *modelAgent) Name() string { return "model-agent" }
@@ -187,9 +189,15 @@ func (a *modelAgent) StartSession(ctx context.Context, workDir string) (AgentSes
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sessions++
+	defaultModel := a.defaultModel
+	models := a.models
+	if models == nil {
+		defaultModel = "gpt-5"
+		models = []string{"gpt-5", "gpt-5-mini"}
+	}
 	s := &modelSession{
 		id:             fmt.Sprintf("m%d", a.sessions),
-		ModelSelection: NewModelSelection("gpt-5", []string{"gpt-5", "gpt-5-mini"}),
+		ModelSelection: NewModelSelection(defaultModel, models),
 	}
 	a.last = s
 	return s, nil
@@ -202,6 +210,66 @@ type modelSession struct {
 	id    string
 	mu    sync.Mutex
 	turns []string
+}
+
+type approvalAgent struct {
+	mu   sync.Mutex
+	last *approvalSession
+}
+
+func (a *approvalAgent) Name() string { return "approval-agent" }
+func (a *approvalAgent) StartSession(context.Context, string) (AgentSession, error) {
+	s := &approvalSession{settings: NewRuntimeSettingsSelection(
+		RuntimeSettings{ApprovalMode: ApprovalModeManual},
+		RuntimeSettingsCapabilities{ApprovalModes: ApprovalModeOptionsForRuntime("codex")},
+	)}
+	a.mu.Lock()
+	a.last = s
+	a.mu.Unlock()
+	return s, nil
+}
+func (a *approvalAgent) ListSessions(context.Context) ([]string, error) { return nil, nil }
+func (a *approvalAgent) Stop(context.Context) error                     { return nil }
+
+type approvalSession struct {
+	settings *RuntimeSettingsSelection
+	mu       sync.Mutex
+	turns    []string
+}
+
+func (s *approvalSession) ID() string { return "approval-session" }
+func (s *approvalSession) RuntimeSettingsCapabilities() RuntimeSettingsCapabilities {
+	return s.settings.RuntimeSettingsCapabilities()
+}
+func (s *approvalSession) CurrentRuntimeSettings() RuntimeSettings {
+	return s.settings.CurrentRuntimeSettings()
+}
+func (s *approvalSession) DefaultRuntimeSettings() RuntimeSettings {
+	return s.settings.DefaultRuntimeSettings()
+}
+func (s *approvalSession) SetRuntimeSetting(setting RuntimeSetting, value string) error {
+	return s.settings.SetRuntimeSetting(setting, value)
+}
+func (s *approvalSession) ResetRuntimeSetting(setting RuntimeSetting) error {
+	return s.settings.ResetRuntimeSetting(setting)
+}
+func (s *approvalSession) Send(_ context.Context, text string) (<-chan *Event, error) {
+	s.mu.Lock()
+	s.turns = append(s.turns, text)
+	mode := s.CurrentRuntimeSettings().ApprovalMode
+	s.mu.Unlock()
+	out := make(chan *Event, 1)
+	out <- &Event{Type: EventFinal, Text: "mode:" + mode + " " + text, Final: true}
+	close(out)
+	return out, nil
+}
+func (s *approvalSession) RespondPermission(context.Context, bool) error { return nil }
+func (s *approvalSession) Close(context.Context) error                   { return nil }
+
+func (s *approvalSession) turnCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.turns)
 }
 
 func (s *modelSession) ID() string                    { return s.id }
@@ -229,6 +297,7 @@ type fakeStore struct {
 	mu       sync.Mutex
 	channels []Channel
 	triggers []Trigger
+	agents   map[string]AgentInstance
 	runs     map[string]string // trigger id -> last status
 }
 
@@ -274,6 +343,12 @@ func (s *fakeStore) UpdateTriggerRun(ctx context.Context, id string, lastRun tim
 	return nil
 }
 func (s *fakeStore) GetAgentInstance(ctx context.Context, id string) (*AgentInstance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if agent, ok := s.agents[id]; ok {
+		copy := agent
+		return &copy, nil
+	}
 	return nil, nil
 }
 func (s *fakeStore) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error {
@@ -356,6 +431,65 @@ func TestChannelMessageRouting(t *testing.T) {
 	eng.DetachChannel("c1")
 	if got := eng.ChannelStatuses(); len(got) != 0 {
 		t.Fatalf("after detach: %+v", got)
+	}
+}
+
+func TestRestartChannelsForAgentRefreshesChangedRuntime(t *testing.T) {
+	const (
+		platformName = "fake-agent-refresh"
+		oldRuntime   = "fake-runtime-old"
+		newRuntime   = "fake-runtime-new"
+	)
+	restorePlatform := stubPlatformFactoryFunc(t, platformName, func(map[string]any) (Platform, error) {
+		return newFakePlatform(platformName), nil
+	})
+	defer restorePlatform()
+	restoreOld := stubAgentFactory(t, oldRuntime, func(map[string]any) (Agent, error) {
+		return &namedFakeAgent{name: oldRuntime, fakeAgent: &fakeAgent{}}, nil
+	})
+	defer restoreOld()
+	restoreNew := stubAgentFactory(t, newRuntime, func(map[string]any) (Agent, error) {
+		return &namedFakeAgent{name: newRuntime, fakeAgent: &fakeAgent{}}, nil
+	})
+	defer restoreNew()
+
+	now := time.Now()
+	store := &fakeStore{
+		channels: []Channel{{
+			ID: "channel-1", Name: "bot", Type: platformName, AgentID: "agent-1", Enabled: true, UpdatedAt: now,
+		}},
+		agents: map[string]AgentInstance{
+			"agent-1": {ID: "agent-1", Name: "Agent", RuntimeID: oldRuntime, Enabled: true, UpdatedAt: now},
+		},
+	}
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	connect := NewConnectService(nil, eng, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := connect.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := eng.channelRuntime("channel-1")
+	if before == nil || before.agent == nil || before.agent.Name() != oldRuntime {
+		t.Fatalf("initial channel runtime = %#v", before)
+	}
+
+	store.mu.Lock()
+	agent := store.agents["agent-1"]
+	agent.RuntimeID = newRuntime
+	agent.UpdatedAt = now.Add(time.Second)
+	store.agents["agent-1"] = agent
+	store.mu.Unlock()
+	if err := connect.RestartChannelsForAgent(ctx, "agent-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	after := eng.channelRuntime("channel-1")
+	if after == nil || after == before {
+		t.Fatalf("channel runtime was not replaced: before=%p after=%p", before, after)
+	}
+	if after.agent == nil || after.agent.Name() != newRuntime || after.workspace.RuntimeID != newRuntime {
+		t.Fatalf("refreshed channel still uses stale runtime: agent=%v workspace=%+v", after.agent, after.workspace)
 	}
 }
 
@@ -815,6 +949,238 @@ func TestAgentDefaultRuntimeSettingDoesNotOverrideCurrentSession(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestNewConversationPromptsForApprovalModeBeforeRunningAgent(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	eng.SetConversationStore(&senderConversationStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newRuntimeSettingsPickerPlatform("fake-approval-prompt")
+	restore := stubPlatformFactory(t, "fake-approval-prompt", plat)
+	defer restore()
+	agent := &approvalAgent{}
+	ch := Channel{ID: "c-approval", Name: "approval", Type: "fake-approval-prompt", AgentID: "agent-approval", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, t.TempDir(), WorkspaceInitOptions{AgentID: "agent-approval"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "hello", Platform: "fake-approval-prompt"})
+	waitFor(t, "first workspace approval picker", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.cards) == 1
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil || sess.turnCount() != 0 {
+		t.Fatalf("first prompt reached Agent before approval configuration")
+	}
+	plat.pickerMu.Lock()
+	state := plat.cards[0]
+	plat.pickerMu.Unlock()
+	if len(state.Capabilities.ApprovalModes) < 2 || !strings.Contains(state.Notice, "首次对话") || !strings.Contains(state.Notice, "自动继续") {
+		t.Fatalf("approval picker state = %+v", state)
+	}
+
+	plat.push(&Message{ID: "action-1", InteractionMessageID: "picker-1", ChatID: "chat-1", Platform: "fake-approval-prompt", RuntimeSettingsAction: &RuntimeSettingsAction{
+		Scope: RuntimeSettingsScopeConversation, Setting: RuntimeSettingApprovalMode, Value: ApprovalModeYolo,
+	}})
+	waitFor(t, "approval selection resumes original Agent turn", func() bool {
+		return sess.CurrentRuntimeSettings().ApprovalMode == ApprovalModeYolo && sess.turnCount() == 1
+	})
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.turns) != 1 || sess.turns[0] != "hello" {
+		t.Fatalf("resumed Agent turns = %#v", sess.turns)
+	}
+}
+
+func TestNewConversationUsesAgentApprovalDefaultWithoutPrompt(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	eng.SetConversationStore(&senderConversationStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newRuntimeSettingsPickerPlatform("fake-agent-approval-default")
+	restore := stubPlatformFactory(t, "fake-agent-approval-default", plat)
+	defer restore()
+	agent := &approvalAgent{}
+	ch := Channel{
+		ID: "c-agent-approval-default", Name: "approval-default", Type: "fake-agent-approval-default",
+		AgentID: "agent-approval", Enabled: true,
+		// A legacy channel value must not override or force confirmation of the
+		// Agent-owned default.
+		Config:    map[string]string{"approval_mode": "prompt"},
+		UpdatedAt: time.Now(),
+	}
+	workspace := WorkspaceInitOptions{
+		AgentID: "agent-approval", RuntimeDefaults: RuntimeSettings{ApprovalMode: ApprovalModeYolo},
+	}
+	if err := eng.AttachChannel(ctx, ch, agent, t.TempDir(), workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "hello", Platform: "fake-agent-approval-default"})
+	waitFor(t, "Agent approval default dispatch", func() bool {
+		agent.mu.Lock()
+		sess := agent.last
+		agent.mu.Unlock()
+		return sess != nil && sess.turnCount() == 1
+	})
+
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if got := sess.CurrentRuntimeSettings().ApprovalMode; got != ApprovalModeYolo {
+		t.Fatalf("approval mode = %q, want Agent default yolo", got)
+	}
+	plat.pickerMu.Lock()
+	cardCount := len(plat.cards)
+	plat.pickerMu.Unlock()
+	if cardCount != 0 {
+		t.Fatalf("runtime settings cards = %d, want none when Agent has a default", cardCount)
+	}
+}
+
+func TestNewConversationResumesOriginalTurnAfterInitialModelSelection(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	eng.SetConversationStore(&senderConversationStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newRuntimeSettingsPickerPlatform("fake-model-prompt")
+	restore := stubPlatformFactory(t, "fake-model-prompt", plat)
+	defer restore()
+	agent := &modelAgent{models: []string{"gpt-5", "gpt-5-mini"}}
+	ch := Channel{ID: "c-model-prompt", Name: "model", Type: "fake-model-prompt", AgentID: "agent-model", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, t.TempDir(), WorkspaceInitOptions{AgentID: "agent-model"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "hello", Platform: "fake-model-prompt"})
+	waitFor(t, "first workspace model picker", func() bool {
+		plat.pickerMu.Lock()
+		defer plat.pickerMu.Unlock()
+		return len(plat.cards) == 1
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil || sess.turnCount() != 0 {
+		t.Fatalf("first prompt reached Agent before model selection")
+	}
+	plat.pickerMu.Lock()
+	state := plat.cards[0]
+	plat.pickerMu.Unlock()
+	if state.Settings.Model != "" || !strings.Contains(state.Notice, "选择模型") || !strings.Contains(state.Notice, "自动继续") {
+		t.Fatalf("model picker state = %+v", state)
+	}
+
+	plat.push(&Message{ID: "action-1", InteractionMessageID: "picker-1", ChatID: "chat-1", Platform: "fake-model-prompt", RuntimeSettingsAction: &RuntimeSettingsAction{
+		Scope: RuntimeSettingsScopeConversation, Setting: RuntimeSettingModel, Value: "gpt-5-mini",
+	}})
+	waitFor(t, "model selection resumes original Agent turn", func() bool {
+		return sess.CurrentModel() == "gpt-5-mini" && sess.turnCount() == 1
+	})
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.turns) != 1 || sess.turns[0] != "hello" {
+		t.Fatalf("resumed Agent turns = %#v", sess.turns)
+	}
+}
+
+func TestNewConversationResumesOriginalTurnAfterFallbackModelCommand(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	eng.SetConversationStore(&senderConversationStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake-model-command-prompt")
+	restore := stubPlatformFactory(t, "fake-model-command-prompt", plat)
+	defer restore()
+	agent := &modelAgent{models: []string{"gpt-5", "gpt-5-mini"}}
+	ch := Channel{ID: "c-model-command-prompt", Name: "model", Type: "fake-model-command-prompt", AgentID: "agent-model", Enabled: true, UpdatedAt: time.Now()}
+	if err := eng.AttachChannel(ctx, ch, agent, t.TempDir(), WorkspaceInitOptions{AgentID: "agent-model"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", Text: "hello", Platform: "fake-model-command-prompt"})
+	waitFor(t, "first workspace model command prompt", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1 && strings.Contains(plat.replies[0], "/model <模型>")
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil || sess.turnCount() != 0 {
+		t.Fatalf("first prompt reached Agent before model command")
+	}
+
+	plat.push(&Message{ID: "m2", ChatID: "chat-1", Text: "/model gpt-5-mini", Platform: "fake-model-command-prompt"})
+	waitFor(t, "model command resumes original Agent turn", func() bool {
+		return sess.CurrentModel() == "gpt-5-mini" && sess.turnCount() == 1
+	})
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.turns) != 1 || sess.turns[0] != "hello" {
+		t.Fatalf("resumed Agent turns = %#v", sess.turns)
+	}
+}
+
+func TestChannelApprovalSlashCommandSwitchesModeBeforeAgentDispatch(t *testing.T) {
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = eng.Start(ctx) }()
+
+	plat := newFakePlatform("fake-approval-command")
+	restore := stubPlatformFactory(t, "fake-approval-command", plat)
+	defer restore()
+	agent := &approvalAgent{}
+	ch := Channel{
+		ID: "c-approval-command", Name: "approval-command", Type: "fake-approval-command", AgentID: "agent-approval", Enabled: true,
+		UpdatedAt: time.Now(),
+	}
+	if err := eng.AttachChannel(ctx, ch, agent, t.TempDir(), WorkspaceInitOptions{AgentID: "agent-approval"}); err != nil {
+		t.Fatal(err)
+	}
+
+	plat.push(&Message{ID: "m1", ChatID: "chat-1", UserID: "user-1", Text: "/yolo on", Platform: "fake-approval-command"})
+	waitFor(t, "approval command reply", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 1
+	})
+	agent.mu.Lock()
+	sess := agent.last
+	agent.mu.Unlock()
+	if sess == nil || sess.turnCount() != 0 {
+		t.Fatalf("slash command reached Agent: session=%v", sess)
+	}
+	if got := sess.CurrentRuntimeSettings().ApprovalMode; got != ApprovalModeYolo {
+		t.Fatalf("approval mode = %q, want yolo", got)
+	}
+
+	plat.push(&Message{ID: "m2", ChatID: "chat-1", UserID: "user-1", Text: "hello", Platform: "fake-approval-command"})
+	waitFor(t, "agent reply after approval switch", func() bool {
+		plat.mu.Lock()
+		defer plat.mu.Unlock()
+		return len(plat.replies) == 2
+	})
+	plat.mu.Lock()
+	got := plat.replies[1]
+	plat.mu.Unlock()
+	if got != "mode:yolo hello" {
+		t.Fatalf("Agent reply = %q, want switched approval mode", got)
+	}
 }
 
 func TestStreamTurnSkipsDuplicateOutputAndFinal(t *testing.T) {
@@ -1330,9 +1696,14 @@ func TestEventTriggerDispatch(t *testing.T) {
 // returns a cleanup that unregisters it.
 func stubPlatformFactory(t *testing.T, name string, p Platform) func() {
 	t.Helper()
+	return stubPlatformFactoryFunc(t, name, func(map[string]any) (Platform, error) { return p, nil })
+}
+
+func stubPlatformFactoryFunc(t *testing.T, name string, factory PlatformFactory) func() {
+	t.Helper()
 	regMu.Lock()
 	old, hadOld := platforms[name]
-	platforms[name] = func(cfg map[string]any) (Platform, error) { return p, nil }
+	platforms[name] = factory
 	regMu.Unlock()
 	return func() {
 		regMu.Lock()
@@ -1344,3 +1715,27 @@ func stubPlatformFactory(t *testing.T, name string, p Platform) func() {
 		regMu.Unlock()
 	}
 }
+
+func stubAgentFactory(t *testing.T, name string, factory AgentFactory) func() {
+	t.Helper()
+	regMu.Lock()
+	old, hadOld := agents[name]
+	agents[name] = factory
+	regMu.Unlock()
+	return func() {
+		regMu.Lock()
+		if hadOld {
+			agents[name] = old
+		} else {
+			delete(agents, name)
+		}
+		regMu.Unlock()
+	}
+}
+
+type namedFakeAgent struct {
+	*fakeAgent
+	name string
+}
+
+func (a *namedFakeAgent) Name() string { return a.name }

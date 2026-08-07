@@ -149,12 +149,13 @@ func TestModelCommandFromCardActionResetsModelWithContextChat(t *testing.T) {
 func TestRuntimeSettingsPickerCardCarriesScopeAndControls(t *testing.T) {
 	card := buildRuntimeSettingsPickerCard(&core.Message{ChatID: "oc_1", ChatType: "group"}, core.RuntimeSettingsPickerState{
 		Scope:                 core.RuntimeSettingsScopeConversation,
-		Settings:              core.RuntimeSettings{Model: "gpt-5", ReasoningEffort: "high", ServiceTier: "priority"},
+		Settings:              core.RuntimeSettings{Model: "gpt-5", ReasoningEffort: "high", ServiceTier: "priority", ApprovalMode: core.ApprovalModeYolo},
 		AgentDefaultsEditable: true,
 		Capabilities: core.RuntimeSettingsCapabilities{
 			Models:           []core.RuntimeOption{{Value: "gpt-5", Label: "gpt-5"}, {Value: "gpt-5-mini", Label: "gpt-5-mini"}},
 			ReasoningEfforts: []core.RuntimeOption{{Value: "low"}, {Value: "high"}},
 			ServiceTiers:     []core.RuntimeOption{{Value: "default"}, {Value: "priority"}},
+			ApprovalModes:    []core.RuntimeOption{{Value: core.ApprovalModeManual}, {Value: core.ApprovalModeYolo}},
 		},
 	})
 	if !json.Valid([]byte(card)) {
@@ -162,11 +163,62 @@ func TestRuntimeSettingsPickerCardCarriesScopeAndControls(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"agentmux_action":"runtime_settings"`, `"setting":"model"`, `"setting":"reasoning_effort"`,
-		`"setting":"service_tier"`, `"setting":"scope"`, `Agent 默认`, `gpt-5-mini`,
+		`"setting":"service_tier"`, `"setting":"approval_mode"`, `"setting":"scope"`, `Agent 默认`, `gpt-5-mini`,
+		`"tag":"select_static"`, `"initial_option":"gpt-5"`, `"width":"fill"`,
 	} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("card missing %q: %s", want, card)
 		}
+	}
+	if got := strings.Count(card, `"tag":"select_static"`); got != 5 {
+		t.Fatalf("select count = %d, want 5: %s", got, card)
+	}
+	if strings.Contains(card, `"tag":"button"`) {
+		t.Fatalf("runtime settings card still contains buttons: %s", card)
+	}
+	for _, selected := range []string{"conversation", "gpt-5", "high", "priority", core.ApprovalModeYolo} {
+		if !strings.Contains(card, `"initial_option":"`+selected+`"`) {
+			t.Fatalf("card missing selected option %q: %s", selected, card)
+		}
+	}
+}
+
+func TestRuntimeSettingsSelectCallbackUsesSelectedOption(t *testing.T) {
+	tests := []struct {
+		name      string
+		setting   core.RuntimeSetting
+		option    string
+		wantScope core.RuntimeSettingsScope
+		wantValue string
+	}{
+		{name: "model", setting: core.RuntimeSettingModel, option: "gpt-5-mini", wantScope: core.RuntimeSettingsScopeConversation, wantValue: "gpt-5-mini"},
+		{name: "effort", setting: core.RuntimeSettingReasoningEffort, option: "high", wantScope: core.RuntimeSettingsScopeConversation, wantValue: "high"},
+		{name: "scope", setting: core.RuntimeSettingScope, option: string(core.RuntimeSettingsScopeAgent), wantScope: core.RuntimeSettingsScopeAgent},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &larkClient{platform: "feishu"}
+			event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+				Context: &callback.Context{OpenChatID: "oc_context", OpenMessageID: "om_picker"},
+				Action: &callback.CallBackAction{
+					Value: map[string]interface{}{
+						modelPickerActionKey: runtimeSettingsAction,
+						"scope":              "conversation",
+						"setting":            string(tt.setting),
+						"chat_id":            "oc_1",
+						"chat_type":          "group",
+					},
+					Option: tt.option,
+				},
+			}}
+			msg, ok := client.messageFromCardAction("channel:c1", event)
+			if !ok || msg.RuntimeSettingsAction == nil {
+				t.Fatalf("runtime select action was not recognized: %+v", msg)
+			}
+			if msg.RuntimeSettingsAction.Setting != tt.setting || msg.RuntimeSettingsAction.Scope != tt.wantScope || msg.RuntimeSettingsAction.Value != tt.wantValue {
+				t.Fatalf("runtime select action = %+v", msg.RuntimeSettingsAction)
+			}
+		})
 	}
 }
 

@@ -3,8 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"math/rand"
-	"strings"
 	"sync"
 	"time"
 )
@@ -44,60 +42,12 @@ type channelRuntime struct {
 	controlTasks map[string]*channelControlState
 	clearConfirm map[string]time.Time
 	threadLists  map[string][]NativeThread
+	pendingTurns map[string]pendingInitialTurn
 }
 
-func (rt *channelRuntime) setState(state, errMsg string) {
-	rt.mu.Lock()
-	rt.state = state
-	rt.errMsg = errMsg
-	rt.connected = false
-	rt.terminal = true
-	rt.mu.Unlock()
-}
-
-func (rt *channelRuntime) applyHealth(health PlatformHealth) (previous string, changed bool) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.terminal {
-		return rt.state, false
-	}
-	previous = rt.state
-	state := health.State
-	switch state {
-	case ChannelStateStarting, ChannelStateRunning, ChannelStateReconnecting, ChannelStateDegraded, ChannelStateError:
-	default:
-		if health.Connected {
-			state = ChannelStateRunning
-		} else {
-			state = ChannelStateDegraded
-		}
-	}
-	rt.state = state
-	rt.connected = health.Connected
-	rt.errMsg = health.Error
-	rt.connectedAt = health.ConnectedAt
-	rt.lastCheckedAt = health.CheckedAt
-	rt.lastHeartbeatAt = health.LastHeartbeatAt
-	rt.lastEventAt = health.LastEventAt
-	rt.lastInboundAt = health.LastInboundAt
-	return previous, previous != state
-}
-
-func (rt *channelRuntime) status() ChannelStatus {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return ChannelStatus{
-		ChannelID:       rt.channel.ID,
-		State:           rt.state,
-		Connected:       rt.connected,
-		Error:           rt.errMsg,
-		StartedAt:       rt.started,
-		ConnectedAt:     rt.connectedAt,
-		LastCheckedAt:   rt.lastCheckedAt,
-		LastHeartbeatAt: rt.lastHeartbeatAt,
-		LastEventAt:     rt.lastEventAt,
-		LastInboundAt:   rt.lastInboundAt,
-	}
+type pendingInitialTurn struct {
+	message         *Message
+	requiredSetting RuntimeSetting
 }
 
 func (rt *channelRuntime) runtimeDefaults() RuntimeSettings {
@@ -163,7 +113,7 @@ func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
 		return
 	}
 	defaults := rt.defaultSettings
-	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier} {
+	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier, RuntimeSettingApprovalMode} {
 		value := defaults.Value(setting)
 		if value == "" || !settings.RuntimeSettingsCapabilities().Supports(setting) {
 			continue
@@ -307,6 +257,7 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		controlTasks:    map[string]*channelControlState{},
 		clearConfirm:    map[string]time.Time{},
 		threadLists:     map[string][]NativeThread{},
+		pendingTurns:    map[string]pendingInitialTurn{},
 		state:           ChannelStateRunning,
 		started:         time.Now(),
 	}
@@ -385,50 +336,6 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 	return nil
 }
 
-func (e *Engine) monitorChannelHealth(ctx context.Context, rt *channelRuntime, reporter PlatformHealthReporter) {
-	check := func() {
-		health := reporter.ChannelHealth()
-		if health.CheckedAt.IsZero() {
-			health.CheckedAt = time.Now()
-		}
-		previous, changed := rt.applyHealth(health)
-		if !changed {
-			return
-		}
-		state := rt.status().State
-		unhealthy := state == ChannelStateReconnecting || state == ChannelStateDegraded || state == ChannelStateError
-		if unhealthy {
-			errMsg := health.Error
-			if errMsg == "" {
-				errMsg = "channel connection is " + state
-			}
-			e.log.Warn("channel health warning", "channel", rt.channel.Name, "type", rt.channel.Type, "state", state, "err", errMsg)
-			e.emit(context.Background(), HookError, map[string]string{
-				"channel_id": rt.channel.ID,
-				"channel":    rt.channel.Name,
-				"platform":   rt.channel.Type,
-				"origin":     "channel_health",
-				"state":      state,
-				"error":      errMsg,
-			})
-		} else if state == ChannelStateRunning && previous != ChannelStateRunning {
-			e.log.Info("channel health recovered", "channel", rt.channel.Name, "type", rt.channel.Type)
-		}
-	}
-
-	check()
-	ticker := time.NewTicker(channelHealthCheckInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			check()
-		}
-	}
-}
-
 // DetachChannel stops and removes a channel runtime. No-op when absent.
 func (e *Engine) DetachChannel(id string) {
 	e.mu.Lock()
@@ -481,243 +388,4 @@ func (e *Engine) channelRuntime(id string) *channelRuntime {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.channels[id]
-}
-
-func (e *Engine) duplicateChannelMessage(msg *Message) bool {
-	rt := e.channelRuntime(msg.ChannelID)
-	return rt != nil && rt.duplicateMessage(msg)
-}
-
-// handleChannelMessage routes an inbound message from an attached channel to
-// the bound agent and streams responses back through the channel's platform.
-func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, data map[string]string) {
-	rt := e.channelRuntime(msg.ChannelID)
-	if rt == nil {
-		e.log.Warn("no runtime for channel message", "channel_id", msg.ChannelID)
-		return
-	}
-
-	if e.handleConversationCommand(ctx, rt, msg) {
-		e.emit(ctx, HookMessageSent, data)
-		return
-	}
-
-	reactionID := ""
-	if msg.RuntimeSettingsAction == nil {
-		reactionID = e.addChannelAckReaction(ctx, rt, msg)
-		defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
-	}
-
-	sess, conv, created, err := rt.session(ctx, msg)
-	if err != nil {
-		e.log.Error("start channel session", "channel", rt.channel.Name, "err", err)
-		e.emit(ctx, HookError, withError(data, err))
-		if replyErr := rt.platform.Reply(ctx, msg, "failed to start agent session: "+err.Error()); replyErr != nil {
-			e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
-		}
-		return
-	}
-	data["agent_id"] = rt.workspace.AgentID
-	data["runtime_id"] = rt.workspace.RuntimeID
-	if rt.agent != nil {
-		data["agent_name"] = rt.agent.Name()
-	}
-	data["session_id"] = sessionObservationID(sess)
-	if conv != nil {
-		data["conversation_id"] = conv.ID
-	}
-	rt.attachRemoteSession(ResolveConversationKey(msg), sess, conv)
-	rt.decorateRemoteTaskData(ResolveConversationKey(msg), data)
-	if created {
-		e.emit(ctx, HookSessionStarted, data)
-	}
-	defer e.persistConversationTurn(ctx, conv, sess)
-	defaults := rt.runtimeDefaults()
-	if e.handleRuntimeSettingsAction(ctx, sess, msg, &defaults, rt.workspace.AgentID, func(state RuntimeSettingsPickerState) bool {
-		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
-		if !ok {
-			return false
-		}
-		if err := picker.UpdateRuntimeSettingsPicker(ctx, msg, state); err != nil {
-			e.log.Error("channel runtime settings picker update", "channel", rt.channel.Name, "err", err)
-			return false
-		}
-		return true
-	}, func(text string) {
-		if err := rt.platform.Reply(ctx, msg, text); err != nil {
-			e.log.Error("channel runtime settings reply", "channel", rt.channel.Name, "err", err)
-		}
-	}) {
-		if msg.RuntimeSettingsAction != nil && msg.RuntimeSettingsAction.Scope == RuntimeSettingsScopeAgent {
-			rt.setRuntimeDefaults(defaults)
-		}
-		e.emit(ctx, HookMessageSent, data)
-		return
-	}
-	if e.handleRuntimeSettingsCommand(sess, msg.Text, func(text string) {
-		if err := rt.platform.Reply(ctx, msg, text); err != nil {
-			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
-		}
-	}, func(state RuntimeSettingsPickerState) bool {
-		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
-		if !ok {
-			return false
-		}
-		state.AgentDefaultsEditable = rt.workspace.AgentID != "" && !strings.HasPrefix(rt.workspace.AgentID, "config:") && e.runtimeSettingsDefaults != nil
-		state.RuntimeDefaults = defaults
-		if err := picker.ReplyRuntimeSettingsPicker(ctx, msg, state); err != nil {
-			e.log.Error("channel runtime settings picker reply", "channel", rt.channel.Name, "err", err)
-			return false
-		}
-		return true
-	}, func(state ModelPickerState) bool {
-		mp, ok := rt.platform.(ModelPickerReplier)
-		if !ok {
-			return false
-		}
-		if err := mp.ReplyModelPicker(ctx, msg, state); err != nil {
-			e.log.Error("channel model picker reply", "channel", rt.channel.Name, "err", err)
-			return false
-		}
-		return true
-	}) {
-		e.emit(ctx, HookMessageSent, data)
-		return
-	}
-
-	agentMsg := channelMessageForAgent(rt.channel, msg)
-	mode, ok := channelReplyMode(rt.channel)
-	if rt.remoteControlEnabled() && data["task_id"] != "" && isFeishuLikeChannel(rt.channel.Type) {
-		// Codex remote-control tasks always use one durable status card in
-		// Feishu/Lark. The classic reply_mode remains unchanged for ordinary
-		// channels and runtime/model control messages.
-		mode, ok = ReplyModeStreamCard, true
-	}
-	if !ok {
-		e.log.Warn("unknown channel reply mode, falling back to stream_message", "channel", rt.channel.Name, "mode", rt.channel.Config[ChannelConfigReplyMode])
-	}
-	if mode == ReplyModeStreamCard {
-		if sr, ok := rt.platform.(StreamReplier); ok {
-			e.streamTurnCard(ctx, sr, sess, agentMsg, data)
-			e.emit(ctx, HookMessageSent, data)
-			return
-		}
-		e.log.Warn("channel reply mode stream_card not supported, falling back to stream_message", "channel", rt.channel.Name, "type", rt.channel.Type)
-	}
-	if mr, ok := rt.platform.(StreamMessageReplier); ok {
-		e.streamTurnMessage(ctx, mr, sess, agentMsg, data)
-		e.emit(ctx, HookMessageSent, data)
-		return
-	}
-
-	_, _ = e.streamTurn(ctx, sess, agentMsg.Text, func(text string) {
-		if err := rt.platform.Reply(ctx, msg, text); err != nil {
-			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
-		}
-	}, data)
-	e.emit(ctx, HookMessageSent, data)
-}
-
-func (e *Engine) addChannelAckReaction(ctx context.Context, rt *channelRuntime, msg *Message) string {
-	if rt == nil || msg == nil || msg.ID == "" || !channelAckReactionEnabled(rt.channel) {
-		return ""
-	}
-	reacter, ok := rt.platform.(MessageReactioner)
-	if !ok {
-		return ""
-	}
-	emoji := chooseAckReactionEmoji(rt.channel)
-	if emoji == "" {
-		return ""
-	}
-	reactionID, err := reacter.AddReaction(ctx, msg, emoji)
-	if err != nil {
-		e.log.Warn("add channel ack reaction", "channel", rt.channel.Name, "message_id", msg.ID, "emoji", emoji, "err", err)
-		return ""
-	}
-	return reactionID
-}
-
-func (e *Engine) deleteChannelAckReaction(ctx context.Context, rt *channelRuntime, msg *Message, reactionID string) {
-	if reactionID == "" || rt == nil || msg == nil {
-		return
-	}
-	reacter, ok := rt.platform.(MessageReactioner)
-	if !ok {
-		return
-	}
-	if err := reacter.DeleteReaction(ctx, msg, reactionID); err != nil {
-		e.log.Warn("delete channel ack reaction", "channel", rt.channel.Name, "message_id", msg.ID, "reaction_id", reactionID, "err", err)
-	}
-}
-
-// handleConversationCommand intercepts control commands like /new and /clear
-// that end the active conversation for a chat (soft delete) so the next
-// message starts fresh. It reports whether the message was a command and was
-// handled (and thus should not be forwarded to the agent).
-func (e *Engine) handleConversationCommand(ctx context.Context, rt *channelRuntime, msg *Message) bool {
-	if !isConversationCommand(msg.Text) {
-		return false
-	}
-	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, ResolveConversationKey(msg), rt.workspace.AgentID, rt.dropSession)
-	if replyErr := rt.platform.Reply(ctx, msg, conversationResetReply); replyErr != nil {
-		e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
-	}
-	return true
-}
-
-func isFeishuLikeChannel(typ string) bool {
-	return typ == "feishu" || typ == "lark"
-}
-
-func channelReplyScope(ch Channel) string {
-	switch strings.TrimSpace(ch.Config[ChannelConfigReplyScope]) {
-	case ReplyScopeAll:
-		return ReplyScopeAll
-	case ReplyScopeMentionsOnly:
-		return ReplyScopeMentionsOnly
-	default:
-		return ReplyScopeDMAndMentions
-	}
-}
-
-func channelReplyMode(ch Channel) (string, bool) {
-	switch strings.TrimSpace(ch.Config[ChannelConfigReplyMode]) {
-	case "", ReplyModeStreamMessage:
-		return ReplyModeStreamMessage, true
-	case ReplyModeStreamCard:
-		return ReplyModeStreamCard, true
-	default:
-		return ReplyModeStreamMessage, false
-	}
-}
-
-func channelAckReactionEnabled(ch Channel) bool {
-	if !isFeishuLikeChannel(ch.Type) {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(ch.Config[ChannelConfigAckReaction])) {
-	case "", "true", "1", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func chooseAckReactionEmoji(ch Channel) string {
-	raw := strings.TrimSpace(ch.Config[ChannelConfigAckReactionEmojis])
-	if raw == "" {
-		raw = DefaultAckReactionEmojis
-	}
-	parts := strings.Split(raw, ",")
-	emojis := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if emoji := strings.TrimSpace(part); emoji != "" {
-			emojis = append(emojis, emoji)
-		}
-	}
-	if len(emojis) == 0 {
-		return ""
-	}
-	return emojis[rand.Intn(len(emojis))]
 }

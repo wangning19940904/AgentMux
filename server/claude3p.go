@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -21,7 +20,7 @@ func (s *Server) handleClaude3PStatus(w http.ResponseWriter, r *http.Request) {
 	p, _ := s.defaultClaudeDesktopProvider(r.Context())
 	status, err := providerpkg.ClaudeDesktopStatus(p)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	attachClaude3PProvider(&status, p)
@@ -30,24 +29,23 @@ func (s *Server) handleClaude3PStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClaude3PToggle(w http.ResponseWriter, r *http.Request) {
 	var req claude3PToggleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 
 	if req.Enabled {
 		p, err := s.claudeDesktopProvider(r.Context(), req.ProviderID)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := s.provider.Switch(r.Context(), p.ID, claudeDesktopTool); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		status, err := providerpkg.ClaudeDesktopStatus(p)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		attachClaude3PProvider(&status, p)
@@ -58,12 +56,12 @@ func (s *Server) handleClaude3PToggle(w http.ResponseWriter, r *http.Request) {
 	p, _ := s.defaultClaudeDesktopProvider(r.Context())
 	status, err := providerpkg.DisableClaudeDesktopConfig(p)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if s.st != nil {
 		if err := s.st.ClearActiveProvider(r.Context(), claudeDesktopTool); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}

@@ -281,10 +281,6 @@ func suppressHiddenReasoningContent(envelope core.ObservationEnvelope) bool {
 	return false
 }
 
-func (r *ObservationRecorder) Handler(ctx context.Context, envelope core.ObservationEnvelope) error {
-	return r.Observe(ctx, envelope)
-}
-
 func (r *ObservationRecorder) referenceObservationPayload(eventID string, content core.ObservationContent, contentTime time.Time) (*core.ObservationPayloadRef, error) {
 	source := content.Source
 	if source == nil || source.Storage != core.ObservationPayloadStorageTranscriptFile {

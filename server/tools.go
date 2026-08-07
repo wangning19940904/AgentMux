@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -57,13 +56,12 @@ type cliInstallRequest struct {
 
 func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
 	var req cliInstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cli id is required"})
+		writeErr(w, http.StatusBadRequest, "cli id is required")
 		return
 	}
 	res := toolpkg.InstallCLI(r.Context(), id, strings.TrimSpace(req.Action))
@@ -72,13 +70,12 @@ func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCLICheck(w http.ResponseWriter, r *http.Request) {
 	var req cliInstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cli id is required"})
+		writeErr(w, http.StatusBadRequest, "cli id is required")
 		return
 	}
 	res := toolpkg.CheckCLIUpdate(r.Context(), id)
@@ -87,13 +84,12 @@ func (s *Server) handleCLICheck(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCLISkillSync(w http.ResponseWriter, r *http.Request) {
 	var req cliInstallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cli id is required"})
+		writeErr(w, http.StatusBadRequest, "cli id is required")
 		return
 	}
 	res := toolpkg.SyncCLILinkedSkills(r.Context(), id)

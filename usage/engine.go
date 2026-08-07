@@ -48,7 +48,7 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 	e.collectMu.Lock()
 	defer e.collectMu.Unlock()
 	for _, src := range e.cfg.Usage.Sources {
-		col, err := parser.NewCollector(src, "", nil)
+		col, err := parser.NewCollector(src, "")
 		if err != nil {
 			e.log.Warn("skip source", "source", src, "err", err)
 			continue

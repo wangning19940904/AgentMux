@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -157,7 +156,7 @@ func (s *Store) MigrateSQLite(ctx context.Context, options SQLiteMigrationOption
 		if item.Selected == 0 {
 			continue
 		}
-		columns, err := sqlitePostgresCommonColumns(ctx, sourceDB, s.db.DB, item.Name)
+		columns, columnTypes, err := sqlitePostgresCommonColumns(ctx, sourceDB, s.db.DB, item.Name)
 		if err != nil {
 			return report, err
 		}
@@ -182,10 +181,10 @@ func (s *Store) MigrateSQLite(ctx context.Context, options SQLiteMigrationOption
 				return report, fmt.Errorf("scan sqlite table %s: %w", item.Name, err)
 			}
 			for column, value := range values {
-				if bytesValue, ok := value.([]byte); ok && bytesValue == nil {
-					// modernc SQLite represents a zero-length BLOB as a typed
-					// nil slice. pgx otherwise encodes that as SQL NULL.
-					values[column] = []byte{}
+				values[column], err = normalizeSQLiteMigrationValue(columnTypes[columns[column]], value)
+				if err != nil {
+					rows.Close()
+					return report, fmt.Errorf("convert sqlite %s.%s: %w", item.Name, columns[column], err)
 				}
 			}
 			batch = append(batch, values)
@@ -293,10 +292,12 @@ func createSQLiteBackup(ctx context.Context, source, destination string) error {
 	return nil
 }
 
-func sqlitePostgresCommonColumns(ctx context.Context, source, target *sql.DB, table string) ([]string, error) {
+func sqlitePostgresCommonColumns(
+	ctx context.Context, source, target *sql.DB, table string,
+) ([]string, map[string]string, error) {
 	rows, err := source.QueryContext(ctx, `PRAGMA table_info(`+quoteIdentifier(table)+`)`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sourceColumns := map[string]bool{}
 	for rows.Next() {
@@ -305,28 +306,65 @@ func sqlitePostgresCommonColumns(ctx context.Context, source, target *sql.DB, ta
 		var defaultValue any
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			rows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		sourceColumns[name] = true
 	}
 	rows.Close()
-	targetRows, err := target.QueryContext(ctx, `SELECT column_name FROM information_schema.columns
+	targetRows, err := target.QueryContext(ctx, `SELECT column_name, data_type FROM information_schema.columns
 		WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, table)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer targetRows.Close()
 	var columns []string
+	columnTypes := map[string]string{}
 	for targetRows.Next() {
-		var name string
-		if err := targetRows.Scan(&name); err != nil {
-			return nil, err
+		var name, dataType string
+		if err := targetRows.Scan(&name, &dataType); err != nil {
+			return nil, nil, err
 		}
 		if sourceColumns[name] {
 			columns = append(columns, name)
+			columnTypes[name] = dataType
 		}
 	}
-	return columns, targetRows.Err()
+	return columns, columnTypes, targetRows.Err()
+}
+
+func normalizeSQLiteMigrationValue(postgresType string, value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if postgresType != "boolean" {
+		if bytesValue, ok := value.([]byte); ok && bytesValue == nil {
+			// modernc SQLite represents a zero-length BLOB as a typed nil
+			// slice. pgx otherwise encodes that as SQL NULL.
+			return []byte{}, nil
+		}
+		return value, nil
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, nil
+	case int64:
+		return typed != 0, nil
+	case float64:
+		return typed != 0, nil
+	case []byte:
+		return normalizeSQLiteMigrationValue(postgresType, string(typed))
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "1", "t", "true", "yes", "on":
+			return true, nil
+		case "0", "f", "false", "no", "off":
+			return false, nil
+		default:
+			return nil, fmt.Errorf("cannot convert %q to boolean", typed)
+		}
+	default:
+		return nil, fmt.Errorf("cannot convert %T to boolean", value)
+	}
 }
 
 func (s *Store) copyPostgresBatch(ctx context.Context, table string, columns []string, rows [][]any) (int64, error) {
@@ -399,8 +437,4 @@ func joinQuotedIdentifiers(values []string) string {
 		quoted[index] = quoteIdentifier(value)
 	}
 	return strings.Join(quoted, ",")
-}
-
-func sortMigrationTables(report *SQLiteMigrationReport) {
-	sort.SliceStable(report.Tables, func(i, j int) bool { return report.Tables[i].Name < report.Tables[j].Name })
 }

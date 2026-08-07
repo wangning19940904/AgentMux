@@ -82,6 +82,37 @@ func TestSessionArgsIncludeSelectedEffort(t *testing.T) {
 	t.Fatalf("args missing selected effort: %#v", got)
 }
 
+func TestSessionArgsMapApprovalMode(t *testing.T) {
+	s, err := newSessionResume(&Agent{
+		defaultApprovalMode:    core.ApprovalModeManual,
+		supportedApprovalModes: core.ApprovalModeValuesForRuntime("claudecode"),
+	}, "/tmp/work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeYolo); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.args("hello"); !containsPair(got, "--dangerously-skip-permissions", "hello") {
+		t.Fatalf("YOLO args = %#v", got)
+	}
+	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeAutoEdit); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.args("hello"); !containsPair(got, "--permission-mode", "acceptEdits") {
+		t.Fatalf("auto-edit args = %#v", got)
+	}
+}
+
+func containsPair(values []string, first, second string) bool {
+	for index := 0; index+1 < len(values); index++ {
+		if values[index] == first && values[index+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStreamMapperEmitsToolUse(t *testing.T) {
 	m := &streamMapper{}
 	// An assistant message that both invokes a tool and carries no text should

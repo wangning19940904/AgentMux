@@ -3,30 +3,7 @@ import { AlertTriangle, Bell, CheckCircle2, Clock, Power, PowerOff, RefreshCw, S
 import { api, Provider, ProviderMonitorAlert, ProviderMonitorConfig } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-
-// providerProtocol reports the upstream wire protocol a provider speaks. With
-// the unified translation layer a provider only declares its own protocol; the
-// proxy adapts it to whatever tool routes to it.
-function providerProtocol(provider: Provider): string {
-  const format = provider.meta?.api_format;
-  return typeof format === "string" && format ? format : "anthropic";
-}
-
-// defaultToolForProvider picks the natural tool entry for a provider's protocol
-// so the one-click switch button has a sensible target. Any tool can still be
-// routed to any provider via the routing UI.
-function defaultToolForProvider(provider: Provider): string {
-  switch (providerProtocol(provider)) {
-    case "openai_chat":
-    case "openai_responses":
-      return "codex";
-    case "gemini":
-    case "gemini_native":
-      return "gemini";
-    default:
-      return "claudecode";
-  }
-}
+import { usePolling } from "../hooks/usePolling";
 
 function claudeDesktopModelList(provider?: Provider) {
   const models = provider?.meta?.claude_desktop_models;
@@ -80,7 +57,6 @@ function formatMonitorTime(value?: string) {
 export function ProvidersPanel() {
   const { t } = useI18n();
   const providers = useAsync(() => api.providers(), []);
-  const presets = useAsync(() => api.presets(), []);
   const claude3p = useAsync(() => api.claude3pStatus(), []);
   const monitor = useAsync(() => api.providerMonitor(), []);
   const [busy, setBusy] = useState<string | null>(null);
@@ -121,35 +97,7 @@ export function ProvidersPanel() {
     if (monitor.data?.config) setMonitorConfig(monitor.data.config);
   }, [monitor.data?.config]);
 
-  useEffect(() => {
-    if (!monitorConfig.enabled) return;
-    const timer = window.setInterval(() => {
-      void monitor.reload();
-    }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [monitor.reload, monitorConfig.enabled]);
-
-  async function importPreset(p: Provider) {
-    setBusy(p.id);
-    try {
-      await api.upsertProvider(p);
-      providers.reload();
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function switchTo(p: Provider) {
-    const tool = defaultToolForProvider(p);
-    setBusy(p.id);
-    try {
-      await api.switchProvider(p.id, tool);
-      claude3p.reload();
-      providers.reload();
-    } finally {
-      setBusy(null);
-    }
-  }
+  usePolling(monitor.reload, 30_000, { enabled: monitorConfig.enabled });
 
   async function saveClaudeModelMapping() {
     if (!selectedClaudeProviderData) return;
@@ -238,22 +186,20 @@ export function ProvidersPanel() {
     const models = alert.models?.join(", ") || alert.model || "—";
     switch (alert.type) {
       case "new_models":
-        return t("providers.monitorNewModels")
-          .replace("{provider}", alert.provider_name)
-          .replace("{models}", models);
+        return t("providers.monitorNewModels", { provider: alert.provider_name, models });
       case "removed_models":
-        return t("providers.monitorRemovedModels")
-          .replace("{provider}", alert.provider_name)
-          .replace("{models}", models);
+        return t("providers.monitorRemovedModels", { provider: alert.provider_name, models });
       case "model_error":
-        return t("providers.monitorModelError")
-          .replace("{provider}", alert.provider_name)
-          .replace("{model}", alert.model || "—")
-          .replace("{error}", alert.message || "—");
+        return t("providers.monitorModelError", {
+          provider: alert.provider_name,
+          model: alert.model || "—",
+          error: alert.message || "—",
+        });
       default:
-        return t("providers.monitorProviderError")
-          .replace("{provider}", alert.provider_name)
-          .replace("{error}", alert.message || "—");
+        return t("providers.monitorProviderError", {
+          provider: alert.provider_name,
+          error: alert.message || "—",
+        });
     }
   }
 
@@ -291,7 +237,7 @@ export function ProvidersPanel() {
                 <span>
                   <Bell size={15} />
                   <strong>
-                    {t("providers.monitorAlerts").replace("{count}", String(monitor.data?.alerts.length ?? 0))}
+                    {t("providers.monitorAlerts", { count: monitor.data?.alerts.length ?? 0 })}
                   </strong>
                 </span>
                 <button
@@ -425,11 +371,12 @@ export function ProvidersPanel() {
                   <span>
                     <strong>{status.provider_name}</strong>
                     <small>
-                      {t("providers.monitorCatalogCount").replace("{count}", String(status.catalog_count))}
+                      {t("providers.monitorCatalogCount", { count: status.catalog_count })}
                       {status.checked_models > 0
-                        ? ` · ${t("providers.monitorHealthCount")
-                            .replace("{healthy}", String(status.healthy_models))
-                            .replace("{total}", String(status.checked_models))}`
+                        ? ` · ${t("providers.monitorHealthCount", {
+                            healthy: status.healthy_models,
+                            total: status.checked_models,
+                          })}`
                         : ""}
                     </small>
                     {status.message && <small title={status.message}>{status.message}</small>}
@@ -548,107 +495,6 @@ export function ProvidersPanel() {
         </div>
       </section>
 
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("providers.configured")}</h2>
-          <span className="pill on">{providers.data?.length ?? 0}</span>
-        </div>
-        {providers.error && <div className="surface-body error">{providers.error}</div>}
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("common.name")}</th>
-                <th>{t("providers.protocol")}</th>
-                <th>{t("providers.model")}</th>
-                <th>{t("common.status")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(providers.data ?? []).map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <span className="provider-name">
-                      <span className="provider-icon">{p.name.slice(0, 1).toUpperCase()}</span>
-                      {p.name}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="pill">{providerProtocol(p)}</span>
-                  </td>
-                  <td className="muted">{p.model || "—"}</td>
-                  <td>
-                    {p.enabled ? (
-                      <span className="status-badge success">
-                        <span className="status-dot" />
-                        {t("common.enabled")}
-                      </span>
-                    ) : (
-                      <span className="status-badge">
-                        <span className="status-dot" />
-                        {t("common.idle")}
-                      </span>
-                    )}
-                  </td>
-                  <td>
-                    <button className="action" disabled={busy === p.id} onClick={() => switchTo(p)}>
-                      {t("providers.switch")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {providers.data?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty-state">
-                    {t("providers.empty")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("providers.presets")}</h2>
-          <span className="pill">{presets.data?.length ?? 0}</span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("common.name")}</th>
-                <th>{t("providers.protocol")}</th>
-                <th>{t("providers.baseUrl")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(presets.data ?? []).map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <span className="provider-name">
-                      <span className="provider-icon">{p.name.slice(0, 1).toUpperCase()}</span>
-                      {p.name}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="pill">{providerProtocol(p)}</span>
-                  </td>
-                  <td className="muted mono">{p.base_url}</td>
-                  <td>
-                    <button className="action" disabled={busy === p.id} onClick={() => importPreset(p)}>
-                      {t("providers.import")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }

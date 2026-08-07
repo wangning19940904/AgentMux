@@ -9,6 +9,11 @@ import (
 // reasoning dominate the answer on narrow mobile screens.
 const progressPreviewRunes = 120
 
+const (
+	toolInputPreviewRunes  = 96
+	toolResultPreviewRunes = 120
+)
+
 // toolStep records one tool invocation and, once known, a short result summary.
 type toolStep struct {
 	id     string
@@ -26,12 +31,8 @@ type toolProgress struct {
 	steps []toolStep
 }
 
-// add records a new tool invocation and returns its index so a later result can
-// be attached to it.
-func (t *toolProgress) add(name, input string) int {
-	return t.addWithID("", name, input)
-}
-
+// addWithID records a new tool invocation and returns its index so a later
+// result can be attached to it. The adapter's stable call id may be empty.
 func (t *toolProgress) addWithID(id, name, input string) int {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -41,15 +42,9 @@ func (t *toolProgress) addWithID(id, name, input string) int {
 	return len(t.steps) - 1
 }
 
-// attachResult records a result summary for the most recent step lacking one
-// (Claude's tool_result frames arrive after the matching tool_use and carry no
-// reliable id we can map, so newest-open-step ordering is the best heuristic).
-func (t *toolProgress) attachResult(result string, failed bool) {
-	t.attachResultForID("", result, failed)
-}
-
 // attachResultForID uses the adapter's stable call id when available, falling
-// back to newest-open ordering for partial generic CLIs.
+// back to newest-open ordering (Claude's tool_result frames arrive after the
+// matching tool_use without a reliable id, so newest-open is the heuristic).
 func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 	result = strings.TrimSpace(result)
 	if id = strings.TrimSpace(id); id != "" {
@@ -74,6 +69,22 @@ func (t *toolProgress) attachResultForID(id, result string, failed bool) {
 
 // empty reports whether any tool step has been recorded.
 func (t *toolProgress) empty() bool { return len(t.steps) == 0 }
+
+// settledSuccessfully reports whether the turn ran at least one tool and every
+// recorded invocation reached a successful terminal state. It is deliberately
+// stricter than "no failures": an open/backgrounded tool must not make a later
+// transport error look harmless.
+func (t *toolProgress) settledSuccessfully() bool {
+	if len(t.steps) == 0 {
+		return false
+	}
+	for _, step := range t.steps {
+		if !step.done || step.failed {
+			return false
+		}
+	}
+	return true
+}
 
 // render returns the full card body with the answer first and execution context
 // reduced to compact summaries below it. Raw commands, tool results, and the
@@ -118,9 +129,9 @@ func renderThinkingSummary(thinking string, done bool) string {
 	return fmt.Sprintf("> <font color=grey>%s</font>\n> <font color=grey>最新：%s</font>", header, preview)
 }
 
-// renderToolSummary replaces raw command lines and output with a fixed-height
-// overview. The latest tool name provides orientation without leaking a large
-// invocation into the card.
+// renderToolSummary replaces raw command lines and output with a compact
+// overview. The latest tool keeps a bounded invocation and result preview so
+// a folded card still explains what ran and what happened.
 func renderToolSummary(steps []toolStep, done bool) string {
 	succeeded, failed, running := 0, 0, 0
 	for _, step := range steps {
@@ -137,9 +148,31 @@ func renderToolSummary(steps []toolStep, done bool) string {
 	if !done {
 		header += " · 进行中…"
 	}
-	latest := compactProgressText(steps[len(steps)-1].name, 40, false)
+	step := steps[len(steps)-1]
+	latest := compactProgressText(step.name, 40, false)
 	counts := fmt.Sprintf("✓ %d · ✗ %d · ⏳ %d · 最近：%s", succeeded, failed, running, latest)
-	return fmt.Sprintf("> <font color=grey>%s</font>\n> <font color=grey>%s</font>", header, counts)
+	input := "无参数"
+	if step.input != "" {
+		input = compactProgressText(step.input, toolInputPreviewRunes, false)
+	}
+	result := "执行中…"
+	if step.done {
+		result = "已完成（无返回内容）"
+		if step.failed {
+			result = "执行失败（无返回内容）"
+		}
+		if step.result != "" {
+			result = compactProgressText(step.result, toolResultPreviewRunes, false)
+		}
+	}
+	return fmt.Sprintf(
+		"> <font color=grey>%s</font>\n> <font color=grey>%s</font>\n> <font color=grey>调用摘要：%s</font>\n> <font color=grey>结果摘要：%s</font>",
+		header, counts, escapeProgressMarkup(input), escapeProgressMarkup(result),
+	)
+}
+
+func escapeProgressMarkup(value string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(value)
 }
 
 func compactProgressText(value string, limit int, keepEnd bool) string {

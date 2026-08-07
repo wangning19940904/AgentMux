@@ -20,12 +20,12 @@ func (s *Server) handleFeishuSetupBegin(w http.ResponseWriter, r *http.Request) 
 
 	initResp, err := feishuRegistrationCall(client, feishuAccountsBaseURL, "init", nil)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "feishu init: " + err.Error()})
+		writeErr(w, http.StatusBadGateway, "feishu init: " + err.Error())
 		return
 	}
 	if errMsg, _ := initResp["error"].(string); errMsg != "" {
 		desc, _ := initResp["error_description"].(string)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("feishu init: %s: %s", errMsg, desc)})
+		writeErr(w, http.StatusBadGateway, fmt.Sprintf("feishu init: %s: %s", errMsg, desc))
 		return
 	}
 
@@ -35,12 +35,12 @@ func (s *Server) handleFeishuSetupBegin(w http.ResponseWriter, r *http.Request) 
 		"request_user_info": "open_id",
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "feishu begin: " + err.Error()})
+		writeErr(w, http.StatusBadGateway, "feishu begin: " + err.Error())
 		return
 	}
 	if errMsg, _ := beginResp["error"].(string); errMsg != "" {
 		desc, _ := beginResp["error_description"].(string)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("feishu begin: %s: %s", errMsg, desc)})
+		writeErr(w, http.StatusBadGateway, fmt.Sprintf("feishu begin: %s: %s", errMsg, desc))
 		return
 	}
 
@@ -49,7 +49,7 @@ func (s *Server) handleFeishuSetupBegin(w http.ResponseWriter, r *http.Request) 
 	interval, _ := beginResp["interval"].(float64)
 	expiresIn, _ := beginResp["expire_in"].(float64)
 	if deviceCode == "" || qrURL == "" {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "feishu begin: incomplete response"})
+		writeErr(w, http.StatusBadGateway, "feishu begin: incomplete response")
 		return
 	}
 
@@ -67,17 +67,17 @@ func (s *Server) handleFeishuSetupPoll(w http.ResponseWriter, r *http.Request) {
 		BaseURL    string `json:"base_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		writeErr(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	if strings.TrimSpace(req.DeviceCode) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_code required"})
+		writeErr(w, http.StatusBadRequest, "device_code required")
 		return
 	}
 
 	baseURL, err := normalizeFeishuAccountsBaseURL(req.BaseURL)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -87,7 +87,7 @@ func (s *Server) handleFeishuSetupPoll(w http.ResponseWriter, r *http.Request) {
 			"device_code": req.DeviceCode,
 		})
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "feishu poll: " + err.Error()})
+			writeErr(w, http.StatusBadGateway, "feishu poll: " + err.Error())
 			return
 		}
 

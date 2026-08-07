@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -18,7 +17,7 @@ func (s *Server) handleProxyStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := s.proxySvc.Status(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
@@ -37,7 +36,7 @@ func (s *Server) handleProxyTraces(w http.ResponseWriter, r *http.Request) {
 		limit,
 	)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, traces)
@@ -45,19 +44,18 @@ func (s *Server) handleProxyTraces(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProxyTakeover(w http.ResponseWriter, r *http.Request) {
 	if s.proxySvc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "local routing unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "local routing unavailable")
 		return
 	}
 	var req struct {
 		Tool    string `json:"tool"`
 		Enabled bool   `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	if req.Tool == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tool"})
+		writeErr(w, http.StatusBadRequest, "missing tool")
 		return
 	}
 	var err error
@@ -67,12 +65,12 @@ func (s *Server) handleProxyTakeover(w http.ResponseWriter, r *http.Request) {
 		err = s.proxySvc.DisableTakeover(r.Context(), req.Tool)
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	status, err := s.proxySvc.Status(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
@@ -80,25 +78,24 @@ func (s *Server) handleProxyTakeover(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProxyConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	if s.proxySvc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "local routing unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "local routing unavailable")
 		return
 	}
 	var cfg store.ProxyToolConfig
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &cfg) {
 		return
 	}
 	if cfg.Tool == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing tool"})
+		writeErr(w, http.StatusBadRequest, "missing tool")
 		return
 	}
 	if err := s.proxySvc.SetToolConfig(r.Context(), cfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	status, err := s.proxySvc.Status(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
@@ -106,7 +103,7 @@ func (s *Server) handleProxyConfigUpdate(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleProviderFailover(w http.ResponseWriter, r *http.Request) {
 	if s.proxySvc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "local routing unavailable"})
+		writeErr(w, http.StatusServiceUnavailable, "local routing unavailable")
 		return
 	}
 	var req struct {
@@ -114,17 +111,16 @@ func (s *Server) handleProviderFailover(w http.ResponseWriter, r *http.Request) 
 		InFailoverQueue bool   `json:"in_failover_queue"`
 		SortIndex       int    `json:"sort_index"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	if !decodeJSONInto(w, r, &req) {
 		return
 	}
 	if req.ID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing id"})
+		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
 	if err := s.proxySvc.SetFailoverQueue(r.Context(), req.ID, req.InFailoverQueue, req.SortIndex); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeOK(w)
 }

@@ -32,8 +32,10 @@ type codexAgent struct {
 	defaultModel              string
 	defaultReasoningEffort    string
 	defaultServiceTier        string
+	defaultApprovalMode       string
 	supportedReasoningEfforts []string
 	supportedServiceTiers     []string
+	supportedApprovalModes    []string
 	env                       map[string]string
 	clientMu                  sync.Mutex
 	client                    *codexAppClient
@@ -52,12 +54,22 @@ func newCodexAgent(cfg map[string]any) *codexAgent {
 		a.defaultModel = defaults.Model
 		a.defaultReasoningEffort = defaults.ReasoningEffort
 		a.defaultServiceTier = defaults.ServiceTier
+		a.defaultApprovalMode = defaults.ApprovalMode
 		for _, option := range capabilities.ReasoningEfforts {
 			a.supportedReasoningEfforts = append(a.supportedReasoningEfforts, option.Value)
 		}
 		for _, option := range capabilities.ServiceTiers {
 			a.supportedServiceTiers = append(a.supportedServiceTiers, option.Value)
 		}
+		for _, option := range capabilities.ApprovalModes {
+			a.supportedApprovalModes = append(a.supportedApprovalModes, option.Value)
+		}
+	}
+	if a.defaultApprovalMode == "" {
+		a.defaultApprovalMode = core.ApprovalModeManual
+	}
+	if len(a.supportedApprovalModes) == 0 {
+		a.supportedApprovalModes = core.ApprovalModeValuesForRuntime("codex")
 	}
 	if env, ok := cfg["env"].(map[string]string); ok {
 		a.env = env
@@ -241,9 +253,12 @@ type codexSession struct {
 	currentReasoningEffort    string
 	defaultServiceTier        string
 	currentServiceTier        string
+	defaultApprovalMode       string
+	currentApprovalMode       string
 	supportedModel            []string
 	supportedReasoningEfforts []string
 	supportedServiceTiers     []string
+	supportedApprovalModes    []string
 	modelReasoningEfforts     map[string][]string
 }
 
@@ -257,8 +272,10 @@ func newCodexSession(ctx context.Context, agent *codexAgent, workDir, resumeID s
 		defaultModel:              agent.defaultModel,
 		defaultReasoningEffort:    agent.defaultReasoningEffort,
 		defaultServiceTier:        agent.defaultServiceTier,
+		defaultApprovalMode:       agent.defaultApprovalMode,
 		supportedReasoningEfforts: append([]string(nil), agent.supportedReasoningEfforts...),
 		supportedServiceTiers:     append([]string(nil), agent.supportedServiceTiers...),
+		supportedApprovalModes:    append([]string(nil), agent.supportedApprovalModes...),
 		modelReasoningEfforts:     map[string][]string{},
 		pendingInteractions:       map[string]codexPendingInteraction{},
 		interactionPrefix:         core.NewChannelControlID("app"),
@@ -347,13 +364,14 @@ func (s *codexSession) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabil
 		Models:           core.RuntimeOptions(s.supportedModel),
 		ReasoningEfforts: core.RuntimeOptions(efforts),
 		ServiceTiers:     core.RuntimeOptions(serviceTiers),
+		ApprovalModes:    core.RuntimeOptions(s.supportedApprovalModes),
 	}
 }
 
 func (s *codexSession) CurrentRuntimeSettings() core.RuntimeSettings {
 	s.modelMu.Lock()
 	defer s.modelMu.Unlock()
-	settings := core.RuntimeSettings{Model: s.defaultModel, ReasoningEffort: s.defaultReasoningEffort, ServiceTier: s.defaultServiceTier}
+	settings := core.RuntimeSettings{Model: s.defaultModel, ReasoningEffort: s.defaultReasoningEffort, ServiceTier: s.defaultServiceTier, ApprovalMode: s.defaultApprovalMode}
 	if s.currentModel != "" {
 		settings.Model = s.currentModel
 	}
@@ -363,13 +381,16 @@ func (s *codexSession) CurrentRuntimeSettings() core.RuntimeSettings {
 	if s.currentServiceTier != "" {
 		settings.ServiceTier = s.currentServiceTier
 	}
+	if s.currentApprovalMode != "" {
+		settings.ApprovalMode = s.currentApprovalMode
+	}
 	return settings
 }
 
 func (s *codexSession) DefaultRuntimeSettings() core.RuntimeSettings {
 	s.modelMu.Lock()
 	defer s.modelMu.Unlock()
-	return core.RuntimeSettings{Model: s.defaultModel, ReasoningEffort: s.defaultReasoningEffort, ServiceTier: s.defaultServiceTier}
+	return core.RuntimeSettings{Model: s.defaultModel, ReasoningEffort: s.defaultReasoningEffort, ServiceTier: s.defaultServiceTier, ApprovalMode: s.defaultApprovalMode}
 }
 
 func (s *codexSession) SetRuntimeSetting(setting core.RuntimeSetting, value string) error {
@@ -399,6 +420,8 @@ func (s *codexSession) SetRuntimeSetting(setting core.RuntimeSetting, value stri
 			return nil
 		}
 		options = s.supportedServiceTiers
+	case core.RuntimeSettingApprovalMode:
+		options = s.supportedApprovalModes
 	default:
 		return fmt.Errorf("unknown runtime setting %q", setting)
 	}
@@ -410,8 +433,10 @@ func (s *codexSession) SetRuntimeSetting(setting core.RuntimeSetting, value stri
 	}
 	if setting == core.RuntimeSettingReasoningEffort {
 		s.currentReasoningEffort = value
-	} else {
+	} else if setting == core.RuntimeSettingServiceTier {
 		s.currentServiceTier = value
+	} else {
+		s.currentApprovalMode = value
 	}
 	return nil
 }
@@ -427,6 +452,8 @@ func (s *codexSession) ResetRuntimeSetting(setting core.RuntimeSetting) error {
 		s.currentReasoningEffort = ""
 	case core.RuntimeSettingServiceTier:
 		s.currentServiceTier = ""
+	case core.RuntimeSettingApprovalMode:
+		s.currentApprovalMode = ""
 	default:
 		return fmt.Errorf("unknown runtime setting %q", setting)
 	}
@@ -765,6 +792,29 @@ func (s *codexSession) turnStartParams(threadID, text string) map[string]any {
 	if tier := settings.ServiceTier; tier != "" {
 		params["serviceTier"] = tier
 	}
+	if settings.ApprovalMode != "" {
+		// These overrides are sticky for following turns. Send the ordinary
+		// reviewer explicitly so switching away from auto review really resets it.
+		params["approvalsReviewer"] = "user"
+	}
+	switch settings.ApprovalMode {
+	case core.ApprovalModeManual:
+		params["approvalPolicy"] = "on-request"
+		params["sandbox"] = "readOnly"
+	case core.ApprovalModeAutoEdit:
+		params["approvalPolicy"] = "on-request"
+		params["sandbox"] = "workspaceWrite"
+	case core.ApprovalModeAuto:
+		params["approvalPolicy"] = "on-request"
+		params["sandbox"] = "workspaceWrite"
+		params["approvalsReviewer"] = "auto_review"
+	case core.ApprovalModePlan:
+		params["approvalPolicy"] = "never"
+		params["sandbox"] = "readOnly"
+	case core.ApprovalModeYolo:
+		params["approvalPolicy"] = "never"
+		params["sandbox"] = "dangerFullAccess"
+	}
 	return params
 }
 
@@ -1070,14 +1120,6 @@ func (s *codexSession) withStderr(err error) error {
 		return err
 	}
 	return s.client.withStderr(err)
-}
-
-func codexBuildEnv(extra map[string]string) []string {
-	env := os.Environ()
-	for key, value := range extra {
-		env = append(env, key+"="+value)
-	}
-	return env
 }
 
 type codexEventMapper struct {

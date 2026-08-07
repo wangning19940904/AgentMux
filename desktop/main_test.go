@@ -3,11 +3,19 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 func TestDesktopAssetMiddlewareProxiesAPIOnSameOrigin(t *testing.T) {
@@ -90,5 +98,60 @@ func TestLocalWebUIURLFollowsConfiguredDesktopTarget(t *testing.T) {
 	app.setAPITarget("0.0.0.0:9123")
 	if got := app.localWebUIURL(); got != "http://127.0.0.1:9123" {
 		t.Fatalf("localWebUIURL() = %q", got)
+	}
+}
+
+func TestExternalBrowserURLOnlyAllowsWebLinks(t *testing.T) {
+	got, err := externalBrowserURL(" https://auth.example.test/device?code=one ")
+	if err != nil || got != "https://auth.example.test/device?code=one" {
+		t.Fatalf("externalBrowserURL() = %q, %v", got, err)
+	}
+	for _, raw := range []string{"javascript:alert(1)", "file:///tmp/secret", "https:///missing-host"} {
+		if _, err := externalBrowserURL(raw); err == nil {
+			t.Fatalf("externalBrowserURL(%q) succeeded", raw)
+		}
+	}
+}
+
+func TestWaitForDesktopStoreRecoversAfterDependencyStarts(t *testing.T) {
+	var attempts atomic.Int32
+	want := &store.Store{}
+	opener := func(context.Context, *config.Config) (*store.Store, error) {
+		if attempts.Add(1) < 3 {
+			return nil, errors.New("postgres is starting")
+		}
+		return want, nil
+	}
+
+	got, err := waitForDesktopStore(
+		context.Background(),
+		config.Default(),
+		time.Millisecond,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		opener,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want || attempts.Load() != 3 {
+		t.Fatalf("store = %p, attempts = %d", got, attempts.Load())
+	}
+}
+
+func TestWaitForDesktopStoreStopsWhenDesktopShutsDown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var attempts atomic.Int32
+	opener := func(context.Context, *config.Config) (*store.Store, error) {
+		attempts.Add(1)
+		return nil, errors.New("postgres is unavailable")
+	}
+
+	got, err := waitForDesktopStore(ctx, config.Default(), time.Hour, nil, opener)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if got != nil || attempts.Load() != 1 {
+		t.Fatalf("store = %p, attempts = %d", got, attempts.Load())
 	}
 }

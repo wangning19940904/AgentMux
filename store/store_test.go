@@ -279,6 +279,7 @@ func TestAgentInstanceCRUD(t *testing.T) {
 		DefaultModel:           "gpt-5",
 		DefaultReasoningEffort: "high",
 		DefaultServiceTier:     "priority",
+		DefaultApprovalMode:    core.ApprovalModeAutoEdit,
 		MemoryScope:            "agent:agent-test",
 		Env:                    map[string]string{"CODEX_HOME": "/tmp/codex"},
 		ChannelBindings: []core.AgentChannelBinding{{
@@ -316,14 +317,14 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" {
+	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" || got.DefaultApprovalMode != core.ApprovalModeAutoEdit {
 		t.Fatalf("agent = %+v", got)
 	}
-	if err := st.UpdateAgentRuntimeSettings(ctx, "agent-test", core.RuntimeSettings{Model: "gpt-5-mini", ReasoningEffort: "xhigh", ServiceTier: "default"}); err != nil {
+	if err := st.UpdateAgentRuntimeSettings(ctx, "agent-test", core.RuntimeSettings{Model: "gpt-5-mini", ReasoningEffort: "xhigh", ServiceTier: "default", ApprovalMode: core.ApprovalModeYolo}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = st.GetAgentInstance(ctx, "agent-test")
-	if err != nil || got == nil || got.DefaultModel != "gpt-5-mini" || got.DefaultReasoningEffort != "xhigh" || got.DefaultServiceTier != "default" {
+	if err != nil || got == nil || got.DefaultModel != "gpt-5-mini" || got.DefaultReasoningEffort != "xhigh" || got.DefaultServiceTier != "default" || got.DefaultApprovalMode != core.ApprovalModeYolo {
 		t.Fatalf("updated runtime settings = %+v, err=%v", got, err)
 	}
 	if len(got.ChannelBindings) != 1 || got.ChannelBindings[0].Type != "telegram" {

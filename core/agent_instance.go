@@ -39,6 +39,7 @@ type AgentInstance struct {
 	DefaultModel           string                `json:"default_model,omitempty"`
 	DefaultReasoningEffort string                `json:"default_reasoning_effort,omitempty"`
 	DefaultServiceTier     string                `json:"default_service_tier,omitempty"`
+	DefaultApprovalMode    string                `json:"default_approval_mode,omitempty"`
 	MemoryScope            string                `json:"memory_scope,omitempty"`
 	Env                    map[string]string     `json:"env,omitempty"`
 	ChannelBindings        []AgentChannelBinding `json:"channel_bindings,omitempty"`

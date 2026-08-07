@@ -524,22 +524,6 @@ func (s *Store) recordObservation(ctx context.Context, envelope core.Observation
 	return true, nil
 }
 
-func (s *Store) observationEventRecorded(ctx context.Context, eventID, dedupeKey string) (bool, error) {
-	query := `SELECT 1 FROM observation_events WHERE event_id=?`
-	args := []any{eventID}
-	if strings.TrimSpace(dedupeKey) != "" {
-		query += ` OR dedupe_key=?`
-		args = append(args, dedupeKey)
-	}
-	query += ` LIMIT 1`
-	var found int
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
-}
-
 // observationTraceUsageTx applies the same request/attempt source selection as
 // the long-term Usage materializer while the event transaction is still open.
 // This keeps Trace cards and details from summing internal, OTel and Proxy
@@ -683,10 +667,39 @@ func (s *Store) queryObservationTraces(ctx context.Context, suffix string, args 
 }
 
 func (s *Store) ListObservationSpans(ctx context.Context, traceID string) ([]ObservationSpan, error) {
+	return s.queryObservationSpans(ctx, `trace_id=?`, traceID)
+}
+
+// ListObservationSpansForTraces batch-loads the spans of many traces in one
+// query per chunk, keyed by trace id. It replaces per-trace ListObservationSpans
+// loops (the insight engine walks up to 1000 traces per run).
+func (s *Store) ListObservationSpansForTraces(ctx context.Context, traceIDs []string) (map[string][]ObservationSpan, error) {
+	out := make(map[string][]ObservationSpan, len(traceIDs))
+	// Chunk to stay well below SQLite's host-parameter limit.
+	const chunkSize = 400
+	for start := 0; start < len(traceIDs); start += chunkSize {
+		chunk := traceIDs[start:min(start+chunkSize, len(traceIDs))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		spans, err := s.queryObservationSpans(ctx, `trace_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, span := range spans {
+			out[span.TraceID] = append(out[span.TraceID], span)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) queryObservationSpans(ctx context.Context, where string, args ...any) ([]ObservationSpan, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT span_id,trace_id,parent_span_id,kind,name,sequence,started_at,ended_at,duration_ms,
 		agent_id,runtime_id,conversation_id,session_id,turn_id,source,provenance,quality,status,error_json,model_json,tool_json,payload_id,
 		input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,tool_tokens,total_tokens,cost_usd,attributes,created_at,updated_at
-		FROM observation_spans WHERE trace_id=? ORDER BY sequence,started_at,span_id`, traceID)
+		FROM observation_spans WHERE `+where+` ORDER BY sequence,started_at,span_id`, args...)
 	if err != nil {
 		return nil, err
 	}

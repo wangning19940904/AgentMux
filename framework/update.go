@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -110,10 +109,14 @@ func npmPackageVersion(ctx context.Context, pkg string) (string, error) {
 		runCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, "npm", "view", pkg, "version", "--silent")
+	cmd := frameworkCommandContext(runCtx, "npm", "view", pkg, "version", "--silent")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return strings.TrimSpace(string(out)), err
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			return "", fmt.Errorf("%w: %s", err, detail)
+		}
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -161,7 +164,15 @@ func cursorInstallerVersion(raw string) string {
 var sdkVersionRE = regexp.MustCompile(`\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?`)
 
 func normalizeSDKVersion(raw string) string {
-	return sdkVersionRE.FindString(strings.TrimSpace(raw))
+	matches := sdkVersionRE.FindAllString(strings.TrimSpace(raw), -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		// Framework and npm versions are dotted. Ignoring standalone numbers
+		// prevents a harmless warning such as "os error 2" from becoming v2.
+		if strings.Contains(matches[i], ".") {
+			return matches[i]
+		}
+	}
+	return ""
 }
 
 func sdkVersionGreater(candidate, current string) bool {

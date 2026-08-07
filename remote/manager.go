@@ -26,12 +26,14 @@ type cachedClient struct {
 
 // Manager owns persisted profiles and reusable SSH connections.
 type Manager struct {
-	store   *Store
-	log     *slog.Logger
-	timeout time.Duration
-	install func(context.Context, remoteClient, Host) error
-	mu      sync.Mutex
-	clients map[string]*cachedClient
+	store    *Store
+	log      *slog.Logger
+	timeout  time.Duration
+	install  func(context.Context, remoteClient, Host) error
+	update   func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error)
+	mu       sync.Mutex
+	clients  map[string]*cachedClient
+	updateMu sync.Mutex
 }
 
 type TestResult struct {
@@ -46,6 +48,22 @@ type TestResult struct {
 type ImportResult struct {
 	Host HostView `json:"host"`
 	TestResult
+}
+
+type UpdateResult struct {
+	OK                 bool           `json:"ok"`
+	Name               string         `json:"name"`
+	LatencyMS          int64          `json:"latency_ms"`
+	HostKeyFingerprint string         `json:"host_key_fingerprint"`
+	PreviousVersion    string         `json:"previous_version,omitempty"`
+	Version            string         `json:"version,omitempty"`
+	Platform           string         `json:"platform"`
+	Arch               string         `json:"arch"`
+	SHA256             string         `json:"sha256"`
+	DataPath           string         `json:"data_path"`
+	DatabaseURL        string         `json:"database_url,omitempty"`
+	BackupPath         string         `json:"backup_path,omitempty"`
+	Status             map[string]any `json:"status,omitempty"`
 }
 
 type UnknownHostKeyError struct {
@@ -66,6 +84,7 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 	}
 	return &Manager{
 		store: store, log: log, timeout: timeout, install: installRemoteAgentMux,
+		update:  updateRemoteAgentMux,
 		clients: map[string]*cachedClient{},
 	}, nil
 }
@@ -117,24 +136,10 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 		host.HostKeyFingerprint = existing.HostKeyFingerprint
 	}
 	started := time.Now()
-	client, fingerprint, err := m.dial(ctx, host, trustOnFirstUse)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	keepClient := false
-	defer func() {
-		if !keepClient {
-			_ = client.Close()
-		}
-	}()
-	if host.HostKeyFingerprint == "" {
-		if !trustOnFirstUse {
-			return ImportResult{}, &UnknownHostKeyError{Fingerprint: fingerprint}
-		}
+	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, func(fingerprint string) (Host, error) {
 		host.HostKeyFingerprint = fingerprint
-	}
-
-	status, installed, err := m.ensureService(ctx, client, host)
+		return host, nil
+	})
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -143,10 +148,10 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 	}
 	saved, err := m.store.Upsert(host, false)
 	if err != nil {
+		_ = client.Close()
 		return ImportResult{}, err
 	}
 	m.cache(saved, client)
-	keepClient = true
 	result := TestResult{
 		OK: true, Name: saved.Name, LatencyMS: time.Since(started).Milliseconds(),
 		HostKeyFingerprint: saved.HostKeyFingerprint, Status: status, Installed: installed,
@@ -160,35 +165,124 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
-	client, fingerprint, err := m.dial(ctx, host, trustOnFirstUse)
+	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, func(fingerprint string) (Host, error) {
+		return m.store.SetHostKeyFingerprint(id, fingerprint)
+	})
 	if err != nil {
 		return TestResult{}, err
 	}
-	keepClient := false
+	m.cache(host, client)
+	return TestResult{
+		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
+		HostKeyFingerprint: host.HostKeyFingerprint, Status: status, Installed: installed,
+	}, nil
+}
+
+// verifyHost dials the host, enforces host-key trust (pin persists a newly
+// trusted fingerprint) and ensures the remote AgentMux service is reachable,
+// installing it when absent. On success ownership of the returned client
+// passes to the caller, who must cache or close it.
+func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse bool, pin func(fingerprint string) (Host, error)) (Host, remoteClient, map[string]any, bool, error) {
+	client, fingerprint, err := m.dial(ctx, host, trustOnFirstUse)
+	if err != nil {
+		return host, nil, nil, false, err
+	}
+	verified := false
 	defer func() {
-		if !keepClient {
+		if !verified {
 			_ = client.Close()
 		}
 	}()
 	if host.HostKeyFingerprint == "" {
 		if !trustOnFirstUse {
-			return TestResult{}, &UnknownHostKeyError{Fingerprint: fingerprint}
+			return host, nil, nil, false, &UnknownHostKeyError{Fingerprint: fingerprint}
 		}
-		host, err = m.store.SetHostKeyFingerprint(id, fingerprint)
+		host, err = pin(fingerprint)
 		if err != nil {
-			return TestResult{}, err
+			return host, nil, nil, false, err
 		}
 	}
 	status, installed, err := m.ensureService(ctx, client, host)
 	if err != nil {
+		return host, nil, nil, false, err
+	}
+	verified = true
+	return host, client, status, installed, nil
+}
+
+// Status reads the remote health endpoint without installing, updating, or
+// restarting anything. The Console uses it to show live versions in the host
+// list as soon as the page opens.
+func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
+	host, ok := m.store.Get(id)
+	if !ok {
+		return TestResult{}, os.ErrNotExist
+	}
+	started := time.Now()
+	client, err := m.client(ctx, host)
+	if err != nil {
 		return TestResult{}, err
 	}
-	m.cache(host, client)
-	keepClient = true
+	status, err := requestStatus(ctx, client, host)
+	if err != nil {
+		return TestResult{}, err
+	}
 	return TestResult{
 		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
-		HostKeyFingerprint: host.HostKeyFingerprint, Status: status, Installed: installed,
+		HostKeyFingerprint: host.HostKeyFingerprint, Status: status,
 	}, nil
+}
+
+// Update replaces the remote CLI with the binary bundled in the local Console,
+// migrates a legacy SQLite store into PostgreSQL, and takes a backup. Only one
+// update is allowed at a time so repeated button clicks cannot race service
+// stop/start operations.
+func (m *Manager) Update(ctx context.Context, id string) (UpdateResult, error) {
+	m.updateMu.Lock()
+	defer m.updateMu.Unlock()
+
+	host, ok := m.store.Get(id)
+	if !ok {
+		return UpdateResult{}, os.ErrNotExist
+	}
+	if m.update == nil {
+		return UpdateResult{}, errors.New("remote AgentMux updates are unavailable")
+	}
+	started := time.Now()
+	client, err := m.client(ctx, host)
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	previousStatus, _ := requestStatus(ctx, client, host)
+	artifact, err := m.update(ctx, client, host)
+	if err != nil {
+		return UpdateResult{}, fmt.Errorf("update remote AgentMux: %w", err)
+	}
+
+	status, err := waitForStatus(ctx, client, host, 20*time.Second, "verify updated remote AgentMux")
+	if err != nil {
+		return UpdateResult{}, err
+	}
+	version := artifact.Version
+	if version == "" {
+		version = statusVersion(status)
+	}
+	return UpdateResult{
+		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
+		HostKeyFingerprint: host.HostKeyFingerprint,
+		PreviousVersion:    statusVersion(previousStatus), Version: version,
+		Platform: artifact.Platform, Arch: artifact.Arch, SHA256: artifact.SHA256,
+		DataPath: artifact.DataPath, DatabaseURL: artifact.DatabaseURL,
+		BackupPath: artifact.BackupPath, Status: status,
+	}, nil
+}
+
+func statusVersion(status map[string]any) string {
+	if status == nil {
+		return ""
+	}
+	version, _ := status["version"].(string)
+	return strings.TrimSpace(version)
 }
 
 func (m *Manager) ensureService(ctx context.Context, client remoteClient, host Host) (map[string]any, bool, error) {
@@ -209,24 +303,11 @@ func (m *Manager) ensureService(ctx context.Context, client remoteClient, host H
 	if installErr := m.install(ctx, client, host); installErr != nil {
 		return nil, false, fmt.Errorf("install remote AgentMux: %w", installErr)
 	}
-	deadline := time.Now().Add(12 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		status, lastErr = requestStatus(ctx, client, host)
-		if lastErr == nil {
-			return status, true, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		case <-time.After(300 * time.Millisecond):
-		}
+	status, err = waitForStatus(ctx, client, host, 12*time.Second, "start remote AgentMux")
+	if err != nil {
+		return nil, false, err
 	}
-	logText, _ := remoteAgentMuxLog(ctx, client)
-	if logText != "" {
-		return nil, false, fmt.Errorf("start remote AgentMux: %v; remote log: %s", lastErr, logText)
-	}
-	return nil, false, fmt.Errorf("start remote AgentMux: %w", lastErr)
+	return status, true, nil
 }
 
 // ServiceUnavailableError means the SSH connection succeeded but nothing
@@ -239,14 +320,25 @@ func (e *ServiceUnavailableError) Error() string { return "reach remote AgentMux
 func (e *ServiceUnavailableError) Unwrap() error { return e.Err }
 
 func requestStatus(ctx context.Context, client remoteClient, host Host) (map[string]any, error) {
-	transport := &http.Transport{
+	transport := statusTransport(client, host)
+	defer transport.CloseIdleConnections()
+	return requestStatusVia(ctx, transport, host)
+}
+
+// statusTransport tunnels HTTP through the SSH client with keep-alives on so
+// polling loops reuse one tunneled connection instead of re-dialing per probe.
+func statusTransport(client remoteClient, host Host) *http.Transport {
+	return &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return client.DialContext(ctx, network, host.RemoteAddr)
 		},
-		DisableKeepAlives: true,
+		MaxIdleConns:    1,
+		IdleConnTimeout: 30 * time.Second,
 	}
-	defer transport.CloseIdleConnections()
+}
+
+func requestStatusVia(ctx context.Context, transport *http.Transport, host Host) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host.RemoteAddr+"/api/v1/status", nil)
 	if err != nil {
 		return nil, err
@@ -268,6 +360,32 @@ func requestStatus(ctx context.Context, client remoteClient, host Host) (map[str
 		return nil, fmt.Errorf("decode remote status: %w", err)
 	}
 	return status, nil
+}
+
+// waitForStatus polls the remote status endpoint until it answers or the
+// timeout elapses, reusing one tunneled connection and appending the remote
+// service log to the returned error so startup failures stay diagnosable.
+func waitForStatus(ctx context.Context, client remoteClient, host Host, timeout time.Duration, action string) (map[string]any, error) {
+	transport := statusTransport(client, host)
+	defer transport.CloseIdleConnections()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		status, err := requestStatusVia(ctx, transport, host)
+		if err == nil {
+			return status, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	if logText, _ := remoteAgentMuxLog(ctx, client); logText != "" {
+		return nil, fmt.Errorf("%s: %v; remote log: %s", action, lastErr, logText)
+	}
+	return nil, fmt.Errorf("%s: %w", action, lastErr)
 }
 
 func (m *Manager) find(candidate Host) (Host, bool) {

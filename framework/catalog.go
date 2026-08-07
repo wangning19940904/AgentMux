@@ -94,7 +94,11 @@ var catalog = []Spec{
 		Bin: "cursor-agent", VersionArgs: []string{"--version"},
 		InstallCommand:   []string{"bash", "-c", "curl https://cursor.com/install -fsS | bash"},
 		InstallSupported: true,
-		LatestURL:        "https://cursor.com/install", UpdateCommand: []string{"cursor-agent", "update"},
+		// Cursor's native self-updater can reject a headless service with an
+		// unauthenticated error even though the official installer is publicly
+		// downloadable. Re-running the installer performs the same atomic version
+		// switch without depending on an interactive Cursor login.
+		LatestURL: "https://cursor.com/install", UpdateCommand: []string{"bash", "-c", "curl https://cursor.com/install -fsS | bash"},
 		UpdateSupported: true, Supported: true, Note: "Cursor Agent CLI",
 	},
 	{
