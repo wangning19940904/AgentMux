@@ -27,7 +27,6 @@ export function ToolsPanel() {
   const data = tools.data;
   const cli = data?.cli ?? [];
   const skills = data?.skills ?? [];
-  const mcp = data?.mcp ?? [];
   const market = marketplace.data ?? data?.marketplace ?? [];
 
   useEffect(() => {
@@ -224,27 +223,6 @@ export function ToolsPanel() {
           </div>
         </div>
 
-        <div className="surface">
-          <div className="surface-header">
-            <h2>{t("tools.mcpTitle")}</h2>
-            <span className="pill on">{mcp.length}</span>
-          </div>
-          <div className="surface-body tools-list">
-            {mcp.map((server) => (
-              <div key={server.name} className="tools-list-row static">
-                <span>
-                  <strong>{server.name}</strong>
-                  <small>{server.command || server.url || server.transport}</small>
-                </span>
-                <span className={`status-badge ${server.enabled ? "success" : ""}`}>
-                  <span className="status-dot" />
-                  {server.enabled ? t("common.enabled") : t("common.disabled")}
-                </span>
-              </div>
-            ))}
-            {mcp.length === 0 && <div className="empty-state">{t("mcp.empty")}</div>}
-          </div>
-        </div>
       </section>
 
       {result?.log && (

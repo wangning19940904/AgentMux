@@ -5,30 +5,6 @@ import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { usePolling } from "../hooks/usePolling";
 
-// providerProtocol reports the upstream wire protocol a provider speaks. With
-// the unified translation layer a provider only declares its own protocol; the
-// proxy adapts it to whatever tool routes to it.
-function providerProtocol(provider: Provider): string {
-  const format = provider.meta?.api_format;
-  return typeof format === "string" && format ? format : "anthropic";
-}
-
-// defaultToolForProvider picks the natural tool entry for a provider's protocol
-// so the one-click switch button has a sensible target. Any tool can still be
-// routed to any provider via the routing UI.
-function defaultToolForProvider(provider: Provider): string {
-  switch (providerProtocol(provider)) {
-    case "openai_chat":
-    case "openai_responses":
-      return "codex";
-    case "gemini":
-    case "gemini_native":
-      return "gemini";
-    default:
-      return "claudecode";
-  }
-}
-
 function claudeDesktopModelList(provider?: Provider) {
   const models = provider?.meta?.claude_desktop_models;
   if (!Array.isArray(models)) return "";
@@ -81,7 +57,6 @@ function formatMonitorTime(value?: string) {
 export function ProvidersPanel() {
   const { t } = useI18n();
   const providers = useAsync(() => api.providers(), []);
-  const presets = useAsync(() => api.presets(), []);
   const claude3p = useAsync(() => api.claude3pStatus(), []);
   const monitor = useAsync(() => api.providerMonitor(), []);
   const [busy, setBusy] = useState<string | null>(null);
@@ -123,28 +98,6 @@ export function ProvidersPanel() {
   }, [monitor.data?.config]);
 
   usePolling(monitor.reload, 30_000, { enabled: monitorConfig.enabled });
-
-  async function importPreset(p: Provider) {
-    setBusy(p.id);
-    try {
-      await api.upsertProvider(p);
-      providers.reload();
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function switchTo(p: Provider) {
-    const tool = defaultToolForProvider(p);
-    setBusy(p.id);
-    try {
-      await api.switchProvider(p.id, tool);
-      claude3p.reload();
-      providers.reload();
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function saveClaudeModelMapping() {
     if (!selectedClaudeProviderData) return;
@@ -542,107 +495,6 @@ export function ProvidersPanel() {
         </div>
       </section>
 
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("providers.configured")}</h2>
-          <span className="pill on">{providers.data?.length ?? 0}</span>
-        </div>
-        {providers.error && <div className="surface-body error">{providers.error}</div>}
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("common.name")}</th>
-                <th>{t("providers.protocol")}</th>
-                <th>{t("providers.model")}</th>
-                <th>{t("common.status")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(providers.data ?? []).map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <span className="provider-name">
-                      <span className="provider-icon">{p.name.slice(0, 1).toUpperCase()}</span>
-                      {p.name}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="pill">{providerProtocol(p)}</span>
-                  </td>
-                  <td className="muted">{p.model || "—"}</td>
-                  <td>
-                    {p.enabled ? (
-                      <span className="status-badge success">
-                        <span className="status-dot" />
-                        {t("common.enabled")}
-                      </span>
-                    ) : (
-                      <span className="status-badge">
-                        <span className="status-dot" />
-                        {t("common.idle")}
-                      </span>
-                    )}
-                  </td>
-                  <td>
-                    <button className="action" disabled={busy === p.id} onClick={() => switchTo(p)}>
-                      {t("providers.switch")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {providers.data?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty-state">
-                    {t("providers.empty")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("providers.presets")}</h2>
-          <span className="pill">{presets.data?.length ?? 0}</span>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("common.name")}</th>
-                <th>{t("providers.protocol")}</th>
-                <th>{t("providers.baseUrl")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(presets.data ?? []).map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <span className="provider-name">
-                      <span className="provider-icon">{p.name.slice(0, 1).toUpperCase()}</span>
-                      {p.name}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="pill">{providerProtocol(p)}</span>
-                  </td>
-                  <td className="muted mono">{p.base_url}</td>
-                  <td>
-                    <button className="action" disabled={busy === p.id} onClick={() => importPreset(p)}>
-                      {t("providers.import")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }

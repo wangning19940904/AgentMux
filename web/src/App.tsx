@@ -1,4 +1,4 @@
-import { Component, useEffect, useMemo, useState } from "react";
+import { Component, Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Activity,
@@ -26,22 +26,25 @@ import {
   Sun,
   Workflow,
 } from "lucide-react";
-import { ProvidersPanel } from "./panels/ProvidersPanel";
-import { UsagePanel } from "./panels/UsagePanel";
-import { ObservabilityPanel } from "./panels/ObservabilityPanel";
-import { AgentsPanel } from "./panels/AgentsPanel";
-import { ConnectPanel } from "./panels/ConnectPanel";
-import { FrameworksPanel } from "./panels/FrameworksPanel";
-import { GatewayPanel } from "./panels/GatewayPanel";
-import { OverviewPanel } from "./panels/OverviewPanel";
-import { MemoryPanel } from "./panels/MemoryPanel";
-import { SkillsPanel } from "./panels/SkillsPanel";
-import { MCPPanel } from "./panels/MCPPanel";
-import { GuardPanel } from "./panels/GuardPanel";
-import { SessionsPanel } from "./panels/SessionsPanel";
-import { MenuBarPanel } from "./panels/MenuBarPanel";
-import { RemoteHostsPanel } from "./panels/RemoteHostsPanel";
 import { RemoteTargetSelector } from "./RemoteTargetSelector";
+
+// Panels load lazily so the initial bundle only carries the shell; each panel
+// chunk downloads when its tab is first selected.
+const ProvidersPanel = lazy(() => import("./panels/ProvidersPanel").then((m) => ({ default: m.ProvidersPanel })));
+const UsagePanel = lazy(() => import("./panels/UsagePanel").then((m) => ({ default: m.UsagePanel })));
+const ObservabilityPanel = lazy(() => import("./panels/ObservabilityPanel").then((m) => ({ default: m.ObservabilityPanel })));
+const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((m) => ({ default: m.AgentsPanel })));
+const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
+const FrameworksPanel = lazy(() => import("./panels/FrameworksPanel").then((m) => ({ default: m.FrameworksPanel })));
+const GatewayPanel = lazy(() => import("./panels/GatewayPanel").then((m) => ({ default: m.GatewayPanel })));
+const OverviewPanel = lazy(() => import("./panels/OverviewPanel").then((m) => ({ default: m.OverviewPanel })));
+const MemoryPanel = lazy(() => import("./panels/MemoryPanel").then((m) => ({ default: m.MemoryPanel })));
+const SkillsPanel = lazy(() => import("./panels/SkillsPanel").then((m) => ({ default: m.SkillsPanel })));
+const MCPPanel = lazy(() => import("./panels/MCPPanel").then((m) => ({ default: m.MCPPanel })));
+const GuardPanel = lazy(() => import("./panels/GuardPanel").then((m) => ({ default: m.GuardPanel })));
+const SessionsPanel = lazy(() => import("./panels/SessionsPanel").then((m) => ({ default: m.SessionsPanel })));
+const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ default: m.MenuBarPanel })));
+const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
   getLaunchAtLogin,
@@ -180,19 +183,21 @@ export function App() {
   useEffect(() => {
     const onHashChange = () => {
       const hashTab = tabFromHash();
-      setTab((current) => hashTab ?? (current === "observability" ? "agents" : current));
+      if (hashTab) setTab(hashTab);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // Every tab owns a hash route (#tab or #tab/subview); panels with internal
+  // sub-navigation (observability) extend the same scheme.
   function selectTab(next: Tab) {
     setTab(next);
     if (next === "observability") {
       if (!window.location.hash.startsWith("#observability")) window.location.hash = "#observability/overview";
-    } else if (window.location.hash.startsWith("#observability")) {
-      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      return;
     }
+    window.location.hash = `#${next}`;
   }
 
   return (
@@ -352,21 +357,23 @@ function Shell({
             description={t("app.panelErrorHint")}
             retryLabel={t("common.retry")}
           >
-            {tab === "overview" && <OverviewPanel />}
-            {tab === "agents" && <AgentsPanel />}
-            {tab === "connect" && <ConnectPanel />}
-            {tab === "frameworks" && <FrameworksPanel />}
-            {tab === "observability" && <ObservabilityPanel />}
-            {tab === "usage" && <UsagePanel />}
-            {tab === "menubar" && <MenuBarPanel />}
-            {tab === "machines" && <RemoteHostsPanel />}
-            {tab === "sessions" && <SessionsPanel />}
-            {tab === "providers" && <ProvidersPanel />}
-            {tab === "gateway" && <GatewayPanel />}
-            {tab === "memory" && <MemoryPanel />}
-            {tab === "skills" && <SkillsPanel />}
-            {tab === "mcp" && <MCPPanel />}
-            {tab === "guard" && <GuardPanel />}
+            <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
+              {tab === "overview" && <OverviewPanel />}
+              {tab === "agents" && <AgentsPanel />}
+              {tab === "connect" && <ConnectPanel />}
+              {tab === "frameworks" && <FrameworksPanel />}
+              {tab === "observability" && <ObservabilityPanel />}
+              {tab === "usage" && <UsagePanel />}
+              {tab === "menubar" && <MenuBarPanel />}
+              {tab === "machines" && <RemoteHostsPanel />}
+              {tab === "sessions" && <SessionsPanel />}
+              {tab === "providers" && <ProvidersPanel />}
+              {tab === "gateway" && <GatewayPanel />}
+              {tab === "memory" && <MemoryPanel />}
+              {tab === "skills" && <SkillsPanel />}
+              {tab === "mcp" && <MCPPanel />}
+              {tab === "guard" && <GuardPanel />}
+            </Suspense>
           </PanelErrorBoundary>
         </main>
       </div>
