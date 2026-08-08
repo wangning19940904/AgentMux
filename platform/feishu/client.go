@@ -58,6 +58,16 @@ type threadReplyClient interface {
 	BeginStreamCardReply(ctx context.Context, messageID string, control *streamCardControl) (cardID string, err error)
 }
 
+// attachmentClient is optional so lightweight test clients do not need to
+// implement upload APIs. The production Lark client supports both chat sends
+// and native thread replies after uploading the artifact.
+type attachmentClient interface {
+	SendImage(ctx context.Context, chatID, fileName string, data []byte) (messageID string, err error)
+	ReplyImage(ctx context.Context, messageID, fileName string, data []byte) (replyMessageID string, err error)
+	SendFile(ctx context.Context, chatID, fileName string, data []byte) (messageID string, err error)
+	ReplyFile(ctx context.Context, messageID, fileName string, data []byte) (replyMessageID string, err error)
+}
+
 type interactionCardClient interface {
 	SendAgentInteractionCard(ctx context.Context, msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) (messageID string, err error)
 	UpdateAgentInteractionCard(ctx context.Context, messageID string, interaction core.ChannelInteraction, outcome string) error

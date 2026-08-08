@@ -1,11 +1,32 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+type channelDeliveryTestPlatform struct {
+	*fakePlatform
+	images []ChannelDeliveryFile
+	files  []ChannelDeliveryFile
+	target *Message
+}
+
+func (p *channelDeliveryTestPlatform) ReplyImage(_ context.Context, msg *Message, fileName string, data []byte) error {
+	p.target = msg
+	p.images = append(p.images, ChannelDeliveryFile{Name: fileName, Data: append([]byte(nil), data...)})
+	return nil
+}
+
+func (p *channelDeliveryTestPlatform) ReplyFile(_ context.Context, msg *Message, fileName string, data []byte) error {
+	p.target = msg
+	p.files = append(p.files, ChannelDeliveryFile{Name: fileName, Data: append([]byte(nil), data...)})
+	return nil
+}
 
 type senderConversationStore struct {
 	mu      sync.Mutex
@@ -192,5 +213,47 @@ func TestConversationRuntimeControllerStopsConsoleTurn(t *testing.T) {
 	}
 	if state.Status != ConversationStatusIdle || state.CanStop {
 		t.Fatalf("final state = %+v", state)
+	}
+}
+
+func TestSendToChannelDeliversOnlyToActiveConversation(t *testing.T) {
+	engine := NewEngine(nil, nil)
+	platform := &channelDeliveryTestPlatform{fakePlatform: newFakePlatform("delivery-test")}
+	runtime := &channelRuntime{
+		owner: engine, channel: Channel{ID: "channel-delivery", Type: "feishu"}, platform: platform,
+		controlTasks: map[string]*channelControlState{}, directTurns: map[string]*directChannelTurn{},
+	}
+	runtime.controlTasks["root:message-1"] = &channelControlState{active: &runtimeChannelTask{
+		msg: &Message{ID: "message-1", ChatID: "chat-1", ChatType: "group", ConversationKey: "root:message-1"},
+	}}
+	engine.channels[runtime.channel.ID] = runtime
+
+	err := engine.SendToChannel(context.Background(), ChannelDelivery{
+		ChannelID: "channel-delivery", ConversationKey: "root:message-1", Text: "二维码如下",
+		Images: []ChannelDeliveryFile{{Name: "qr.png", Data: []byte("png")}},
+		Files:  []ChannelDeliveryFile{{Name: "result.txt", Data: []byte("result")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if platform.target == nil || platform.target.ChatID != "chat-1" || platform.target.ID != "message-1" {
+		t.Fatalf("delivery target = %+v", platform.target)
+	}
+	if len(platform.images) != 1 || platform.images[0].Name != "qr.png" || !bytes.Equal(platform.images[0].Data, []byte("png")) {
+		t.Fatalf("images = %+v", platform.images)
+	}
+	if len(platform.files) != 1 || platform.files[0].Name != "result.txt" || !bytes.Equal(platform.files[0].Data, []byte("result")) {
+		t.Fatalf("files = %+v", platform.files)
+	}
+	platform.mu.Lock()
+	if len(platform.replies) != 1 || platform.replies[0] != "二维码如下" {
+		t.Fatalf("text replies = %v", platform.replies)
+	}
+	platform.mu.Unlock()
+
+	if err := engine.SendToChannel(context.Background(), ChannelDelivery{
+		ChannelID: "channel-delivery", ConversationKey: "root:stale", Text: "should fail",
+	}); err == nil || !strings.Contains(err.Error(), "no active turn") {
+		t.Fatalf("stale delivery error = %v", err)
 	}
 }

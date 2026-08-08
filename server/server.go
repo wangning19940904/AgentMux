@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -407,8 +409,12 @@ func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Project string `json:"project"`
-		Text    string `json:"text"`
+		Project         string   `json:"project"`
+		ChannelID       string   `json:"channel_id"`
+		ConversationKey string   `json:"conversation_key"`
+		Text            string   `json:"text"`
+		Images          []string `json:"images"`
+		Files           []string `json:"files"`
 	}
 	if !decodeJSONInto(w, r, &req) {
 		return
@@ -417,11 +423,79 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "no sender wired")
 		return
 	}
+	channelDelivery := strings.TrimSpace(req.ChannelID) != "" || strings.TrimSpace(req.ConversationKey) != "" || len(req.Images) > 0 || len(req.Files) > 0
+	if channelDelivery {
+		if !isLoopbackRequest(r) {
+			writeErr(w, http.StatusForbidden, "channel delivery is only available on loopback")
+			return
+		}
+		if strings.TrimSpace(req.ChannelID) == "" || strings.TrimSpace(req.ConversationKey) == "" {
+			writeErr(w, http.StatusBadRequest, "channel_id and conversation_key are required")
+			return
+		}
+		deliverySender, ok := s.sender.(core.ChannelDeliverySender)
+		if !ok {
+			writeErr(w, http.StatusServiceUnavailable, "channel delivery is unavailable")
+			return
+		}
+		images, err := readChannelDeliveryFiles(req.Images, 10<<20)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid image: "+err.Error())
+			return
+		}
+		files, err := readChannelDeliveryFiles(req.Files, 30<<20)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid file: "+err.Error())
+			return
+		}
+		delivery := core.ChannelDelivery{
+			ChannelID:       req.ChannelID,
+			ConversationKey: req.ConversationKey,
+			Text:            req.Text,
+			Images:          images,
+			Files:           files,
+		}
+		if err := deliverySender.SendToChannel(r.Context(), delivery); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeOK(w)
+		return
+	}
 	if err := s.sender.SendToProject(r.Context(), req.Project, req.Text); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeOK(w)
+}
+
+func readChannelDeliveryFiles(paths []string, maxBytes int64) ([]core.ChannelDeliveryFile, error) {
+	if len(paths) > 8 {
+		return nil, fmt.Errorf("at most 8 attachments are allowed")
+	}
+	files := make([]core.ChannelDeliveryFile, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" || !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("attachment path must be absolute")
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("%q is not a regular file", path)
+		}
+		if info.Size() > maxBytes {
+			return nil, fmt.Errorf("%q exceeds the %d MiB limit", path, maxBytes>>20)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, core.ChannelDeliveryFile{Name: filepath.Base(path), Data: data})
+	}
+	return files, nil
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {

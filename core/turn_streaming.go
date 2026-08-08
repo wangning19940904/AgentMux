@@ -270,7 +270,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 		tools = toolProgress{}
 		failed = false
 	} else if ctx.Err() == context.DeadlineExceeded {
-		answer = "任务执行超时，已自动终止。需要扫码、授权、验证码或人工确认的命令必须拆成多轮：先返回操作链接，再由用户回复后继续。"
+		answer = "任务执行超时，已自动终止。需要扫码、授权、验证码或人工确认时，请让命令在后台运行，并使用 request_user_input 暂停等待用户，不要让 shell 前台阻塞。"
 		thinking = ""
 		failed = true
 	}
