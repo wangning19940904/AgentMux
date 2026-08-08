@@ -234,6 +234,18 @@ type Platform interface {
 	Stop(ctx context.Context) error
 }
 
+// ChannelImageReplier and ChannelFileReplier are optional transport
+// capabilities used by a running agent turn to deliver generated artifacts to
+// the same channel conversation. Implementations decide whether to reply in a
+// native thread or post to the chat.
+type ChannelImageReplier interface {
+	ReplyImage(ctx context.Context, msg *Message, fileName string, data []byte) error
+}
+
+type ChannelFileReplier interface {
+	ReplyFile(ctx context.Context, msg *Message, fileName string, data []byte) error
+}
+
 // PlatformHealth is a transport-neutral snapshot of a long-lived platform
 // connection. Messaging adapters that maintain sockets can expose it through
 // PlatformHealthReporter so the channel supervisor can detect connections

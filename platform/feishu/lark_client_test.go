@@ -422,6 +422,30 @@ func TestResolvedAgentInteractionCardUsesReadableOutcome(t *testing.T) {
 	}
 }
 
+func TestUserInputInteractionCardRendersLinkCodeAndActions(t *testing.T) {
+	msg := &core.Message{ID: "om_root", ChatID: "oc_1", ChatType: "group"}
+	task := core.ChannelTask{ID: "task-1", ConversationKey: "root:om_root"}
+	interaction := core.ChannelInteraction{
+		ID: "interaction-1", TaskID: task.ID, Nonce: "nonce-1",
+		Request: core.AgentInteraction{
+			ID: "interaction-1", Kind: core.AgentInteractionUserInput, Title: "完成认证",
+			Questions: []core.InteractionQuestion{{
+				ID: "auth", Header: "飞书认证",
+				Question: "[打开认证页面](https://open.feishu.cn/page/cli?user_code=ABCD)\n\n验证码：`ABCD`",
+				Options:  []core.InteractionOption{{Label: "已完成"}, {Label: "取消"}},
+			}},
+		},
+	}
+	card := buildAgentInteractionCard(msg, task, interaction, "")
+	for _, want := range []string{
+		"https://open.feishu.cn/page/cli?user_code=ABCD", "验证码：`ABCD`", "已完成", "取消", `"decision":"answer"`,
+	} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("user-input card missing %q: %s", want, card)
+		}
+	}
+}
+
 func TestMessageFromCardActionPreservesGenericCallbackForLogging(t *testing.T) {
 	client := &larkClient{platform: "feishu"}
 	event := &callback.CardActionTriggerEvent{

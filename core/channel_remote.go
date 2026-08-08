@@ -41,9 +41,6 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
-	if e.handleChannelCLIAuth(ctx, rt, msg, data) {
-		return
-	}
 	if msg.ChannelTaskAction != nil {
 		e.handleRemoteTaskAction(ctx, rt, msg, data, *msg.ChannelTaskAction)
 		return

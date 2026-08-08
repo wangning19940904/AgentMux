@@ -19,9 +19,6 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
-	if e.handleChannelCLIAuth(ctx, rt, msg, data) {
-		return
-	}
 	managedDirectTurn := !rt.remoteControlEnabled()
 	if managedDirectTurn && e.handleDirectStop(ctx, rt, msg, data) {
 		return

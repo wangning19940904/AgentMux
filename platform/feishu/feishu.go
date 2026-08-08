@@ -105,6 +105,34 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 	return err
 }
 
+// ReplyImage uploads an image and delivers it to the originating conversation.
+func (p *Platform) ReplyImage(ctx context.Context, msg *core.Message, fileName string, data []byte) error {
+	client, ok := p.client.(attachmentClient)
+	if !ok {
+		return fmt.Errorf("%s: image delivery is unavailable", p.name)
+	}
+	if messageID := threadReplyMessageID(msg); messageID != "" {
+		_, err := client.ReplyImage(ctx, messageID, fileName, data)
+		return err
+	}
+	_, err := client.SendImage(ctx, msg.ChatID, fileName, data)
+	return err
+}
+
+// ReplyFile uploads a file and delivers it to the originating conversation.
+func (p *Platform) ReplyFile(ctx context.Context, msg *core.Message, fileName string, data []byte) error {
+	client, ok := p.client.(attachmentClient)
+	if !ok {
+		return fmt.Errorf("%s: file delivery is unavailable", p.name)
+	}
+	if messageID := threadReplyMessageID(msg); messageID != "" {
+		_, err := client.ReplyFile(ctx, messageID, fileName, data)
+		return err
+	}
+	_, err := client.SendFile(ctx, msg.ChatID, fileName, data)
+	return err
+}
+
 // BeginMessageReply opens a streaming plain-text reply for the chat that
 // originated msg. The first Update posts a text message; later Updates edit it.
 func (p *Platform) BeginMessageReply(ctx context.Context, msg *core.Message) (core.ReplyStream, error) {

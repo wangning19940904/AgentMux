@@ -15,6 +15,29 @@ type Sender interface {
 	SendToProject(ctx context.Context, project, text string) error
 }
 
+// ChannelDelivery is an out-of-band payload produced by the agent that owns
+// the currently running channel turn. The channel and conversation keys are
+// both required so a local helper cannot accidentally publish into a different
+// conversation.
+type ChannelDelivery struct {
+	ChannelID       string
+	ConversationKey string
+	Text            string
+	Images          []ChannelDeliveryFile
+	Files           []ChannelDeliveryFile
+}
+
+type ChannelDeliveryFile struct {
+	Name string
+	Data []byte
+}
+
+// ChannelDeliverySender is the session-scoped counterpart of Sender. It is an
+// optional API used by the local amux CLI while an agent turn is active.
+type ChannelDeliverySender interface {
+	SendToChannel(ctx context.Context, delivery ChannelDelivery) error
+}
+
 // ConversationSender is the richer console-chat capability implemented by
 // Engine. It lets the management UI continue an AgentMux-managed channel
 // conversation without publishing the console operator's message back to the
@@ -56,6 +79,98 @@ func (e *Engine) SendToProject(ctx context.Context, project, text string) error 
 		// targeting is added with per-platform default chats.
 		if err := p.Send(ctx, "", text); err != nil {
 			e.log.Warn("bridge send", "platform", p.Name(), "err", err)
+		}
+	}
+	return nil
+}
+
+// SendToChannel delivers text and artifacts to the exact conversation that
+// owns a live turn. It intentionally refuses inactive conversations: callers
+// must obtain channel_id and conversation_key from the injected turn metadata,
+// and stale commands cannot publish after that turn has finished.
+func (e *Engine) SendToChannel(ctx context.Context, delivery ChannelDelivery) error {
+	channelID := strings.TrimSpace(delivery.ChannelID)
+	conversationKey := strings.TrimSpace(delivery.ConversationKey)
+	if channelID == "" || conversationKey == "" {
+		return errors.New("channel and conversation key are required")
+	}
+	if strings.TrimSpace(delivery.Text) == "" && len(delivery.Images) == 0 && len(delivery.Files) == 0 {
+		return errors.New("text, image, or file is required")
+	}
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return fmt.Errorf("channel %q is not running", channelID)
+	}
+
+	var msg *Message
+	rt.controlMu.Lock()
+	if state := rt.controlTasks[conversationKey]; state != nil && state.active != nil && state.active.msg != nil {
+		copy := *state.active.msg
+		msg = &copy
+	}
+	active := msg != nil || rt.directTurns[conversationKey] != nil
+	rt.controlMu.Unlock()
+	if !active {
+		return fmt.Errorf("conversation %q has no active turn", conversationKey)
+	}
+	if msg == nil {
+		if e.conversations == nil {
+			return errors.New("conversation store is unavailable")
+		}
+		conversations, err := e.conversations.ListConversations(ctx, "channel:"+channelID, false)
+		if err != nil {
+			return err
+		}
+		for i := range conversations {
+			if conversations[i].ConversationKey == conversationKey {
+				msg = &Message{
+					ChatID:          conversations[i].ChatID,
+					ChatType:        conversations[i].ChatType,
+					ConversationKey: conversationKey,
+					Platform:        rt.channel.Type,
+					ChannelID:       channelID,
+				}
+				break
+			}
+		}
+	}
+	if msg == nil || strings.TrimSpace(msg.ChatID) == "" {
+		return fmt.Errorf("conversation %q has no delivery target", conversationKey)
+	}
+	var imageReplier ChannelImageReplier
+	if len(delivery.Images) > 0 {
+		var ok bool
+		imageReplier, ok = rt.platform.(ChannelImageReplier)
+		if !ok {
+			return fmt.Errorf("channel %q does not support image delivery", channelID)
+		}
+	}
+	var fileReplier ChannelFileReplier
+	if len(delivery.Files) > 0 {
+		var ok bool
+		fileReplier, ok = rt.platform.(ChannelFileReplier)
+		if !ok {
+			return fmt.Errorf("channel %q does not support file delivery", channelID)
+		}
+	}
+
+	if text := strings.TrimSpace(delivery.Text); text != "" {
+		if err := rt.platform.Reply(ctx, msg, text); err != nil {
+			return err
+		}
+	}
+	if len(delivery.Images) > 0 {
+		for _, image := range delivery.Images {
+			if err := imageReplier.ReplyImage(ctx, msg, image.Name, image.Data); err != nil {
+				return err
+			}
+		}
+	}
+	if len(delivery.Files) > 0 {
+		for _, file := range delivery.Files {
+			if err := fileReplier.ReplyFile(ctx, msg, file.Name, file.Data); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

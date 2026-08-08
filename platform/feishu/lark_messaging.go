@@ -1,6 +1,7 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,105 @@ import (
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
+
+func (c *larkClient) SendImage(ctx context.Context, chatID, fileName string, data []byte) (string, error) {
+	imageKey, err := c.uploadImage(ctx, fileName, data)
+	if err != nil {
+		return "", err
+	}
+	content, _ := json.Marshal(map[string]string{"image_key": imageKey})
+	return c.sendMessage(ctx, chatID, larkim.MsgTypeImage, string(content))
+}
+
+func (c *larkClient) ReplyImage(ctx context.Context, messageID, fileName string, data []byte) (string, error) {
+	imageKey, err := c.uploadImage(ctx, fileName, data)
+	if err != nil {
+		return "", err
+	}
+	content, _ := json.Marshal(map[string]string{"image_key": imageKey})
+	return c.replyMessage(ctx, messageID, larkim.MsgTypeImage, string(content))
+}
+
+func (c *larkClient) SendFile(ctx context.Context, chatID, fileName string, data []byte) (string, error) {
+	fileKey, err := c.uploadFile(ctx, fileName, data)
+	if err != nil {
+		return "", err
+	}
+	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
+	return c.sendMessage(ctx, chatID, larkim.MsgTypeFile, string(content))
+}
+
+func (c *larkClient) ReplyFile(ctx context.Context, messageID, fileName string, data []byte) (string, error) {
+	fileKey, err := c.uploadFile(ctx, fileName, data)
+	if err != nil {
+		return "", err
+	}
+	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
+	return c.replyMessage(ctx, messageID, larkim.MsgTypeFile, string(content))
+}
+
+func (c *larkClient) uploadImage(ctx context.Context, fileName string, data []byte) (string, error) {
+	req := larkim.NewCreateImageReqBuilder().
+		Body(larkim.NewCreateImageReqBodyBuilder().
+			ImageType("message").
+			Image(bytes.NewReader(data)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Image.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s upload image failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.ImageKey == nil {
+		return "", fmt.Errorf("%s upload image: missing image key", c.platform)
+	}
+	return *resp.Data.ImageKey, nil
+}
+
+func (c *larkClient) uploadFile(ctx context.Context, fileName string, data []byte) (string, error) {
+	req := larkim.NewCreateFileReqBuilder().
+		Body(larkim.NewCreateFileReqBodyBuilder().
+			FileType("stream").
+			FileName(fileName).
+			File(bytes.NewReader(data)).
+			Build()).
+		Build()
+	resp, err := c.api.Im.File.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s upload file failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.FileKey == nil {
+		return "", fmt.Errorf("%s upload file: missing file key", c.platform)
+	}
+	return *resp.Data.FileKey, nil
+}
+
+func (c *larkClient) sendMessage(ctx context.Context, chatID, msgType, content string) (string, error) {
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType("chat_id").
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(chatID).
+			MsgType(msgType).
+			Content(content).
+			Build()).
+		Build()
+	resp, err := c.api.Im.Message.Create(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("%s send failed: %s", c.platform, resp.Msg)
+	}
+	if resp.Data == nil || resp.Data.MessageId == nil {
+		return "", fmt.Errorf("%s send: missing message id", c.platform)
+	}
+	return *resp.Data.MessageId, nil
+}
 
 func (c *larkClient) SendText(ctx context.Context, chatID, text string) (string, error) {
 	content, _ := json.Marshal(map[string]string{"text": text})
