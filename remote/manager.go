@@ -219,13 +219,26 @@ func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
-	client, err := m.client(ctx, host)
-	if err != nil {
-		return TestResult{}, err
-	}
-	status, err := requestStatus(ctx, client, host)
-	if err != nil {
-		return TestResult{}, err
+	var status map[string]any
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		var client remoteClient
+		client, err = m.client(ctx, host)
+		if err == nil {
+			status, err = requestStatus(ctx, client, host)
+		}
+		if err == nil {
+			break
+		}
+		var unavailable *ServiceUnavailableError
+		if attempt == 1 || !errors.As(err, &unavailable) {
+			return TestResult{}, err
+		}
+		// A cached SSH client can survive locally after the server or an
+		// intermediate network device has discarded the connection. Status is
+		// read-only, so it is safe to evict that client and retry once through a
+		// fresh, host-key-pinned handshake.
+		m.invalidate(id)
 	}
 	return TestResult{
 		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),

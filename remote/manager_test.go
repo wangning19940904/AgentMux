@@ -90,6 +90,18 @@ func TestManagerTrustsHostKeyAndReachesRemoteAgentMux(t *testing.T) {
 	if err != nil || observed.Status["version"] != "test" {
 		t.Fatalf("status result = %+v, err = %v", observed, err)
 	}
+	manager.mu.Lock()
+	stale := manager.clients[saved.ID]
+	if stale == nil {
+		manager.mu.Unlock()
+		t.Fatal("trusted SSH client was not cached")
+	}
+	_ = stale.client.Close()
+	manager.mu.Unlock()
+	observed, err = manager.Status(ctx, saved.ID)
+	if err != nil || observed.Status["version"] != "test" {
+		t.Fatalf("status did not reconnect after stale cached SSH client: result = %+v, err = %v", observed, err)
+	}
 	manager.update = func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error) {
 		return remoteUpdateArtifact{
 			Platform: "linux", Arch: "amd64", Version: "test-build", SHA256: "abc123",

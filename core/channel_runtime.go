@@ -44,6 +44,7 @@ type channelRuntime struct {
 	clearConfirm map[string]time.Time
 	threadLists  map[string][]NativeThread
 	pendingTurns map[string]pendingInitialTurn
+	cliAuth      map[string]channelCLIAuthPending
 }
 
 type pendingInitialTurn struct {
@@ -259,6 +260,7 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		clearConfirm:    map[string]time.Time{},
 		threadLists:     map[string][]NativeThread{},
 		pendingTurns:    map[string]pendingInitialTurn{},
+		cliAuth:         map[string]channelCLIAuthPending{},
 		state:           ChannelStateRunning,
 		started:         time.Now(),
 	}
