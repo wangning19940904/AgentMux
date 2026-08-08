@@ -27,3 +27,21 @@ func TestRuntimeSettingsKeyboardStoresCallbackActions(t *testing.T) {
 		t.Fatal("keyboard callback action was not registered")
 	}
 }
+
+func TestHelpKeyboardExposesCommandCallbacks(t *testing.T) {
+	state := core.HelpCardState{
+		AgentName: "代码助手", RuntimeName: "codex", Introduction: "你好，我是代码助手。",
+		Commands: []core.HelpCommand{
+			{Command: "/model", Description: "切换模型", Actionable: true},
+			{Command: "/clear", Description: "清除上下文", Actionable: true},
+			{Command: "/effort", Description: "切换思考强度"},
+		},
+	}
+	rows := telegramHelpKeyboard(state)
+	if len(rows) != 1 || len(rows[0]) != 2 {
+		t.Fatalf("help keyboard = %+v", rows)
+	}
+	if rows[0][0].CallbackData != "hc:model" || rows[0][1].CallbackData != "hc:clear" {
+		t.Fatalf("help callback data = %+v", rows[0])
+	}
+}

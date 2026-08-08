@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectCLIReadsVersionFromPath(t *testing.T) {
@@ -100,7 +101,7 @@ func TestCLICatalogIncludesGitHubCLI(t *testing.T) {
 	if !ok {
 		t.Fatal("github-cli missing from CLI catalog")
 	}
-	if spec.Name != "GitHub CLI" || spec.Bin != "gh" || spec.Package != "gh" {
+	if spec.Name != "GitHub CLI" || spec.Bin != "gh" || spec.Package != "gh" || !spec.LoginSupported {
 		t.Fatalf("spec = %+v", spec)
 	}
 	if strings.Join(spec.InstallCommand, " ") != "brew install gh" {
@@ -112,6 +113,121 @@ func TestCLICatalogIncludesGitHubCLI(t *testing.T) {
 	if spec.LatestVersionURL != "https://api.github.com/repos/cli/cli/releases/latest" {
 		t.Fatalf("latest version URL = %q", spec.LatestVersionURL)
 	}
+}
+
+func TestCLICatalogMarksLarkLoginSupported(t *testing.T) {
+	spec, ok := LookupCLI("lark-cli")
+	if !ok || !spec.LoginSupported {
+		t.Fatalf("lark-cli spec = %+v, ok = %v", spec, ok)
+	}
+}
+
+func TestCLIAuthWorkflowChainsLarkSetupAndLogin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	state := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLI_AUTH_TEST_DIR", state)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeExecutable(t, filepath.Join(bin, "lark-cli"), `#!/bin/sh
+state="$CLI_AUTH_TEST_DIR"
+if [ "$1" = "--version" ]; then
+  echo 'lark-cli version 1.0.85'
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  if [ -f "$state/authenticated" ]; then
+    echo '{"appId":"cli_test","identities":{"bot":{"status":"ready","available":true},"user":{"status":"ready","available":true}}}'
+    exit 0
+  fi
+  if [ -f "$state/configured" ]; then
+    echo '{"appId":"cli_test","identities":{"bot":{"status":"ready","available":true},"user":{"status":"not_logged_in","available":false}}}'
+    exit 3
+  fi
+  echo '{"ok":false,"error":{"type":"config","subtype":"not_configured"}}'
+  exit 3
+fi
+if [ "$1" = "config" ] && [ "$2" = "init" ]; then
+  echo 'Open https://open.feishu.cn/page/cli?user_code=INIT-CODE to configure'
+  while [ ! -f "$state/setup-approved" ]; do sleep 0.05; done
+  touch "$state/configured"
+  exit 0
+fi
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  echo '{"verification_uri":"https://open.feishu.cn/device","user_code":"AUTH-CODE"}'
+  while [ ! -f "$state/login-approved" ]; do sleep 0.05; done
+  touch "$state/authenticated"
+  exit 0
+fi
+exit 2
+`)
+
+	before := CheckCLIAuth(context.Background(), "lark-cli")
+	if before.State != CLIAuthSetupRequired || !before.LoginSupported {
+		t.Fatalf("initial auth status = %+v", before)
+	}
+
+	session, err := StartCLIAuth("lark-cli", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = CancelCLIAuthSession(session.SessionID) }()
+	if session.Phase != "setup" || !strings.Contains(session.LoginURL, "open.feishu.cn/page/cli") || session.VerificationCode != "INIT-CODE" {
+		t.Fatalf("setup session = %+v", session)
+	}
+	if err := os.WriteFile(filepath.Join(state, "setup-approved"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	login := waitForCLIAuthTest(t, session.SessionID, func(snapshot CLIAuthSession) bool {
+		return snapshot.Phase == "login" && snapshot.State == CLIAuthSessionWaiting && strings.Contains(snapshot.LoginURL, "/device")
+	})
+	if login.VerificationCode != "AUTH-CODE" {
+		t.Fatalf("login session = %+v", login)
+	}
+	if err := os.WriteFile(filepath.Join(state, "login-approved"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForCLIAuthTest(t, session.SessionID, func(snapshot CLIAuthSession) bool {
+		return snapshot.State == CLIAuthSessionSucceeded
+	})
+	after := CheckCLIAuth(context.Background(), "lark-cli")
+	if after.State != CLIAuthAuthenticated {
+		t.Fatalf("final auth status = %+v", after)
+	}
+}
+
+func TestClassifyGitHubCLIAuth(t *testing.T) {
+	if got := classifyGitHubCLIAuth([]byte("Logged in to github.com account octocat\nActive account: true"), nil); got != CLIAuthAuthenticated {
+		t.Fatalf("authenticated classification = %q", got)
+	}
+	if got := classifyGitHubCLIAuth([]byte("You are not logged into any GitHub hosts"), fmt.Errorf("exit 1")); got != CLIAuthUnauthenticated {
+		t.Fatalf("unauthenticated classification = %q", got)
+	}
+}
+
+func waitForCLIAuthTest(t *testing.T, sessionID string, ready func(CLIAuthSession) bool) CLIAuthSession {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, ok := GetCLIAuthSession(sessionID)
+		if !ok {
+			t.Fatalf("auth session %s disappeared", sessionID)
+		}
+		if ready(snapshot) {
+			return snapshot
+		}
+		if snapshot.State == CLIAuthSessionFailed || snapshot.State == CLIAuthSessionCancelled {
+			t.Fatalf("auth session stopped early: %+v", snapshot)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	snapshot, _ := GetCLIAuthSession(sessionID)
+	t.Fatalf("timed out waiting for auth session: %+v", snapshot)
+	return CLIAuthSession{}
 }
 
 func TestInstallGitHubCLIUsesHomebrew(t *testing.T) {
@@ -133,9 +249,15 @@ echo installed
 `, gh, gh))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := InstallCLI(context.Background(), "github-cli", "install")
+	var phases []string
+	res := InstallCLIWithProgress(context.Background(), "github-cli", "install", func(phase, _ string, _ int) {
+		phases = append(phases, phase)
+	})
 	if !res.OK || res.Command != "brew install gh" || !strings.Contains(res.Version, "2.93.0") {
 		t.Fatalf("install result = %+v", res)
+	}
+	if got := strings.Join(phases, ","); got != "preparing,installing,verifying" {
+		t.Fatalf("progress phases = %q", got)
 	}
 }
 

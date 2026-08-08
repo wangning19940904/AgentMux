@@ -28,6 +28,7 @@ export const FEISHU_DEFAULTS = {
   admin_user_ids: "",
   codex_max_queue: "20",
   codex_turn_timeout_minutes: "20",
+  turn_timeout_minutes: "20",
 };
 
 export const FEISHU_REPLY_SCOPES = [

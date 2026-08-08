@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -57,15 +58,7 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 	if action == "" {
 		action = "install"
 	}
-	var res framework.InstallResult
-	switch action {
-	case "install":
-		res = framework.Install(r.Context(), kind)
-	case "update":
-		res = framework.Update(r.Context(), kind)
-	default:
-		res = framework.InstallResult{Kind: kind, Action: action, Error: "action must be install or update"}
-	}
+	res := s.runFrameworkInstall(r.Context(), kind, action, nil)
 	if !res.OK {
 		// Surface the install log/error but keep a 200 envelope so the client
 		// can render the log; the ok flag conveys success.
@@ -73,12 +66,44 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Register the freshly-installed SDK framework so it becomes routable in the
-	// current process without requiring a daemon restart. Register() is
-	// idempotent and only picks up frameworks detected as installed.
-	sdkagent.Register()
-
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleFrameworkInstallStream(w http.ResponseWriter, r *http.Request) {
+	var req frameworkInstallRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	kind := strings.TrimSpace(req.Kind)
+	if kind == "" {
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
+		return
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		action = "install"
+	}
+	streamInstall(w, r, func(report func(string, string, int)) any {
+		return s.runFrameworkInstall(r.Context(), kind, action, framework.ProgressFunc(report))
+	})
+}
+
+func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, progress framework.ProgressFunc) framework.InstallResult {
+	var res framework.InstallResult
+	switch action {
+	case "install":
+		res = framework.InstallWithProgress(ctx, kind, progress)
+	case "update":
+		res = framework.UpdateWithProgress(ctx, kind, progress)
+	default:
+		return framework.InstallResult{Kind: kind, Action: action, Error: "action must be install or update"}
+	}
+	if res.OK {
+		// Register the freshly-installed SDK framework so it becomes routable in
+		// the current process without requiring a daemon restart.
+		sdkagent.Register()
+	}
+	return res
 }
 
 func (s *Server) handleFrameworkCheck(w http.ResponseWriter, r *http.Request) {

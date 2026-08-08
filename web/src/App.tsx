@@ -9,6 +9,7 @@ import {
   Cable,
   ChevronDown,
   Command,
+  Coffee,
   DatabaseZap,
   ExternalLink,
   Gauge,
@@ -47,8 +48,10 @@ const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ d
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
+  api,
   getLaunchAtLogin,
   isDesktopApp,
+  KeepAwakeStatus,
   LaunchAtLoginStatus,
   openLocalWebUI,
   setLaunchAtLogin,
@@ -444,6 +447,9 @@ function PreferenceControls({
   const { t } = useI18n();
   const [launchAtLogin, setLaunchAtLoginStatus] = useState<LaunchAtLoginStatus | null>(null);
   const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(false);
+  const [keepAwake, setKeepAwakeStatus] = useState<KeepAwakeStatus | null>(null);
+  const [keepAwakeMinutes, setKeepAwakeMinutes] = useState("60");
+  const [keepAwakeBusy, setKeepAwakeBusy] = useState(false);
   const [preferenceError, setPreferenceError] = useState("");
   const desktop = isDesktopApp();
 
@@ -462,6 +468,32 @@ function PreferenceControls({
     };
   }, [desktop]);
 
+  useEffect(() => {
+    let active = true;
+    api.keepAwakeStatus()
+      .then((status) => {
+        if (!active) return;
+        setKeepAwakeStatus(status);
+        if (status.duration_minutes > 0) setKeepAwakeMinutes(String(status.duration_minutes));
+      })
+      .catch((error) => {
+        if (active) setPreferenceError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!keepAwake?.enabled) return;
+    const timer = window.setInterval(() => {
+      api.keepAwakeStatus()
+        .then((status) => setKeepAwakeStatus(status))
+        .catch(() => undefined);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [keepAwake?.enabled]);
+
   async function updateLaunchAtLogin(enabled: boolean) {
     setLaunchAtLoginBusy(true);
     setPreferenceError("");
@@ -473,6 +505,23 @@ function PreferenceControls({
       setLaunchAtLoginBusy(false);
     }
   }
+
+  async function updateKeepAwake(durationMinutes: number) {
+    setKeepAwakeBusy(true);
+    setPreferenceError("");
+    try {
+      setKeepAwakeStatus(await api.setKeepAwake(durationMinutes));
+    } catch (error) {
+      setPreferenceError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setKeepAwakeBusy(false);
+    }
+  }
+
+  const parsedKeepAwakeMinutes = Number(keepAwakeMinutes);
+  const keepAwakeDurationValid = Number.isInteger(parsedKeepAwakeMinutes)
+    && parsedKeepAwakeMinutes >= 1
+    && parsedKeepAwakeMinutes <= 1440;
 
   return (
     <>
@@ -519,6 +568,53 @@ function PreferenceControls({
             onChange={(event) => updateLaunchAtLogin(event.target.checked)}
           />
         </label>
+      )}
+      {keepAwake?.supported && (
+        <div className="preference-keep-awake">
+          <div className="preference-keep-awake-title">
+            <Coffee size={16} />
+            <span>
+              <strong>{t("app.keepAwake")}</strong>
+              <small>
+                {keepAwake.enabled
+                  ? t("app.keepAwakeRemaining", { minutes: Math.max(1, Math.ceil(keepAwake.remaining_seconds / 60)) })
+                  : t("app.keepAwakeHint")}
+              </small>
+            </span>
+          </div>
+          <div className="preference-keep-awake-controls">
+            <label>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                step={1}
+                value={keepAwakeMinutes}
+                disabled={keepAwakeBusy}
+                aria-label={t("app.keepAwakeDuration")}
+                onChange={(event) => setKeepAwakeMinutes(event.target.value)}
+              />
+              <span>{t("app.minutesShort")}</span>
+            </label>
+            <button
+              type="button"
+              disabled={keepAwakeBusy || !keepAwakeDurationValid}
+              onClick={() => updateKeepAwake(parsedKeepAwakeMinutes)}
+            >
+              {keepAwake.enabled ? t("app.keepAwakeUpdate") : t("app.keepAwakeStart")}
+            </button>
+            {keepAwake.enabled && (
+              <button
+                className="keep-awake-stop"
+                type="button"
+                disabled={keepAwakeBusy}
+                onClick={() => updateKeepAwake(0)}
+              >
+                {t("app.keepAwakeStop")}
+              </button>
+            )}
+          </div>
+        </div>
       )}
       {desktop && (
         <button

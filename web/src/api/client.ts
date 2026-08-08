@@ -1,6 +1,6 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
-import type { LaunchAtLoginStatus, RemoteHost } from "./types";
+import type { LaunchAtLoginStatus, OperationProgress, RemoteHost } from "./types";
 
 declare global {
   interface Window {
@@ -102,6 +102,57 @@ export async function postChecked<T>(path: string, body: unknown): Promise<T> {
     throw new Error(message);
   }
   return payload as T;
+}
+
+export async function postProgress<T>(
+  path: string,
+  body: unknown,
+  onProgress: (progress: OperationProgress) => void,
+): Promise<T> {
+  const res = await fetch(apiPath(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
+    throw new Error(message);
+  }
+  if (!res.body) throw new Error("Installation progress stream is unavailable.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: T | undefined;
+
+  const consumeEvent = (block: string) => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) return;
+    const event = JSON.parse(data) as {
+      type?: string;
+      progress?: OperationProgress;
+      result?: T;
+    };
+    if (event.type === "progress" && event.progress) onProgress(event.progress);
+    if (event.type === "result" && event.result !== undefined) finalResult = event.result;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? "";
+    blocks.forEach(consumeEvent);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeEvent(buffer);
+  if (finalResult === undefined) throw new Error("Installation progress stream ended unexpectedly.");
+  return finalResult;
 }
 
 export async function del<T>(path: string): Promise<T> {

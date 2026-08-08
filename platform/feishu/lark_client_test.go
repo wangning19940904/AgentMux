@@ -101,6 +101,97 @@ func TestBuildModelPickerCardUsesV2CallbackButtons(t *testing.T) {
 	}
 }
 
+func TestStreamingTaskCardsExposeStopOnlyWhileRunning(t *testing.T) {
+	control := &streamCardControl{
+		taskID: "task-1", chatID: "oc_1", chatType: "group", conversationKey: "root:om_1",
+	}
+	for name, card := range map[string]string{
+		"native": buildStreamCardJSON("working", false, false, control),
+		"legacy": buildCard("working", false, false, control),
+	} {
+		if !json.Valid([]byte(card)) {
+			t.Fatalf("%s card is not valid JSON: %s", name, card)
+		}
+		for _, want := range []string{
+			"停止任务", `"agentmux_action":"codex_task_control"`, `"action":"stop"`,
+			`"task_id":"task-1"`, `"conversation_key":"root:om_1"`,
+		} {
+			if !strings.Contains(card, want) {
+				t.Fatalf("%s running card missing %q: %s", name, want, card)
+			}
+		}
+	}
+	for name, card := range map[string]string{
+		"native": buildStreamCardJSON("done", true, false, control),
+		"legacy": buildCard("done", true, false, control),
+	} {
+		if strings.Contains(card, "codex_task_control") || strings.Contains(card, "停止任务") {
+			t.Fatalf("%s completed card is still actionable: %s", name, card)
+		}
+	}
+}
+
+func TestStreamingCardsLinkifyBareURLs(t *testing.T) {
+	bareURL := "https://open.feishu.cn/page/cli?user_code=LX5C-4SAK&lpv=1.0.85&from=cli"
+	input := "请打开：\n" + bareURL + "\n已有：[登录](https://example.com/login)\n代码：`https://example.com/code`"
+	want := "[" + bareURL + "](" + bareURL + ")"
+	wantJSON := strings.ReplaceAll(want, "&", `\u0026`)
+
+	for name, card := range map[string]string{
+		"native": buildStreamCardJSON(input, false, false, nil),
+		"legacy": buildCard(input, false, false, nil),
+	} {
+		if !strings.Contains(card, wantJSON) {
+			t.Fatalf("%s card did not linkify bare URL: %s", name, card)
+		}
+		if !strings.Contains(card, `[登录](https://example.com/login)`) ||
+			!strings.Contains(card, "`https://example.com/code`") {
+			t.Fatalf("%s card rewrote existing Markdown: %s", name, card)
+		}
+	}
+}
+
+func TestLinkifyFeishuMarkdownPreservesTrailingPunctuation(t *testing.T) {
+	got := linkifyFeishuMarkdown("文档：https://example.com/docs。")
+	want := "文档：[https://example.com/docs](https://example.com/docs)。"
+	if got != want {
+		t.Fatalf("linkified Markdown = %q, want %q", got, want)
+	}
+}
+
+func TestTaskStopCardActionKeepsTaskCorrelation(t *testing.T) {
+	client := &larkClient{platform: "feishu"}
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_controller"},
+		Context:  &callback.Context{OpenChatID: "fallback_chat", OpenMessageID: "om_task_card"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			modelPickerActionKey: codexTaskControlAction,
+			"action":             core.ChannelTaskActionStop,
+			"task_id":            "task-1",
+			"chat_id":            "oc_1",
+			"chat_type":          "group",
+			"conversation_key":   "root:om_1",
+		}},
+	}}
+	msg, ok := client.messageFromCardAction("channel:c1", event)
+	if !ok || msg == nil || msg.LogOnly || msg.ChannelTaskAction == nil {
+		t.Fatalf("task stop action was not recognized: %+v", msg)
+	}
+	if msg.ChannelTaskAction.TaskID != "task-1" || msg.ChannelTaskAction.Action != core.ChannelTaskActionStop ||
+		msg.ChatID != "oc_1" || msg.ConversationKey != "root:om_1" || msg.UserID != "ou_controller" {
+		t.Fatalf("task stop action message = %+v", msg)
+	}
+}
+
+func TestCardActionReplyTargetsTheCardMessage(t *testing.T) {
+	msg := &core.Message{
+		ID: "event-id", InteractionMessageID: "om_task_card", ChatID: "oc_1", ChatType: "group",
+	}
+	if got := threadReplyMessageID(msg); got != "om_task_card" {
+		t.Fatalf("card action reply target = %q, want card message", got)
+	}
+}
+
 func TestModelCommandFromCardActionSelectsModel(t *testing.T) {
 	client := &larkClient{platform: "feishu"}
 	event := &callback.CardActionTriggerEvent{
@@ -176,10 +267,39 @@ func TestRuntimeSettingsPickerCardCarriesScopeAndControls(t *testing.T) {
 	if strings.Contains(card, `"tag":"button"`) {
 		t.Fatalf("runtime settings card still contains buttons: %s", card)
 	}
+	if strings.Contains(card, `**设置范围**：`) || strings.Contains(card, `**模型**：`) {
+		t.Fatalf("runtime settings card still contains the duplicate summary: %s", card)
+	}
+	if got := strings.Count(card, `"tag":"column_set"`); got != 5 {
+		t.Fatalf("inline selector row count = %d, want 5: %s", got, card)
+	}
 	for _, selected := range []string{"conversation", "gpt-5", "high", "priority", core.ApprovalModeYolo} {
 		if !strings.Contains(card, `"initial_option":"`+selected+`"`) {
 			t.Fatalf("card missing selected option %q: %s", selected, card)
 		}
+	}
+}
+
+func TestRuntimeSettingsPickerHidesUnsupportedControls(t *testing.T) {
+	card := buildRuntimeSettingsPickerCard(&core.Message{ChatID: "oc_1"}, core.RuntimeSettingsPickerState{
+		Scope:    core.RuntimeSettingsScopeConversation,
+		Settings: core.RuntimeSettings{Model: "cursor-grok-4.5-medium-fast"},
+		Capabilities: core.RuntimeSettingsCapabilities{
+			Models: []core.RuntimeOption{{Value: "cursor-grok-4.5-medium-fast"}},
+		},
+		Unsupported: map[core.RuntimeSetting]string{
+			core.RuntimeSettingReasoningEffort: "not supported",
+			core.RuntimeSettingServiceTier:     "not supported",
+			core.RuntimeSettingApprovalMode:    "not supported",
+		},
+	})
+	for _, hidden := range []string{"思考强度", "速度", "审批模式", "not supported"} {
+		if strings.Contains(card, hidden) {
+			t.Fatalf("unsupported control %q rendered: %s", hidden, card)
+		}
+	}
+	if got := strings.Count(card, `"tag":"select_static"`); got != 1 {
+		t.Fatalf("select count = %d, want model only: %s", got, card)
 	}
 }
 
@@ -290,6 +410,15 @@ func TestAgentInteractionCardAndCallbackCorrelation(t *testing.T) {
 	}
 	if strings.Contains(actionMsg.Callback.ActionValue, "nonce-1") || strings.Contains(actionMsg.Callback.ActionValue, `"decision"`) {
 		t.Fatalf("logged callback value retained approval data: %s", actionMsg.Callback.ActionValue)
+	}
+}
+
+func TestResolvedAgentInteractionCardUsesReadableOutcome(t *testing.T) {
+	card := buildAgentInteractionCard(&core.Message{}, core.ChannelTask{}, core.ChannelInteraction{
+		Request: core.AgentInteraction{Title: "命令执行审批"},
+	}, "acceptForSession")
+	if !strings.Contains(card, "本会话已允许") || strings.Contains(card, ">acceptForSession<") {
+		t.Fatalf("resolved interaction outcome is not readable: %s", card)
 	}
 }
 

@@ -323,6 +323,7 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	}
 	workspace := WorkspaceInitOptions{
 		AgentID:         inst.ID,
+		AgentName:       inst.Name,
 		RuntimeID:       inst.RuntimeID,
 		WorkDir:         inst.WorkDir,
 		Skills:          append([]string(nil), inst.Skills...),

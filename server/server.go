@@ -41,6 +41,7 @@ type Server struct {
 	obs             *observabilityRuntime
 	providerMonitor *providerMonitor
 	remote          *remotepkg.Manager
+	keepAwake       *keepAwakeManager
 	channelPeers    channelPeerClient
 	channelClaimMu  sync.Mutex
 	mux             *http.ServeMux
@@ -54,14 +55,15 @@ type UsageReporter func(ctx context.Context, period string, since, until time.Ti
 // New builds a server.
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
 	s := &Server{
-		cfg:      cfg,
-		version:  "0.1.0",
-		log:      log,
-		st:       st,
-		provider: pm,
-		usageFn:  usageFn,
-		sessions: sessionstore.New(),
-		mux:      http.NewServeMux(),
+		cfg:       cfg,
+		version:   "0.1.0",
+		log:       log,
+		st:        st,
+		provider:  pm,
+		usageFn:   usageFn,
+		sessions:  sessionstore.New(),
+		keepAwake: newKeepAwakeManager(),
+		mux:       http.NewServeMux(),
 	}
 	s.providerMonitor = newProviderMonitor(log, st, pm)
 	remoteManager, err := remotepkg.NewManager(
@@ -130,8 +132,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/agent-instances", s.handleAgentInstanceDelete)
 	s.mux.HandleFunc("GET /api/v1/tools", s.handleTools)
 	s.mux.HandleFunc("POST /api/v1/tools/cli/install", s.handleCLIInstall)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/install/stream", s.handleCLIInstallStream)
 	s.mux.HandleFunc("POST /api/v1/tools/cli/check", s.handleCLICheck)
 	s.mux.HandleFunc("POST /api/v1/tools/cli/skills/sync", s.handleCLISkillSync)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/skills/sync/stream", s.handleCLISkillSyncStream)
+	s.mux.HandleFunc("GET /api/v1/tools/cli/auth", s.handleCLIAuthStatus)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/auth/login", s.handleCLIAuthLogin)
+	s.mux.HandleFunc("GET /api/v1/tools/cli/auth/login", s.handleCLIAuthLoginStatus)
+	s.mux.HandleFunc("POST /api/v1/tools/cli/auth/login/cancel", s.handleCLIAuthLoginCancel)
 	s.mux.HandleFunc("GET /api/v1/providers", s.handleProvidersList)
 	s.mux.HandleFunc("POST /api/v1/providers", s.handleProviderUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/providers", s.handleProviderDelete)
@@ -153,9 +161,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/system/claude-3p", s.handleClaude3PToggle)
 	s.mux.HandleFunc("GET /api/v1/system/directories", s.handleSystemDirectoryList)
 	s.mux.HandleFunc("POST /api/v1/system/directories", s.handleSystemDirectoryEnsure)
+	s.mux.HandleFunc("GET /api/v1/system/keep-awake", s.handleKeepAwakeGet)
+	s.mux.HandleFunc("PUT /api/v1/system/keep-awake", s.handleKeepAwakePut)
 	s.mux.HandleFunc("GET /api/v1/frameworks", s.handleFrameworksList)
 	s.mux.HandleFunc("GET /api/v1/frameworks/auth", s.handleFrameworkAuthStatus)
 	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
+	s.mux.HandleFunc("POST /api/v1/frameworks/install/stream", s.handleFrameworkInstallStream)
 	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login", s.handleFrameworkLogin)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login/complete", s.handleFrameworkLoginComplete)
@@ -163,6 +174,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/sessions/messages", s.handleSessionMessages)
 	s.mux.HandleFunc("POST /api/v1/sessions/messages", s.handleSessionMessageSend)
 	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
+	s.mux.HandleFunc("POST /api/v1/sessions/stop", s.handleSessionStop)
 	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
 	s.mux.HandleFunc("GET /api/v1/menubar/settings", s.handleMenubarSettingsGet)
@@ -195,6 +207,7 @@ func (s *Server) routes() {
 
 // ListenAndServe starts the HTTP server until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	defer s.keepAwake.Stop()
 	if s.remote != nil {
 		defer s.remote.Close()
 	}

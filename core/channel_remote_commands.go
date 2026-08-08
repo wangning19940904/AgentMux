@@ -16,7 +16,7 @@ func (e *Engine) handleRemoteCommand(ctx context.Context, rt *channelRuntime, ms
 		e.emit(ctx, HookMessageSent, data)
 		return true
 	case "停止", "/stop":
-		e.stopRemoteTask(ctx, rt, msg, data)
+		e.stopRemoteTask(ctx, rt, msg, data, "")
 		return true
 	case "/queue clear":
 		e.clearRemoteQueue(ctx, rt, msg, data, false)
@@ -74,6 +74,16 @@ func (e *Engine) handleRemoteCommand(ctx context.Context, rt *channelRuntime, ms
 		}
 	}
 	return false
+}
+
+func (e *Engine) handleRemoteTaskAction(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, action ChannelTaskAction) {
+	switch action.Action {
+	case ChannelTaskActionStop:
+		e.stopRemoteTask(ctx, rt, msg, data, action.TaskID)
+	default:
+		_ = rt.platform.Reply(ctx, msg, "不支持的任务操作。")
+		e.emit(ctx, HookMessageSent, data)
+	}
 }
 
 func (e *Engine) ensureRemoteConversation(ctx context.Context, rt *channelRuntime, msg *Message) (*Conversation, error) {
@@ -206,18 +216,21 @@ func (rt *channelRuntime) remoteStatus(key string) string {
 		state.active.task.Status, threadID, state.active.task.ControllerID, len(state.queue))
 }
 
-func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string) {
+func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, expectedTaskID string) {
 	key := ResolveConversationKey(msg)
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(key)
 	active := state.active
-	rt.controlMu.Unlock()
 	if active == nil {
+		rt.controlMu.Unlock()
 		_ = rt.platform.Reply(ctx, msg, "当前没有活动任务。")
+	} else if expectedTaskID != "" && active.task.ID != expectedTaskID {
+		rt.controlMu.Unlock()
+		_ = rt.platform.Reply(ctx, msg, "该任务已结束或不再是当前任务。")
 	} else if active.task.ControllerID != msg.UserID && !rt.isAdmin(msg.UserID) {
+		rt.controlMu.Unlock()
 		_ = rt.platform.Reply(ctx, msg, "只有任务控制人或管理员可以停止当前任务。")
 	} else {
-		rt.controlMu.Lock()
 		active.stopRequested = true
 		cancelTask := active.cancel
 		session := active.session

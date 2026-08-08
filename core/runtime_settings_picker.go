@@ -19,6 +19,7 @@ type RuntimeSettingsPickerState struct {
 	AgentDefaultsEditable bool                        `json:"agent_defaults_editable"`
 	Unsupported           map[RuntimeSetting]string   `json:"unsupported,omitempty"`
 	Notice                string                      `json:"notice,omitempty"`
+	Hint                  string                      `json:"hint,omitempty"`
 }
 
 // RuntimeSettingsAction is attached to an inbound Message produced by an

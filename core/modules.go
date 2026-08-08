@@ -65,6 +65,7 @@ type SkillManager interface {
 // before a local agent runtime starts.
 type WorkspaceInitOptions struct {
 	AgentID         string          `json:"agent_id,omitempty"`
+	AgentName       string          `json:"agent_name,omitempty"`
 	RuntimeID       string          `json:"runtime_id,omitempty"`
 	WorkDir         string          `json:"work_dir,omitempty"`
 	Skills          []string        `json:"skills,omitempty"`

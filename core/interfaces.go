@@ -48,6 +48,9 @@ type Message struct {
 	// AgentInteractionAction carries an idempotent response to a pending native
 	// agent approval or request_user_input prompt.
 	AgentInteractionAction *AgentInteractionAction
+	// ChannelTaskAction carries an id-scoped action from a live task card. It is
+	// separate from Text so a stale callback cannot become a generic /stop.
+	ChannelTaskAction *ChannelTaskAction
 	// InteractionMessageID is the card/message that an interactive action
 	// updates. ID remains the unique inbound event id used for deduplication.
 	InteractionMessageID string
@@ -266,6 +269,13 @@ type StreamReplier interface {
 	BeginReply(ctx context.Context, msg *Message) (ReplyStream, error)
 }
 
+// TaskStreamReplier opens a streaming reply with controls bound to one durable
+// channel task. Implementations should remove task controls on the terminal
+// Update so completed cards are no longer actionable.
+type TaskStreamReplier interface {
+	BeginTaskReply(ctx context.Context, msg *Message, taskID string) (ReplyStream, error)
+}
+
 // ReplyStream is a live, in-place updating reply produced by a StreamReplier.
 // Update may be called repeatedly with the full accumulated text so far; the
 // implementation is responsible for rendering it. Close finalizes the message.
@@ -298,6 +308,13 @@ type SpeechReply interface {
 // whole agent turn as one in-place updating plain-text message.
 type StreamMessageReplier interface {
 	BeginMessageReply(ctx context.Context, msg *Message) (ReplyStream, error)
+}
+
+// HelpCardReplier renders /help as an interactive card. Button callbacks are
+// converted by the platform into ordinary command messages such as /model or
+// /clear, so they pass through the same validation and handling paths.
+type HelpCardReplier interface {
+	ReplyHelpCard(ctx context.Context, msg *Message, state HelpCardState) error
 }
 
 // ModelPickerReplier is an optional Platform capability for rendering the

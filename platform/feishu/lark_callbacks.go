@@ -80,6 +80,16 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 	if msg.ChatID == "" {
 		return msg, true
 	}
+	if action == codexTaskControlAction {
+		taskID := stringValue(value["task_id"])
+		taskAction := stringValue(value["action"])
+		if taskID == "" || taskAction != core.ChannelTaskActionStop {
+			return msg, true
+		}
+		msg.LogOnly = false
+		msg.ChannelTaskAction = &core.ChannelTaskAction{TaskID: taskID, Action: taskAction}
+		return msg, true
+	}
 	if action == codexInteractionAction {
 		interactionID := stringValue(value["interaction_id"])
 		nonce := stringValue(value["nonce"])
@@ -135,6 +145,15 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 		msg.RuntimeSettingsAction = &core.RuntimeSettingsAction{
 			Scope: scope, Setting: setting, Value: selectedValue, Reset: boolValue(value["reset"]),
 		}
+		return msg, true
+	}
+	if action == helpCommandAction {
+		command := strings.ToLower(strings.TrimSpace(stringValue(value["command"])))
+		if !core.IsHelpCommandAction(command) {
+			return msg, true
+		}
+		msg.LogOnly = false
+		msg.Text = command
 		return msg, true
 	}
 	text := ""

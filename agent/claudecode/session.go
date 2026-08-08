@@ -12,6 +12,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/internal/procutil"
 )
 
 // session drives one `claude` subprocess invocation per turn using
@@ -70,6 +71,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	args := s.args(text)
 
 	cmd := exec.CommandContext(ctx, claudeBinary(), args...)
+	procutil.Prepare(cmd)
 	cmd.Dir = s.workDir
 	// Drop CLAUDECODE so a nested claude can launch (INSTALL.md gotcha).
 	cmd.Env = withObservationTelemetry(

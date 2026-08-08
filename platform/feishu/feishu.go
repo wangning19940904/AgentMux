@@ -86,9 +86,9 @@ func (p *Platform) Reply(ctx context.Context, msg *core.Message, text string) er
 	if p.client == nil {
 		return fmt.Errorf("%s: client not started", p.name)
 	}
-	if shouldReplyInThread(msg) {
+	if messageID := threadReplyMessageID(msg); messageID != "" {
 		if client, ok := p.client.(threadReplyClient); ok {
-			_, err := client.ReplyText(ctx, msg.ID, text)
+			_, err := client.ReplyText(ctx, messageID, text)
 			return err
 		}
 	}
@@ -124,6 +124,18 @@ func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.Repl
 	return &cardStream{client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg)}, nil
 }
 
+// BeginTaskReply opens a task-scoped streaming card. While the turn is active
+// the card exposes a stop button whose callback is bound to taskID.
+func (p *Platform) BeginTaskReply(ctx context.Context, msg *core.Message, taskID string) (core.ReplyStream, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("%s: client not started", p.name)
+	}
+	control := newStreamCardControl(msg, taskID)
+	return &cardStream{
+		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
+	}, nil
+}
+
 // BeginSpeechReply mirrors the assistant answer to the active meeting joined
 // through the invite approval flow. A nil reply means voice is disabled or the
 // bot is not currently in a meeting.
@@ -150,6 +162,15 @@ func (p *Platform) ReplyModelPicker(ctx context.Context, msg *core.Message, stat
 		return fmt.Errorf("%s: client not started", p.name)
 	}
 	_, err := p.client.SendModelPickerCard(ctx, msg, state)
+	return err
+}
+
+func (p *Platform) ReplyHelpCard(ctx context.Context, msg *core.Message, state core.HelpCardState) error {
+	client, ok := p.client.(helpCardClient)
+	if !ok {
+		return fmt.Errorf("%s: help cards are unavailable", p.name)
+	}
+	_, err := client.SendHelpCard(ctx, msg, state)
 	return err
 }
 
@@ -261,6 +282,24 @@ type cardStream struct {
 
 	// legacy patch path state
 	messageID string
+	control   *streamCardControl
+}
+
+type streamCardControl struct {
+	taskID          string
+	chatID          string
+	chatType        string
+	conversationKey string
+}
+
+func newStreamCardControl(msg *core.Message, taskID string) *streamCardControl {
+	if msg == nil || taskID == "" {
+		return nil
+	}
+	return &streamCardControl{
+		taskID: taskID, chatID: msg.ChatID, chatType: msg.ChatType,
+		conversationKey: core.ResolveConversationKey(msg),
+	}
 }
 
 func (s *cardStream) Update(ctx context.Context, text string, done, failed bool) error {
@@ -270,12 +309,12 @@ func (s *cardStream) Update(ctx context.Context, text string, done, failed bool)
 		var err error
 		if s.replyMessageID != "" {
 			if client, ok := s.client.(threadReplyClient); ok {
-				id, err = client.BeginStreamCardReply(ctx, s.replyMessageID)
+				id, err = client.BeginStreamCardReply(ctx, s.replyMessageID, s.control)
 			} else {
-				id, err = s.client.BeginStreamCard(ctx, s.chatID)
+				id, err = s.client.BeginStreamCard(ctx, s.chatID, s.control)
 			}
 		} else {
-			id, err = s.client.BeginStreamCard(ctx, s.chatID)
+			id, err = s.client.BeginStreamCard(ctx, s.chatID, s.control)
 		}
 		if err != nil {
 			s.fellBack = true
@@ -293,7 +332,7 @@ func (s *cardStream) Update(ctx context.Context, text string, done, failed bool)
 func (s *cardStream) updateNative(ctx context.Context, text string, done, failed bool) error {
 	s.sequence++
 	if done {
-		return s.client.FinishStreamCard(ctx, s.cardID, text, s.sequence, failed)
+		return s.client.FinishStreamCard(ctx, s.cardID, text, s.sequence, failed, s.control)
 	}
 	return s.client.StreamCardText(ctx, s.cardID, text, s.sequence)
 }
@@ -304,12 +343,12 @@ func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed
 		var err error
 		if s.replyMessageID != "" {
 			if client, ok := s.client.(threadReplyClient); ok {
-				id, err = client.ReplyCard(ctx, s.replyMessageID, text, done, failed)
+				id, err = client.ReplyCard(ctx, s.replyMessageID, text, done, failed, s.control)
 			} else {
-				id, err = s.client.SendCard(ctx, s.chatID, text, done, failed)
+				id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.control)
 			}
 		} else {
-			id, err = s.client.SendCard(ctx, s.chatID, text, done, failed)
+			id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.control)
 		}
 		if err != nil {
 			return err
@@ -317,7 +356,7 @@ func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed
 		s.messageID = id
 		return nil
 	}
-	return s.client.UpdateCard(ctx, s.messageID, text, done, failed)
+	return s.client.UpdateCard(ctx, s.messageID, text, done, failed, s.control)
 }
 
 func (s *cardStream) Close(ctx context.Context) error { return nil }
@@ -331,6 +370,9 @@ func shouldReplyInThread(msg *core.Message) bool {
 
 func threadReplyMessageID(msg *core.Message) string {
 	if shouldReplyInThread(msg) {
+		if msg.InteractionMessageID != "" {
+			return msg.InteractionMessageID
+		}
 		return msg.ID
 	}
 	return ""

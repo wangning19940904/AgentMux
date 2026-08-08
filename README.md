@@ -166,6 +166,21 @@ GET  /api/v1/observability/integrations        # Plugin/OTel/Transcript/Proxy Do
 POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall|doctor}
 ```
 
+### 渠道命令
+
+在绑定 Agent 的渠道中发送 `/help`，会收到包含 Agent 自我介绍、完整命令列表和快捷操作按钮的帮助卡片。飞书/Lark、Slack、Discord 和 Telegram 支持直接点击 `/model`、`/clear`、`/approval` 等按钮；其他渠道自动回退为文本帮助。
+
+| 命令 | 效果 |
+| --- | --- |
+| `/help` | 查看 Agent 介绍、支持的命令和快捷按钮 |
+| `/clear`、`/new`、`/reset` | 清除上下文并开始新会话 |
+| `/model` | 查看或切换当前会话模型 |
+| `/effort` | 查看或切换思考强度 |
+| `/fast` | 查看或切换快速模式 |
+| `/approval` | 查看或切换审批模式 |
+
+启用 Codex 远程控制的渠道还会展示 `/status`、`/stop`、`/queue`、`/sessions`、`/bind`、`/open` 和 `/takeover`。
+
 ### 渠道审批命令
 
 在飞书/Lark 等绑定 Agent 的渠道中，可以直接切换当前会话的审批模式；命令由 AgentMux 处理，不会转发给 Agent：
@@ -182,6 +197,8 @@ POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall
 | `/approval reset` | 恢复 Agent/运行时默认审批模式 |
 
 不同 Agent runtime 支持的模式不同；不支持的命令会返回该 runtime 的可用模式列表。
+
+运行时设置卡里的“当前会话”会立即生效；“Agent 默认”只影响之后创建的新会话，不会反向修改已经存在的会话。Codex app-server 能原生挂起权限请求，启用渠道 Codex 远程控制后会发送带“允许一次 / 本会话允许 / 拒绝”的审批卡片。Cursor、Claude Code 等 print-mode CLI 不能在渠道中暂停后继续接收逐次审批；它们的手动模式会直接拦截工具，请改用运行时支持的自动审批或 `/yolo on`。
 
 ## 构建
 

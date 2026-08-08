@@ -104,6 +104,23 @@ func (p *Platform) handleCallback(ctx context.Context, inbound chan<- *core.Mess
 		return
 	}
 	p.answerCallback(ctx, callback.ID)
+	if strings.HasPrefix(callback.Data, "hc:") {
+		command := "/" + strings.TrimPrefix(callback.Data, "hc:")
+		if !core.IsHelpCommandAction(command) {
+			return
+		}
+		msg := &core.Message{
+			ID: callback.ID, InteractionMessageID: strconv.FormatInt(callback.Message.MessageID, 10),
+			ChatID: strconv.FormatInt(callback.Message.Chat.ID, 10),
+			UserID: strconv.FormatInt(callback.From.ID, 10), UserName: callback.From.Username,
+			Platform: "telegram", Text: command,
+		}
+		select {
+		case inbound <- msg:
+		case <-ctx.Done():
+		}
+		return
+	}
 	token := strings.TrimPrefix(callback.Data, "rs:")
 	p.mu.Lock()
 	action, ok := p.pickerActions[token]
@@ -175,6 +192,13 @@ func (p *Platform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *core.Mes
 	return p.sendSettingsPicker(ctx, msg.ChatID, telegramRuntimeSettingsText(state), telegramRuntimeSettingsKeyboard(p, state))
 }
 
+func (p *Platform) ReplyHelpCard(ctx context.Context, msg *core.Message, state core.HelpCardState) error {
+	if msg == nil || msg.ChatID == "" {
+		return fmt.Errorf("telegram: empty chat id")
+	}
+	return p.sendSettingsPicker(ctx, msg.ChatID, telegramHelpText(state), telegramHelpKeyboard(state))
+}
+
 func (p *Platform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
 	if msg == nil || msg.ChatID == "" || (msg.ID == "" && msg.InteractionMessageID == "") {
 		return fmt.Errorf("telegram: missing picker message reference")
@@ -236,7 +260,40 @@ func telegramRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
 	if state.Notice != "" {
 		text += "\n提示：" + state.Notice
 	}
+	if state.Hint != "" {
+		text += "\n" + state.Hint
+	}
 	return text
+}
+
+func telegramHelpText(state core.HelpCardState) string {
+	text := state.AgentName + " · 帮助\n" + state.Introduction
+	if state.RuntimeName != "" {
+		text += "\n当前运行时：" + state.RuntimeName
+	}
+	text += "\n\n支持的命令："
+	for _, command := range state.Commands {
+		text += "\n" + command.Command + " — " + command.Description
+	}
+	return text
+}
+
+func telegramHelpKeyboard(state core.HelpCardState) [][]tgInlineButton {
+	buttons := make([]tgInlineButton, 0)
+	for _, command := range state.Commands {
+		if !command.Actionable || !core.IsHelpCommandAction(command.Command) {
+			continue
+		}
+		buttons = append(buttons, tgInlineButton{
+			Text: command.Command, CallbackData: "hc:" + strings.TrimPrefix(command.Command, "/"),
+		})
+	}
+	rows := make([][]tgInlineButton, 0)
+	for i := 0; i < len(buttons); i += 3 {
+		end := min(i+3, len(buttons))
+		rows = append(rows, buttons[i:end])
+	}
+	return rows
 }
 
 type tgInlineButton struct {

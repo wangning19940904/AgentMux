@@ -43,6 +43,7 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 		}
 		eng.AddProject(p.Name, p.WorkDir, ag, plats, core.WorkspaceInitOptions{
 			AgentID:   "config:" + p.Name,
+			AgentName: p.Name,
 			RuntimeID: p.Agent,
 			WorkDir:   p.WorkDir,
 		})

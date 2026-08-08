@@ -103,6 +103,28 @@ func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) erro
 			return
 		}
 		data := interaction.MessageComponentData()
+		if strings.HasPrefix(data.CustomID, "agentmux_help_") {
+			command := "/" + strings.TrimPrefix(data.CustomID, "agentmux_help_")
+			if !core.IsHelpCommandAction(command) || interaction.Message == nil {
+				return
+			}
+			_ = s.InteractionRespond(interaction.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
+			userID := ""
+			if interaction.Member != nil && interaction.Member.User != nil {
+				userID = interaction.Member.User.ID
+			} else if interaction.User != nil {
+				userID = interaction.User.ID
+			}
+			msg := &core.Message{
+				ID: interaction.ID, InteractionMessageID: interaction.Message.ID,
+				ChatID: interaction.ChannelID, UserID: userID, Platform: "discord", Text: command,
+			}
+			select {
+			case inbound <- msg:
+			case <-ctx.Done():
+			}
+			return
+		}
 		if !strings.HasPrefix(data.CustomID, "agentmux_settings_") || len(data.Values) == 0 {
 			return
 		}
@@ -177,6 +199,19 @@ func (p *Platform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *core.Mes
 	return nil
 }
 
+func (p *Platform) ReplyHelpCard(ctx context.Context, msg *core.Message, state core.HelpCardState) error {
+	if msg == nil || msg.ChatID == "" {
+		return fmt.Errorf("discord: empty chat id")
+	}
+	_, err := p.discordSession().ChannelMessageSendComplex(msg.ChatID, &discordgo.MessageSend{
+		Content: discordHelpText(state), Components: discordHelpComponents(state),
+	}, discordgo.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("discord help card: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
 	if msg == nil || msg.ChatID == "" || (msg.ID == "" && msg.InteractionMessageID == "") {
 		return fmt.Errorf("discord: missing picker message reference")
@@ -218,6 +253,9 @@ func discordRuntimeSettingsText(state core.RuntimeSettingsPickerState) string {
 	if state.Notice != "" {
 		text += "\n> " + state.Notice
 	}
+	if state.Hint != "" {
+		text += "\n> " + state.Hint
+	}
 	return text
 }
 
@@ -236,6 +274,43 @@ func discordRuntimeSettingsComponents(state core.RuntimeSettingsPickerState) []d
 	// Discord allows at most five component rows per message.
 	if len(rows) > 5 {
 		return rows[:5]
+	}
+	return rows
+}
+
+func discordHelpText(state core.HelpCardState) string {
+	text := "**" + state.AgentName + " · 帮助**\n" + state.Introduction
+	if state.RuntimeName != "" {
+		text += "\n**当前运行时**：`" + state.RuntimeName + "`"
+	}
+	text += "\n\n**支持的命令**"
+	for _, command := range state.Commands {
+		text += "\n`" + command.Command + "`  " + command.Description
+	}
+	return text
+}
+
+func discordHelpComponents(state core.HelpCardState) []discordgo.MessageComponent {
+	buttons := make([]discordgo.MessageComponent, 0)
+	for _, command := range state.Commands {
+		if !command.Actionable || !core.IsHelpCommandAction(command.Command) {
+			continue
+		}
+		style := discordgo.SecondaryButton
+		if command.Command == "/model" {
+			style = discordgo.PrimaryButton
+		} else if command.Command == "/clear" || command.Command == "/stop" {
+			style = discordgo.DangerButton
+		}
+		buttons = append(buttons, discordgo.Button{
+			Label: command.Command, Style: style,
+			CustomID: "agentmux_help_" + strings.TrimPrefix(command.Command, "/"),
+		})
+	}
+	rows := make([]discordgo.MessageComponent, 0)
+	for i := 0; i < len(buttons); i += 5 {
+		end := min(i+5, len(buttons))
+		rows = append(rows, discordgo.ActionsRow{Components: buttons[i:end]})
 	}
 	return rows
 }

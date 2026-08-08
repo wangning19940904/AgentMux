@@ -115,6 +115,43 @@ func (s *Server) handleSessionResume(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleSessionStop(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "sessions can be stopped only from the local console")
+		return
+	}
+	if s.st == nil {
+		writeErr(w, http.StatusServiceUnavailable, "conversation store is unavailable")
+		return
+	}
+	controller, ok := s.sender.(core.ConversationRuntimeController)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "conversation control is unavailable")
+		return
+	}
+	var req struct {
+		ChannelID      string `json:"channel_id"`
+		ConversationID string `json:"conversation_id"`
+		ActiveTaskID   string `json:"active_task_id,omitempty"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	conversation, err := s.channelConversation(r, req.ChannelID, req.ConversationID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	state, err := controller.StopConversation(r.Context(), strings.TrimSpace(req.ChannelID), conversation.ConversationKey, req.ActiveTaskID)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "status": state.Status, "can_stop": state.CanStop, "task_id": state.TaskID,
+	})
+}
+
 func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
 		writeErr(w, http.StatusServiceUnavailable, "sessions not enabled")
@@ -146,6 +183,9 @@ func (s *Server) enrichSessionRows(
 		if native[i].NativeSessionID == "" {
 			native[i].NativeSessionID = native[i].SessionID
 		}
+		if native[i].RunStatus == "" {
+			native[i].RunStatus = core.ConversationStatusIdle
+		}
 	}
 	if s.st == nil {
 		return native, nil
@@ -162,6 +202,10 @@ func (s *Server) enrichSessionRows(
 	if err != nil {
 		return nil, err
 	}
+	tasks, err := s.st.ListChannelTasks(ctx, "", "", false)
+	if err != nil {
+		return nil, err
+	}
 	channelByID := make(map[string]core.Channel, len(channels))
 	for _, channel := range channels {
 		channelByID[channel.ID] = channel
@@ -170,6 +214,20 @@ func (s *Server) enrichSessionRows(
 	for _, agent := range agents {
 		agentByID[agent.ID] = agent
 	}
+	latestTaskByConversation := make(map[string]core.ChannelTask, len(tasks))
+	latestTaskByKey := make(map[string]core.ChannelTask, len(tasks))
+	for _, task := range tasks {
+		if task.ConversationID != "" {
+			if _, exists := latestTaskByConversation[task.ConversationID]; !exists {
+				latestTaskByConversation[task.ConversationID] = task
+			}
+		}
+		key := sessionConversationTaskKey(task.ChannelID, task.ConversationKey)
+		if _, exists := latestTaskByKey[key]; !exists {
+			latestTaskByKey[key] = task
+		}
+	}
+	runtimeController, runtimeControlAvailable := s.sender.(core.ConversationRuntimeController)
 	usedNative := make(map[int]bool, len(native))
 	rows := make([]sessionstore.Meta, 0, len(native)+len(conversations))
 	for _, conversation := range conversations {
@@ -235,6 +293,30 @@ func (s *Server) enrichSessionRows(
 		if conversation.MessageCount > row.MessageCount {
 			row.MessageCount = conversation.MessageCount
 		}
+		row.RunStatus = core.ConversationStatusIdle
+		latestTask, taskFound := latestTaskByConversation[conversation.ID]
+		if !taskFound {
+			latestTask, taskFound = latestTaskByKey[sessionConversationTaskKey(channelID, conversation.ConversationKey)]
+		}
+		if taskFound {
+			row.RunStatus = string(latestTask.Status)
+			if sessionRunStatusActive(row.RunStatus) {
+				row.ActiveTaskID = latestTask.ID
+			}
+		}
+		if runtimeControlAvailable {
+			state, stateErr := runtimeController.ConversationRuntimeState(ctx, channelID, conversation.ConversationKey)
+			if stateErr == nil {
+				if sessionRunStatusActive(state.Status) || sessionRunStatusActive(row.RunStatus) ||
+					row.RunStatus == "" || row.RunStatus == core.ConversationStatusIdle {
+					row.RunStatus = state.Status
+				}
+				row.CanStop = state.CanStop
+				if state.TaskID != "" {
+					row.ActiveTaskID = state.TaskID
+				}
+			}
+		}
 		rows = append(rows, row)
 	}
 	for i, item := range native {
@@ -246,6 +328,19 @@ func (s *Server) enrichSessionRows(
 		return rows[i].LastActiveAt.After(rows[j].LastActiveAt)
 	})
 	return rows, nil
+}
+
+func sessionConversationTaskKey(channelID, conversationKey string) string {
+	return strings.TrimSpace(channelID) + "\x00" + strings.TrimSpace(conversationKey)
+}
+
+func sessionRunStatusActive(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case string(core.ChannelTaskQueued), string(core.ChannelTaskRunning), string(core.ChannelTaskWaitingInput), core.ConversationStatusStopping:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) resolveConversationSession(ctx context.Context, conversationID string) (*core.Conversation, string, error) {

@@ -43,6 +43,36 @@ func TestClaudeScannerParsesSessions(t *testing.T) {
 	}
 }
 
+func TestClaudeScannerPairsToolInputAndOutput(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	dir := filepath.Join(root, "projects", "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "tools.jsonl")
+	data := `{"type":"assistant","sessionId":"tools","message":{"role":"assistant","content":[{"type":"text","text":"I will inspect it."},{"type":"tool_use","id":"call-1","name":"read_file","input":{"path":"README.md"}}]},"timestamp":"2026-07-03T01:01:00Z"}
+{"type":"user","sessionId":"tools","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"file contents"}]},"timestamp":"2026-07-03T01:02:00Z"}
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := New().Messages(context.Background(), ResumeRequest{ProviderID: "claudecode", Surface: "cli", SourcePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	tool := messages[1]
+	if tool.Role != "tool" || tool.ToolName != "read_file" || tool.ToolCallID != "call-1" || tool.ToolOutput != "file contents" {
+		t.Fatalf("tool message = %+v", tool)
+	}
+	if tool.ToolInput != "{\n  \"path\": \"README.md\"\n}" {
+		t.Fatalf("tool input = %q", tool.ToolInput)
+	}
+}
+
 func TestCodexScannerParsesAndSkipsSubagents(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".codex")
 	t.Setenv("CODEX_HOME", root)
@@ -70,6 +100,35 @@ func TestCodexScannerParsesAndSkipsSubagents(t *testing.T) {
 	}
 	if items[0].SessionID != "cx1" || items[0].ResumeCommand != "codex resume 'cx1'" || items[0].MessageCount != 2 {
 		t.Fatalf("meta = %+v", items[0])
+	}
+}
+
+func TestCodexScannerPairsFunctionCallInputAndOutput(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".codex")
+	t.Setenv("CODEX_HOME", root)
+	dir := filepath.Join(root, "sessions", "2026", "07", "03")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-tools.jsonl")
+	data := `{"type":"session_meta","payload":{"id":"tools","cwd":"/repo","timestamp":"2026-07-03T02:00:00Z"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"check status"}]},"timestamp":"2026-07-03T02:01:00Z"}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"git status\"}","call_id":"call-1"},"timestamp":"2026-07-03T02:02:00Z"}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"clean"},"timestamp":"2026-07-03T02:03:00Z"}
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := New().Messages(context.Background(), ResumeRequest{ProviderID: "codex", Surface: "cli", SourcePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	tool := messages[1]
+	if tool.Role != "tool" || tool.ToolName != "exec_command" || tool.ToolCallID != "call-1" || tool.ToolOutput != "clean" {
+		t.Fatalf("tool message = %+v", tool)
 	}
 }
 
@@ -133,5 +192,50 @@ func TestCodexAppServerMockMessages(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[0].Content != "hello" || messages[1].Role != "assistant" {
 		t.Fatalf("messages = %+v", messages)
+	}
+}
+
+func TestCodexAppServerMessagesParsesThreadItems(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	dir := t.TempDir()
+	cmd := filepath.Join(dir, "codex-mock")
+	body1 := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	body2 := `{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1","turns":[{"createdAt":1783047600,"items":[{"id":"u1","type":"userMessage","content":[{"type":"text","text":"hello"}]},{"id":"tool-1","type":"commandExecution","command":"pwd","cwd":"/repo","aggregatedOutput":"/repo","exitCode":0,"status":"completed","commandActions":[]},{"id":"a1","type":"agentMessage","text":"done"}]}]}}}`
+	script := "#!/bin/sh\n" +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body1) +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body2) +
+		"sleep 1\n"
+	if err := os.WriteFile(cmd, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := (&CodexAppClient{Command: cmd}).Messages(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 3 || messages[0].Role != "user" || messages[2].Role != "assistant" {
+		t.Fatalf("messages = %+v", messages)
+	}
+	tool := messages[1]
+	if tool.Role != "tool" || tool.ToolName != "exec_command" || tool.ToolOutput != "/repo\n\nexit code: 0" || tool.ToolStatus != "completed" {
+		t.Fatalf("tool message = %+v", tool)
+	}
+}
+
+func TestAppServerThreadStatusIsSafeForUnownedThreads(t *testing.T) {
+	tests := []struct {
+		status any
+		want   string
+	}{
+		{status: map[string]any{"type": "notLoaded"}, want: "idle"},
+		{status: map[string]any{"type": "active"}, want: "running"},
+		{status: map[string]any{"type": "waiting_input"}, want: "waiting_input"},
+		{status: map[string]any{"type": "failed"}, want: "failed"},
+	}
+	for _, test := range tests {
+		if got := appServerThreadStatus(map[string]any{"status": test.status}); got != test.want {
+			t.Fatalf("status %#v = %q, want %q", test.status, got, test.want)
+		}
 	}
 }

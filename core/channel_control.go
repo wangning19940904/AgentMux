@@ -15,9 +15,11 @@ const (
 	ChannelConfigAdminUserIDs        = "admin_user_ids"
 	ChannelConfigCodexMaxQueue       = "codex_max_queue"
 	ChannelConfigCodexTurnTimeout    = "codex_turn_timeout_minutes"
+	ChannelConfigTurnTimeout         = "turn_timeout_minutes"
 
-	DefaultCodexMaxQueue           = 20
-	DefaultCodexTurnTimeoutMinutes = 20
+	DefaultCodexMaxQueue             = 20
+	DefaultCodexTurnTimeoutMinutes   = 20
+	DefaultChannelTurnTimeoutMinutes = 20
 )
 
 type ChannelTaskStatus string
@@ -31,6 +33,16 @@ const (
 	ChannelTaskCancelled    ChannelTaskStatus = "cancelled"
 	ChannelTaskInterrupted  ChannelTaskStatus = "interrupted"
 )
+
+const ChannelTaskActionStop = "stop"
+
+// ChannelTaskAction is an id-scoped control submitted by an interactive task
+// card. Keeping the task ID separate from a plain /stop command prevents a
+// delayed click on an old card from interrupting a newer task.
+type ChannelTaskAction struct {
+	TaskID string
+	Action string
+}
 
 // ChannelTask is the durable, prompt-redacted task summary exposed to the
 // console. Prompt is only populated internally while the task is queued.
@@ -122,9 +134,20 @@ func ChannelCodexMaxQueue(ch Channel) int {
 }
 
 func ChannelCodexTurnTimeout(ch Channel) time.Duration {
-	n, _ := strconv.Atoi(strings.TrimSpace(ch.Config[ChannelConfigCodexTurnTimeout]))
+	return ChannelTurnTimeout(ch)
+}
+
+// ChannelTurnTimeout bounds every channel-originated agent turn. The generic
+// key supersedes the original Codex-only key; the legacy value remains a
+// fallback so existing channel records keep their configured behavior.
+func ChannelTurnTimeout(ch Channel) time.Duration {
+	raw := strings.TrimSpace(ch.Config[ChannelConfigTurnTimeout])
+	if raw == "" {
+		raw = strings.TrimSpace(ch.Config[ChannelConfigCodexTurnTimeout])
+	}
+	n, _ := strconv.Atoi(raw)
 	if n <= 0 {
-		n = DefaultCodexTurnTimeoutMinutes
+		n = DefaultChannelTurnTimeoutMinutes
 	}
 	if n > 240 {
 		n = 240

@@ -166,22 +166,3 @@ func TestToolProgressThinkingPreviewKeepsLatestText(t *testing.T) {
 		t.Fatalf("thinking preview was not compacted from the end:\n%s", out)
 	}
 }
-
-func TestMergePersistentOutputKeepsAuthorizationDetailsInFinalAnswer(t *testing.T) {
-	auth := "需要完成授权：\nhttps://login.example/device\n验证码：ABCD-EFGH"
-	if got := mergePersistentOutput(auth, auth); got != auth {
-		t.Fatalf("initial persistent output = %q", got)
-	}
-	got := mergePersistentOutput("已启动安装，等待授权。", auth)
-	for _, want := range []string{"已启动安装，等待授权。", "https://login.example/device", "ABCD-EFGH"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("merged output %q missing %q", got, want)
-		}
-	}
-	if strings.Index(got, "https://login.example/device") > strings.Index(got, "已启动安装，等待授权。") {
-		t.Fatalf("action-required output must stay above the streaming answer: %q", got)
-	}
-	if duplicated := mergePersistentOutput(got, auth); duplicated != got {
-		t.Fatalf("persistent output duplicated: %q", duplicated)
-	}
-}

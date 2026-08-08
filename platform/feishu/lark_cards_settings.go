@@ -127,19 +127,12 @@ func buildModelPickerCard(msg *core.Message, state core.ModelPickerState) string
 }
 
 func buildRuntimeSettingsPickerCard(msg *core.Message, state core.RuntimeSettingsPickerState) string {
-	scopeLabel := "当前会话"
-	if state.Scope == core.RuntimeSettingsScopeAgent {
-		scopeLabel = "Agent 默认（仅后续会话）"
-	}
-	elements := []map[string]any{
-		{
-			"tag": "markdown",
-			"content": fmt.Sprintf("**设置范围**：%s\n**模型**：`%s`\n**思考强度**：`%s`\n**速度**：`%s`\n**审批模式**：`%s`", scopeLabel,
-				modelPickerDisplay(state.Settings.Model), modelPickerDisplay(state.Settings.ReasoningEffort), modelPickerDisplay(state.Settings.ServiceTier), modelPickerDisplay(state.Settings.ApprovalMode)),
-		},
-	}
+	elements := []map[string]any{}
 	if state.Notice != "" {
 		elements = append(elements, map[string]any{"tag": "markdown", "content": "<font color='red'>" + state.Notice + "</font>"})
+	}
+	if state.Hint != "" {
+		elements = append(elements, map[string]any{"tag": "markdown", "content": "<font color='grey'>" + state.Hint + "</font>"})
 	}
 	for _, group := range settingsui.Groups(state) {
 		elements = append(elements, runtimeSettingsSelector(msg, state, group)...)
@@ -161,9 +154,6 @@ func buildRuntimeSettingsPickerCard(msg *core.Message, state core.RuntimeSetting
 }
 
 func runtimeSettingsSelector(msg *core.Message, state core.RuntimeSettingsPickerState, group settingsui.Group) []map[string]any {
-	if group.Unsupported != "" {
-		return []map[string]any{{"tag": "markdown", "content": "**" + group.Title + "**：" + group.Unsupported}}
-	}
 	if len(group.Options) == 0 {
 		return nil
 	}
@@ -201,10 +191,19 @@ func runtimeSettingsSelector(msg *core.Message, state core.RuntimeSettingsPicker
 	if selected != "" {
 		selector["initial_option"] = selected
 	}
-	return []map[string]any{
-		{"tag": "markdown", "content": "**" + group.Title + "**"},
-		selector,
-	}
+	return []map[string]any{{
+		"tag": "column_set", "flex_mode": "stretch", "horizontal_spacing": "12px",
+		"columns": []map[string]any{
+			{
+				"tag": "column", "width": "weighted", "weight": 1, "vertical_align": "center",
+				"elements": []map[string]any{{"tag": "markdown", "content": "**" + group.Title + "：**"}},
+			},
+			{
+				"tag": "column", "width": "weighted", "weight": 4, "vertical_align": "center",
+				"elements": []map[string]any{selector},
+			},
+		},
+	}}
 }
 
 func runtimeSettingsActionValue(msg *core.Message, action core.RuntimeSettingsAction) map[string]any {

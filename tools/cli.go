@@ -44,6 +44,7 @@ type CLISpec struct {
 	UpdateCommand      []string             `json:"update_command,omitempty"`
 	LatestVersionURL   string               `json:"-"`
 	LinkedSkills       []CLILinkedSkillSpec `json:"linked_skills,omitempty"`
+	LoginSupported     bool                 `json:"login_supported,omitempty"`
 	Note               string               `json:"note,omitempty"`
 }
 
@@ -102,11 +103,17 @@ type CLIUpdateCheck struct {
 	Error           string    `json:"error,omitempty"`
 }
 
+// ProgressFunc reports durable installation stages. Percent describes stage
+// completion, not package-manager download bytes (which npm and Homebrew do not
+// expose consistently).
+type ProgressFunc func(phase, detail string, percent int)
+
 var cliCatalog = []CLISpec{
 	{
 		ID: "lark-cli", Name: "Lark CLI", Bin: "lark-cli", Package: "@larksuite/cli",
 		InstallCommand: []string{"npm", "install", "-g", "@larksuite/cli@latest"},
 		UpdateCommand:  []string{"lark-cli", "update"},
+		LoginSupported: true,
 		Note:           "Feishu/Lark Open Platform CLI and official skills updater.",
 	},
 	{
@@ -150,6 +157,7 @@ var cliCatalog = []CLISpec{
 		InstallCommand:   []string{"brew", "install", "gh"},
 		UpdateCommand:    []string{"brew", "upgrade", "gh"},
 		LatestVersionURL: "https://api.github.com/repos/cli/cli/releases/latest",
+		LoginSupported:   true,
 		Note:             "GitHub's official CLI for pull requests, issues, Actions, and repositories.",
 	},
 }
@@ -222,6 +230,12 @@ func CheckCLIUpdate(ctx context.Context, id string) CLIUpdateCheck {
 
 // InstallCLI installs or updates a whitelisted CLI.
 func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
+	return InstallCLIWithProgress(ctx, id, action, nil)
+}
+
+// InstallCLIWithProgress installs or updates a whitelisted CLI and reports
+// coarse, truthful stages while the catalog-owned commands are running.
+func InstallCLIWithProgress(ctx context.Context, id, action string, progress ProgressFunc) CLIInstallResult {
 	id = strings.TrimSpace(id)
 	action = strings.TrimSpace(action)
 	if action == "" {
@@ -238,6 +252,7 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		return res
 	}
 
+	reportProgress(progress, "preparing", "", 5)
 	statusBefore := DetectCLI(ctx, spec)
 	cmdArgs := spec.InstallCommand
 	if action == "update" {
@@ -245,6 +260,7 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 			res.Error = fmt.Sprintf("CLI %q is not installed; install it first", id)
 			return res
 		}
+		reportProgress(progress, "checking", "", 15)
 		check := CheckCLIUpdate(ctx, id)
 		if check.Error != "" {
 			res.Error = check.Error
@@ -253,7 +269,7 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		if !check.UpdateAvailable {
 			res.Version = statusBefore.Version
 			res.Log = fmt.Sprintf("%s is already up to date (current %s, latest %s)", spec.Name, check.CurrentVersion, check.LatestVersion)
-			return syncAfterCLIChange(ctx, spec, res)
+			return syncAfterCLIChange(ctx, spec, res, progress)
 		}
 		if len(spec.UpdateCommand) > 0 {
 			cmdArgs = spec.UpdateCommand
@@ -279,12 +295,17 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 		runCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
-	logOutput, err := runCLICommands(runCtx, spec, commands)
+	commandPhase := "installing"
+	if action == "update" {
+		commandPhase = "updating"
+	}
+	logOutput, err := runCLICommandsWithProgress(runCtx, spec, commands, progress, commandPhase, 30, 72)
 	res.Log = appendLog(res.Log, logOutput)
 	if err != nil {
 		res.Error = fmt.Sprintf("%s failed: %v", action, err)
 		return res
 	}
+	reportProgress(progress, "verifying", "", 76)
 	status := DetectCLI(ctx, spec)
 	res.Version = status.Version
 	if !status.Installed {
@@ -296,12 +317,18 @@ func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
 			res.Log += "\n" + out
 		}
 	}
-	return syncAfterCLIChange(ctx, spec, res)
+	return syncAfterCLIChange(ctx, spec, res, progress)
 }
 
 // SyncCLILinkedSkills repairs or refreshes the skills managed by a CLI without
 // reinstalling the CLI itself.
 func SyncCLILinkedSkills(ctx context.Context, id string) CLIInstallResult {
+	return SyncCLILinkedSkillsWithProgress(ctx, id, nil)
+}
+
+// SyncCLILinkedSkillsWithProgress refreshes managed skills and reports the
+// command and verification stages to the caller.
+func SyncCLILinkedSkillsWithProgress(ctx context.Context, id string, progress ProgressFunc) CLIInstallResult {
 	id = strings.TrimSpace(id)
 	res := CLIInstallResult{ID: id, Action: "sync-skills"}
 	spec, ok := lookupCLI(id)
@@ -313,16 +340,17 @@ func SyncCLILinkedSkills(ctx context.Context, id string) CLIInstallResult {
 		res.Error = fmt.Sprintf("CLI %q has no linked skills", id)
 		return res
 	}
+	reportProgress(progress, "preparing", "", 5)
 	status := DetectCLI(ctx, spec)
 	if !status.Installed {
 		res.Error = fmt.Sprintf("CLI %q is not installed; install it first", id)
 		return res
 	}
 	res.Version = status.Version
-	return syncAfterCLIChange(ctx, spec, res)
+	return syncAfterCLIChange(ctx, spec, res, progress)
 }
 
-func syncAfterCLIChange(ctx context.Context, spec CLISpec, res CLIInstallResult) CLIInstallResult {
+func syncAfterCLIChange(ctx context.Context, spec CLISpec, res CLIInstallResult, progress ProgressFunc) CLIInstallResult {
 	if len(spec.LinkedSkills) == 0 {
 		res.OK = true
 		return res
@@ -335,8 +363,10 @@ func syncAfterCLIChange(ctx context.Context, spec CLISpec, res CLIInstallResult)
 		defer cancel()
 	}
 	linkedResults := make([]CLILinkedSkillResult, 0, len(spec.LinkedSkills))
-	for _, linked := range spec.LinkedSkills {
-		result := syncLinkedSkill(runCtx, spec, linked, res.Version)
+	for i, linked := range spec.LinkedSkills {
+		percent := 80 + i*12/max(1, len(spec.LinkedSkills))
+		reportProgress(progress, "syncing", linked.Name, percent)
+		result := syncLinkedSkill(runCtx, spec, linked, res.Version, progress)
 		linkedResults = append(linkedResults, result)
 		res.Command = appendCommand(res.Command, result.Command)
 		res.Log = appendLog(res.Log, result.Log)
@@ -349,7 +379,7 @@ func syncAfterCLIChange(ctx context.Context, spec CLISpec, res CLIInstallResult)
 	return res
 }
 
-func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec, cliVersion string) CLILinkedSkillResult {
+func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec, cliVersion string, progress ProgressFunc) CLILinkedSkillResult {
 	res := CLILinkedSkillResult{ID: linked.ID}
 	command, err := resolveLinkedSkillCommand(linked.InstallCommand)
 	if err != nil {
@@ -361,7 +391,7 @@ func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec
 		return res
 	}
 	res.Command = strings.Join(command, " ")
-	logOutput, err := runCLICommands(ctx, cli, [][]string{command})
+	logOutput, err := runCLICommandsWithProgress(ctx, cli, [][]string{command}, progress, "syncing", 80, 92)
 	res.Log = logOutput
 	if err != nil {
 		res.Error = err.Error()
@@ -381,11 +411,28 @@ func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec
 }
 
 func runCLICommands(ctx context.Context, spec CLISpec, commands [][]string) (string, error) {
+	return runCLICommandsWithProgress(ctx, spec, commands, nil, "installing", 30, 78)
+}
+
+func runCLICommandsWithProgress(
+	ctx context.Context,
+	spec CLISpec,
+	commands [][]string,
+	progress ProgressFunc,
+	phase string,
+	startPercent int,
+	endPercent int,
+) (string, error) {
 	var logOutput string
-	for _, args := range commands {
+	for i, args := range commands {
 		if len(args) == 0 {
 			return logOutput, fmt.Errorf("empty command")
 		}
+		percent := startPercent
+		if len(commands) > 1 {
+			percent += (endPercent - startPercent) * i / len(commands)
+		}
+		reportProgress(progress, phase, strings.Join(args, " "), percent)
 		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 		cmd.Env = cliEnv(spec)
 		out, err := cmd.CombinedOutput()
@@ -395,6 +442,12 @@ func runCLICommands(ctx context.Context, spec CLISpec, commands [][]string) (str
 		}
 	}
 	return logOutput, nil
+}
+
+func reportProgress(progress ProgressFunc, phase, detail string, percent int) {
+	if progress != nil {
+		progress(phase, detail, percent)
+	}
 }
 
 func latestCLIVersion(ctx context.Context, spec CLISpec) (string, error) {

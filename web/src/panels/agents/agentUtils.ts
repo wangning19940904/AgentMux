@@ -27,10 +27,25 @@ export const EMPTY_AGENT: AgentInstance = {
 export function composeInjectedPrompt(
   base: string,
   logPaths: string[],
-  clis: { name: string; note: string }[]
+  clis: { name: string; note: string }[],
+  channelPrompts: { name: string; prompt: string }[] = [],
+  channelPromptHeading = "渠道消息默认注入（每条入站消息）"
 ): string {
   const sections: string[] = [];
   const trimmedBase = base.replace(/\n+$/, "");
+
+  const groupedChannelPrompts = new Map<string, string[]>();
+  channelPrompts.forEach(({ name, prompt }) => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) return;
+    const names = groupedChannelPrompts.get(trimmedPrompt) ?? [];
+    if (name.trim() && !names.includes(name.trim())) names.push(name.trim());
+    groupedChannelPrompts.set(trimmedPrompt, names);
+  });
+  groupedChannelPrompts.forEach((names, prompt) => {
+    const source = names.length > 0 ? `\n\n**${names.join("、")}**` : "";
+    sections.push(`### ${channelPromptHeading}${source}\n\n${prompt}`);
+  });
 
   if (logPaths.length > 0) {
     sections.push(["绑定的事件回调日志路径为：", ...logPaths.map((path) => `- ${path}`)].join("\n"));

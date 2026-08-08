@@ -5,13 +5,15 @@
 export * from "./types";
 export * from "./client";
 export * from "./desktop";
-import { activeRemoteID, get, getChecked, post, put, postChecked, del } from "./client";
+import { activeRemoteID, get, getChecked, post, put, postChecked, postProgress, del } from "./client";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
   AgentInstance,
   AgentSession,
+  CLIAuthSession,
+  CLIAuthStatus,
   CLIInstallResult,
   CLIUpdateCheck,
   Channel,
@@ -28,6 +30,7 @@ import type {
   FrameworkUpdateCheck,
   FrameworksResponse,
   GuardPolicy,
+  KeepAwakeStatus,
   MCPServer,
   MarketplaceSkill,
   MemoryEntry,
@@ -40,6 +43,7 @@ import type {
   ObservationTrace,
   ObservationTraceDetail,
   ObservationTraceFilters,
+  OperationProgress,
   Provider,
   ProviderMonitorConfig,
   ProviderMonitorSnapshot,
@@ -113,6 +117,9 @@ export const api = {
   updateRemoteHost,
 
   status: () => get<Status>("/api/v1/status"),
+  keepAwakeStatus: () => get<KeepAwakeStatus>("/api/v1/system/keep-awake"),
+  setKeepAwake: (durationMinutes: number) =>
+    put<KeepAwakeStatus>("/api/v1/system/keep-awake", { duration_minutes: durationMinutes }),
   platforms: () => get<string[]>("/api/v1/platforms"),
   agents: () => get<string[]>("/api/v1/agents"),
   agentInstances: () => get<AgentInstance[] | null>("/api/v1/agent-instances"),
@@ -123,11 +130,23 @@ export const api = {
   deleteAgentInstance: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/agent-instances?id=${encodeURIComponent(id)}`),
   tools: () => get<ToolsResponse>("/api/v1/tools"),
-  installCLI: (id: string, action: "install" | "update") =>
-    postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
+  installCLI: (id: string, action: "install" | "update", onProgress?: (progress: OperationProgress) => void) =>
+    onProgress
+      ? postProgress<CLIInstallResult>("/api/v1/tools/cli/install/stream", { id, action }, onProgress)
+      : postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
   checkCLIUpdate: (id: string) => post<CLIUpdateCheck>("/api/v1/tools/cli/check", { id }),
-  syncCLISkills: (id: string) =>
-    postChecked<CLIInstallResult>("/api/v1/tools/cli/skills/sync", { id }),
+  cliAuth: (id: string) =>
+    getChecked<CLIAuthStatus>(`/api/v1/tools/cli/auth?id=${encodeURIComponent(id)}`),
+  startCLIAuth: (id: string, force = false) =>
+    postChecked<CLIAuthSession>("/api/v1/tools/cli/auth/login", { id, force }),
+  cliAuthSession: (sessionID: string) =>
+    getChecked<CLIAuthSession>(`/api/v1/tools/cli/auth/login?session_id=${encodeURIComponent(sessionID)}`),
+  cancelCLIAuth: (sessionID: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/tools/cli/auth/login/cancel", { session_id: sessionID }),
+  syncCLISkills: (id: string, onProgress?: (progress: OperationProgress) => void) =>
+    onProgress
+      ? postProgress<CLIInstallResult>("/api/v1/tools/cli/skills/sync/stream", { id }, onProgress)
+      : postChecked<CLIInstallResult>("/api/v1/tools/cli/skills/sync", { id }),
   providers: () => getProviders("/api/v1/providers"),
   activeRoutes: () => get<ProviderRoute[] | null>("/api/v1/providers/active"),
   presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],
@@ -195,8 +214,13 @@ export const api = {
     postChecked<FrameworkLoginResult>("/api/v1/frameworks/login", { kind }),
   completeFrameworkLogin: (sessionID: string, code: string) =>
     postChecked<{ ok: boolean }>("/api/v1/frameworks/login/complete", { session_id: sessionID, code }),
-  installFramework: (kind: string, action: "install" | "update" = "install") =>
-    postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
+  installFramework: (
+    kind: string,
+    action: "install" | "update" = "install",
+    onProgress?: (progress: OperationProgress) => void,
+  ) => onProgress
+    ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", { kind, action }, onProgress)
+    : postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
   checkFrameworkUpdate: (kind: string) =>
     post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
   usage: (period: string, from = "", to = "") => {
@@ -377,6 +401,12 @@ export const api = {
         open_terminal: openTerminal,
       }
     ),
+	stopSession: (session: Pick<AgentSession, "channel_id" | "conversation_id" | "active_task_id">) =>
+		postChecked<{ ok: boolean; status: string; can_stop: boolean; task_id?: string }>("/api/v1/sessions/stop", {
+			channel_id: session.channel_id,
+			conversation_id: session.conversation_id,
+			active_task_id: session.active_task_id,
+		}),
   deleteSession: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path">) =>
     del<{ ok: boolean }>(
       `/api/v1/sessions?provider=${encodeURIComponent(session.provider_id)}&surface=${encodeURIComponent(

@@ -30,8 +30,8 @@ type Group struct {
 }
 
 // Groups derives the picker groups for a state: an optional scope switch
-// followed by one group per setting that has options (or an unsupported
-// reason).
+// followed by one group per setting that the active runtime can actually
+// apply. Unsupported settings stay hidden instead of taking up card space.
 func Groups(state core.RuntimeSettingsPickerState) []Group {
 	groups := make([]Group, 0, 5)
 	if state.AgentDefaultsEditable {
@@ -39,11 +39,11 @@ func Groups(state core.RuntimeSettingsPickerState) []Group {
 			ID: "scope", Title: "设置范围", Setting: core.RuntimeSettingScope,
 			Options: []Option{
 				{
-					Label: "当前会话", Selected: state.Scope == core.RuntimeSettingsScopeConversation,
+					Label: "当前会话（立即生效）", Selected: state.Scope == core.RuntimeSettingsScopeConversation,
 					Action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeConversation, Setting: core.RuntimeSettingScope},
 				},
 				{
-					Label: "Agent 默认", Selected: state.Scope == core.RuntimeSettingsScopeAgent,
+					Label: "Agent 默认（仅新会话）", Selected: state.Scope == core.RuntimeSettingsScopeAgent,
 					Action: core.RuntimeSettingsAction{Scope: core.RuntimeSettingsScopeAgent, Setting: core.RuntimeSettingScope},
 				},
 			},
@@ -62,17 +62,18 @@ func Groups(state core.RuntimeSettingsPickerState) []Group {
 	}
 	for _, item := range settings {
 		if len(item.options) == 0 {
-			if reason := state.Unsupported[item.setting]; reason != "" {
-				groups = append(groups, Group{ID: item.id, Title: item.title, Setting: item.setting, Unsupported: reason})
-			}
 			continue
 		}
 		selected := state.Settings.Value(item.setting)
+		defaultValue := state.RuntimeDefaults.Value(item.setting)
 		group := Group{ID: item.id, Title: item.title, Setting: item.setting}
 		for _, option := range item.options {
 			label := option.Label
 			if label == "" {
 				label = option.Value
+			}
+			if defaultValue != "" && option.Value == defaultValue {
+				label += "（默认）"
 			}
 			group.Options = append(group.Options, Option{
 				Label: label, Selected: option.Value == selected,
@@ -104,19 +105,27 @@ func SummaryText(state core.RuntimeSettingsPickerState, format Format) string {
 	var b strings.Builder
 	b.WriteString(bold("运行时设置"))
 	b.WriteString("\n范围：" + ScopeLabel(state.Scope))
-	b.WriteString("\n模型：" + code(Display(state.Settings.Model)))
-	b.WriteString("\n思考：" + code(Display(state.Settings.ReasoningEffort)))
-	b.WriteString("\n速度：" + code(Display(state.Settings.ServiceTier)))
-	b.WriteString("\n审批：" + code(Display(state.Settings.ApprovalMode)))
+	if len(state.Capabilities.Models) > 0 {
+		b.WriteString("\n模型：" + code(Display(state.Settings.Model)))
+	}
+	if len(state.Capabilities.ReasoningEfforts) > 0 {
+		b.WriteString("\n思考：" + code(Display(state.Settings.ReasoningEffort)))
+	}
+	if len(state.Capabilities.ServiceTiers) > 0 {
+		b.WriteString("\n速度：" + code(Display(state.Settings.ServiceTier)))
+	}
+	if len(state.Capabilities.ApprovalModes) > 0 {
+		b.WriteString("\n审批：" + code(Display(state.Settings.ApprovalMode)))
+	}
 	return b.String()
 }
 
 // ScopeLabel names a picker scope for humans.
 func ScopeLabel(scope core.RuntimeSettingsScope) string {
 	if scope == core.RuntimeSettingsScopeAgent {
-		return "Agent 默认（仅后续会话）"
+		return "Agent 默认（仅新会话）"
 	}
-	return "当前会话"
+	return "当前会话（立即生效）"
 }
 
 // Display substitutes the runtime-default placeholder for blank values.

@@ -108,6 +108,21 @@ type RuntimeSettingsSession interface {
 	ResetRuntimeSetting(setting RuntimeSetting) error
 }
 
+// RuntimeSettingsViewSession optionally refines a settings snapshot for the
+// selected model. Adapters use it when a model slug already fixes another
+// setting (for example effort or speed), so pickers do not expose a duplicate
+// control that cannot independently take effect.
+type RuntimeSettingsViewSession interface {
+	RuntimeSettingsView(settings RuntimeSettings) (RuntimeSettings, RuntimeSettingsCapabilities)
+}
+
+func RuntimeSettingsView(settings RuntimeSettingsSession, selected RuntimeSettings) (RuntimeSettings, RuntimeSettingsCapabilities) {
+	if view, ok := settings.(RuntimeSettingsViewSession); ok {
+		return view.RuntimeSettingsView(selected)
+	}
+	return selected, settings.RuntimeSettingsCapabilities()
+}
+
 // RuntimeSettingsSelection is the reusable thread-safe state holder used by
 // CLI adapters. Defaults come from the Agent instance; overrides live only for
 // the current conversation.

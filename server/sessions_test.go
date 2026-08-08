@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -15,6 +17,10 @@ type testConversationSender struct {
 	channelID      string
 	conversationID string
 	text           string
+	runtimeState   core.ConversationRuntimeState
+	runtimeChannel string
+	runtimeKey     string
+	stoppedTaskID  string
 }
 
 func (s *testConversationSender) SendToProject(context.Context, string, string) error {
@@ -26,6 +32,19 @@ func (s *testConversationSender) SendToConversation(_ context.Context, channelID
 	s.conversationID = conversationID
 	s.text = text
 	return "console answer", nil
+}
+
+func (s *testConversationSender) ConversationRuntimeState(_ context.Context, channelID, conversationKey string) (core.ConversationRuntimeState, error) {
+	s.runtimeChannel = channelID
+	s.runtimeKey = conversationKey
+	return s.runtimeState, nil
+}
+
+func (s *testConversationSender) StopConversation(_ context.Context, channelID, conversationKey, expectedTaskID string) (core.ConversationRuntimeState, error) {
+	s.runtimeChannel = channelID
+	s.runtimeKey = conversationKey
+	s.stoppedTaskID = expectedTaskID
+	return core.ConversationRuntimeState{Status: core.ConversationStatusStopping, CanStop: true, TaskID: expectedTaskID}, nil
 }
 
 func TestSessionRowsIncludeAgentAndChannelContext(t *testing.T) {
@@ -104,5 +123,62 @@ func TestSessionMessageSendUsesConversationSender(t *testing.T) {
 	}
 	if sender.channelID != "channel-1" || sender.conversationID != "conversation-1" || sender.text != "hello" {
 		t.Fatalf("sender request = %+v", sender)
+	}
+}
+
+func TestSessionRowsExposeRuntimeStateAndStopActiveConversation(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	agent := core.AgentInstance{
+		ID: "agent-stop", Name: "Stop Agent", RuntimeID: "codex",
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertAgentInstance(ctx, &agent); err != nil {
+		t.Fatal(err)
+	}
+	channel := core.Channel{
+		ID: "channel-stop", Name: "Stop channel", Type: "feishu",
+		AgentID: agent.ID, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertChannel(ctx, &channel); err != nil {
+		t.Fatal(err)
+	}
+	conversation, _, err := st.GetOrCreateConversation(ctx, core.Conversation{
+		Scope: "channel:" + channel.ID, ConversationKey: "chat:stop",
+		ChatID: "stop", ChatType: "group", AgentID: agent.ID, WorkDir: "/tmp/stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &testConversationSender{runtimeState: core.ConversationRuntimeState{
+		Status: string(core.ChannelTaskRunning), CanStop: true, TaskID: "task-live",
+	}}
+	srv.sender = sender
+
+	rows, err := srv.enrichSessionRows(ctx, nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RunStatus != string(core.ChannelTaskRunning) || !rows[0].CanStop || rows[0].ActiveTaskID != "task-live" {
+		t.Fatalf("session rows = %+v", rows)
+	}
+
+	payload, err := json.Marshal(map[string]string{
+		"channel_id": channel.ID, "conversation_id": conversation.ID, "active_task_id": "task-live",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/stop", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:43210"
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if sender.runtimeChannel != channel.ID || sender.runtimeKey != conversation.ConversationKey || sender.stoppedTaskID != "task-live" {
+		t.Fatalf("stop request = channel %q key %q task %q", sender.runtimeChannel, sender.runtimeKey, sender.stoppedTaskID)
 	}
 }

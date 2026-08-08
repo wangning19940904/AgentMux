@@ -91,19 +91,16 @@ func TestCursorStreamEventsMapToolStartAndCompletion(t *testing.T) {
 	}
 }
 
-func TestCursorStreamEventsExposeAuthorizationOutput(t *testing.T) {
+func TestCursorStreamEventsDoNotDuplicateAuthorizationOutput(t *testing.T) {
 	events := cursorStreamEvents([]byte(`{
 		"type":"tool_call","subtype":"completed","call_id":"call-auth",
 		"tool_call":{"shellToolCall":{"result":{"success":{"exitCode":0,"stderr":"To login, open https://login.example/device?code=ABCD-EFGH\nVerification code: ABCD-EFGH\nWaiting for authorization..."}}},"toolCallId":"call-auth"}
 	}`))
-	if len(events) != 2 || events[0].Type != core.EventToolUse || events[1].Type != core.EventOutput {
+	if len(events) != 1 || events[0].Type != core.EventToolUse {
 		t.Fatalf("authorization events = %#v", events)
 	}
-	if !strings.Contains(events[1].Text, "https://login.example/device?code=ABCD-EFGH") || !strings.Contains(events[1].Text, "ABCD-EFGH") {
-		t.Fatalf("authorization output = %q", events[1].Text)
-	}
-	if strings.Contains(events[1].Text, "Waiting for authorization") {
-		t.Fatalf("authorization output should contain only actionable details: %q", events[1].Text)
+	if !strings.Contains(events[0].ToolResult, "https://login.example/device?code=ABCD-EFGH") {
+		t.Fatalf("tool result lost authorization diagnostics = %q", events[0].ToolResult)
 	}
 }
 
@@ -114,7 +111,7 @@ func TestCursorStreamEventsMapFinalUsageAndSafeProgress(t *testing.T) {
 	}`))
 	if len(result) != 1 || result[0].Type != core.EventFinal || result[0].Text != "done" || result[0].DurationMs != 900 ||
 		result[0].Usage == nil || result[0].Usage.TotalTokens != 20 || result[0].Usage.RequestID != "request-1" ||
-		result[0].Metadata["clear_persistent"] != "true" {
+		result[0].Metadata["lifecycle"] != "completed" {
 		t.Fatalf("result events = %#v", result)
 	}
 
@@ -126,37 +123,6 @@ func TestCursorStreamEventsMapFinalUsageAndSafeProgress(t *testing.T) {
 	// user-facing summary, and must remain suppressed.
 	if thinking := cursorStreamEvents([]byte(`{"type":"thinking","subtype":"delta","text":"private chain of thought"}`)); len(thinking) != 0 {
 		t.Fatalf("raw thinking leaked: %#v", thinking)
-	}
-}
-
-func TestCursorStderrMapperPreservesMultilineLoginDetails(t *testing.T) {
-	mapper := newCursorStderrMapper()
-	source := mapper([]byte("Source: https://skills.byted.org/sre/spacex"))
-	noise := mapper([]byte("Downloading file 431 of 500 from skills.byted.org"))
-	first := mapper([]byte("To login, open https://login.example/device"))
-	second := mapper([]byte("Verification code: ABCD-EFGH"))
-	third := mapper([]byte("Waiting for authorization..."))
-	if source != nil || noise != nil {
-		t.Fatalf("ordinary stderr must not become assistant output: %#v / %#v", source, noise)
-	}
-	if first == nil || second == nil || third == nil || third.Type != core.EventOutput {
-		t.Fatalf("stderr events = %#v / %#v / %#v", first, second, third)
-	}
-	if third.Metadata["persistent"] != "true" {
-		t.Fatalf("authorization stderr was not marked persistent: %#v", third.Metadata)
-	}
-	if third.Metadata["priority"] != "action_required" {
-		t.Fatalf("authorization stderr was not prioritized: %#v", third.Metadata)
-	}
-	for _, want := range []string{"https://login.example/device", "ABCD-EFGH", "授权完成后任务会自动继续"} {
-		if !strings.Contains(third.Text, want) {
-			t.Fatalf("stderr output %q missing %q", third.Text, want)
-		}
-	}
-	for _, hidden := range []string{"Downloading file", "https://skills.byted.org/sre/spacex", "Waiting for authorization"} {
-		if strings.Contains(third.Text, hidden) {
-			t.Fatalf("stderr output %q leaked noisy detail %q", third.Text, hidden)
-		}
 	}
 }
 
@@ -194,9 +160,14 @@ func TestCursorModelForSettingsEncodesEffortAndFast(t *testing.T) {
 			want:     "claude-opus-4-8[context=1m,effort=xhigh,fast=true]",
 		},
 		{
-			name:     "replaces aliases without duplicates",
+			name:     "embedded parameters remain authoritative",
 			settings: core.RuntimeSettings{Model: "gpt-5.6-sol[reasoning=low,fast=false,context=200k]", ReasoningEffort: "high", ServiceTier: "fast"},
-			want:     "gpt-5.6-sol[effort=high,fast=true,context=200k]",
+			want:     "gpt-5.6-sol[reasoning=low,fast=false,context=200k]",
+		},
+		{
+			name:     "expanded Cursor variant is not double parameterized",
+			settings: core.RuntimeSettings{Model: "cursor-grok-4.5-medium-fast", ReasoningEffort: "xhigh", ServiceTier: "default"},
+			want:     "cursor-grok-4.5-medium-fast",
 		},
 		{
 			name:     "explicit normal speed",
@@ -215,6 +186,24 @@ func TestCursorModelForSettingsEncodesEffortAndFast(t *testing.T) {
 				t.Fatalf("model = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCursorEmbeddedModelSettings(t *testing.T) {
+	tests := []struct {
+		model string
+		want  core.RuntimeSettings
+	}{
+		{"cursor-grok-4.5-medium-fast", core.RuntimeSettings{ReasoningEffort: "medium", ServiceTier: "priority"}},
+		{"gpt-5.6-sol-extra-high", core.RuntimeSettings{ReasoningEffort: "xhigh", ServiceTier: "default"}},
+		{"claude-opus-4-8[context=1m,effort=high,fast=false]", core.RuntimeSettings{ReasoningEffort: "high", ServiceTier: "default"}},
+		{"composer-2-fast", core.RuntimeSettings{ServiceTier: "priority"}},
+		{"plain-model", core.RuntimeSettings{}},
+	}
+	for _, tt := range tests {
+		if got := cursorEmbeddedModelSettings(tt.model); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("cursorEmbeddedModelSettings(%q) = %#v, want %#v", tt.model, got, tt.want)
+		}
 	}
 }
 

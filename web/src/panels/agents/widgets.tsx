@@ -1,3 +1,4 @@
+import { Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -39,6 +40,9 @@ export function Picker({
   selected,
   readOnly,
   onChange,
+  unavailableItems = [],
+  unavailableTitle,
+  onUnavailableClick,
   empty,
 }: {
   title: string;
@@ -47,6 +51,9 @@ export function Picker({
   selected: string[];
   readOnly: boolean;
   onChange: (next: string[]) => void;
+  unavailableItems?: string[];
+  unavailableTitle?: string;
+  onUnavailableClick?: (item: string) => void;
   empty: string;
 }) {
   return (
@@ -56,14 +63,24 @@ export function Picker({
       <div className="provider-chip-row">
         {items.map((item) => {
           const active = selected.includes(item);
+          const unavailable = unavailableItems.includes(item);
           return (
             <button
               key={item}
-              className={`status-badge ${active ? "success" : ""}`}
-              disabled={readOnly}
-              onClick={() => onChange(active ? selected.filter((value) => value !== item) : [...selected, item])}
+              className={`status-badge ${active && !unavailable ? "success" : ""}${unavailable ? " unavailable" : ""}`}
+              disabled={readOnly && !unavailable}
+              onClick={() => {
+                if (unavailable) {
+                  onUnavailableClick?.(item);
+                  return;
+                }
+                onChange(active ? selected.filter((value) => value !== item) : [...selected, item]);
+              }}
+              title={unavailable ? unavailableTitle : undefined}
+              type="button"
             >
               {labels?.[item] ?? item}
+              {unavailable && <Download size={12} />}
             </button>
           );
         })}

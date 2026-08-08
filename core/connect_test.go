@@ -938,6 +938,12 @@ func TestAgentDefaultRuntimeSettingDoesNotOverrideCurrentSession(t *testing.T) {
 	if got.Model != "gpt-5-mini" {
 		t.Fatalf("stored Agent defaults = %+v", got)
 	}
+	plat.pickerMu.Lock()
+	updated := plat.updates[len(plat.updates)-1]
+	plat.pickerMu.Unlock()
+	if !strings.Contains(updated.Hint, "仅新会话生效") || !strings.Contains(updated.Hint, "当前会话未改变") {
+		t.Fatalf("Agent-default feedback did not explain scope: %+v", updated)
+	}
 	plat.push(&Message{ID: "m2", ChatID: "chat-2", Text: "hello", Platform: "fake"})
 	waitFor(t, "future session uses Agent default", func() bool {
 		plat.fakePlatform.mu.Lock()
@@ -992,6 +998,12 @@ func TestNewConversationPromptsForApprovalModeBeforeRunningAgent(t *testing.T) {
 	waitFor(t, "approval selection resumes original Agent turn", func() bool {
 		return sess.CurrentRuntimeSettings().ApprovalMode == ApprovalModeYolo && sess.turnCount() == 1
 	})
+	plat.pickerMu.Lock()
+	updated := plat.updates[len(plat.updates)-1]
+	plat.pickerMu.Unlock()
+	if !strings.Contains(updated.Hint, "当前会话启用 YOLO") {
+		t.Fatalf("YOLO feedback did not confirm immediate scope: %+v", updated)
+	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if len(sess.turns) != 1 || sess.turns[0] != "hello" {
@@ -1223,6 +1235,7 @@ type streamingPlatform struct {
 	deleteErr        error
 	addedReactions   []string
 	deletedReactions []string
+	taskReplyID      string
 }
 
 func newStreamingPlatform(name string) *streamingPlatform {
@@ -1234,6 +1247,13 @@ func (p *streamingPlatform) BeginReply(ctx context.Context, msg *Message) (Reply
 		return nil, p.beginErr
 	}
 	return &fakeReplyStream{parent: p, kind: "card"}, nil
+}
+
+func (p *streamingPlatform) BeginTaskReply(ctx context.Context, msg *Message, taskID string) (ReplyStream, error) {
+	p.mu.Lock()
+	p.taskReplyID = taskID
+	p.mu.Unlock()
+	return p.BeginReply(ctx, msg)
 }
 
 func (p *streamingPlatform) BeginMessageReply(ctx context.Context, msg *Message) (ReplyStream, error) {
@@ -1401,9 +1421,17 @@ func TestCodexRemoteControlForcesOneFeishuStatusCard(t *testing.T) {
 	plat.mu.Lock()
 	cardDoneCalls := plat.cardDoneCalls
 	messageDoneCalls := plat.messageDoneCalls
+	taskReplyID := plat.taskReplyID
+	initialCard := ""
+	if len(plat.cardUpdates) > 0 {
+		initialCard = plat.cardUpdates[0]
+	}
 	plat.mu.Unlock()
 	if cardDoneCalls != 1 || messageDoneCalls != 0 {
 		t.Fatalf("card done=%d message done=%d", cardDoneCalls, messageDoneCalls)
+	}
+	if taskReplyID == "" || initialCard != "正在处理…" {
+		t.Fatalf("task reply id=%q initial card=%q", taskReplyID, initialCard)
 	}
 }
 

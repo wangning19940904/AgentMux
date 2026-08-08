@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // streamTurn submits text to a session and forwards output through reply
@@ -114,7 +115,15 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 		return
 	}
 
-	stream, err := sr.BeginReply(ctx, msg)
+	var stream ReplyStream
+	if taskID := strings.TrimSpace(data["task_id"]); taskID != "" {
+		if taskReplier, ok := sr.(TaskStreamReplier); ok {
+			stream, err = taskReplier.BeginTaskReply(ctx, msg, taskID)
+		}
+	}
+	if stream == nil && err == nil {
+		stream, err = sr.BeginReply(ctx, msg)
+	}
 	if err != nil {
 		e.log.Error("begin streaming reply", "err", err)
 		// Degrade to per-event replies using the platform's Reply (the
@@ -131,6 +140,11 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 		return
 	}
 	defer func() { _ = stream.Close(ctx) }()
+	if strings.TrimSpace(data["task_id"]) != "" {
+		if err := stream.Update(ctx, "正在处理…", false, false); err != nil {
+			e.log.Error("initialize task stream", "err", err)
+		}
+	}
 
 	speech := e.beginSpeechReply(ctx, sr, msg)
 	if speech != nil {
@@ -153,7 +167,7 @@ func (e *Engine) beginSpeechReply(ctx context.Context, renderer any, msg *Messag
 }
 
 func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream ReplyStream, speech SpeechReply, events <-chan *Event, data map[string]string) {
-	var answer, completedAnswer, thinking, rendered, persistentOutput string
+	var answer, completedAnswer, thinking, rendered string
 	var failed bool
 	var answerAfterLastTool bool
 	var tools toolProgress
@@ -214,13 +228,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			if len(strings.TrimSpace(ev.Text)) > len(strings.TrimSpace(completedAnswer)) {
 				completedAnswer = ev.Text
 			}
-			if ev.Metadata["clear_persistent"] == "true" {
-				persistentOutput = ""
-			}
-			if ev.Metadata["persistent"] == "true" {
-				persistentOutput = ev.Text
-			}
-			answer = mergePersistentOutput(ev.Text, persistentOutput)
+			answer = ev.Text
 			if speech != nil {
 				if err := speech.Update(ctx, answer, false); err != nil {
 					e.log.Warn("speech update", "err", err)
@@ -234,6 +242,11 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				rendered = body
 			}
 		case EventError:
+			if ctx.Err() != nil && e.remoteTaskStopRequested(data) {
+				thinking = ""
+				answer = "任务已停止。"
+				continue
+			}
 			if shouldPreserveCompletedCursorAnswer(ev, completedAnswer, answerAfterLastTool, tools) {
 				// Cursor can emit WriteIterableClosedError after the assistant has
 				// already completed every tool and produced its final user-facing
@@ -241,21 +254,36 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				// operation with a red transport-error card. The original EventError
 				// still passes through the observation wrapper before it reaches this
 				// renderer, and this warning keeps the local runtime symptom visible.
-				persistentOutput = ""
 				answer = strings.TrimSpace(completedAnswer)
 				e.log.Warn("ignored cursor stream close after completed answer", "err", ev.Err)
 				continue
 			}
 			e.emit(ctx, HookError, withError(data, ev.Err))
 			failed = true
-			answer = mergePersistentOutput("error: "+errString(ev.Err), persistentOutput)
+			answer = "error: " + errString(ev.Err)
 		}
 	}
 
+	if ctx.Err() != nil && e.remoteTaskStopRequested(data) {
+		answer = "任务已停止。"
+		thinking = ""
+		tools = toolProgress{}
+		failed = false
+	} else if ctx.Err() == context.DeadlineExceeded {
+		answer = "任务执行超时，已自动终止。需要扫码、授权、验证码或人工确认的命令必须拆成多轮：先返回操作链接，再由用户回复后继续。"
+		thinking = ""
+		failed = true
+	}
 	if answer == "" && tools.empty() && thinking == "" {
 		answer = "(no reply)"
 	}
-	if err := stream.Update(ctx, tools.render(thinking, answer, true), true, failed); err != nil {
+	finalCtx := ctx
+	cancelFinal := func() {}
+	if ctx.Err() != nil {
+		finalCtx, cancelFinal = context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	}
+	defer cancelFinal()
+	if err := stream.Update(finalCtx, tools.render(thinking, answer, true), true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
 	}
 	if speech != nil && !failed && answer != "" && answer != "NO_REPLY" {
@@ -263,6 +291,20 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			e.log.Warn("speech finalize", "err", err)
 		}
 	}
+}
+
+func (e *Engine) remoteTaskStopRequested(data map[string]string) bool {
+	if data == nil || data["channel_id"] == "" || data["conversation_key"] == "" || data["task_id"] == "" {
+		return false
+	}
+	rt := e.channelRuntime(data["channel_id"])
+	if rt == nil {
+		return false
+	}
+	rt.controlMu.Lock()
+	defer rt.controlMu.Unlock()
+	state := rt.controlStateLocked(data["conversation_key"])
+	return state.active != nil && state.active.task.ID == data["task_id"] && state.active.stopRequested
 }
 
 func shouldPreserveCompletedCursorAnswer(ev *Event, answer string, answerAfterLastTool bool, tools toolProgress) bool {
@@ -273,22 +315,6 @@ func shouldPreserveCompletedCursorAnswer(ev *Event, answer string, answerAfterLa
 		return false
 	}
 	return strings.Contains(strings.ToLower(ev.Err.Error()), "writableiterable is closed")
-}
-
-func mergePersistentOutput(answer, persistent string) string {
-	answer = strings.TrimSpace(answer)
-	persistent = strings.TrimSpace(persistent)
-	if persistent == "" || answer == persistent || strings.Contains(answer, persistent) {
-		return answer
-	}
-	if answer == "" {
-		return persistent
-	}
-	// Persistent output represents an action the user must take while the
-	// assistant keeps streaming (for example, a device-login URL). Keep it at
-	// the top of the card so subsequent answer growth cannot push it below a
-	// long tool trace or beyond the mobile viewport.
-	return persistent + "\n\n---\n\n" + answer
 }
 
 func (e *Engine) emitMessageStreamOnce(ctx context.Context, mr StreamMessageReplier, msg *Message, text string, failed bool) {

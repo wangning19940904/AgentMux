@@ -48,14 +48,22 @@ type Meta struct {
 	ChatID          string    `json:"chat_id,omitempty"`
 	ChatType        string    `json:"chat_type,omitempty"`
 	CanChat         bool      `json:"can_chat,omitempty"`
+	RunStatus       string    `json:"run_status,omitempty"`
+	CanStop         bool      `json:"can_stop,omitempty"`
+	ActiveTaskID    string    `json:"active_task_id,omitempty"`
 }
 
 // Message is a compact transcript row extracted from a session source.
 type Message struct {
-	Role      string    `json:"role"`
-	Kind      string    `json:"kind,omitempty"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp,omitempty"`
+	Role       string    `json:"role"`
+	Kind       string    `json:"kind,omitempty"`
+	Content    string    `json:"content"`
+	Timestamp  time.Time `json:"timestamp,omitempty"`
+	ToolName   string    `json:"tool_name,omitempty"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
+	ToolInput  string    `json:"tool_input,omitempty"`
+	ToolOutput string    `json:"tool_output,omitempty"`
+	ToolStatus string    `json:"tool_status,omitempty"`
 }
 
 // ResumeRequest asks AgentMux to restore or open a session.
@@ -120,6 +128,11 @@ func (s *Service) List(ctx context.Context, providerID, surface string) ([]Meta,
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].LastActiveAt.After(out[j].LastActiveAt)
 	})
+	for i := range out {
+		if out[i].RunStatus == "" {
+			out[i].RunStatus = "idle"
+		}
+	}
 	if len(out) == 0 && appErr != nil && providerID == "codex" && surface == "" {
 		return out, nil
 	}
@@ -379,17 +392,12 @@ func parseClaudeFile(path string) (Meta, []Message, error) {
 		if msgRole := stringField(msgMap, "role"); msgRole != "" {
 			role = msgRole
 		}
-		content := extractContent(firstNonNil(msgMap["content"], raw["content"]))
-		if content == "" {
-			continue
-		}
-		msg := Message{Role: normalizeRole(role), Content: content, Timestamp: ts}
-		if msg.Role == "tool" {
-			msg.Kind = "tool"
-		}
-		messages = append(messages, msg)
-		if meta.Title == "" && msg.Role == "user" {
-			meta.Title = truncate(content, 80)
+		parsed := parseClaudeContent(firstNonNil(msgMap["content"], raw["content"]), role, ts)
+		for _, msg := range parsed {
+			appendTranscriptMessage(&messages, msg)
+			if meta.Title == "" && msg.Role == "user" && msg.Content != "" {
+				meta.Title = truncate(msg.Content, 80)
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -518,16 +526,11 @@ func parseCodexFileWithLimit(path string, maxLines int) (Meta, []Message, error)
 		if len(item) == 0 {
 			continue
 		}
-		role := normalizeRole(stringField(item, "role", "type"))
-		content := extractContent(firstNonNil(item["content"], item["text"], item["arguments"], item["output"]))
-		if content == "" {
-			continue
-		}
-		kind := stringField(item, "type")
-		msg := Message{Role: role, Kind: kind, Content: content, Timestamp: ts}
-		messages = append(messages, msg)
-		if meta.Title == "" && msg.Role == "user" {
-			meta.Title = truncate(content, 80)
+		for _, msg := range parseCodexItem(item, ts) {
+			appendTranscriptMessage(&messages, msg)
+			if meta.Title == "" && msg.Role == "user" && msg.Content != "" {
+				meta.Title = truncate(msg.Content, 80)
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -695,6 +698,179 @@ func extractContent(value any) string {
 	}
 }
 
+func parseClaudeContent(value any, fallbackRole string, ts time.Time) []Message {
+	role := normalizeRole(fallbackRole)
+	switch content := value.(type) {
+	case []any:
+		messages := make([]Message, 0, len(content))
+		var textParts []string
+		flushText := func() {
+			if text := strings.TrimSpace(strings.Join(textParts, "\n")); text != "" {
+				messages = append(messages, Message{Role: role, Content: text, Timestamp: ts})
+			}
+			textParts = nil
+		}
+		for _, block := range content {
+			item, ok := block.(map[string]any)
+			if !ok {
+				if text := extractContent(block); text != "" {
+					textParts = append(textParts, text)
+				}
+				continue
+			}
+			kind := strings.ToLower(stringField(item, "type"))
+			switch kind {
+			case "tool_use", "tool_call", "function_call":
+				flushText()
+				messages = append(messages, Message{
+					Role:       "tool",
+					Kind:       kind,
+					Timestamp:  ts,
+					ToolName:   firstNonEmpty(stringField(item, "name", "tool"), kind),
+					ToolCallID: stringField(item, "id", "call_id", "tool_use_id"),
+					ToolInput:  formatToolValue(firstNonNil(item["input"], item["arguments"])),
+					ToolStatus: firstNonEmpty(stringField(item, "status"), "called"),
+				})
+			case "tool_result", "tool_output", "function_call_output":
+				flushText()
+				status := stringField(item, "status")
+				if failed, _ := item["is_error"].(bool); failed {
+					status = "failed"
+				}
+				messages = append(messages, Message{
+					Role:       "tool",
+					Kind:       kind,
+					Timestamp:  ts,
+					ToolName:   stringField(item, "name", "tool"),
+					ToolCallID: stringField(item, "tool_use_id", "call_id", "id"),
+					ToolOutput: formatToolValue(firstNonNil(item["content"], item["output"], item["result"])),
+					ToolStatus: firstNonEmpty(status, "completed"),
+				})
+			default:
+				if text := extractContent(firstNonNil(item["text"], item["content"])); text != "" {
+					textParts = append(textParts, text)
+				}
+			}
+		}
+		flushText()
+		return messages
+	case map[string]any:
+		return parseClaudeContent([]any{content}, fallbackRole, ts)
+	default:
+		if text := extractContent(value); text != "" {
+			return []Message{{Role: role, Content: text, Timestamp: ts}}
+		}
+	}
+	return nil
+}
+
+func parseCodexItem(item map[string]any, ts time.Time) []Message {
+	kind := strings.ToLower(stringField(item, "type"))
+	if kind == "message" || stringField(item, "role") != "" {
+		content := extractContent(firstNonNil(item["content"], item["text"]))
+		if content == "" {
+			return nil
+		}
+		return []Message{{
+			Role: normalizeRole(stringField(item, "role", "type")), Kind: kind, Content: content, Timestamp: ts,
+		}}
+	}
+	if !isToolKind(kind) {
+		content := extractContent(firstNonNil(item["content"], item["text"]))
+		if content == "" {
+			return nil
+		}
+		return []Message{{Role: normalizeRole(kind), Kind: kind, Content: content, Timestamp: ts}}
+	}
+	msg := Message{
+		Role:       "tool",
+		Kind:       kind,
+		Timestamp:  ts,
+		ToolName:   firstNonEmpty(stringField(item, "name", "tool"), toolNameForKind(kind)),
+		ToolCallID: stringField(item, "call_id", "tool_use_id", "id"),
+		ToolStatus: stringField(item, "status"),
+	}
+	if isToolOutputKind(kind) {
+		msg.ToolOutput = formatToolValue(firstNonNil(item["output"], item["result"], item["content"], item["error"]))
+		if msg.ToolStatus == "" {
+			msg.ToolStatus = "completed"
+		}
+	} else {
+		msg.ToolInput = formatToolValue(firstNonNil(item["arguments"], item["input"], item["command"], item["action"], item["query"], item["changes"]))
+		if msg.ToolStatus == "" {
+			msg.ToolStatus = "called"
+		}
+	}
+	return []Message{msg}
+}
+
+func isToolKind(kind string) bool {
+	return strings.Contains(kind, "tool") || strings.Contains(kind, "function_call") ||
+		strings.Contains(kind, "functioncall") || strings.Contains(kind, "web_search") ||
+		strings.Contains(kind, "websearch") || strings.Contains(kind, "computer_call")
+}
+
+func isToolOutputKind(kind string) bool {
+	return strings.Contains(kind, "output") || strings.Contains(kind, "result")
+}
+
+func toolNameForKind(kind string) string {
+	name := strings.TrimSuffix(kind, "_output")
+	name = strings.TrimSuffix(name, "output")
+	name = strings.TrimSuffix(name, "_call")
+	name = strings.TrimSuffix(name, "call")
+	return strings.Trim(name, "_")
+}
+
+func appendTranscriptMessage(messages *[]Message, msg Message) {
+	if msg.Role == "tool" && msg.ToolCallID != "" {
+		for i := len(*messages) - 1; i >= 0; i-- {
+			existing := &(*messages)[i]
+			if existing.Role != "tool" || existing.ToolCallID != msg.ToolCallID {
+				continue
+			}
+			if existing.ToolName == "" {
+				existing.ToolName = msg.ToolName
+			}
+			if existing.ToolInput == "" {
+				existing.ToolInput = msg.ToolInput
+			}
+			if msg.ToolOutput != "" {
+				existing.ToolOutput = msg.ToolOutput
+			}
+			if msg.ToolStatus != "" {
+				existing.ToolStatus = msg.ToolStatus
+			}
+			return
+		}
+	}
+	*messages = append(*messages, msg)
+}
+
+func formatToolValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return ""
+		}
+		var parsed any
+		if json.Unmarshal([]byte(text), &parsed) == nil {
+			if pretty, err := json.MarshalIndent(parsed, "", "  "); err == nil {
+				return string(pretty)
+			}
+		}
+		return text
+	}
+	pretty, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return extractContent(value)
+	}
+	return string(pretty)
+}
+
 func anyToString(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -783,39 +959,148 @@ func (c *CodexAppClient) List(ctx context.Context) ([]Meta, error) {
 			Available:     true,
 			MessageCount:  int(firstNumber(numberField(thread, "turn_count", "message_count"), float64(len(resultArrayFromMap(thread, "turns"))))),
 			StatusMessage: "codex app-server",
+			RunStatus:     appServerThreadStatus(thread),
 		})
 	}
 	return out, nil
 }
 
+func appServerThreadStatus(thread map[string]any) string {
+	status := firstNonEmpty(stringField(thread, "run_status"), stringField(thread, "state"), stringField(mapField(thread, "status"), "type"))
+	status = strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(status))
+	switch status {
+	case "active", "running", "inprogress", "loaded":
+		return "running"
+	case "queued", "pending":
+		return "queued"
+	case "waiting", "waitinginput", "blocked":
+		return "waiting_input"
+	case "failed", "error":
+		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
+	case "interrupted", "stopped":
+		return "interrupted"
+	default:
+		// A fresh app-server reports persisted threads as notLoaded. That means
+		// this AgentMux process does not own a live turn, so idle is the only
+		// safe status and the UI must not offer a stop action.
+		return "idle"
+	}
+}
+
 func (c *CodexAppClient) Messages(ctx context.Context, threadID string) ([]Message, error) {
-	raw, err := c.call(ctx, "thread/read", map[string]any{"threadId": threadID})
+	raw, err := c.call(ctx, "thread/read", map[string]any{"threadId": threadID, "includeTurns": true})
 	if err != nil {
 		return nil, err
 	}
-	items := resultArray(raw, "items", "messages", "turns", "data")
-	if len(items) == 0 {
-		var obj map[string]any
-		_ = json.Unmarshal(raw, &obj)
-		items = resultArrayFromMap(mapField(obj, "thread"), "turns", "items", "messages")
-	}
+	items := appServerTranscriptItems(raw)
 	messages := make([]Message, 0, len(items))
-	for _, item := range items {
-		content := extractContent(firstNonNil(item["content"], item["message"], item["text"]))
-		if content == "" {
-			content = extractContent(firstNonNil(item["input"], item["output"], item["events"]))
+	for _, entry := range items {
+		for _, msg := range parseAppServerItem(entry.item, entry.timestamp) {
+			appendTranscriptMessage(&messages, msg)
 		}
-		if content == "" {
-			continue
-		}
-		messages = append(messages, Message{
-			Role:      normalizeRole(stringField(item, "role", "type")),
-			Kind:      stringField(item, "type"),
-			Content:   content,
-			Timestamp: parseTimestamp(stringField(item, "timestamp", "created_at", "createdAt")),
-		})
 	}
 	return messages, nil
+}
+
+type appServerTranscriptItem struct {
+	item      map[string]any
+	timestamp time.Time
+}
+
+func appServerTranscriptItems(raw json.RawMessage) []appServerTranscriptItem {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil
+	}
+	thread := mapField(obj, "thread")
+	if len(thread) == 0 {
+		thread = obj
+	}
+	turns := resultArrayFromMap(thread, "turns")
+	if len(turns) > 0 {
+		var entries []appServerTranscriptItem
+		for _, turn := range turns {
+			ts := parseTimestamp(stringField(turn, "timestamp", "created_at", "createdAt", "started_at", "startedAt", "completed_at", "completedAt"))
+			turnItems := resultArrayFromMap(turn, "items", "messages")
+			if len(turnItems) == 0 {
+				entries = append(entries, appServerTranscriptItem{item: turn, timestamp: ts})
+				continue
+			}
+			for _, item := range turnItems {
+				entries = append(entries, appServerTranscriptItem{item: item, timestamp: ts})
+			}
+		}
+		return entries
+	}
+	items := resultArrayFromMap(thread, "items", "messages", "data")
+	if len(items) == 0 {
+		items = resultArray(raw, "items", "messages", "data")
+	}
+	entries := make([]appServerTranscriptItem, 0, len(items))
+	for _, item := range items {
+		entries = append(entries, appServerTranscriptItem{
+			item:      item,
+			timestamp: parseTimestamp(stringField(item, "timestamp", "created_at", "createdAt")),
+		})
+	}
+	return entries
+}
+
+func parseAppServerItem(item map[string]any, ts time.Time) []Message {
+	kind := stringField(item, "type")
+	switch kind {
+	case "userMessage":
+		if content := extractContent(item["content"]); content != "" {
+			return []Message{{Role: "user", Kind: kind, Content: content, Timestamp: ts}}
+		}
+		return nil
+	case "agentMessage":
+		if content := extractContent(item["text"]); content != "" {
+			return []Message{{Role: "assistant", Kind: kind, Content: content, Timestamp: ts}}
+		}
+		return nil
+	case "commandExecution":
+		input := map[string]any{"command": item["command"], "cwd": item["cwd"]}
+		output := formatToolValue(item["aggregatedOutput"])
+		if exitCode := item["exitCode"]; exitCode != nil {
+			if output != "" {
+				output += "\n\n"
+			}
+			output += "exit code: " + anyToString(exitCode)
+		}
+		return []Message{{Role: "tool", Kind: kind, Timestamp: ts, ToolName: "exec_command", ToolCallID: stringField(item, "id"), ToolInput: formatToolValue(input), ToolOutput: output, ToolStatus: stringField(item, "status")}}
+	case "fileChange":
+		return []Message{{Role: "tool", Kind: kind, Timestamp: ts, ToolName: "apply_patch", ToolCallID: stringField(item, "id"), ToolInput: formatToolValue(item["changes"]), ToolStatus: stringField(item, "status")}}
+	case "mcpToolCall":
+		name := strings.Trim(strings.Join([]string{stringField(item, "server"), stringField(item, "tool")}, "/"), "/")
+		return []Message{{Role: "tool", Kind: kind, Timestamp: ts, ToolName: name, ToolCallID: stringField(item, "id"), ToolInput: formatToolValue(item["arguments"]), ToolOutput: formatToolValue(firstNonNil(item["result"], item["error"])), ToolStatus: stringField(item, "status")}}
+	case "dynamicToolCall":
+		name := strings.Trim(strings.Join([]string{stringField(item, "namespace"), stringField(item, "tool")}, "/"), "/")
+		return []Message{{Role: "tool", Kind: kind, Timestamp: ts, ToolName: name, ToolCallID: stringField(item, "id"), ToolInput: formatToolValue(item["arguments"]), ToolOutput: formatToolValue(item["contentItems"]), ToolStatus: stringField(item, "status")}}
+	case "collabAgentToolCall":
+		input := map[string]any{"prompt": item["prompt"], "model": item["model"], "reasoningEffort": item["reasoningEffort"]}
+		output := map[string]any{"receiverThreadIds": item["receiverThreadIds"], "agentsStates": item["agentsStates"]}
+		return []Message{{Role: "tool", Kind: kind, Timestamp: ts, ToolName: stringField(item, "tool"), ToolCallID: stringField(item, "id"), ToolInput: formatToolValue(input), ToolOutput: formatToolValue(output), ToolStatus: stringField(item, "status")}}
+	}
+	if stringField(item, "role") != "" {
+		content := extractContent(firstNonNil(item["content"], item["message"], item["text"]))
+		if content != "" {
+			return []Message{{Role: normalizeRole(stringField(item, "role")), Kind: kind, Content: content, Timestamp: ts}}
+		}
+	}
+	lowerKind := strings.ToLower(kind)
+	if isToolKind(lowerKind) || strings.Contains(lowerKind, "execution") || strings.Contains(lowerKind, "search") {
+		name := firstNonEmpty(stringField(item, "name", "tool"), toolNameForKind(lowerKind))
+		return []Message{{
+			Role: "tool", Kind: kind, Timestamp: ts, ToolName: name, ToolCallID: stringField(item, "id", "callId", "call_id"),
+			ToolInput:  formatToolValue(firstNonNil(item["arguments"], item["input"], item["command"], item["query"], item["action"])),
+			ToolOutput: formatToolValue(firstNonNil(item["result"], item["output"], item["aggregatedOutput"], item["error"])),
+			ToolStatus: stringField(item, "status"),
+		}}
+	}
+	return nil
 }
 
 func (c *CodexAppClient) Resume(ctx context.Context, threadID string) (string, error) {

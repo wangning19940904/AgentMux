@@ -3,23 +3,12 @@ package cliagents
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 
-	"github.com/wangning19940904/AgentMux/agent/cliagent"
 	"github.com/wangning19940904/AgentMux/core"
-)
-
-const cursorStderrPreviewLimit = 16 * 1024
-
-var (
-	cursorAuthURL          = regexp.MustCompile(`https?://[^\s<>"']+`)
-	cursorVerificationCode = regexp.MustCompile(
-		`(?i)(verification\s+code|device\s+code|验证码|校验码)\s*[:：]?\s*([a-z0-9][a-z0-9_-]{3,})`,
-	)
 )
 
 // cursorStreamEvents maps Cursor's native --output-format stream-json frames.
@@ -42,19 +31,7 @@ func cursorStreamEvents(line []byte) []*core.Event {
 		}
 	case "tool_call":
 		if event := cursorToolEvent(frame, subtype); event != nil {
-			events := []*core.Event{event}
-			if event.ToolResultRaw != "" {
-				if auth := cursorAuthorizationOutput(event.ToolResultRaw); auth != "" {
-					metadata := cursorMetadata("tool_authorization")
-					metadata["persistent"] = "true"
-					metadata["priority"] = "action_required"
-					events = append(events, &core.Event{
-						Type: core.EventOutput, Text: auth, Status: "in_progress",
-						Metadata: metadata,
-					})
-				}
-			}
-			return events
+			return []*core.Event{event}
 		}
 	case "result":
 		return cursorResultEvents(frame, subtype)
@@ -95,36 +72,6 @@ func cursorStreamEvents(line []byte) []*core.Event {
 	// Cursor's `thinking` frames contain raw model reasoning rather than a
 	// deliberately produced user-facing summary. Do not expose them.
 	return nil
-}
-
-func newCursorStderrMapper() cliagent.LineMapper {
-	var output string
-	return func(line []byte) *core.Event {
-		text := strings.TrimSpace(cursorANSISequence.ReplaceAllString(string(line), ""))
-		if text == "" {
-			return nil
-		}
-		if output != "" {
-			output += "\n"
-		}
-		output += text
-		if len(output) > cursorStderrPreviewLimit {
-			output = output[len(output)-cursorStderrPreviewLimit:]
-		}
-		// Cursor and the commands it launches write package-download progress,
-		// warnings, and terminal animations to stderr. Those bytes remain in the
-		// bounded process-error tail, but they are not assistant prose and must
-		// not replace the live answer in the chat card. The one exception is an
-		// explicit login/device-authorization prompt that requires user action.
-		auth := cursorAuthorizationOutput(output)
-		if auth == "" {
-			return nil
-		}
-		metadata := cursorMetadata("tool_authorization")
-		metadata["persistent"] = "true"
-		metadata["priority"] = "action_required"
-		return &core.Event{Type: core.EventOutput, Text: auth, Status: "in_progress", Metadata: metadata}
-	}
 }
 
 func cursorMessageText(message map[string]any) string {
@@ -293,108 +240,6 @@ func cursorToolOutput(value map[string]any) string {
 	return firstNonEmpty(stdout, stderr)
 }
 
-func cursorAuthorizationOutput(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	text := raw
-	var decoded any
-	if json.Unmarshal([]byte(raw), &decoded) == nil {
-		if nested := cursorNestedOutput(decoded); nested != "" {
-			text = nested
-		}
-	}
-	text = cursorANSISequence.ReplaceAllString(text, "")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	url := cursorAuthorizationURL(text)
-	if url == "" {
-		return ""
-	}
-	lower := strings.ToLower(text)
-	authHint := strings.Contains(lower, "authoriz") || strings.Contains(lower, "login") ||
-		strings.Contains(lower, "verification") || strings.Contains(lower, "device code") ||
-		strings.Contains(text, "授权") || strings.Contains(text, "验证码") || strings.Contains(text, "扫码")
-	if !authHint {
-		return ""
-	}
-
-	var code string
-	if match := cursorVerificationCode.FindStringSubmatch(text); len(match) >= 3 {
-		code = match[2]
-	}
-	var b strings.Builder
-	b.WriteString("⚠️ **需要完成授权**\n\n请打开以下链接完成登录：\n")
-	b.WriteString(url)
-	if code != "" {
-		b.WriteString("\n\n**验证码：** `")
-		b.WriteString(code)
-		b.WriteString("`")
-	}
-	b.WriteString("\n\n<font color='orange'>⏳ 授权完成后任务会自动继续</font>")
-	return b.String()
-}
-
-func cursorAuthorizationURL(text string) string {
-	matches := cursorAuthURL.FindAllStringIndex(text, -1)
-	bestURL := ""
-	bestScore := 0
-	for _, match := range matches {
-		if len(match) != 2 {
-			continue
-		}
-		url := strings.TrimRight(text[match[0]:match[1]], ".,;:!?)]}")
-		lowerURL := strings.ToLower(url)
-		score := 0
-		for _, hint := range []string{"/auth", "login", "oauth", "device", "verify", "signin", "sign-in", "sso"} {
-			if strings.Contains(lowerURL, hint) {
-				score += 4
-			}
-		}
-		// Some device-login URLs are opaque. In that case, instructions placed
-		// immediately around the link still distinguish it from an earlier
-		// package source or documentation URL.
-		start := match[0] - 160
-		if start < 0 {
-			start = 0
-		}
-		end := match[1] + 160
-		if end > len(text) {
-			end = len(text)
-		}
-		context := strings.ToLower(text[start:end])
-		for _, hint := range []string{"authoriz", "to login", "log in", "verification code", "device code", "授权", "验证码", "扫码"} {
-			if strings.Contains(context, hint) {
-				score += 2
-			}
-		}
-		if score >= bestScore && score > 0 {
-			bestScore = score
-			bestURL = url
-		}
-	}
-	return bestURL
-}
-
-func cursorNestedOutput(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	case []any:
-		for _, item := range typed {
-			if text := cursorNestedOutput(item); text != "" && cursorAuthURL.MatchString(text) {
-				return text
-			}
-		}
-	case map[string]any:
-		for _, key := range []string{"interleavedOutput", "stderr", "stdout", "output", "message", "content", "result", "success", "failure", "error"} {
-			if text := cursorNestedOutput(typed[key]); text != "" && cursorAuthURL.MatchString(text) {
-				return text
-			}
-		}
-	}
-	return ""
-}
-
 func cursorResultEvents(frame map[string]any, subtype string) []*core.Event {
 	duration := cursorInt64(frame["duration_ms"])
 	text := firstString(frame, "result", "message")
@@ -412,11 +257,9 @@ func cursorResultEvents(frame map[string]any, subtype string) []*core.Event {
 		DurationMs:       duration,
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
-	metadata := cursorMetadata("completed")
-	metadata["clear_persistent"] = "true"
 	return []*core.Event{{
 		Type: core.EventFinal, Text: text, Final: true, Status: firstNonEmpty(subtype, "success"),
-		DurationMs: duration, Usage: usage, Metadata: metadata,
+		DurationMs: duration, Usage: usage, Metadata: cursorMetadata("completed"),
 	}}
 }
 

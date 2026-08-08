@@ -66,11 +66,11 @@ func registerCursor() {
 	core.RegisterAgent("cursor", func(cfg map[string]any) (core.Agent, error) {
 		return cliagent.New(cliagent.Spec{
 			Name: "cursor", Binary: "cursor-agent", Args: cursorArgs,
-			EventMapper: cursorStreamEvents, NewStderrMapper: newCursorStderrMapper,
+			EventMapper:   cursorStreamEvents,
 			FinalFromLast: true, SupportsModel: true,
 			ApprovalModes: core.ApprovalModeValuesForRuntime("cursor"), DefaultApprovalMode: core.ApprovalModeManual,
 			ModelCatalogArgs: []string{"--list-models"}, ParseModelCatalog: parseCursorModelCatalog,
-			ModelForSettings: cursorModelForSettings,
+			ModelForSettings: cursorModelForSettings, EmbeddedModelSettings: cursorEmbeddedModelSettings,
 			ReasoningEfforts: []string{"low", "medium", "high", "xhigh"},
 			ServiceTiers:     []string{"default", "priority"},
 		}, cfg), nil
@@ -154,16 +154,81 @@ func cursorModelForSettings(settings core.RuntimeSettings) string {
 	if base == "" {
 		return ""
 	}
-	if effort := strings.TrimSpace(settings.ReasoningEffort); effort != "" {
+	embedded := cursorEmbeddedModelSettings(settings.Model)
+	if effort := strings.TrimSpace(settings.ReasoningEffort); effort != "" && embedded.ReasoningEffort == "" {
 		parameters = setCursorModelParameter(parameters, []string{"effort", "reasoning"}, "effort", effort)
 	}
-	if fast, ok := cursorFastParameter(settings.ServiceTier); ok {
+	if fast, ok := cursorFastParameter(settings.ServiceTier); ok && embedded.ServiceTier == "" {
 		parameters = setCursorModelParameter(parameters, []string{"fast"}, "fast", fast)
 	}
 	if len(parameters) == 0 {
 		return base
 	}
 	return base + "[" + strings.Join(parameters, ",") + "]"
+}
+
+// cursorEmbeddedModelSettings recognizes the parameterized model variants
+// returned by Cursor's live catalog. Cursor currently exposes both bracket
+// parameters and expanded slugs such as `cursor-grok-4.5-medium-fast`. In both
+// forms the selected model already owns effort/speed, so sending another
+// independently selected value would create a contradictory model request.
+func cursorEmbeddedModelSettings(model string) core.RuntimeSettings {
+	base, parameters := splitCursorModelParameters(model)
+	settings := core.RuntimeSettings{}
+	for _, parameter := range parameters {
+		key, value, ok := strings.Cut(parameter, "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "effort", "reasoning":
+			settings.ReasoningEffort = normalizeCursorEffort(value)
+		case "fast":
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "true", "1", "yes", "on":
+				settings.ServiceTier = "priority"
+			case "false", "0", "no", "off":
+				settings.ServiceTier = "default"
+			}
+		}
+	}
+
+	tokens := strings.Split(strings.ToLower(strings.TrimSpace(base)), "-")
+	if len(tokens) == 0 {
+		return settings
+	}
+	end := len(tokens)
+	if tokens[end-1] == "fast" {
+		if settings.ServiceTier == "" {
+			settings.ServiceTier = "priority"
+		}
+		end--
+	}
+	if settings.ReasoningEffort == "" && end > 0 {
+		effort := normalizeCursorEffort(tokens[end-1])
+		if effort == "high" && end > 1 && tokens[end-2] == "extra" {
+			effort = "xhigh"
+		}
+		if effort != "" {
+			settings.ReasoningEffort = effort
+			// Expanded catalog slugs without `-fast` are the normal-speed variant.
+			if settings.ServiceTier == "" {
+				settings.ServiceTier = "default"
+			}
+		}
+	}
+	return settings
+}
+
+func normalizeCursorEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "medium", "high", "xhigh":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "extra-high", "extra_high":
+		return "xhigh"
+	default:
+		return ""
+	}
 }
 
 func splitCursorModelParameters(model string) (string, []string) {

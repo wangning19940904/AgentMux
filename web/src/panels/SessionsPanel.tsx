@@ -2,19 +2,28 @@ import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
+  CheckCircle2,
+  ChevronDown,
   Clipboard,
+  Clock3,
   ExternalLink,
   Link2,
   MessageSquareText,
   Play,
   RefreshCw,
   Send,
+	Square,
   TerminalSquare,
   Trash2,
+  Wrench,
+  XCircle,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ChannelAvatar } from "../ChannelAvatar";
 import { AgentSession, ProxyTrace, SessionMessage, api } from "../api";
 import { useI18n } from "../i18n";
+import { usePolling } from "../hooks/usePolling";
 import { useAsync } from "../useAsync";
 
 const PROVIDERS = [
@@ -40,6 +49,7 @@ export function SessionsPanel() {
   const [query, setQuery] = useState("");
   const [selectedID, setSelectedID] = useState("");
   const [busy, setBusy] = useState("");
+	const [stopping, setStopping] = useState(false);
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
   const [draft, setDraft] = useState("");
@@ -48,8 +58,10 @@ export function SessionsPanel() {
   const [bindConversationID, setBindConversationID] = useState("");
   const [localAnswers, setLocalAnswers] = useState<Record<string, string>>({});
   const transcriptRef = useRef<HTMLDivElement>(null);
+	const stopRequestedRef = useRef(false);
 
   const sessions = useAsync(() => api.sessions(), []);
+	usePolling(sessions.reload, 10_000);
   const channels = useAsync(() => api.channels(), []);
   const channelByID = useMemo(
     () => new Map((channels.data ?? []).map((channel) => [channel.id, channel])),
@@ -129,11 +141,23 @@ export function SessionsPanel() {
     [interactionChannelID, interactionConversationID]
   );
   const visibleMessages = [...(messages.data ?? []), ...optimisticMessages];
+  const transcriptMessages = visibleMessages.filter((message) =>
+    message.role === "user" || message.role === "assistant" || message.role === "tool"
+  );
   const selectedTraces = sessionTraces.data ?? [];
   const fallbackTraces = recentTraces.data ?? [];
   const routeTraces = selectedTraces.length > 0 ? selectedTraces : fallbackTraces;
   const routeTraceFallback = !sessionTraces.loading && selectedTraces.length === 0 && fallbackTraces.length > 0;
   const routeTraceLoading = sessionTraces.loading || (!sessionTraces.loading && selectedTraces.length === 0 && recentTraces.loading);
+	const selectedRunStatus = stopping
+		? "stopping"
+		: busy === "message"
+			? "running"
+			: selected?.run_status || "idle";
+	const selectedCanStop = Boolean(
+		selectedRunStatus !== "stopping" && selected?.channel_id && selected?.conversation_id &&
+		(selected.can_stop || (selected.can_chat && busy === "message"))
+	);
 
   useEffect(() => {
     if (selected) setSelectedID(keyOf(selected));
@@ -193,6 +217,25 @@ export function SessionsPanel() {
     }
   }
 
+	async function stopConversation() {
+		if (!selected?.channel_id || !selected.conversation_id || !selectedCanStop || stopping) return;
+		if (!window.confirm(t("sessions.stopConfirm"))) return;
+		const stoppingOwnMessage = busy === "message";
+		stopRequestedRef.current = true;
+		setStopping(true);
+		try {
+			await api.stopSession(selected);
+			showNotice(t("sessions.stopRequested"));
+			await Promise.all([sessions.reload(), messages.reload()]);
+		} catch (error) {
+			stopRequestedRef.current = false;
+			showNotice(String(error), true);
+		} finally {
+			if (!stoppingOwnMessage) stopRequestedRef.current = false;
+			setStopping(false);
+		}
+	}
+
   async function openCodex() {
     const threadID = selected?.native_session_id || selected?.session_id;
     if (!threadID) return;
@@ -244,8 +287,13 @@ export function SessionsPanel() {
     } catch (error) {
       setDraft(text);
       setOptimisticMessages([]);
-      showNotice(String(error), true);
+		if (stopRequestedRef.current) {
+			showNotice(t("sessions.stopped"));
+		} else {
+			showNotice(String(error), true);
+		}
     } finally {
+		stopRequestedRef.current = false;
       setBusy("");
     }
   }
@@ -313,6 +361,9 @@ export function SessionsPanel() {
           <div className="session-list" role="list">
             {filtered.map((session) => {
               const channel = session.channel_id ? channelByID.get(session.channel_id) : undefined;
+				const sessionRunStatus = selected && keyOf(selected) === keyOf(session) && busy === "message"
+					? "running"
+					: session.run_status || "idle";
               return (
                 <button
                   key={keyOf(session)}
@@ -336,6 +387,7 @@ export function SessionsPanel() {
                         : session.project_dir || session.status_message || session.session_id}
                     </span>
                     <span className="session-meta">
+						<SessionStatusBadge status={sessionRunStatus} t={t} />
                       {session.origin === "channel" && <span className="pill accent">{t("sessions.channelSession")}</span>}
                       {session.channel_type && <span className="pill">{channelTypeLabel(session.channel_type)}</span>}
                       <span className="pill">{providerLabel(session.provider_id)}</span>
@@ -356,7 +408,10 @@ export function SessionsPanel() {
                     <span className="session-eyebrow">
                       {selected.origin === "channel" ? t("sessions.channelSession") : t("sessions.localSession")}
                     </span>
-                    <h3>{selected.title || selected.conversation_key || selected.session_id}</h3>
+					<div className="session-title-row">
+						<h3>{selected.title || selected.conversation_key || selected.session_id}</h3>
+						<SessionStatusBadge status={selectedRunStatus} t={t} />
+					</div>
                     <p className="muted">
                       {selected.origin === "channel"
                         ? [selected.agent_name, selected.channel_name, channelTypeLabel(selected.channel_type || "")].filter(Boolean).join(" · ")
@@ -380,6 +435,17 @@ export function SessionsPanel() {
                         {t("sessions.copy")}
                       </button>
                     )}
+					{selectedCanStop && (
+						<button
+							className="ghost-action danger-action session-stop-action"
+							disabled={stopping}
+							onClick={stopConversation}
+							title={t("sessions.stop")}
+						>
+							<Square size={14} fill="currentColor" />
+							{stopping ? t("sessions.stopping") : t("sessions.stop")}
+						</button>
+					)}
                     {selected.surface !== "channel" && selected.available && (
                       <button className="action" disabled={busy === "resume"} onClick={() => resume(false)} title={t("sessions.resume")}>
                         <Play size={15} />
@@ -419,17 +485,29 @@ export function SessionsPanel() {
                   <div className="transcript" ref={transcriptRef} aria-live="polite">
                     {messages.loading && !messages.data && <div className="empty-state compact">{t("common.loading")}</div>}
                     {messages.error && <div className="error">{messages.error}</div>}
-                    {visibleMessages.map((message, index) => (
-                      <article className={`message ${message.role}`} key={`${message.timestamp ?? ""}-${index}`}>
-                        <header>
-                          <span>{roleLabel(message.role, t)}</span>
-                          {message.kind && <span className="muted">{message.kind}</span>}
-                          <time>{formatDate(message.timestamp, language)}</time>
-                        </header>
-                        <p>{message.content}</p>
-                      </article>
+                    {transcriptMessages.map((message, index) => (
+                      message.role === "tool" || message.tool_name || message.tool_input || message.tool_output ? (
+                        <SessionToolMessage
+                          key={message.tool_call_id || `${message.timestamp ?? ""}-${index}`}
+                          language={language}
+                          message={message}
+                          onCopy={copy}
+                          t={t}
+                        />
+                      ) : (
+                        <article className={`message ${message.role}`} key={`${message.timestamp ?? ""}-${index}`}>
+                          <header>
+                            <span>{roleLabel(message.role, t)}</span>
+                            {message.kind && message.kind !== "message" && <span className="muted">{message.kind}</span>}
+                            <time>{formatDate(message.timestamp, language)}</time>
+                          </header>
+                          <div className="message-content">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                          </div>
+                        </article>
+                      )
                     ))}
-                    {!messages.loading && !messages.error && visibleMessages.length === 0 && (
+                    {!messages.loading && !messages.error && transcriptMessages.length === 0 && (
                       <div className="empty-state">{t("sessions.noMessages")}</div>
                     )}
                     {busy === "message" && (
@@ -607,6 +685,44 @@ function keyOf(session: AgentSession) {
   return `${session.provider_id}:${session.surface}:${session.session_id}:${session.source_path ?? ""}`;
 }
 
+function SessionStatusBadge({ status, t }: { status?: string; t: (key: string) => string }) {
+	const normalized = normalizeSessionRunStatus(status);
+	return (
+		<span className={`status-badge session-status-badge status-${normalized} ${sessionStatusTone(normalized)}`}>
+			<span className="status-dot" />
+			{sessionStatusLabel(normalized, t)}
+		</span>
+	);
+}
+
+function normalizeSessionRunStatus(status?: string) {
+	return (status || "idle").trim().toLowerCase().replace(/-/g, "_");
+}
+
+function sessionStatusTone(status: string) {
+	if (["running", "succeeded"].includes(status)) return "success";
+	if (["queued", "waiting_input", "stopping", "interrupted", "cancelled", "canceled"].includes(status)) return "warning";
+	if (["failed", "error"].includes(status)) return "danger";
+	return "";
+}
+
+function sessionStatusLabel(status: string, t: (key: string) => string) {
+	switch (status) {
+		case "running": return t("sessions.statusRunning");
+		case "queued": return t("sessions.statusQueued");
+		case "waiting_input": return t("sessions.statusWaitingInput");
+		case "stopping": return t("sessions.statusStopping");
+		case "succeeded": return t("sessions.statusSucceeded");
+		case "failed":
+		case "error": return t("sessions.statusFailed");
+		case "cancelled":
+		case "canceled": return t("sessions.statusCancelled");
+		case "interrupted": return t("sessions.statusInterrupted");
+		case "offline": return t("sessions.statusOffline");
+		default: return t("sessions.statusIdle");
+	}
+}
+
 function routeToolForSession(session: AgentSession) {
   if (session.provider_id === "claude" || session.provider_id === "claudecode") return "claudecode";
   if (session.provider_id === "codex") return "codex";
@@ -644,6 +760,102 @@ function roleLabel(role: string, t: (key: string) => string) {
   if (role === "user") return t("sessions.you");
   if (role === "assistant") return t("sessions.agentReply");
   return role;
+}
+
+function SessionToolMessage({
+  language,
+  message,
+  onCopy,
+  t,
+}: {
+  language: string;
+  message: SessionMessage;
+  onCopy: (text: string) => Promise<void>;
+  t: (key: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const tone = toolStatusTone(message.tool_status);
+  const StatusIcon = tone === "success" ? CheckCircle2 : tone === "error" ? XCircle : Clock3;
+  const name = message.tool_name || message.kind || t("sessions.toolCall");
+  return (
+    <article className={`tool-message ${tone}${open ? " open" : ""}`}>
+      <button
+        aria-expanded={open}
+        className="tool-message-summary"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <span className="tool-message-summary-grid">
+          <span className="tool-message-heading">
+            <span className="tool-message-icon"><Wrench size={16} /></span>
+            <span>
+              <strong>{name}</strong>
+              <small>{t("sessions.toolCall")}</small>
+            </span>
+          </span>
+          <span className={`tool-status ${tone}`}>
+            <StatusIcon size={13} />
+            {toolStatusLabel(message.tool_status, t)}
+          </span>
+          <time>{formatDate(message.timestamp, language)}</time>
+          <ChevronDown className="tool-message-chevron" size={16} />
+        </span>
+      </button>
+      {open && (
+        <div className="tool-message-body">
+          {message.tool_input && (
+            <ToolPayload title={t("sessions.toolInput")} value={message.tool_input} onCopy={onCopy} copyLabel={t("sessions.copy")} />
+          )}
+          {message.tool_output && (
+            <ToolPayload title={t("sessions.toolOutput")} value={message.tool_output} onCopy={onCopy} copyLabel={t("sessions.copy")} />
+          )}
+          {!message.tool_input && !message.tool_output && message.content && (
+            <ToolPayload title={t("sessions.toolDetails")} value={message.content} onCopy={onCopy} copyLabel={t("sessions.copy")} />
+          )}
+          {message.tool_call_id && <span className="tool-call-id">ID: {message.tool_call_id}</span>}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ToolPayload({
+  copyLabel,
+  onCopy,
+  title,
+  value,
+}: {
+  copyLabel: string;
+  onCopy: (text: string) => Promise<void>;
+  title: string;
+  value: string;
+}) {
+  return (
+    <section className="tool-payload">
+      <header>
+        <strong>{title}</strong>
+        <button className="tool-copy" onClick={() => void onCopy(value)} title={copyLabel} type="button">
+          <Clipboard size={13} />
+          {copyLabel}
+        </button>
+      </header>
+      <pre><code>{value}</code></pre>
+    </section>
+  );
+}
+
+function toolStatusTone(status = "") {
+  const normalized = status.toLowerCase().replace(/_/g, "");
+  if (["completed", "success", "succeeded", "done"].includes(normalized)) return "success";
+  if (["failed", "error", "declined", "cancelled", "canceled"].includes(normalized)) return "error";
+  return "pending";
+}
+
+function toolStatusLabel(status: string | undefined, t: (key: string) => string) {
+  const tone = toolStatusTone(status);
+  if (tone === "success") return t("sessions.toolCompleted");
+  if (tone === "error") return t("sessions.toolFailed");
+  return t("sessions.toolCalled");
 }
 
 function RouteTracePanel({
