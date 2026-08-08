@@ -68,6 +68,21 @@ func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleCLIInstallStream(w http.ResponseWriter, r *http.Request) {
+	var req cliInstallRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "cli id is required")
+		return
+	}
+	streamInstall(w, r, func(report func(string, string, int)) any {
+		return toolpkg.InstallCLIWithProgress(r.Context(), id, strings.TrimSpace(req.Action), toolpkg.ProgressFunc(report))
+	})
+}
+
 func (s *Server) handleCLICheck(w http.ResponseWriter, r *http.Request) {
 	var req cliInstallRequest
 	if !decodeJSONInto(w, r, &req) {
@@ -94,4 +109,75 @@ func (s *Server) handleCLISkillSync(w http.ResponseWriter, r *http.Request) {
 	}
 	res := toolpkg.SyncCLILinkedSkills(r.Context(), id)
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleCLISkillSyncStream(w http.ResponseWriter, r *http.Request) {
+	var req cliInstallRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "cli id is required")
+		return
+	}
+	streamInstall(w, r, func(report func(string, string, int)) any {
+		return toolpkg.SyncCLILinkedSkillsWithProgress(r.Context(), id, toolpkg.ProgressFunc(report))
+	})
+}
+
+func (s *Server) handleCLIAuthStatus(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "cli id is required")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, toolpkg.CheckCLIAuth(r.Context(), id))
+}
+
+func (s *Server) handleCLIAuthLogin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string `json:"id"`
+		Force bool   `json:"force"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	result, err := toolpkg.StartCLIAuth(req.ID, req.Force)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleCLIAuthLoginStatus(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		writeErr(w, http.StatusBadRequest, "login session id is required")
+		return
+	}
+	result, ok := toolpkg.GetCLIAuthSession(sessionID)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "CLI login session was not found")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleCLIAuthLoginCancel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	if err := toolpkg.CancelCLIAuthSession(req.SessionID); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeOK(w)
 }

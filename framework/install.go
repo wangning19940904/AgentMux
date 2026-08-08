@@ -22,18 +22,36 @@ type InstallResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// ProgressFunc reports durable installation stages. Percent tracks stage
+// completion rather than package-manager download bytes, which are not exposed
+// consistently by every supported installer.
+type ProgressFunc func(phase, detail string, percent int)
+
 // Install installs a catalogued framework with its catalog-owned command. CLI
 // packages are installed globally while SDK packages live in the sidecar. The
 // caller selects only the framework kind, so this cannot execute arbitrary
 // packages or commands.
 func Install(ctx context.Context, kind string) InstallResult {
-	return install(ctx, kind, "install")
+	return InstallWithProgress(ctx, kind, nil)
+}
+
+// InstallWithProgress installs a framework while reporting preparation,
+// command execution, and verification stages.
+func InstallWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
+	return install(ctx, kind, "install", progress)
 }
 
 // Update updates an installed framework only when its catalog-owned version
 // source reports a newer release. The update is checked again server-side so a
 // stale UI cannot trigger an unnecessary command.
 func Update(ctx context.Context, kind string) InstallResult {
+	return UpdateWithProgress(ctx, kind, nil)
+}
+
+// UpdateWithProgress updates a framework while reporting the update check,
+// installer execution, and verification stages.
+func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
+	reportProgress(progress, "checking", "", 8)
 	check := CheckUpdate(ctx, kind)
 	if check.Error != "" {
 		return InstallResult{Kind: kind, Action: "update", Error: check.Error}
@@ -55,12 +73,16 @@ func Update(ctx context.Context, kind string) InstallResult {
 		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("unknown framework %q", kind)}
 	}
 	if spec.KindType == KindCLI {
-		return updateCLI(ctx, spec, check)
+		return updateCLIWithProgress(ctx, spec, check, progress)
 	}
-	return install(ctx, kind, "update")
+	return install(ctx, kind, "update", progress)
 }
 
 func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult {
+	return updateCLIWithProgress(ctx, spec, check, nil)
+}
+
+func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: spec.Kind, Action: "update"}
 	command, err := resolvedCLIUpdateCommand(spec)
 	if err != nil {
@@ -68,6 +90,7 @@ func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult 
 		return res
 	}
 	res.Command = strings.Join(command, " ")
+	reportProgress(progress, "updating", res.Command, 30)
 
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -87,6 +110,7 @@ func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult 
 		return res
 	}
 
+	reportProgress(progress, "verifying", "", 88)
 	status := Detect(spec, DetectPrereqs())
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
@@ -115,8 +139,9 @@ func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult 
 	return res
 }
 
-func install(ctx context.Context, kind, action string) InstallResult {
+func install(ctx context.Context, kind, action string, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: kind, Action: action}
+	reportProgress(progress, "preparing", "", 5)
 
 	spec, ok := Lookup(kind)
 	if !ok {
@@ -132,7 +157,7 @@ func install(ctx context.Context, kind, action string) InstallResult {
 		return res
 	}
 	if spec.KindType == KindCLI {
-		return installCLI(ctx, spec)
+		return installCLIWithProgress(ctx, spec, progress)
 	}
 	if spec.Language != "node" {
 		res.Error = fmt.Sprintf("framework %q requires a %s runtime (not yet supported)", kind, spec.Language)
@@ -148,6 +173,7 @@ func install(ctx context.Context, kind, action string) InstallResult {
 		res.Error = "npm not found on PATH; install Node.js first"
 		return res
 	}
+	reportProgress(progress, "preparing", "sidecar", 18)
 	if err := EnsureSidecar(); err != nil {
 		res.Error = fmt.Sprintf("prepare sidecar: %v", err)
 		return res
@@ -161,6 +187,11 @@ func install(ctx context.Context, kind, action string) InstallResult {
 	}
 	args := append([]string{"install", "--no-audit", "--no-fund"}, packages...)
 	res.Command = "npm " + strings.Join(args, " ")
+	phase := "installing"
+	if action == "update" {
+		phase = "updating"
+	}
+	reportProgress(progress, phase, res.Command, 32)
 
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -179,6 +210,7 @@ func install(ctx context.Context, kind, action string) InstallResult {
 		return res
 	}
 
+	reportProgress(progress, "verifying", "", 88)
 	installed, version := nodePackageInstalled(spec.Packages)
 	res.OK = installed
 	res.Version = version
@@ -189,7 +221,12 @@ func install(ctx context.Context, kind, action string) InstallResult {
 }
 
 func installCLI(ctx context.Context, spec Spec) InstallResult {
+	return installCLIWithProgress(ctx, spec, nil)
+}
+
+func installCLIWithProgress(ctx context.Context, spec Spec, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: spec.Kind, Action: "install"}
+	reportProgress(progress, "preparing", "", 5)
 	if status := Detect(spec, DetectPrereqs()); status.Installed {
 		res.OK = true
 		res.Version = normalizeSDKVersion(status.Version)
@@ -214,6 +251,7 @@ func installCLI(ctx context.Context, spec Spec) InstallResult {
 		return res
 	}
 	res.Command = strings.Join(command, " ")
+	reportProgress(progress, "installing", res.Command, 30)
 
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -230,6 +268,7 @@ func installCLI(ctx context.Context, spec Spec) InstallResult {
 		return res
 	}
 
+	reportProgress(progress, "verifying", "", 88)
 	status := Detect(spec, DetectPrereqs())
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
@@ -242,4 +281,10 @@ func installCLI(ctx context.Context, spec Spec) InstallResult {
 	}
 	res.OK = true
 	return res
+}
+
+func reportProgress(progress ProgressFunc, phase, detail string, percent int) {
+	if progress != nil {
+		progress(phase, detail, percent)
+	}
 }

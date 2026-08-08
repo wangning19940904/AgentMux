@@ -58,13 +58,13 @@ func (c *larkClient) UpdateText(ctx context.Context, messageID, text string) err
 	return nil
 }
 
-func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, failed bool) (string, error) {
+func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, failed bool, control *streamCardControl) (string, error) {
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType("chat_id").
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(chatID).
 			MsgType(larkim.MsgTypeInteractive).
-			Content(buildCard(text, done, failed)).
+			Content(buildCard(text, done, failed, control)).
 			Build()).
 		Build()
 	resp, err := c.api.Im.Message.Create(ctx, req)
@@ -80,8 +80,8 @@ func (c *larkClient) SendCard(ctx context.Context, chatID, text string, done, fa
 	return *resp.Data.MessageId, nil
 }
 
-func (c *larkClient) ReplyCard(ctx context.Context, messageID, text string, done, failed bool) (string, error) {
-	return c.replyMessage(ctx, messageID, larkim.MsgTypeInteractive, buildCard(text, done, failed))
+func (c *larkClient) ReplyCard(ctx context.Context, messageID, text string, done, failed bool, control *streamCardControl) (string, error) {
+	return c.replyMessage(ctx, messageID, larkim.MsgTypeInteractive, buildCard(text, done, failed, control))
 }
 
 func (c *larkClient) replyMessage(ctx context.Context, messageID, msgType, content string) (string, error) {
@@ -107,11 +107,11 @@ func (c *larkClient) replyMessage(ctx context.Context, messageID, msgType, conte
 	return *resp.Data.MessageId, nil
 }
 
-func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, done, failed bool) error {
+func (c *larkClient) UpdateCard(ctx context.Context, messageID, text string, done, failed bool, control *streamCardControl) error {
 	req := larkim.NewPatchMessageReqBuilder().
 		MessageId(messageID).
 		Body(larkim.NewPatchMessageReqBodyBuilder().
-			Content(buildCard(text, done, failed)).
+			Content(buildCard(text, done, failed, control)).
 			Build()).
 		Build()
 	resp, err := c.api.Im.Message.Patch(ctx, req)

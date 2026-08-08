@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, Download, Package, RefreshCw, TriangleAlert } from "lucide-react";
-import { api, Framework, FrameworkInstallResult, FrameworkUpdateCheck } from "../api";
+import { api, Framework, FrameworkInstallResult, FrameworkUpdateCheck, OperationProgress } from "../api";
+import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
+import { OperationProgress as OperationProgressView } from "../components/OperationProgress";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
@@ -8,6 +10,7 @@ export function FrameworksPanel() {
   const { t } = useI18n();
   const frameworks = useAsync(() => api.frameworks(), []);
   const [busy, setBusy] = useState<Record<string, "install" | "update" | "check">>({});
+  const [progress, setProgress] = useState<Record<string, OperationProgress>>({});
   const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<FrameworkInstallResult | null>(null);
@@ -16,6 +19,7 @@ export function FrameworksPanel() {
   const items = frameworks.data?.frameworks ?? [];
   const sortedItems = [...items].sort((left, right) => Number(right.installed) - Number(left.installed));
   const installedCount = items.filter((item) => item.installed).length;
+  const frameworkPagination = useCatalogPagination(sortedItems);
 
   useEffect(() => {
     items.forEach((item) => {
@@ -39,6 +43,28 @@ export function FrameworksPanel() {
 
   function forgetCheck(kind: string) {
     setChecks((current) => {
+      const next = { ...current };
+      delete next[kind];
+      return next;
+    });
+  }
+
+  function beginProgress(kind: string, phase: string) {
+    setProgress((current) => ({
+      ...current,
+      [kind]: { phase, percent: 4, started_at: Date.now() },
+    }));
+  }
+
+  function updateProgress(kind: string, update: OperationProgress) {
+    setProgress((current) => ({
+      ...current,
+      [kind]: { ...update, started_at: current[kind]?.started_at ?? Date.now() },
+    }));
+  }
+
+  function clearProgress(kind: string) {
+    setProgress((current) => {
       const next = { ...current };
       delete next[kind];
       return next;
@@ -73,11 +99,12 @@ export function FrameworksPanel() {
 
   async function install(kind: string, action: "install" | "update") {
     markBusy(kind, action);
+    beginProgress(kind, action === "update" ? "checking" : "preparing");
     setNotice("");
     setResult(null);
     if (action === "install") forgetCheck(kind);
     try {
-      const res = await api.installFramework(kind, action);
+      const res = await api.installFramework(kind, action, (update) => updateProgress(kind, update));
       setResult(res);
       setNotice(res.ok ? t("frameworks.installed") : frameworkInstallFailureNotice(res, t));
       await frameworks.reload();
@@ -85,6 +112,7 @@ export function FrameworksPanel() {
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
     } finally {
+      clearProgress(kind);
       clearBusy(kind);
     }
   }
@@ -130,20 +158,46 @@ export function FrameworksPanel() {
           <span className="pill on">{items.length}</span>
         </div>
         {frameworks.error && <div className="surface-body error">{frameworks.error}</div>}
-        <div className="surface-body framework-grid">
-          {sortedItems.map((item) => (
-            <FrameworkCard
-              key={item.spec.kind}
-              item={item}
-              busy={busy[item.spec.kind]}
-              check={checks[item.spec.kind]}
-              disabled={(item.spec.install_requires_npm && Boolean(nodeMissing)) || !item.spec.supported}
-              onCheck={() => checkUpdate(item.spec.kind)}
-              onInstall={(action) => install(item.spec.kind, action)}
-            />
-          ))}
-          {sortedItems.length === 0 && <div className="empty-state">{t("frameworks.empty")}</div>}
+        <div className="catalog-table-wrap">
+          <table className="catalog-table framework-table">
+            <thead>
+              <tr>
+                <th>{t("common.name")}</th>
+                <th>{t("common.type")}</th>
+                <th>{t("frameworks.requirements")}</th>
+                <th>{t("common.status")}</th>
+                <th>{t("common.actions")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {frameworkPagination.pageItems.map((item) => (
+                <FrameworkTableRows
+                  key={item.spec.kind}
+                  item={item}
+                  busy={busy[item.spec.kind]}
+                  progress={progress[item.spec.kind]}
+                  check={checks[item.spec.kind]}
+                  disabled={(item.spec.install_requires_npm && Boolean(nodeMissing)) || !item.spec.supported}
+                  onCheck={() => checkUpdate(item.spec.kind)}
+                  onInstall={(action) => install(item.spec.kind, action)}
+                />
+              ))}
+              {sortedItems.length === 0 && (
+                <tr>
+                  <td className="empty-state" colSpan={5}>{t("frameworks.empty")}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
+        <CatalogPagination
+          page={frameworkPagination.page}
+          totalPages={frameworkPagination.totalPages}
+          start={frameworkPagination.start}
+          end={frameworkPagination.end}
+          total={frameworkPagination.total}
+          onChange={frameworkPagination.setPage}
+        />
       </section>
 
       {result?.log && (
@@ -174,9 +228,10 @@ function frameworkInstallFailureNotice(
   return detail && !summary.includes(detail) ? `${summary}: ${detail}` : summary;
 }
 
-function FrameworkCard({
+function FrameworkTableRows({
   item,
   busy,
+  progress,
   check,
   disabled,
   onCheck,
@@ -184,6 +239,7 @@ function FrameworkCard({
 }: {
   item: Framework;
   busy?: "install" | "update" | "check";
+  progress?: OperationProgress;
   check?: FrameworkUpdateCheck;
   disabled: boolean;
   onCheck?: () => void;
@@ -209,29 +265,31 @@ function FrameworkCard({
             : t("tools.checkUpdate");
 
   return (
-    <div className={`framework-card${item.installed ? " installed" : ""}`}>
-      <div className="framework-card-head">
-        <span className="provider-icon">
-          <Package size={16} />
-        </span>
-        <div className="framework-card-title">
-          <strong>{spec.display}</strong>
-          <span className="muted mono">{spec.kind}</span>
-        </div>
-        <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
-      </div>
-
-      {spec.note && <p className="framework-note">{spec.note}</p>}
-
-      {spec.env_required && spec.env_required.length > 0 && (
-        <div className="framework-env">
-          {spec.env_required.map((env) => (
-            <span key={env} className="pill mono">{env}</span>
-          ))}
-        </div>
-      )}
-
-      <div className="framework-card-foot">
+    <>
+      <tr className={`catalog-row${item.installed ? " installed" : ""}`}>
+        <td className="catalog-primary-cell" data-label={t("common.name")}>
+          <span className="provider-icon">
+            <Package size={16} />
+          </span>
+          <span className="catalog-primary-copy">
+            <strong>{spec.display}</strong>
+            <small className="mono">{spec.kind}</small>
+            {spec.note && <small>{spec.note}</small>}
+            {cli && !item.installed && spec.bin && <small className="mono">{spec.bin}</small>}
+          </span>
+        </td>
+        <td data-label={t("common.type")}>
+          <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+        </td>
+        <td data-label={t("frameworks.requirements")}>
+          <span className="catalog-badge-list">
+            {spec.env_required?.map((env) => (
+              <span key={env} className="pill mono">{env}</span>
+            ))}
+            {!spec.env_required?.length && <span className="muted">—</span>}
+          </span>
+        </td>
+        <td data-label={t("common.status")}>
         <span className="cli-status-stack">
           {item.installed ? (
             <span className="status-badge success">
@@ -254,6 +312,8 @@ function FrameworkCard({
             <span className={`status-badge ${updateStatusClass}`} title={check?.error || undefined}>{updateStatus}</span>
           )}
         </span>
+        </td>
+        <td className="catalog-action-cell" data-label={t("common.actions")}>
         {showAction && (
           <button
             className="action"
@@ -264,11 +324,14 @@ function FrameworkCard({
             {buttonLabel}
           </button>
         )}
-      </div>
-      {cli && !item.installed && spec.bin && (
-        <p className="framework-cli-hint muted mono">{spec.bin}</p>
+        </td>
+      </tr>
+      {progress && (
+        <tr className="catalog-progress-row">
+          <td colSpan={5}><OperationProgressView progress={progress} /></td>
+        </tr>
       )}
-    </div>
+    </>
   );
 }
 

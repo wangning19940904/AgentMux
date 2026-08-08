@@ -226,6 +226,14 @@ export interface LaunchAtLoginStatus {
   enabled: boolean;
 }
 
+export interface KeepAwakeStatus {
+  supported: boolean;
+  enabled: boolean;
+  duration_minutes: number;
+  remaining_seconds: number;
+  ends_at?: string;
+}
+
 export interface SystemDirectoryEntry {
   name: string;
   path: string;
@@ -356,6 +364,7 @@ export interface Channel {
   type: string;
   agent_id?: string;
   agent_name?: string;
+  default_message_prompt?: string;
   bot_name?: string;
   bot_avatar_url?: string;
   bot_avatar_proxy_url?: string;
@@ -610,6 +619,7 @@ export interface CLIManagedTool {
     package: string;
     registry?: string;
     note?: string;
+    login_supported?: boolean;
     linked_skills?: CLILinkedSkillSpec[];
   };
   installed: boolean;
@@ -666,6 +676,33 @@ export interface CLIUpdateCheck {
   update_available: boolean;
   checked_at?: string;
   error?: string;
+}
+
+export interface CLIAuthStatus {
+  id: string;
+  state: "authenticated" | "unauthenticated" | "setup_required" | "unknown";
+  installed: boolean;
+  login_supported: boolean;
+  detail?: string;
+}
+
+export interface CLIAuthSession {
+  id: string;
+  session_id: string;
+  phase: "checking" | "setup" | "login" | string;
+  state: "starting" | "waiting" | "succeeded" | "failed" | "cancelled";
+  login_url?: string;
+  verification_code?: string;
+  error?: string;
+  started_at?: string;
+  updated_at?: string;
+}
+
+export interface OperationProgress {
+  phase: string;
+  detail?: string;
+  percent: number;
+  started_at?: number;
 }
 
 export interface MarketplaceSkill {
@@ -725,6 +762,9 @@ export interface AgentSession {
   chat_id?: string;
   chat_type?: string;
   can_chat?: boolean;
+	run_status?: string;
+	can_stop?: boolean;
+	active_task_id?: string;
 }
 
 export interface SessionMessage {
@@ -732,6 +772,11 @@ export interface SessionMessage {
   kind?: string;
   content: string;
   timestamp?: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  tool_input?: string;
+  tool_output?: string;
+  tool_status?: string;
 }
 
 export interface ObservationError {

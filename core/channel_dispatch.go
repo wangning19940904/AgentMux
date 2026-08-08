@@ -15,6 +15,18 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		return
 	}
 
+	if e.handleChannelHelpCommand(ctx, rt, msg) {
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+	managedDirectTurn := !rt.remoteControlEnabled()
+	if managedDirectTurn && e.handleDirectStop(ctx, rt, msg, data) {
+		return
+	}
+
+	if managedDirectTurn && isConversationCommand(msg.Text) {
+		rt.cancelDirectTurnForReset(ctx, ResolveConversationKey(msg))
+	}
 	if e.handleConversationCommand(ctx, rt, msg) {
 		e.emit(ctx, HookMessageSent, data)
 		return
@@ -129,6 +141,20 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		if required {
 			rt.discardPendingInitialTurn(msg)
 		}
+	}
+
+	if managedDirectTurn {
+		turnCtx, cancelTurn := context.WithTimeout(ctx, ChannelTurnTimeout(rt.channel))
+		turn, started := rt.beginDirectTurn(ResolveConversationKey(msg), msg.UserID, cancelTurn)
+		if !started {
+			cancelTurn()
+			_ = rt.platform.Reply(ctx, msg, "上一条消息仍在处理中。请等待完成，或发送 /stop 终止后再试。")
+			e.emit(ctx, HookMessageSent, data)
+			return
+		}
+		defer cancelTurn()
+		defer rt.finishDirectTurn(ResolveConversationKey(msg), turn)
+		ctx = turnCtx
 	}
 
 	agentMsg := channelMessageForAgent(rt.channel, msg)

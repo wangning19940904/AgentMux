@@ -95,6 +95,24 @@ func (e *Engine) handleRuntimeSettingsAction(ctx context.Context, sess AgentSess
 	state := runtimeSettingsPickerState(settings, action.Scope, defaults, agentEditable)
 	if err != nil {
 		state.Notice = err.Error()
+	} else if action.Setting == RuntimeSettingScope {
+		if action.Scope == RuntimeSettingsScopeAgent {
+			state.Hint = "正在编辑 Agent 默认；后续修改仅对新会话生效。"
+		} else {
+			state.Hint = "正在编辑当前会话；后续修改立即生效。"
+		}
+	} else if action.Scope == RuntimeSettingsScopeAgent {
+		state.Hint = "已更新 Agent 默认，仅新会话生效；当前会话未改变。"
+	} else if action.Setting == RuntimeSettingApprovalMode && action.Value == ApprovalModeYolo {
+		state.Hint = "已对当前会话启用 YOLO；下一条消息将直接使用运行时最高权限。"
+	} else if action.Setting == RuntimeSettingApprovalMode && action.Value == ApprovalModeManual {
+		if _, interactive := settings.(InteractiveAgentSession); !interactive {
+			state.Hint = "已切换为手动模式；当前运行时不能在渠道中逐次审批，工具请求会被拦截。"
+		} else {
+			state.Hint = "已切换为手动审批；运行时请求权限时会发送审批卡片。"
+		}
+	} else {
+		state.Hint = "已应用到当前会话。"
 	}
 	if update != nil && update(state) {
 		return true

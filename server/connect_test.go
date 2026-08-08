@@ -176,6 +176,15 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		t.Fatalf("stored after round-trip = %+v", stored.Config)
 	}
 
+	rec = doJSON(t, s, http.MethodGet, "/api/v1/channels", nil)
+	var listed []apiChannel
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || !strings.Contains(listed[0].DefaultMessagePrompt, "渠道执行约束") {
+		t.Fatalf("listed default message prompt = %+v", listed)
+	}
+
 	invalids := []core.Channel{
 		{Name: "bad scope", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyScope: "direct"}},
 		{Name: "bad mode", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyMode: "lark_cli"}},

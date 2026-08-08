@@ -23,6 +23,23 @@ type ConversationSender interface {
 	SendToConversation(ctx context.Context, channelID, conversationID, text string) (string, error)
 }
 
+// ConversationRuntimeState is the live execution state for one managed
+// channel conversation. It intentionally describes only work owned by this
+// AgentMux process; native sessions running in another app are never reported
+// as stoppable.
+type ConversationRuntimeState struct {
+	Status  string `json:"status"`
+	CanStop bool   `json:"can_stop"`
+	TaskID  string `json:"task_id,omitempty"`
+}
+
+// ConversationRuntimeController lets the local management API inspect and
+// interrupt the exact in-memory turn backing a channel conversation.
+type ConversationRuntimeController interface {
+	ConversationRuntimeState(ctx context.Context, channelID, conversationKey string) (ConversationRuntimeState, error)
+	StopConversation(ctx context.Context, channelID, conversationKey, expectedTaskID string) (ConversationRuntimeState, error)
+}
+
 // SendToProject implements Sender on the Engine: it sends an unsolicited
 // message to every platform of the named project.
 func (e *Engine) SendToProject(ctx context.Context, project, text string) error {
@@ -78,6 +95,14 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	if conversation == nil {
 		return "", fmt.Errorf("conversation %q was not found in channel %q", conversationID, channelID)
 	}
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	turn, started := rt.beginDirectTurn(conversation.ConversationKey, "agentmux-console", cancelTurn)
+	if !started {
+		cancelTurn()
+		return "", fmt.Errorf("conversation %q is already running", conversationID)
+	}
+	defer cancelTurn()
+	defer rt.finishDirectTurn(conversation.ConversationKey, turn)
 
 	msg := &Message{
 		ID:              fmt.Sprintf("console-%d", time.Now().UTC().UnixNano()),
@@ -100,7 +125,7 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	}
 	e.emit(ctx, HookMessageReceived, data)
 
-	sess, conv, created, err := rt.session(ctx, msg)
+	sess, conv, created, err := rt.session(turnCtx, msg)
 	if err != nil {
 		e.emit(ctx, HookError, withError(data, err))
 		return "", err
@@ -117,7 +142,10 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
 	}
-	answer, turnErr := e.streamTurn(ctx, sess, text, nil, data)
+	answer, turnErr := e.streamTurn(turnCtx, sess, text, nil, data)
+	if turnErr == nil && turnCtx.Err() != nil {
+		turnErr = turnCtx.Err()
+	}
 	e.persistConversationTurn(ctx, conv, sess)
 	e.emit(ctx, HookMessageSent, data)
 	if turnErr != nil {

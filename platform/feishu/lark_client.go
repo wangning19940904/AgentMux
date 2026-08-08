@@ -31,6 +31,8 @@ const (
 	modelPickerActionSelect = "model_select"
 	modelPickerActionReset  = "model_reset"
 	runtimeSettingsAction   = "runtime_settings"
+	helpCommandAction       = "help_command"
+	codexTaskControlAction  = "codex_task_control"
 	codexInteractionAction  = "codex_interaction"
 	larkWSStartupTimeout    = 45 * time.Second
 	larkWSHeartbeatTimeout  = 6 * time.Minute

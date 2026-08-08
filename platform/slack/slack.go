@@ -144,6 +144,26 @@ func (p *Platform) handleInteractive(ctx context.Context, socket *socketmode.Cli
 	if action.SelectedOption.Value != "" {
 		value = action.SelectedOption.Value
 	}
+	if strings.HasPrefix(action.ActionID, "agentmux_help_") {
+		command := strings.ToLower(strings.TrimSpace(value))
+		if !core.IsHelpCommandAction(command) {
+			return
+		}
+		messageID := callback.Container.MessageTs
+		if messageID == "" {
+			messageID = callback.MessageTs
+		}
+		msg := &core.Message{
+			ID: callback.ActionTs, InteractionMessageID: messageID,
+			ChatID: callback.Channel.ID, UserID: callback.User.ID,
+			Platform: "slack", Text: command,
+		}
+		select {
+		case inbound <- msg:
+		case <-ctx.Done():
+		}
+		return
+	}
 	var decoded slackRuntimeSettingsAction
 	if err := json.Unmarshal([]byte(value), &decoded); err != nil || decoded.Setting == "" {
 		return
@@ -222,6 +242,20 @@ func (p *Platform) ReplyRuntimeSettingsPicker(ctx context.Context, msg *core.Mes
 	return nil
 }
 
+func (p *Platform) ReplyHelpCard(ctx context.Context, msg *core.Message, state core.HelpCardState) error {
+	if msg == nil || msg.ChatID == "" {
+		return fmt.Errorf("slack: empty chat id")
+	}
+	_, _, err := p.slackClient().PostMessageContext(ctx, msg.ChatID,
+		slackapi.MsgOptionText(state.Introduction, false),
+		slackapi.MsgOptionBlocks(slackHelpBlocks(state)...),
+	)
+	if err != nil {
+		return fmt.Errorf("slack help card: %w", err)
+	}
+	return nil
+}
+
 func (p *Platform) UpdateRuntimeSettingsPicker(ctx context.Context, msg *core.Message, state core.RuntimeSettingsPickerState) error {
 	if msg == nil || msg.ChatID == "" || msg.ID == "" {
 		return fmt.Errorf("slack: missing picker message reference")
@@ -264,12 +298,45 @@ func slackRuntimeSettingsBlocks(state core.RuntimeSettingsPickerState) []slackap
 	if state.Notice != "" {
 		blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", ":warning: "+state.Notice, false, false), nil, nil))
 	}
+	if state.Hint != "" {
+		blocks = append(blocks, slackapi.NewContextBlock("agentmux_settings_hint", slackapi.NewTextBlockObject("mrkdwn", state.Hint, false, false)))
+	}
 	for _, group := range settingsui.Groups(state) {
-		if group.Unsupported != "" {
-			blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", "*"+group.Title+"*："+group.Unsupported, false, false), nil, nil))
+		blocks = append(blocks, slackSettingsSelect(group))
+	}
+	return blocks
+}
+
+func slackHelpBlocks(state core.HelpCardState) []slackapi.Block {
+	intro := "*" + state.AgentName + " · 帮助*\n" + state.Introduction
+	if state.RuntimeName != "" {
+		intro += "\n*当前运行时*：`" + state.RuntimeName + "`"
+	}
+	blocks := []slackapi.Block{slackapi.NewSectionBlock(
+		slackapi.NewTextBlockObject("mrkdwn", intro, false, false), nil, nil,
+	)}
+	commands := "*支持的命令*"
+	buttons := make([]slackapi.BlockElement, 0)
+	for index, command := range state.Commands {
+		commands += "\n`" + command.Command + "`  " + command.Description
+		if !command.Actionable || !core.IsHelpCommandAction(command.Command) {
 			continue
 		}
-		blocks = append(blocks, slackSettingsSelect(group))
+		button := slackapi.NewButtonBlockElement(
+			fmt.Sprintf("agentmux_help_%d", index), command.Command,
+			slackapi.NewTextBlockObject("plain_text", command.Command, false, false),
+		)
+		if command.Command == "/model" {
+			button.WithStyle(slackapi.StylePrimary)
+		} else if command.Command == "/clear" || command.Command == "/stop" {
+			button.WithStyle(slackapi.StyleDanger)
+		}
+		buttons = append(buttons, button)
+	}
+	blocks = append(blocks, slackapi.NewSectionBlock(slackapi.NewTextBlockObject("mrkdwn", commands, false, false), nil, nil))
+	for i := 0; i < len(buttons); i += 5 {
+		end := min(i+5, len(buttons))
+		blocks = append(blocks, slackapi.NewActionBlock(fmt.Sprintf("agentmux_help_actions_%d", i/5), buttons[i:end]...))
 	}
 	return blocks
 }

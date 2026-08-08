@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,116 @@ func TestRemoteTaskTakeoverRequiresAdminAndIsAudited(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("task takeover lifecycle event was not emitted")
+	}
+}
+
+func TestRemoteTaskCardStopIsScopedToItsTaskID(t *testing.T) {
+	engine := NewEngine(nil, NewHookRunner(nil, nil))
+	runtime, platform := newRemoteControlTestRuntime(engine)
+	state := runtime.controlStateLocked("chat:one")
+	taskCtx, cancelTask := context.WithCancel(context.Background())
+	defer cancelTask()
+	state.active = &runtimeChannelTask{
+		task: ChannelTask{
+			ID: "current-task", ConversationKey: "chat:one", ControllerID: "member", Status: ChannelTaskRunning,
+		},
+		cancel: cancelTask,
+	}
+	data := map[string]string{"channel_id": "channel-1", "conversation_key": "chat:one"}
+
+	engine.handleChannelMessage(context.Background(), &Message{
+		ChannelID: "channel-1", ChatID: "one", ConversationKey: "chat:one", UserID: "other",
+		ChannelTaskAction: &ChannelTaskAction{TaskID: "current-task", Action: ChannelTaskActionStop},
+	}, data)
+	select {
+	case <-taskCtx.Done():
+		t.Fatal("a non-controller stopped the current task")
+	default:
+	}
+	if state.active.stopRequested {
+		t.Fatal("a non-controller marked the current task for stopping")
+	}
+
+	engine.handleChannelMessage(context.Background(), &Message{
+		ChannelID: "channel-1", ChatID: "one", ConversationKey: "chat:one", UserID: "member",
+		ChannelTaskAction: &ChannelTaskAction{TaskID: "old-task", Action: ChannelTaskActionStop},
+	}, data)
+	select {
+	case <-taskCtx.Done():
+		t.Fatal("a stale card stopped the current task")
+	default:
+	}
+	if state.active.stopRequested {
+		t.Fatal("a stale card marked the current task for stopping")
+	}
+
+	engine.handleChannelMessage(context.Background(), &Message{
+		ChannelID: "channel-1", ChatID: "one", ConversationKey: "chat:one", UserID: "member",
+		ChannelTaskAction: &ChannelTaskAction{TaskID: "current-task", Action: ChannelTaskActionStop},
+	}, data)
+	select {
+	case <-taskCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the matching task card did not cancel the task context")
+	}
+	if !state.active.stopRequested {
+		t.Fatal("the matching task was not marked for stopping")
+	}
+
+	platform.mu.Lock()
+	defer platform.mu.Unlock()
+	if len(platform.replies) != 3 || !strings.Contains(platform.replies[0], "控制人或管理员") ||
+		!strings.Contains(platform.replies[1], "已结束") || !strings.Contains(platform.replies[2], "已请求停止") {
+		t.Fatalf("stop replies = %#v", platform.replies)
+	}
+}
+
+type finalContextReplyStream struct {
+	text      string
+	done      bool
+	failed    bool
+	ctxErr    error
+	callCount int
+}
+
+func (s *finalContextReplyStream) Update(ctx context.Context, text string, done, failed bool) error {
+	s.callCount++
+	if done {
+		s.text = text
+		s.done = done
+		s.failed = failed
+		s.ctxErr = ctx.Err()
+	}
+	return nil
+}
+
+func (s *finalContextReplyStream) Close(context.Context) error { return nil }
+
+func TestStoppedRemoteTaskFinalizesCardAfterTaskContextCancellation(t *testing.T) {
+	for _, withErrorEvent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("error_event_%t", withErrorEvent), func(t *testing.T) {
+			engine := NewEngine(nil, NewHookRunner(nil, nil))
+			runtime, _ := newRemoteControlTestRuntime(engine)
+			runtime.controlStateLocked("chat:one").active = &runtimeChannelTask{
+				task: ChannelTask{ID: "task-1", ConversationKey: "chat:one"}, stopRequested: true,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			events := make(chan *Event, 1)
+			if withErrorEvent {
+				events <- &Event{Type: EventError, Err: context.Canceled}
+			}
+			close(events)
+			stream := &finalContextReplyStream{}
+
+			engine.driveReplyStream(ctx, nil, stream, nil, events, map[string]string{
+				"channel_id": "channel-1", "conversation_key": "chat:one", "task_id": "task-1",
+			})
+
+			if !stream.done || stream.failed || stream.ctxErr != nil || stream.text != "任务已停止。" {
+				t.Fatalf("final stopped card = %+v", stream)
+			}
+		})
 	}
 }
 

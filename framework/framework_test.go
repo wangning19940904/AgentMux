@@ -259,9 +259,15 @@ func TestInstallCLIUsesCatalogNPMCommandAndVerifiesBinary(t *testing.T) {
 	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), npmScript)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := Install(context.Background(), "gemini")
+	var phases []string
+	res := InstallWithProgress(context.Background(), "gemini", func(phase, _ string, _ int) {
+		phases = append(phases, phase)
+	})
 	if !res.OK || res.Error != "" || res.Version != "1.2.3" || res.Command != "npm install -g @google/gemini-cli@latest" {
 		t.Fatalf("install result = %+v", res)
+	}
+	if got := strings.Join(phases, ","); got != "preparing,preparing,installing,verifying" {
+		t.Fatalf("progress phases = %q", got)
 	}
 }
 

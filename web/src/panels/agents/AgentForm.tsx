@@ -32,7 +32,7 @@ import {
 import { MarkdownPreview, Picker } from "./widgets";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 
-export type CLIOption = { id: string; name: string; note?: string };
+export type CLIOption = { id: string; name: string; note?: string; installed: boolean };
 
 export function AgentForm({
   busy,
@@ -45,6 +45,7 @@ export function AgentForm({
   drawerMode,
   mcpOptions,
   onDelete,
+  onInstallCLI,
   onSave,
   onToggleChannel,
   onToggleTrigger,
@@ -67,6 +68,7 @@ export function AgentForm({
   drawerMode: DrawerMode | null;
   mcpOptions: string[];
   onDelete: () => void;
+  onInstallCLI: (id: string) => void;
   onSave: () => void;
   onToggleChannel: (id: string) => void;
   onToggleTrigger: (id: string) => void;
@@ -91,12 +93,25 @@ export function AgentForm({
   const [loginCode, setLoginCode] = useState("");
   const injectedPrompt = useMemo(() => {
     const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
+    const channelPrompts = selectedChannelIDs
+      .map((id) => channelOptions.find((channel) => channel.id === id))
+      .filter((channel): channel is Channel => Boolean(channel?.default_message_prompt?.trim()))
+      .map((channel) => ({
+        name: channel.name || channel.type,
+        prompt: channel.default_message_prompt ?? "",
+      }));
     const clis = (draft.clis ?? [])
       .map((id) => cliOptions.find((option) => option.id === id))
-      .filter((option): option is CLIOption => Boolean(option))
+      .filter((option): option is CLIOption => Boolean(option?.installed))
       .map((option) => ({ name: option.name, note: option.note ?? "" }));
-    return composeInjectedPrompt(draft.system_prompt ?? "", logPaths, clis);
-  }, [draft.system_prompt, draft.clis, selectedChannelIDs, cliOptions]);
+    return composeInjectedPrompt(
+      draft.system_prompt ?? "",
+      logPaths,
+      clis,
+      channelPrompts,
+      t("agents.channelDefaultPrompt"),
+    );
+  }, [draft.system_prompt, draft.clis, selectedChannelIDs, channelOptions, cliOptions, t]);
   const selectedRouteTool = draft.provider_tool || routeToolForRuntime(draft.runtime_id);
   const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
@@ -319,7 +334,7 @@ export function AgentForm({
           </label>
           <div className="field wide agent-prompt-field">
             <div className="field-label-row">
-              <span>{t("agents.systemPrompt")}</span>
+              <span>{promptView === "preview" ? t("agents.fullInjectedPrompt") : t("agents.systemPrompt")}</span>
               <div className="markdown-mode-toggle" role="group" aria-label={t("agents.markdownViewMode")}>
                 <button
                   className={promptView === "edit" ? "active" : ""}
@@ -351,19 +366,25 @@ export function AgentForm({
                 placeholder={t("agents.markdownPlaceholder")}
               />
             ) : (
-              <MarkdownPreview content={draft.system_prompt ?? ""} empty={t("agents.markdownPreviewEmpty")} />
+              <MarkdownPreview
+                className="injected-prompt-preview agent-prompt-full-preview"
+                content={injectedPrompt}
+                empty={t("agents.injectedPromptEmpty")}
+              />
             )}
-            <small>{t("agents.markdownHelp")}</small>
+            <small>{promptView === "preview" ? t("agents.injectedPromptHelp") : t("agents.markdownHelp")}</small>
           </div>
-          <div className="field wide">
-            <span>{t("agents.injectedPrompt")}</span>
-            <MarkdownPreview
-              className="injected-prompt-preview"
-              content={injectedPrompt}
-              empty={t("agents.injectedPromptEmpty")}
-            />
-            <small>{t("agents.injectedPromptHelp")}</small>
-          </div>
+          {promptView === "edit" && (
+            <div className="field wide">
+              <span>{t("agents.injectedPrompt")}</span>
+              <MarkdownPreview
+                className="injected-prompt-preview"
+                content={injectedPrompt}
+                empty={t("agents.injectedPromptEmpty")}
+              />
+              <small>{t("agents.injectedPromptHelp")}</small>
+            </div>
+          )}
         </div>
       </section>
 
@@ -615,6 +636,9 @@ export function AgentForm({
             selected={draft.clis ?? []}
             readOnly={readOnly}
             onChange={(next) => onUpdate("clis", next)}
+            unavailableItems={cliOptions.filter((option) => !option.installed).map((option) => option.id)}
+            unavailableTitle={t("agents.cliInstallHint")}
+            onUnavailableClick={onInstallCLI}
             empty={t("agents.clisEmpty")}
           />
         </div>

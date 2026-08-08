@@ -40,6 +40,7 @@ type channelRuntime struct {
 
 	controlMu    sync.Mutex
 	controlTasks map[string]*channelControlState
+	directTurns  map[string]*directChannelTurn
 	clearConfirm map[string]time.Time
 	threadLists  map[string][]NativeThread
 	pendingTurns map[string]pendingInitialTurn

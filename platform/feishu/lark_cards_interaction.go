@@ -71,7 +71,7 @@ func buildAgentInteractionCard(msg *core.Message, task core.ChannelTask, interac
 			template = "grey"
 		}
 		elements = append(elements, map[string]any{
-			"tag": "markdown", "content": "**已处理**：" + outcome,
+			"tag": "markdown", "content": "**已处理**：" + interactionOutcomeLabel(outcome),
 		})
 	} else {
 		detail := strings.TrimSpace(request.Description)
@@ -117,6 +117,23 @@ func buildAgentInteractionCard(msg *core.Message, task core.ChannelTask, interac
 		return `{"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"Codex interaction unavailable"}]}}`
 	}
 	return string(data)
+}
+
+func interactionOutcomeLabel(outcome string) string {
+	switch outcome {
+	case "accept":
+		return "已允许一次"
+	case "acceptForSession":
+		return "本会话已允许"
+	case "decline", "cancel":
+		return "已拒绝"
+	case "expired":
+		return "已过期"
+	case "answered":
+		return "已提交"
+	default:
+		return outcome
+	}
 }
 
 func interactionApprovalElements(msg *core.Message, task core.ChannelTask, interaction core.ChannelInteraction) []map[string]any {

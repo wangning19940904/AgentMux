@@ -171,6 +171,49 @@ func TestStartSessionDiscoversAndCachesRuntimeModels(t *testing.T) {
 	}
 }
 
+func TestSessionHidesSettingsFixedBySelectedModel(t *testing.T) {
+	agent := New(Spec{
+		Name: "parameterized-helper", SupportsModel: true,
+		Args:             func(_, _, _, _ string) []string { return nil },
+		ReasoningEfforts: []string{"low", "medium", "high"},
+		ServiceTiers:     []string{"default", "priority"},
+		EmbeddedModelSettings: func(model string) core.RuntimeSettings {
+			if model == "fixed-medium-fast" {
+				return core.RuntimeSettings{ReasoningEffort: "medium", ServiceTier: "priority"}
+			}
+			return core.RuntimeSettings{}
+		},
+	}, map[string]any{
+		"model":            "fixed-medium-fast",
+		"supported_models": []string{"fixed-medium-fast", "flexible"},
+	})
+	sess, err := agent.StartSession(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := core.RuntimeSettingsForSession(sess)
+	if !ok {
+		t.Fatal("session does not expose runtime settings")
+	}
+	current := settings.CurrentRuntimeSettings()
+	caps := settings.RuntimeSettingsCapabilities()
+	if current.ReasoningEffort != "medium" || current.ServiceTier != "priority" {
+		t.Fatalf("effective settings = %#v", current)
+	}
+	if len(caps.ReasoningEfforts) != 0 || len(caps.ServiceTiers) != 0 {
+		t.Fatalf("fixed controls still exposed: %#v", caps)
+	}
+	if err := settings.SetRuntimeSetting(core.RuntimeSettingReasoningEffort, "high"); err == nil {
+		t.Fatal("fixed reasoning effort should reject an independent override")
+	}
+	if err := settings.SetRuntimeSetting(core.RuntimeSettingModel, "flexible"); err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.RuntimeSettingsCapabilities().ReasoningEfforts) == 0 || len(settings.RuntimeSettingsCapabilities().ServiceTiers) == 0 {
+		t.Fatal("flexible model should restore independent controls")
+	}
+}
+
 func runHelperSession(t *testing.T, scenario string) []*core.Event {
 	t.Helper()
 	agent := New(Spec{

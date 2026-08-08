@@ -37,6 +37,14 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
+	if e.handleChannelHelpCommand(ctx, rt, msg) {
+		e.emit(ctx, HookMessageSent, data)
+		return
+	}
+	if msg.ChannelTaskAction != nil {
+		e.handleRemoteTaskAction(ctx, rt, msg, data, *msg.ChannelTaskAction)
+		return
+	}
 	if msg.AgentInteractionAction != nil {
 		if err := e.resolveRemoteInteraction(ctx, rt, msg, *msg.AgentInteractionAction, false); err != nil {
 			_ = rt.platform.Reply(ctx, msg, "操作未生效："+err.Error())
@@ -214,6 +222,7 @@ func cloneChannelMessage(msg *Message) *Message {
 	clone.Images = nil
 	clone.RuntimeSettingsAction = nil
 	clone.AgentInteractionAction = nil
+	clone.ChannelTaskAction = nil
 	clone.Callback = nil
 	clone.LogOnly = false
 	return &clone

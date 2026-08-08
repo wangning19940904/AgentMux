@@ -74,6 +74,11 @@ type Spec struct {
 	// ModelForSettings converts the transport-neutral runtime settings into the
 	// exact value passed to the CLI's model flag.
 	ModelForSettings func(core.RuntimeSettings) string
+	// EmbeddedModelSettings reports settings already fixed by a concrete model
+	// slug. For example Cursor exposes variants such as
+	// `gpt-5.6-sol-high-fast`; showing separate effort/speed controls for those
+	// variants is misleading because the selected slug already owns them.
+	EmbeddedModelSettings func(model string) core.RuntimeSettings
 	// ReasoningEfforts and ServiceTiers enumerate settings that this CLI can
 	// encode into its native model/request syntax when Provider metadata does
 	// not supply a more specific catalog.

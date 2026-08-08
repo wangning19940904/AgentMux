@@ -104,6 +104,11 @@ export function AgentsPanel() {
     setNotice("");
   }
 
+  function openCLIInstaller(id: string) {
+    closeDrawer();
+    window.location.hash = `#skills/cli/${encodeURIComponent(id)}`;
+  }
+
   function update<K extends keyof AgentInstance>(key: K, value: AgentInstance[K]) {
     setDrawerDraft((current) => {
       if (!current) return current;
@@ -127,8 +132,14 @@ export function AgentsPanel() {
     setBusy("save");
     setNotice("");
     try {
+      const installedCLIIDs = tools.data
+        ? new Set(cliCatalog.filter((tool) => tool.installed).map((tool) => tool.spec.id))
+        : null;
       const saved = await api.upsertAgentInstance({
         ...drawerDraft,
+        clis: installedCLIIDs
+          ? (drawerDraft.clis ?? []).filter((id) => installedCLIIDs.has(id))
+          : drawerDraft.clis,
         source: drawerDraft.source || (drawerMode === "create" ? "manual" : "console"),
         provider_tool: drawerDraft.provider_tool || drawerDraft.runtime_id,
         memory_scope: drawerDraft.memory_scope || `agent:${drawerDraft.id || "new"}`,
@@ -217,7 +228,12 @@ export function AgentsPanel() {
                 canSave={canSave}
                 activeRoutes={activeRouteItems}
                 channelOptions={channelItems}
-                cliOptions={cliCatalog.map((tool) => ({ id: tool.spec.id, name: tool.spec.name, note: tool.spec.note }))}
+                cliOptions={cliCatalog.map((tool) => ({
+                  id: tool.spec.id,
+                  name: tool.spec.name,
+                  note: tool.spec.note,
+                  installed: tool.installed,
+                }))}
                 compatibleProviders={compatibleProviders}
                 draft={draft}
                 mcpOptions={mcpOptions.map((server) => server.name)}
@@ -230,6 +246,7 @@ export function AgentsPanel() {
                 busy={busy}
                 drawerMode={drawerMode}
                 onDelete={remove}
+                onInstallCLI={openCLIInstaller}
                 onSave={save}
                 onToggleChannel={(id) => setSelectedChannelIDs((current) => toggleID(current, id))}
                 onToggleTrigger={(id) => setSelectedTriggerIDs((current) => toggleID(current, id))}

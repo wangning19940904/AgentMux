@@ -147,7 +147,7 @@ func runtimeSettingsPickerState(settings RuntimeSettingsSession, scope RuntimeSe
 	if scope == RuntimeSettingsScopeAgent {
 		current = agentDefaults
 	}
-	caps := settings.RuntimeSettingsCapabilities()
+	current, caps := RuntimeSettingsView(settings, current)
 	unsupported := map[RuntimeSetting]string{}
 	if len(caps.Models) == 0 {
 		unsupported[RuntimeSettingModel] = "当前运行时未提供可选模型"
@@ -161,7 +161,7 @@ func runtimeSettingsPickerState(settings RuntimeSettingsSession, scope RuntimeSe
 	if len(caps.ApprovalModes) == 0 {
 		unsupported[RuntimeSettingApprovalMode] = "当前运行时不支持审批模式切换"
 	}
-	return RuntimeSettingsPickerState{
+	state := RuntimeSettingsPickerState{
 		Scope:                 scope,
 		Settings:              current,
 		RuntimeDefaults:       settings.DefaultRuntimeSettings(),
@@ -169,6 +169,12 @@ func runtimeSettingsPickerState(settings RuntimeSettingsSession, scope RuntimeSe
 		AgentDefaultsEditable: agentEditable,
 		Unsupported:           unsupported,
 	}
+	if current.ApprovalMode == ApprovalModeManual {
+		if _, interactive := settings.(InteractiveAgentSession); !interactive && len(caps.ApprovalModes) > 0 {
+			state.Hint = "当前运行时不能在渠道中暂停并逐次审批；手动模式会拦截工具。需要执行工具时请选择智能自动审批或 YOLO。"
+		}
+	}
+	return state
 }
 
 func applyRuntimeSettingsAction(settings RuntimeSettingsSession, action RuntimeSettingsAction, defaults *RuntimeSettings) error {
@@ -183,7 +189,14 @@ func applyRuntimeSettingsAction(settings RuntimeSettingsSession, action RuntimeS
 			defaults.Set(action.Setting, "")
 			return nil
 		}
-		if err := ValidateRuntimeSetting(settings.RuntimeSettingsCapabilities(), action.Setting, action.Value); err != nil {
+		_, capabilities := RuntimeSettingsView(settings, *defaults)
+		// A model change is always validated against the runtime's full model
+		// catalog; other settings use the model-refined view so fixed dimensions
+		// cannot be changed independently.
+		if action.Setting == RuntimeSettingModel {
+			capabilities = settings.RuntimeSettingsCapabilities()
+		}
+		if err := ValidateRuntimeSetting(capabilities, action.Setting, action.Value); err != nil {
 			return err
 		}
 		defaults.Set(action.Setting, action.Value)

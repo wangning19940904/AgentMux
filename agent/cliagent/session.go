@@ -11,6 +11,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/internal/procutil"
 )
 
 const (
@@ -27,6 +28,83 @@ type session struct {
 
 func (s *session) ID() string { return s.id }
 
+// RuntimeSettingsView returns the effective settings and controls for an
+// arbitrary settings snapshot. It lets the shared picker correctly render
+// both the current-conversation scope and persisted Agent defaults.
+func (s *session) RuntimeSettingsView(settings core.RuntimeSettings) (core.RuntimeSettings, core.RuntimeSettingsCapabilities) {
+	if s == nil {
+		return settings, core.RuntimeSettingsCapabilities{}
+	}
+	capabilities := s.Settings.RuntimeSettingsCapabilities()
+	if s.agent == nil || s.agent.spec.EmbeddedModelSettings == nil {
+		return settings, capabilities
+	}
+	embedded := s.agent.spec.EmbeddedModelSettings(settings.Model)
+	if embedded.ReasoningEffort != "" {
+		settings.ReasoningEffort = embedded.ReasoningEffort
+		capabilities.ReasoningEfforts = nil
+	}
+	if embedded.ServiceTier != "" {
+		settings.ServiceTier = embedded.ServiceTier
+		capabilities.ServiceTiers = nil
+	}
+	return settings, capabilities
+}
+
+func (s *session) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabilities {
+	_, capabilities := s.RuntimeSettingsView(s.Settings.CurrentRuntimeSettings())
+	return capabilities
+}
+
+func (s *session) CurrentRuntimeSettings() core.RuntimeSettings {
+	settings, _ := s.RuntimeSettingsView(s.Settings.CurrentRuntimeSettings())
+	return settings
+}
+
+func (s *session) DefaultRuntimeSettings() core.RuntimeSettings {
+	settings, _ := s.RuntimeSettingsView(s.Settings.DefaultRuntimeSettings())
+	return settings
+}
+
+func (s *session) SetRuntimeSetting(setting core.RuntimeSetting, value string) error {
+	if setting != core.RuntimeSettingModel {
+		if err := core.ValidateRuntimeSetting(s.RuntimeSettingsCapabilities(), setting, value); err != nil {
+			return err
+		}
+	}
+	return s.Settings.SetRuntimeSetting(setting, value)
+}
+
+func (s *session) ResetRuntimeSetting(setting core.RuntimeSetting) error {
+	if setting != core.RuntimeSettingModel && !s.RuntimeSettingsCapabilities().Supports(setting) {
+		return fmt.Errorf("%s is fixed by the selected model", setting)
+	}
+	return s.Settings.ResetRuntimeSetting(setting)
+}
+
+func (s *session) ModelSwitchingSupported() bool {
+	return len(s.RuntimeSettingsCapabilities().Models) > 0
+}
+
+func (s *session) CurrentModel() string { return s.CurrentRuntimeSettings().Model }
+
+func (s *session) DefaultModel() string { return s.DefaultRuntimeSettings().Model }
+
+func (s *session) SupportedModels() []string {
+	options := s.Settings.RuntimeSettingsCapabilities().Models
+	models := make([]string, 0, len(options))
+	for _, option := range options {
+		models = append(models, option.Value)
+	}
+	return models
+}
+
+func (s *session) SetModel(model string) error {
+	return s.SetRuntimeSetting(core.RuntimeSettingModel, model)
+}
+
+func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
+
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
 	out := make(chan *core.Event, 16)
 	settings := s.CurrentRuntimeSettings()
@@ -41,6 +119,7 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		bin = p
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	procutil.Prepare(cmd)
 	cmd.Dir = s.workDir
 	env := runner.BuildEnv(s.agent.env)
 	if s.agent.spec.ApprovalEnv != nil {

@@ -168,6 +168,9 @@ func (e *Engine) AddProject(name, workDir string, agent Agent, platforms []Platf
 			opts.WorkDir = workDir
 		}
 	}
+	if opts.AgentName == "" {
+		opts.AgentName = name
+	}
 	e.projects[name] = &projectRuntime{
 		owner:     e,
 		name:      name,
@@ -302,6 +305,11 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	e.mu.RUnlock()
 	if pr == nil {
 		e.log.Warn("no project for message", "project", msg.Project)
+		return
+	}
+
+	if e.handleProjectHelpCommand(ctx, pr, msg) {
+		e.emit(ctx, HookMessageSent, data)
 		return
 	}
 

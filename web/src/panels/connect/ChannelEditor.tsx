@@ -320,18 +320,22 @@ export function FeishuChannelOptions({
                 onChange={(e) => updateConfig("codex_max_queue", e.target.value)}
               />
             </label>
-            <label className="field">
-              <span>{t("connect.codexTurnTimeout")}</span>
-              <input
-                type="number"
-                min={1}
-                max={240}
-                value={configValue(config, "codex_turn_timeout_minutes", FEISHU_DEFAULTS.codex_turn_timeout_minutes)}
-                onChange={(e) => updateConfig("codex_turn_timeout_minutes", e.target.value)}
-              />
-            </label>
           </>
         )}
+        <label className="field">
+          <span>{t("connect.turnTimeout")}</span>
+          <input
+            type="number"
+            min={1}
+            max={240}
+            value={configValue(
+              config,
+              "turn_timeout_minutes",
+              configValue(config, "codex_turn_timeout_minutes", FEISHU_DEFAULTS.turn_timeout_minutes),
+            )}
+            onChange={(e) => updateConfig("turn_timeout_minutes", e.target.value)}
+          />
+        </label>
         <label className="field">
           <span>{t("connect.replyMode")}</span>
           <select value={replyMode} onChange={(e) => updateConfig("reply_mode", e.target.value)}>

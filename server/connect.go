@@ -23,21 +23,22 @@ func (s *Server) SetConnect(svc *core.ConnectService) { s.connect = svc }
 // apiChannel is a channel plus live status and display enrichment.
 type apiChannel struct {
 	core.Channel
-	AgentName         string                       `json:"agent_name,omitempty"`
-	BotName           string                       `json:"bot_name,omitempty"`
-	BotAvatarURL      string                       `json:"bot_avatar_url,omitempty"`
-	BotAvatarProxyURL string                       `json:"bot_avatar_proxy_url,omitempty"`
-	BotOpenID         string                       `json:"bot_open_id,omitempty"`
-	State             string                       `json:"state,omitempty"`
-	Connected         bool                         `json:"connected"`
-	Error             string                       `json:"error,omitempty"`
-	StartedAt         *time.Time                   `json:"started_at,omitempty"`
-	ConnectedAt       *time.Time                   `json:"connected_at,omitempty"`
-	LastCheckedAt     *time.Time                   `json:"last_checked_at,omitempty"`
-	LastHeartbeatAt   *time.Time                   `json:"last_heartbeat_at,omitempty"`
-	LastEventAt       *time.Time                   `json:"last_event_at,omitempty"`
-	LastInboundAt     *time.Time                   `json:"last_inbound_at,omitempty"`
-	CodexCapability   *core.CodexControlCapability `json:"codex_control_capability,omitempty"`
+	AgentName            string                       `json:"agent_name,omitempty"`
+	DefaultMessagePrompt string                       `json:"default_message_prompt,omitempty"`
+	BotName              string                       `json:"bot_name,omitempty"`
+	BotAvatarURL         string                       `json:"bot_avatar_url,omitempty"`
+	BotAvatarProxyURL    string                       `json:"bot_avatar_proxy_url,omitempty"`
+	BotOpenID            string                       `json:"bot_open_id,omitempty"`
+	State                string                       `json:"state,omitempty"`
+	Connected            bool                         `json:"connected"`
+	Error                string                       `json:"error,omitempty"`
+	StartedAt            *time.Time                   `json:"started_at,omitempty"`
+	ConnectedAt          *time.Time                   `json:"connected_at,omitempty"`
+	LastCheckedAt        *time.Time                   `json:"last_checked_at,omitempty"`
+	LastHeartbeatAt      *time.Time                   `json:"last_heartbeat_at,omitempty"`
+	LastEventAt          *time.Time                   `json:"last_event_at,omitempty"`
+	LastInboundAt        *time.Time                   `json:"last_inbound_at,omitempty"`
+	CodexCapability      *core.CodexControlCapability `json:"codex_control_capability,omitempty"`
 }
 
 // apiTrigger is a trigger plus display enrichment.
@@ -69,7 +70,11 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 	for _, ch := range channels {
 		botInfo := s.lookupChannelBotInfo(r.Context(), ch)
 		ch.Config = redactStringMap(ch.Config)
-		item := apiChannel{Channel: ch, AgentName: agentNames[ch.AgentID]}
+		item := apiChannel{
+			Channel:              ch,
+			AgentName:            agentNames[ch.AgentID],
+			DefaultMessagePrompt: core.ChannelDefaultMessagePrompt(ch),
+		}
 		if s.connect != nil {
 			if capability, ok := s.connect.ChannelCodexControlCapability(ch.ID); ok {
 				item.CodexCapability = &capability
@@ -618,6 +623,15 @@ func normalizeChannelConfig(ch *core.Channel) error {
 	// Approval defaults belong to the bound Agent. Strip the retired channel
 	// key whenever a channel is created or saved so old records migrate lazily.
 	delete(ch.Config, "approval_mode")
+	turnTimeoutRaw := strings.TrimSpace(ch.Config[core.ChannelConfigTurnTimeout])
+	if turnTimeoutRaw == "" {
+		turnTimeoutRaw = strings.TrimSpace(ch.Config[core.ChannelConfigCodexTurnTimeout])
+	}
+	turnTimeout, err := boundedChannelInt(turnTimeoutRaw, core.DefaultChannelTurnTimeoutMinutes, 1, 240)
+	if err != nil {
+		return fmt.Errorf("invalid turn_timeout_minutes: %w", err)
+	}
+	ch.Config[core.ChannelConfigTurnTimeout] = strconv.Itoa(turnTimeout)
 	if ch.Type != "feishu" && ch.Type != "lark" {
 		return nil
 	}
