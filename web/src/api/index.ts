@@ -35,6 +35,12 @@ import type {
   MarketplaceSkill,
   MemoryEntry,
   MenubarSettings,
+  MeetingInvitation,
+	MeetingDetail,
+  MeetingJoinResult,
+  MeetingOverview,
+	MeetingResponseMode,
+	MeetingTurn,
   ObservationInsight,
   ObservationIntegration,
   ObservationIntegrationActionResult,
@@ -58,6 +64,8 @@ import type {
   Status,
   SystemDirectoryListing,
   ToolsResponse,
+	TTSCatalogStatus,
+	TTSModel,
   Trigger,
   UsageReport,
   WorkspaceInitResult,
@@ -130,6 +138,11 @@ export const api = {
   deleteAgentInstance: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/agent-instances?id=${encodeURIComponent(id)}`),
   tools: () => get<ToolsResponse>("/api/v1/tools"),
+	ttsModels: () => getChecked<TTSCatalogStatus>("/api/v1/tts/models"),
+	downloadTTSModel: (id: string, onProgress: (progress: OperationProgress) => void) =>
+		postProgress<TTSModel>("/api/v1/tts/models/download/stream", { id }, onProgress),
+	deleteTTSModel: (id: string) =>
+		del<TTSCatalogStatus>(`/api/v1/tts/models?id=${encodeURIComponent(id)}`),
   installCLI: (id: string, action: "install" | "update", onProgress?: (progress: OperationProgress) => void) =>
     onProgress
       ? postProgress<CLIInstallResult>("/api/v1/tools/cli/install/stream", { id, action }, onProgress)
@@ -326,6 +339,43 @@ export const api = {
       nonce,
       decision,
       answers,
+    }),
+  meetingOverview: () => getChecked<MeetingOverview>("/api/v1/remote/meetings"),
+  respondMeetingInvitation: (invitation: MeetingInvitation, decision: "join" | "reject") =>
+    postChecked<MeetingInvitation>("/api/v1/remote/meetings/invitations/respond", {
+      target_id: invitation.target_id ?? "",
+      channel_id: invitation.channel_id,
+      invitation_id: invitation.id,
+      nonce: invitation.nonce,
+      decision,
+    }),
+  joinMeeting: (targetID: string, channelID: string, meetingNumber: string) =>
+    postChecked<MeetingJoinResult>("/api/v1/remote/meetings/join", {
+      target_id: targetID,
+      channel_id: channelID,
+      meeting_number: meetingNumber,
+    }),
+  meetingActivity: async (targetID: string, channelID: string, meetingID: string) => {
+    const detail = await getChecked<MeetingDetail>(`/api/v1/remote/meetings/activity?target_id=${encodeURIComponent(targetID)}&channel_id=${encodeURIComponent(channelID)}&meeting_id=${encodeURIComponent(meetingID)}`);
+    return {
+      ...detail,
+      // Older remote AgentMux instances may still encode empty Go slices as
+      // null. Keep the UI-facing contract stable while mixed versions run.
+      items: Array.isArray(detail.items) ? detail.items : [],
+      turns: Array.isArray(detail.turns) ? detail.turns : [],
+    };
+  },
+  sendMeetingMessage: (targetID: string, channelID: string, meetingID: string, text: string) =>
+    postChecked<{ sent: boolean }>("/api/v1/remote/meetings/messages", {
+      target_id: targetID, channel_id: channelID, meeting_id: meetingID, text,
+    }),
+  askMeeting: (targetID: string, channelID: string, meetingID: string, question: string) =>
+    postChecked<MeetingTurn>("/api/v1/remote/meetings/questions", {
+      target_id: targetID, channel_id: channelID, meeting_id: meetingID, question,
+    }),
+  setMeetingResponseMode: (targetID: string, channelID: string, mode: MeetingResponseMode) =>
+    postChecked<{ channel_id: string; response_mode: MeetingResponseMode }>("/api/v1/remote/meetings/response-mode", {
+      target_id: targetID, channel_id: channelID, mode,
     }),
   beginFeishuSetup: () => postChecked<FeishuSetupBeginResponse>("/api/v1/setup/feishu/begin", {}),
   pollFeishuSetup: (deviceCode: string, baseUrl = "") =>

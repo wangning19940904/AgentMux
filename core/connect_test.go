@@ -317,6 +317,18 @@ func (s *fakeStore) GetChannel(ctx context.Context, id string) (*Channel, error)
 	}
 	return nil, nil
 }
+func (s *fakeStore) UpsertChannel(_ context.Context, channel *Channel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.channels {
+		if s.channels[index].ID == channel.ID {
+			s.channels[index] = *channel
+			return nil
+		}
+	}
+	s.channels = append(s.channels, *channel)
+	return nil
+}
 func (s *fakeStore) ListTriggers(ctx context.Context) ([]Trigger, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -377,6 +389,45 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timeout waiting for %s", what)
+}
+
+func TestSetMeetingResponseModePersistsAndHotApplies(t *testing.T) {
+	platform := &meetingCommandTestPlatform{fakePlatform: newFakePlatform("feishu")}
+	restorePlatform := stubPlatformFactory(t, "feishu", platform)
+	defer restorePlatform()
+
+	now := time.Now()
+	store := &fakeStore{channels: []Channel{{
+		ID: "channel-voice", Name: "Meeting bot", Type: "feishu", Enabled: true, UpdatedAt: now,
+		Config: map[string]string{ChannelConfigMeetingTTSAPIKey: "tts-secret"},
+	}}}
+	engine := NewEngine(nil, NewHookRunner(nil, nil))
+	connect := NewConnectService(nil, engine, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := connect.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mode, err := connect.SetMeetingResponseMode(ctx, "channel-voice", MeetingResponseModeVoice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != MeetingResponseModeVoice {
+		t.Fatalf("mode = %q", mode)
+	}
+	stored, err := store.GetChannel(ctx, "channel-voice")
+	if err != nil || stored == nil {
+		t.Fatal(err)
+	}
+	if ChannelMeetingResponseMode(*stored) != MeetingResponseModeVoice ||
+		stored.Config[ChannelConfigMeetingVoice] != "true" ||
+		stored.Config[ChannelConfigMeetingReplyMode] != MeetingReplyModeFinal {
+		t.Fatalf("stored channel = %+v", stored.Config)
+	}
+	if platform.configured[ChannelConfigMeetingVoice] != "true" ||
+		engine.channelRuntime("channel-voice").currentMeetingResponseMode() != MeetingResponseModeVoice {
+		t.Fatalf("hot configuration = %+v", platform.configured)
+	}
 }
 
 // --- tests ---

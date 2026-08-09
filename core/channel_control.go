@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +136,136 @@ func ChannelCodexMaxQueue(ch Channel) int {
 
 func ChannelCodexTurnTimeout(ch Channel) time.Duration {
 	return ChannelTurnTimeout(ch)
+}
+
+func ChannelMeetingReplyMode(ch Channel) string {
+	switch ChannelMeetingResponseMode(ch) {
+	case MeetingResponseModeFinalText, MeetingResponseModeVoice:
+		return MeetingReplyModeFinal
+	default:
+		return MeetingReplyModeStream
+	}
+}
+
+// NormalizeMeetingResponseMode accepts the canonical API values and the
+// compact aliases used by /meeting. It returns an empty string for unknown
+// input so callers can report a useful validation error.
+func NormalizeMeetingResponseMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case MeetingResponseModeStreamText, "stream", "streaming", "流式", "流式文字":
+		return MeetingResponseModeStreamText
+	case MeetingResponseModeFinalText, "final", "nonstream", "non_stream", "非流式", "非流式文字":
+		return MeetingResponseModeFinalText
+	case MeetingResponseModeTextVoice, "text+voice", "文字+语音", "文字语音":
+		return MeetingResponseModeTextVoice
+	case MeetingResponseModeVoice, "voice_only", "语音", "仅语音":
+		return MeetingResponseModeVoice
+	default:
+		return ""
+	}
+}
+
+// ChannelMeetingResponseMode maps legacy meeting_reply_mode +
+// meeting_voice_enabled records to the four user-facing response modes.
+func ChannelMeetingResponseMode(ch Channel) string {
+	if mode := NormalizeMeetingResponseMode(ch.Config[ChannelConfigMeetingResponseMode]); mode != "" {
+		return mode
+	}
+	voice := parseChannelBool(ch.Config[ChannelConfigMeetingVoice])
+	if voice {
+		return MeetingResponseModeTextVoice
+	}
+	if strings.EqualFold(strings.TrimSpace(ch.Config[ChannelConfigMeetingReplyMode]), MeetingReplyModeFinal) {
+		return MeetingResponseModeFinalText
+	}
+	return DefaultMeetingResponseMode
+}
+
+func MeetingResponseModeUsesText(mode string) bool {
+	switch NormalizeMeetingResponseMode(mode) {
+	case MeetingResponseModeStreamText, MeetingResponseModeFinalText, MeetingResponseModeTextVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+func MeetingResponseModeUsesVoice(mode string) bool {
+	switch NormalizeMeetingResponseMode(mode) {
+	case MeetingResponseModeTextVoice, MeetingResponseModeVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	maxMeetingVoiceWakeWords = 20
+	maxMeetingVoiceWakeRunes = 64
+)
+
+// ParseMeetingVoiceWakeWords accepts the comma-, semicolon-, or newline-
+// separated value stored in channel config. Spaces remain part of a wake word
+// so names such as "Meeting Bot" continue to work.
+func ParseMeetingVoiceWakeWords(value string) ([]string, error) {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' || r == '\r'
+	})
+	words := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		word := strings.TrimSpace(part)
+		if word == "" {
+			continue
+		}
+		if len([]rune(word)) > maxMeetingVoiceWakeRunes {
+			return nil, fmt.Errorf("meeting voice wake word %q exceeds %d characters", word, maxMeetingVoiceWakeRunes)
+		}
+		key := strings.ToLower(word)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		words = append(words, word)
+		if len(words) > maxMeetingVoiceWakeWords {
+			return nil, fmt.Errorf("meeting voice wake words exceed %d entries", maxMeetingVoiceWakeWords)
+		}
+	}
+	return words, nil
+}
+
+// NormalizeMeetingVoiceWakeWords returns the stable newline-separated form
+// used by the channel editor and persistence layer.
+func NormalizeMeetingVoiceWakeWords(value string) (string, error) {
+	words, err := ParseMeetingVoiceWakeWords(value)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(words, "\n"), nil
+}
+
+// ApplyMeetingResponseMode stores the canonical mode and keeps the legacy
+// component keys aligned so older AgentMux versions retain sensible behavior.
+func ApplyMeetingResponseMode(ch *Channel, value string) error {
+	mode := NormalizeMeetingResponseMode(value)
+	if mode == "" {
+		return fmt.Errorf("invalid meeting response mode %q", strings.TrimSpace(value))
+	}
+	if ch.Config == nil {
+		ch.Config = map[string]string{}
+	}
+	ch.Config[ChannelConfigMeetingResponseMode] = mode
+	if MeetingResponseModeUsesVoice(mode) {
+		ch.Config[ChannelConfigMeetingVoice] = "true"
+	} else {
+		ch.Config[ChannelConfigMeetingVoice] = "false"
+	}
+	if mode == MeetingResponseModeFinalText || mode == MeetingResponseModeVoice {
+		ch.Config[ChannelConfigMeetingReplyMode] = MeetingReplyModeFinal
+	} else {
+		ch.Config[ChannelConfigMeetingReplyMode] = MeetingReplyModeStream
+	}
+	return nil
 }
 
 // ChannelTurnTimeout bounds every channel-originated agent turn. The generic

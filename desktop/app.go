@@ -51,7 +51,7 @@ func (a *App) runDesktopBackend(log *slog.Logger, cfg *config.Config) {
 	}
 	defer st.Close()
 
-	srv, svc, ue := bootstrap.NewServer(log, cfg, st, "")
+	srv, svc, ue := bootstrap.NewServer(log, cfg, st, version)
 	if eng, connectSvc, err := bootstrap.AttachRuntime(a.ctx, log, cfg, st, srv, svc, ue, false); err != nil {
 		log.Error("build engine", "err", err)
 	} else {

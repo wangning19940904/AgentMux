@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	ttspkg "github.com/wangning19940904/AgentMux/tts"
 )
 
 // SetConnect attaches the channels/triggers runtime. Nil keeps the CRUD
@@ -574,6 +575,12 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 	if err := normalizeChannelConfig(ch); err != nil {
 		return err
 	}
+	if ch.Config[core.ChannelConfigMeetingVoice] == "true" && ch.Config[core.ChannelConfigMeetingTTSMode] == core.MeetingTTSModeLocal {
+		modelID := ch.Config[core.ChannelConfigMeetingLocalModel]
+		if s.ttsModels == nil || !s.ttsModels.IsInstalled(modelID) {
+			return fmt.Errorf("local TTS model %q is not downloaded", modelID)
+		}
+	}
 	if ch.AgentID != "" {
 		agent, err := s.st.GetAgentInstance(ctx, ch.AgentID)
 		if err != nil {
@@ -676,20 +683,87 @@ func normalizeChannelConfig(ch *core.Channel) error {
 	}
 	ch.Config[core.ChannelConfigAckReactionEmojis] = emojis
 
-	voice := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingVoice]))
-	if voice == "" {
-		voice = core.DefaultMeetingVoice
+	wakeWords, err := core.NormalizeMeetingVoiceWakeWords(ch.Config[core.ChannelConfigMeetingWakeWords])
+	if err != nil {
+		return fmt.Errorf("invalid meeting_voice_wake_words: %w", err)
 	}
-	switch voice {
-	case "true", "1", "yes", "on":
-		ch.Config[core.ChannelConfigMeetingVoice] = "true"
-	case "false", "0", "no", "off":
-		ch.Config[core.ChannelConfigMeetingVoice] = "false"
+	ch.Config[core.ChannelConfigMeetingWakeWords] = wakeWords
+
+	legacyMeetingReply := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingReplyMode]))
+	if legacyMeetingReply != "" && legacyMeetingReply != core.MeetingReplyModeStream && legacyMeetingReply != core.MeetingReplyModeFinal {
+		return fmt.Errorf("invalid meeting_reply_mode %q (want stream or final)", legacyMeetingReply)
+	}
+	legacyMeetingVoice := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingVoice]))
+	switch legacyMeetingVoice {
+	case "", "true", "1", "yes", "on", "false", "0", "no", "off":
 	default:
-		return fmt.Errorf("invalid meeting_voice_enabled %q (want true or false)", voice)
+		return fmt.Errorf("invalid meeting_voice_enabled %q (want true or false)", legacyMeetingVoice)
+	}
+
+	responseMode := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingResponseMode])
+	if normalized := core.NormalizeMeetingResponseMode(responseMode); normalized != "" {
+		expected := core.Channel{Config: map[string]string{}}
+		_ = core.ApplyMeetingResponseMode(&expected, normalized)
+		legacyReply := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingReplyMode]))
+		legacyVoice := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingVoice]))
+		legacyChanged := legacyReply != "" && legacyReply != expected.Config[core.ChannelConfigMeetingReplyMode]
+		if legacyVoice != "" {
+			legacyVoiceEnabled := legacyVoice == "true" || legacyVoice == "1" || legacyVoice == "yes" || legacyVoice == "on"
+			legacyChanged = legacyChanged || strconv.FormatBool(legacyVoiceEnabled) != expected.Config[core.ChannelConfigMeetingVoice]
+		}
+		if legacyChanged {
+			legacy := *ch
+			legacy.Config = make(map[string]string, len(ch.Config))
+			for key, value := range ch.Config {
+				legacy.Config[key] = value
+			}
+			delete(legacy.Config, core.ChannelConfigMeetingResponseMode)
+			responseMode = core.ChannelMeetingResponseMode(legacy)
+		}
+	}
+	if responseMode == "" {
+		responseMode = core.ChannelMeetingResponseMode(*ch)
+	}
+	if err := core.ApplyMeetingResponseMode(ch, responseMode); err != nil {
+		return fmt.Errorf("invalid meeting_response_mode %q (want stream_text, final_text, text_voice or voice)", responseMode)
 	}
 
 	if ch.Config[core.ChannelConfigMeetingVoice] == "true" {
+		ttsMode := strings.ToLower(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSMode]))
+		if ttsMode == "" {
+			ttsMode = core.DefaultMeetingTTSMode
+		}
+		if ttsMode != core.MeetingTTSModeAPI && ttsMode != core.MeetingTTSModeLocal {
+			return fmt.Errorf("invalid meeting_voice_tts_mode %q (want api or local)", ttsMode)
+		}
+		ch.Config[core.ChannelConfigMeetingTTSMode] = ttsMode
+		if ttsMode == core.MeetingTTSModeLocal {
+			modelID := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingLocalModel])
+			if modelID == "" {
+				modelID = core.DefaultMeetingLocalModel
+			}
+			model, ok := ttspkg.Lookup(modelID)
+			if !ok {
+				return fmt.Errorf("unknown local TTS model %q", modelID)
+			}
+			voiceID := strings.TrimSpace(ch.Config[core.ChannelConfigMeetingLocalVoice])
+			if voiceID == "" {
+				voiceID = model.Voices[0].ID
+			}
+			validVoice := false
+			for _, voice := range model.Voices {
+				if voice.ID == voiceID {
+					validVoice = true
+					break
+				}
+			}
+			if !validVoice {
+				return fmt.Errorf("invalid local TTS voice %q for model %q", voiceID, modelID)
+			}
+			ch.Config[core.ChannelConfigMeetingLocalModel] = modelID
+			ch.Config[core.ChannelConfigMeetingLocalVoice] = voiceID
+			return nil
+		}
 		baseURL := strings.TrimRight(strings.TrimSpace(ch.Config[core.ChannelConfigMeetingTTSBaseURL]), "/")
 		if baseURL == "" {
 			baseURL = core.DefaultMeetingTTSBaseURL

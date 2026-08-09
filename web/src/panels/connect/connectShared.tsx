@@ -19,10 +19,17 @@ export const FEISHU_DEFAULTS = {
   ack_reaction_enabled: "true",
   ack_reaction_emojis: "OK,THUMBSUP,MUSCLE,THANKS",
   meeting_voice_enabled: "false",
+	meeting_voice_wake_words: "",
+  meeting_greeting: "",
+  meeting_reply_mode: "stream",
+  meeting_response_mode: "stream_text",
   meeting_voice_tts_base_url: "https://api.openai.com/v1",
   meeting_voice_tts_api_key: "",
   meeting_voice_tts_model: "gpt-4o-mini-tts",
   meeting_voice_tts_voice: "alloy",
+	meeting_voice_tts_mode: "api",
+	meeting_voice_local_model: "kokoro-82m-zh-int8",
+	meeting_voice_local_voice: "3",
   codex_control_enabled: "false",
   allowed_user_ids: "",
   admin_user_ids: "",
@@ -40,6 +47,18 @@ export const FEISHU_REPLY_SCOPES = [
 export const FEISHU_REPLY_MODES = [
   { value: "stream_message", labelKey: "connect.replyModeStreamMessage" },
   { value: "stream_card", labelKey: "connect.replyModeStreamCard" },
+];
+
+export const FEISHU_MEETING_REPLY_MODES = [
+  { value: "stream", labelKey: "connect.meetingReplyModeStream" },
+  { value: "final", labelKey: "connect.meetingReplyModeFinal" },
+];
+
+export const FEISHU_MEETING_RESPONSE_MODES = [
+  { value: "stream_text", labelKey: "meetings.responseModeStreamText" },
+  { value: "final_text", labelKey: "meetings.responseModeFinalText" },
+  { value: "text_voice", labelKey: "meetings.responseModeTextVoice" },
+  { value: "voice", labelKey: "meetings.responseModeVoice" },
 ];
 
 export const CHANNEL_FIELDS: Record<string, { key: string; labelKey: string; secret?: boolean }[]> = {

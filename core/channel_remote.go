@@ -28,6 +28,9 @@ type runtimeChannelTask struct {
 // every classic channel/runtime on the existing direct path.
 func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data map[string]string) {
 	rt := e.channelRuntime(msg.ChannelID)
+	if rt != nil && e.handleMeetingMessage(ctx, rt, msg, data) {
+		return
+	}
 	if rt == nil || !rt.remoteControlEnabled() {
 		e.handleChannelMessageDirect(ctx, msg, data)
 		return

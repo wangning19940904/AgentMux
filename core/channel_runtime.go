@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,19 +25,21 @@ type channelRuntime struct {
 	cancel          context.CancelFunc
 	runCtx          context.Context
 
-	mu              sync.Mutex
-	sessions        map[string]AgentSession // chatID -> session
-	seen            map[string]time.Time
-	state           string
-	errMsg          string
-	started         time.Time
-	connected       bool
-	connectedAt     time.Time
-	lastCheckedAt   time.Time
-	lastHeartbeatAt time.Time
-	lastEventAt     time.Time
-	lastInboundAt   time.Time
-	terminal        bool
+	mu                  sync.Mutex
+	sessions            map[string]AgentSession // chatID -> session
+	seen                map[string]time.Time
+	state               string
+	errMsg              string
+	started             time.Time
+	connected           bool
+	connectedAt         time.Time
+	lastCheckedAt       time.Time
+	lastHeartbeatAt     time.Time
+	lastEventAt         time.Time
+	lastInboundAt       time.Time
+	terminal            bool
+	meetingResponseMode atomic.Value // string
+	definitionUpdatedAt atomic.Value // time.Time
 
 	controlMu    sync.Mutex
 	controlTasks map[string]*channelControlState
@@ -44,6 +47,45 @@ type channelRuntime struct {
 	clearConfirm map[string]time.Time
 	threadLists  map[string][]NativeThread
 	pendingTurns map[string]pendingInitialTurn
+}
+
+func (rt *channelRuntime) currentMeetingResponseMode() string {
+	if rt != nil {
+		if value := rt.meetingResponseMode.Load(); value != nil {
+			if mode, ok := value.(string); ok && mode != "" {
+				return mode
+			}
+		}
+		return ChannelMeetingResponseMode(rt.channel)
+	}
+	return DefaultMeetingResponseMode
+}
+
+func (rt *channelRuntime) setMeetingResponseMode(mode string) {
+	if rt == nil {
+		return
+	}
+	if normalized := NormalizeMeetingResponseMode(mode); normalized != "" {
+		rt.meetingResponseMode.Store(normalized)
+	}
+}
+
+func (rt *channelRuntime) currentDefinitionUpdatedAt() time.Time {
+	if rt != nil {
+		if value := rt.definitionUpdatedAt.Load(); value != nil {
+			if updatedAt, ok := value.(time.Time); ok {
+				return updatedAt
+			}
+		}
+		return rt.channel.UpdatedAt
+	}
+	return time.Time{}
+}
+
+func (rt *channelRuntime) setDefinitionUpdatedAt(updatedAt time.Time) {
+	if rt != nil {
+		rt.definitionUpdatedAt.Store(updatedAt)
+	}
 }
 
 type pendingInitialTurn struct {
@@ -185,6 +227,11 @@ func (rt *channelRuntime) acceptsMessage(msg *Message) bool {
 	if !isFeishuLikeChannel(rt.channel.Type) {
 		return true
 	}
+	// Meeting control is an explicit command namespace. It must remain usable
+	// even when normal group traffic is configured as mentions-only.
+	if isMeetingCommand(msg.Text) || msg.Origin == OriginMeeting {
+		return true
+	}
 	switch channelReplyScope(rt.channel) {
 	case ReplyScopeAll:
 		return true
@@ -262,12 +309,17 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		state:           ChannelStateRunning,
 		started:         time.Now(),
 	}
+	rt.setMeetingResponseMode(ChannelMeetingResponseMode(ch))
+	rt.setDefinitionUpdatedAt(ch.UpdatedAt)
 
 	cfg := make(map[string]any, len(ch.Config)+1)
 	for k, v := range ch.Config {
 		cfg[k] = v
 	}
 	cfg["project"] = "channel:" + ch.ID
+	cfg["channel_name"] = ch.Name
+	cfg["agent_name"] = opts.AgentName
+	cfg["meeting_event_notify"] = func(event MeetingEvent) { e.publishMeetingEvent(ch.ID, event) }
 
 	plat, err := CreatePlatform(ch.Type, cfg)
 	if err != nil {
@@ -306,7 +358,9 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 					continue
 				}
 				msg.ChannelID = ch.ID
-				msg.Origin = OriginChannel
+				if msg.Origin == "" {
+					msg.Origin = OriginChannel
+				}
 				select {
 				case e.inbound <- msg:
 				case <-runCtx.Done():
@@ -357,7 +411,7 @@ func (e *Engine) AttachedChannels() map[string]time.Time {
 	defer e.mu.RUnlock()
 	out := make(map[string]time.Time, len(e.channels))
 	for id, rt := range e.channels {
-		out[id] = rt.channel.UpdatedAt
+		out[id] = rt.currentDefinitionUpdatedAt()
 	}
 	return out
 }

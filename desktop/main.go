@@ -37,6 +37,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// version is injected by the release build so the desktop daemon and bundled
+// remote artifacts expose the same status version.
+var version = "0.1.0"
+
 func main() {
 	app := newApp()
 	err := wails.Run(&options.App{

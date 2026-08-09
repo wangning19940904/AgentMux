@@ -17,6 +17,14 @@ import (
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
+	s.mux.HandleFunc("GET /api/v1/remote/meetings", s.handleMeetingAggregate)
+	s.mux.HandleFunc("GET /api/v1/remote/meetings/events", s.handleMeetingAggregateEvents)
+	s.mux.HandleFunc("GET /api/v1/remote/meetings/activity", s.handleRemoteMeetingActivity)
+	s.mux.HandleFunc("POST /api/v1/remote/meetings/messages", s.handleRemoteMeetingMessageSend)
+	s.mux.HandleFunc("POST /api/v1/remote/meetings/questions", s.handleRemoteMeetingQuestion)
+	s.mux.HandleFunc("POST /api/v1/remote/meetings/response-mode", s.handleRemoteMeetingResponseMode)
+	s.mux.HandleFunc("POST /api/v1/remote/meetings/invitations/respond", s.handleRemoteMeetingInvitationRespond)
+	s.mux.HandleFunc("POST /api/v1/remote/meetings/join", s.handleRemoteMeetingJoin)
 	s.mux.HandleFunc("POST /api/v1/remote/channels/claim", s.handleChannelClaim)
 	s.mux.HandleFunc("GET /api/v1/remote/directories", s.handleRemoteDirectoryList)
 	s.mux.HandleFunc("POST /api/v1/remote/directories", s.handleRemoteDirectoryEnsure)

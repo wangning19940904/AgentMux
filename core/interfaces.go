@@ -42,6 +42,12 @@ type Message struct {
 	ChannelID string
 	// Origin records what produced the message: channel, cron, webhook or api.
 	Origin string
+	// Meeting metadata is populated for questions originating from a live
+	// Feishu/Lark meeting. MeetingID is the long VC id; MeetingNumber is the
+	// user-facing 9 digit number.
+	MeetingID     string
+	MeetingNumber string
+	MeetingTopic  string
 	// RuntimeSettingsAction is set by interactive setting cards. It is kept
 	// separate from Text so callbacks cannot accidentally become agent prompts.
 	RuntimeSettingsAction *RuntimeSettingsAction
@@ -146,6 +152,7 @@ type AgentInteractionAction struct {
 // Message origins.
 const (
 	OriginChannel = "channel"
+	OriginMeeting = "meeting"
 	OriginCron    = "cron"
 	OriginWebhook = "webhook"
 	OriginAPI     = "api"

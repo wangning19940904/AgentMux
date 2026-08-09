@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestParseMeetingVoiceConfig(t *testing.T) {
@@ -31,10 +32,21 @@ func TestParseMeetingVoiceConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !enabled.Enabled ||
+		enabled.TTSMode != core.MeetingTTSModeAPI ||
 		enabled.TTSBaseURL != "https://api.openai.com/v1" ||
 		enabled.TTSModel != "gpt-4o-mini-tts" ||
 		enabled.TTSVoice != "alloy" {
 		t.Fatalf("enabled config = %+v", enabled)
+	}
+
+	local, err := parseMeetingVoiceConfig(map[string]any{
+		"meeting_voice_enabled":     "true",
+		"meeting_voice_tts_mode":    "local",
+		"meeting_voice_local_model": "kokoro-82m-zh-int8",
+		"meeting_voice_local_voice": "58",
+	})
+	if err != nil || local.TTSMode != core.MeetingTTSModeLocal || local.LocalModel != "kokoro-82m-zh-int8" || local.LocalVoice != "58" {
+		t.Fatalf("local config = %+v, err=%v", local, err)
 	}
 
 	for name, config := range map[string]map[string]any{
@@ -45,6 +57,11 @@ func TestParseMeetingVoiceConfig(t *testing.T) {
 			"meeting_voice_tts_api_key":  "secret",
 			"meeting_voice_tts_base_url": "file:///tmp/tts",
 		},
+		"bad local model": {
+			"meeting_voice_enabled":     "true",
+			"meeting_voice_tts_mode":    "local",
+			"meeting_voice_local_model": "missing",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseMeetingVoiceConfig(config); err == nil {
@@ -52,6 +69,24 @@ func TestParseMeetingVoiceConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMeetingVoiceHotEnablePreservesActiveMeeting(t *testing.T) {
+	disabled := newMeetingVoiceManager(nil, meetingVoiceConfig{})
+	disabled.Activate("meeting-1", "ou_inviter", "oc_chat")
+	if disabled.ActiveMeetingID() != "meeting-1" || disabled.IsActive("meeting-1") {
+		t.Fatalf("disabled manager activation = %q active=%v", disabled.ActiveMeetingID(), disabled.IsActive("meeting-1"))
+	}
+
+	client := &larkClient{meetingVoice: disabled}
+	client.ConfigureMeetingVoice(meetingVoiceConfig{
+		Enabled: true, TTSBaseURL: "https://tts.example.test/v1", TTSAPIKey: "secret", TTSModel: "tts", TTSVoice: "voice",
+	})
+	enabled := client.currentMeetingVoice()
+	if enabled == nil || enabled.ActiveMeetingID() != "meeting-1" || !enabled.IsActive("meeting-1") {
+		t.Fatalf("enabled manager did not preserve meeting activation")
+	}
+	enabled.Close()
 }
 
 func TestMeetingSpeechReplyQueuesOnlyNewCompletedText(t *testing.T) {
@@ -111,14 +146,20 @@ func TestMeetingVoiceReplyIsScopedToInviter(t *testing.T) {
 		activeUserID:    "ou_inviter",
 		activeChatID:    "oc_direct",
 	}
-	if reply := manager.BeginReply("ou_someone_else", "oc_direct"); reply != nil {
+	if reply := manager.BeginReply(&core.Message{UserID: "ou_someone_else", ChatID: "oc_direct"}); reply != nil {
 		t.Fatal("another user's Agent reply would be sent to the meeting")
 	}
-	if reply := manager.BeginReply("ou_inviter", "oc_other"); reply != nil {
+	if reply := manager.BeginReply(&core.Message{UserID: "ou_inviter", ChatID: "oc_other"}); reply != nil {
 		t.Fatal("an unrelated chat would be sent to the meeting")
 	}
-	if reply := manager.BeginReply("ou_inviter", "oc_direct"); reply == nil {
+	if reply := manager.BeginReply(&core.Message{UserID: "ou_inviter", ChatID: "oc_direct"}); reply == nil {
 		t.Fatal("inviter's Agent reply was not connected to meeting speech")
+	}
+	if reply := manager.BeginReply(&core.Message{MeetingID: "meeting-1", ChatID: "meeting:meeting-1"}); reply == nil {
+		t.Fatal("meeting-originated Agent reply was not connected to meeting speech")
+	}
+	if reply := manager.BeginReply(&core.Message{MeetingID: "meeting-2", ChatID: "meeting:meeting-2"}); reply != nil {
+		t.Fatal("another meeting's Agent reply would be sent to the active meeting")
 	}
 }
 
@@ -205,6 +246,33 @@ func TestGetMeetingRealtimeEndpointUsesTenantToken(t *testing.T) {
 	}
 }
 
+func TestParseMeetingRealtimeExpiryFormats(t *testing.T) {
+	wantUnix := time.Unix(1_786_283_800, 0).UTC()
+	for name, test := range map[string]struct {
+		raw  string
+		want time.Time
+	}{
+		"unix string": {raw: `"1786283800"`, want: wantUnix},
+		"unix number": {raw: `1786283800`, want: wantUnix},
+		"unix millis": {raw: `1786283800000`, want: wantUnix},
+		"rfc3339":     {raw: `"2030-01-02T03:04:05Z"`, want: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)},
+		"empty":       {raw: `""`, want: time.Time{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseMeetingRealtimeExpiry(json.RawMessage(test.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Equal(test.want) {
+				t.Fatalf("expiry = %s, want %s", got, test.want)
+			}
+		})
+	}
+	if _, err := parseMeetingRealtimeExpiry(json.RawMessage(`"not-a-time"`)); err == nil {
+		t.Fatal("invalid expiry unexpectedly parsed")
+	}
+}
+
 type staticMeetingRealtimeEndpoint struct {
 	endpoint meetingRealtimeEndpoint
 }
@@ -214,12 +282,20 @@ func (p staticMeetingRealtimeEndpoint) GetMeetingRealtimeEndpoint(context.Contex
 }
 
 type capturedRealtimeEvent struct {
-	eventType  string
-	sessionID  uint64
-	pcm        []byte
-	serviceID  int32
-	upstream   capturedAudioFormat
-	downstream capturedAudioFormat
+	eventType       string
+	eventID         string
+	sessionID       uint64
+	createdAt       string
+	pcm             []byte
+	serviceID       int32
+	method          int32
+	payloadEncoding string
+	payloadType     string
+	messageID       string
+	frameType       uint64
+	closeReason     uint64
+	upstream        capturedAudioFormat
+	downstream      capturedAudioFormat
 }
 
 type capturedAudioFormat struct {
@@ -254,13 +330,18 @@ func TestLarkRealtimeSessionCreatesAndSendsBinaryPCM(t *testing.T) {
 				return
 			}
 			eventType, _ := testPBStringField(frame.Payload, 1)
-			sessionID, _ := testPBVarintField(frame.Payload, 2)
+			eventID, _ := testPBStringField(frame.Payload, 2)
+			sessionID, _ := testPBVarintField(frame.Payload, 3)
+			createdAt, _ := testPBStringField(frame.Payload, 4)
+			messageID, _ := testPBStringField(body, 11)
+			frameType, _ := testPBVarintField(body, 12)
 			var pcm []byte
+			var closeReason uint64
 			var upstream, downstream capturedAudioFormat
-			if appendPayload, ok := testPBBytesField(frame.Payload, 4); ok {
+			if appendPayload, ok := testPBBytesField(frame.Payload, 11); ok {
 				pcm, _ = testPBBytesField(appendPayload, 1)
 			}
-			if createPayload, ok := testPBBytesField(frame.Payload, 3); ok {
+			if createPayload, ok := testPBBytesField(frame.Payload, 10); ok {
 				if sessionPayload, ok := testPBBytesField(createPayload, 1); ok {
 					if mediaPayload, ok := testPBBytesField(sessionPayload, 1); ok {
 						upstream = testAudioFormat(mediaPayload, 1)
@@ -268,21 +349,34 @@ func TestLarkRealtimeSessionCreatesAndSendsBinaryPCM(t *testing.T) {
 					}
 				}
 			}
+			if closePayload, ok := testPBBytesField(frame.Payload, 13); ok {
+				closeReason, _ = testPBVarintField(closePayload, 1)
+			}
 			captured <- capturedRealtimeEvent{
-				eventType:  eventType,
-				sessionID:  sessionID,
-				pcm:        append([]byte(nil), pcm...),
-				serviceID:  frame.Service,
-				upstream:   upstream,
-				downstream: downstream,
+				eventType:       eventType,
+				eventID:         eventID,
+				sessionID:       sessionID,
+				createdAt:       createdAt,
+				pcm:             append([]byte(nil), pcm...),
+				serviceID:       frame.Service,
+				method:          frame.Method,
+				payloadEncoding: frame.PayloadEncoding,
+				payloadType:     frame.PayloadType,
+				messageID:       messageID,
+				frameType:       frameType,
+				closeReason:     closeReason,
+				upstream:        upstream,
+				downstream:      downstream,
 			}
 			if i == 0 {
 				serverEvent := appendPBString(nil, 1, "session.created")
-				serverEvent = appendPBVarint(serverEvent, 2, 42)
+				serverEvent = appendPBVarint(serverEvent, 3, 42)
 				responseFrame := &larkws.Frame{
-					Method:      int32(larkws.FrameTypeData),
-					PayloadType: meetingRealtimePayloadType,
-					Payload:     serverEvent,
+					Service:         meetingRealtimeFrontierService,
+					Method:          meetingRealtimeFrontierMethod,
+					PayloadEncoding: meetingRealtimePayloadEncoding,
+					PayloadType:     meetingRealtimePayloadType,
+					Payload:         serverEvent,
 				}
 				encoded, _ := responseFrame.Marshal()
 				if err := conn.WriteMessage(websocket.BinaryMessage, encoded); err != nil {
@@ -294,7 +388,7 @@ func TestLarkRealtimeSessionCreatesAndSendsBinaryPCM(t *testing.T) {
 	}))
 	defer server.Close()
 
-	websocketURL := "ws" + strings.TrimPrefix(server.URL, "http") + "?service_id=77"
+	websocketURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	factory := &larkRealtimeSessionFactory{
 		endpoints: staticMeetingRealtimeEndpoint{
 			endpoint: meetingRealtimeEndpoint{
@@ -319,8 +413,17 @@ func TestLarkRealtimeSessionCreatesAndSendsBinaryPCM(t *testing.T) {
 	create := <-captured
 	appendEvent := <-captured
 	closeEvent := <-captured
-	if create.eventType != "session.create" || create.serviceID != 77 {
+	if create.eventType != "session.create" ||
+		create.serviceID != meetingRealtimeFrontierService ||
+		create.method != meetingRealtimeFrontierMethod ||
+		create.payloadEncoding != meetingRealtimePayloadEncoding ||
+		create.payloadType != meetingRealtimePayloadType ||
+		create.eventID == "" || create.messageID != create.eventID || create.frameType != 0 ||
+		create.sessionID != 0 {
 		t.Fatalf("create event = %+v", create)
+	}
+	if _, err := time.Parse(time.RFC3339, create.createdAt); err != nil {
+		t.Fatalf("create created_at = %q: %v", create.createdAt, err)
 	}
 	wantFormat := capturedAudioFormat{mediaType: "audio/pcm", encoding: "s16le", sampleRate: 24000}
 	if create.upstream != wantFormat || create.downstream != wantFormat {
@@ -328,10 +431,15 @@ func TestLarkRealtimeSessionCreatesAndSendsBinaryPCM(t *testing.T) {
 	}
 	if appendEvent.eventType != "audio.upstream.append" ||
 		appendEvent.sessionID != 42 ||
+		appendEvent.eventID != "" || appendEvent.messageID != "" ||
 		!bytes.Equal(appendEvent.pcm, pcm) {
 		t.Fatalf("append event = %+v", appendEvent)
 	}
-	if closeEvent.eventType != "session.close" || closeEvent.sessionID != 42 {
+	if _, err := time.Parse(time.RFC3339, appendEvent.createdAt); err != nil {
+		t.Fatalf("append created_at = %q: %v", appendEvent.createdAt, err)
+	}
+	if closeEvent.eventType != "session.close" || closeEvent.sessionID != 42 ||
+		closeEvent.eventID == "" || closeEvent.messageID != closeEvent.eventID || closeEvent.closeReason != 1 {
 		t.Fatalf("close event = %+v", closeEvent)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -24,22 +25,26 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/wangning19940904/AgentMux/core"
+	ttspkg "github.com/wangning19940904/AgentMux/tts"
 )
 
 const (
-	meetingEndedEventType            = "vc.bot.meeting_ended_v1"
-	meetingRealtimeEndpointAPIPath   = "/open-apis/vc/v1/realtime/endpoint"
-	meetingRealtimeSampleRate        = 24000
-	meetingRealtimeBytesPerSecond    = meetingRealtimeSampleRate * 2
-	meetingRealtimeFrameBytes        = 4800 // 100 ms of 24 kHz mono s16le PCM.
-	meetingRealtimeMaxFrameBytes     = 8000
-	meetingRealtimeSessionTimeout    = 10 * time.Second
-	meetingRealtimeWriteTimeout      = 10 * time.Second
-	meetingVoiceQueueSize            = 64
-	meetingVoiceMaxSegmentRunes      = 240
-	meetingVoiceTTSResponseLimit     = 32 << 20
-	meetingRealtimePayloadType       = "protobuf"
-	meetingRealtimeFrontierServiceID = 0
+	meetingEndedEventType          = "vc.bot.meeting_ended_v1"
+	meetingRealtimeEndpointAPIPath = "/open-apis/vc/v1/realtime/endpoint"
+	meetingRealtimeSampleRate      = 24000
+	meetingRealtimeBytesPerSecond  = meetingRealtimeSampleRate * 2
+	meetingRealtimeFrameBytes      = 4800 // 100 ms of 24 kHz mono s16le PCM.
+	meetingRealtimeMaxFrameBytes   = 8000
+	meetingRealtimeSessionTimeout  = 10 * time.Second
+	meetingRealtimeWriteTimeout    = 10 * time.Second
+	meetingVoiceQueueSize          = 64
+	meetingVoiceMaxSegmentRunes    = 240
+	meetingVoiceTTSResponseLimit   = 32 << 20
+	meetingRealtimePayloadEncoding = "binary"
+	meetingRealtimePayloadType     = "application/x-protobuf"
+	meetingRealtimeFrontierService = 33555721
+	meetingRealtimeFrontierMethod  = 1
+	meetingRealtimeFrontierNormal  = 0
 )
 
 type meetingVoiceConfig struct {
@@ -48,6 +53,9 @@ type meetingVoiceConfig struct {
 	TTSAPIKey  string
 	TTSModel   string
 	TTSVoice   string
+	TTSMode    string
+	LocalModel string
+	LocalVoice string
 }
 
 func parseMeetingVoiceConfig(cfg map[string]any) (meetingVoiceConfig, error) {
@@ -58,6 +66,38 @@ func parseMeetingVoiceConfig(cfg map[string]any) (meetingVoiceConfig, error) {
 	result := meetingVoiceConfig{Enabled: enabled}
 	if !enabled {
 		return result, nil
+	}
+	result.TTSMode = strings.ToLower(meetingVoiceString(cfg[core.ChannelConfigMeetingTTSMode]))
+	if result.TTSMode == "" {
+		result.TTSMode = core.DefaultMeetingTTSMode
+	}
+	if result.TTSMode == core.MeetingTTSModeLocal {
+		result.LocalModel = meetingVoiceString(cfg[core.ChannelConfigMeetingLocalModel])
+		if result.LocalModel == "" {
+			result.LocalModel = core.DefaultMeetingLocalModel
+		}
+		model, ok := ttspkg.Lookup(result.LocalModel)
+		if !ok {
+			return meetingVoiceConfig{}, fmt.Errorf("unknown local TTS model %q", result.LocalModel)
+		}
+		result.LocalVoice = meetingVoiceString(cfg[core.ChannelConfigMeetingLocalVoice])
+		if result.LocalVoice == "" {
+			result.LocalVoice = model.Voices[0].ID
+		}
+		validVoice := false
+		for _, voice := range model.Voices {
+			if voice.ID == result.LocalVoice {
+				validVoice = true
+				break
+			}
+		}
+		if !validVoice {
+			return meetingVoiceConfig{}, fmt.Errorf("invalid local TTS voice %q", result.LocalVoice)
+		}
+		return result, nil
+	}
+	if result.TTSMode != core.MeetingTTSModeAPI {
+		return meetingVoiceConfig{}, fmt.Errorf("invalid %s %q", core.ChannelConfigMeetingTTSMode, result.TTSMode)
 	}
 
 	result.TTSBaseURL = strings.TrimRight(meetingVoiceString(cfg[core.ChannelConfigMeetingTTSBaseURL]), "/")
@@ -120,7 +160,11 @@ func meetingVoiceBool(value any) (bool, error) {
 }
 
 type meetingVoiceClient interface {
-	BeginMeetingSpeech(context.Context, string, string) (core.SpeechReply, error)
+	BeginMeetingSpeech(context.Context, *core.Message) (core.SpeechReply, error)
+}
+
+type meetingVoiceConfigurableClient interface {
+	ConfigureMeetingVoice(meetingVoiceConfig)
 }
 
 type meetingRealtimeEndpointProvider interface {
@@ -178,12 +222,18 @@ func newMeetingVoiceManager(provider meetingRealtimeEndpointProvider, config mee
 	if !config.Enabled {
 		return manager
 	}
-	manager.synthesizer = &openAICompatibleTTSSynthesizer{
-		baseURL: config.TTSBaseURL,
-		apiKey:  config.TTSAPIKey,
-		model:   config.TTSModel,
-		voice:   config.TTSVoice,
-		client:  &http.Client{Timeout: 90 * time.Second},
+	if config.TTSMode == core.MeetingTTSModeLocal {
+		manager.synthesizer = &localTTSSynthesizer{
+			manager: ttspkg.NewManager("", nil), model: config.LocalModel, voice: config.LocalVoice,
+		}
+	} else {
+		manager.synthesizer = &openAICompatibleTTSSynthesizer{
+			baseURL: config.TTSBaseURL,
+			apiKey:  config.TTSAPIKey,
+			model:   config.TTSModel,
+			voice:   config.TTSVoice,
+			client:  &http.Client{Timeout: 90 * time.Second},
+		}
 	}
 	manager.sessions = &larkRealtimeSessionFactory{
 		endpoints: provider,
@@ -200,13 +250,13 @@ func newMeetingVoiceManager(provider meetingRealtimeEndpointProvider, config mee
 }
 
 func (m *meetingVoiceManager) Activate(meetingID, userID, chatID string) {
-	if m == nil || !m.enabled {
+	if m == nil {
 		return
 	}
 	meetingID = strings.TrimSpace(meetingID)
 	userID = strings.TrimSpace(userID)
 	chatID = strings.TrimSpace(chatID)
-	if meetingID == "" || userID == "" || chatID == "" {
+	if meetingID == "" {
 		return
 	}
 	m.mu.Lock()
@@ -231,7 +281,7 @@ func (m *meetingVoiceManager) Activate(meetingID, userID, chatID string) {
 }
 
 func (m *meetingVoiceManager) Deactivate(meetingID string) {
-	if m == nil || !m.enabled {
+	if m == nil {
 		return
 	}
 	meetingID = strings.TrimSpace(meetingID)
@@ -256,12 +306,25 @@ func (m *meetingVoiceManager) Deactivate(meetingID string) {
 }
 
 func (m *meetingVoiceManager) ActiveMeetingID() string {
-	if m == nil || !m.enabled {
+	if m == nil {
 		return ""
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.activeMeetingID
+}
+
+func (m *meetingVoiceManager) IsActive(meetingID string) bool {
+	return m != nil && m.enabled && strings.TrimSpace(meetingID) != "" && m.ActiveMeetingID() == strings.TrimSpace(meetingID)
+}
+
+func (m *meetingVoiceManager) activation() (meetingID, userID, chatID string) {
+	if m == nil {
+		return "", "", ""
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.activeMeetingID, m.activeUserID, m.activeChatID
 }
 
 func (m *meetingVoiceManager) activeContext(meetingID string) context.Context {
@@ -290,15 +353,27 @@ func (m *meetingVoiceManager) HandleMeetingEnded(payload []byte) {
 	m.Deactivate(event.Event.Meeting.ID)
 }
 
-func (m *meetingVoiceManager) BeginReply(userID, chatID string) core.SpeechReply {
+func (m *meetingVoiceManager) BeginReply(msg *core.Message) core.SpeechReply {
+	if m == nil || !m.enabled || msg == nil {
+		return nil
+	}
 	m.mu.RLock()
 	meetingID := m.activeMeetingID
 	activeUserID := m.activeUserID
 	activeChatID := m.activeChatID
 	m.mu.RUnlock()
-	if meetingID == "" ||
-		strings.TrimSpace(userID) != activeUserID ||
-		strings.TrimSpace(chatID) != activeChatID {
+	if meetingID == "" {
+		return nil
+	}
+	// Meeting-originated questions and explicit /meeting commands already
+	// carry the long meeting id, so they can speak even when the bot was joined
+	// directly from the console and has no approval-chat correlation.
+	if strings.TrimSpace(msg.MeetingID) == meetingID {
+		return &meetingSpeechReply{manager: m, meetingID: meetingID}
+	}
+	if activeUserID == "" || activeChatID == "" ||
+		strings.TrimSpace(msg.UserID) != activeUserID ||
+		strings.TrimSpace(msg.ChatID) != activeChatID {
 		return nil
 	}
 	return &meetingSpeechReply{manager: m, meetingID: meetingID}
@@ -335,7 +410,18 @@ func (m *meetingVoiceManager) enqueueControl(job meetingVoiceJob) {
 }
 
 func (m *meetingVoiceManager) Close() {
-	if m == nil || !m.enabled || m.cancel == nil {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	activeCancel := m.activeCancel
+	m.activeCancel = nil
+	m.activeCtx = nil
+	m.mu.Unlock()
+	if activeCancel != nil {
+		activeCancel()
+	}
+	if !m.enabled || m.cancel == nil {
 		return
 	}
 	m.cancel()
@@ -549,16 +635,46 @@ func isMeetingSpeechBoundary(r rune) bool {
 	}
 }
 
-func (c *larkClient) BeginMeetingSpeech(_ context.Context, userID, chatID string) (core.SpeechReply, error) {
-	if c.meetingVoice == nil {
+func (c *larkClient) BeginMeetingSpeech(_ context.Context, msg *core.Message) (core.SpeechReply, error) {
+	manager := c.currentMeetingVoice()
+	if manager == nil {
 		return nil, nil
 	}
-	return c.meetingVoice.BeginReply(userID, chatID), nil
+	return manager.BeginReply(msg), nil
 }
 
 func (c *larkClient) MeetingInviteJoined(meetingID, inviterOpenID, approvalChatID string) {
+	c.meetingVoiceMu.RLock()
+	defer c.meetingVoiceMu.RUnlock()
 	if c.meetingVoice != nil {
 		c.meetingVoice.Activate(meetingID, inviterOpenID, approvalChatID)
+	}
+}
+
+func (c *larkClient) currentMeetingVoice() *meetingVoiceManager {
+	if c == nil {
+		return nil
+	}
+	c.meetingVoiceMu.RLock()
+	defer c.meetingVoiceMu.RUnlock()
+	return c.meetingVoice
+}
+
+func (c *larkClient) ConfigureMeetingVoice(config meetingVoiceConfig) {
+	if c == nil {
+		return
+	}
+	next := newMeetingVoiceManager(c, config)
+	c.meetingVoiceMu.Lock()
+	previous := c.meetingVoice
+	meetingID, userID, chatID := previous.activation()
+	c.meetingVoice = next
+	if next != nil && meetingID != "" {
+		next.Activate(meetingID, userID, chatID)
+	}
+	c.meetingVoiceMu.Unlock()
+	if previous != nil {
+		previous.Close()
 	}
 }
 
@@ -582,8 +698,8 @@ func (c *larkClient) GetMeetingRealtimeEndpoint(ctx context.Context, meetingID s
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 		Data struct {
-			WebSocketURL string `json:"websocket_url"`
-			ExpiresTime  string `json:"expires_time"`
+			WebSocketURL string          `json:"websocket_url"`
+			ExpiresTime  json.RawMessage `json:"expires_time"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp.RawBody, &result); err != nil {
@@ -597,14 +713,38 @@ func (c *larkClient) GetMeetingRealtimeEndpoint(ctx context.Context, meetingID s
 	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" {
 		return meetingRealtimeEndpoint{}, errors.New("meeting realtime endpoint returned an invalid websocket_url")
 	}
-	var expiresAt time.Time
-	if raw := strings.TrimSpace(result.Data.ExpiresTime); raw != "" {
-		expiresAt, err = time.Parse(time.RFC3339, raw)
-		if err != nil {
-			return meetingRealtimeEndpoint{}, fmt.Errorf("decode meeting realtime endpoint expires_time: %w", err)
-		}
+	expiresAt, err := parseMeetingRealtimeExpiry(result.Data.ExpiresTime)
+	if err != nil {
+		return meetingRealtimeEndpoint{}, fmt.Errorf("decode meeting realtime endpoint expires_time: %w", err)
 	}
 	return meetingRealtimeEndpoint{WebSocketURL: webSocketURL, ExpiresAt: expiresAt}, nil
+}
+
+func parseMeetingRealtimeExpiry(raw json.RawMessage) (time.Time, error) {
+	value := strings.TrimSpace(string(bytes.TrimSpace(raw)))
+	if value == "" || value == "null" {
+		return time.Time{}, nil
+	}
+	if strings.HasPrefix(value, `"`) {
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return time.Time{}, err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return time.Time{}, nil
+		}
+	}
+	if timestamp, parseErr := strconv.ParseInt(value, 10, 64); parseErr == nil {
+		if timestamp > 1e12 {
+			return time.UnixMilli(timestamp).UTC(), nil
+		}
+		return time.Unix(timestamp, 0).UTC(), nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
 }
 
 type openAICompatibleTTSSynthesizer struct {
@@ -613,6 +753,19 @@ type openAICompatibleTTSSynthesizer struct {
 	model   string
 	voice   string
 	client  *http.Client
+}
+
+type localTTSSynthesizer struct {
+	manager *ttspkg.Manager
+	model   string
+	voice   string
+}
+
+func (s *localTTSSynthesizer) Synthesize(ctx context.Context, text string) (io.ReadCloser, error) {
+	if s == nil || s.manager == nil {
+		return nil, errors.New("local TTS manager is unavailable")
+	}
+	return s.manager.SynthesizePCM(ctx, s.model, s.voice, text)
 }
 
 func (s *openAICompatibleTTSSynthesizer) Synthesize(ctx context.Context, text string) (io.ReadCloser, error) {
@@ -690,11 +843,9 @@ func (f *larkRealtimeSessionFactory) Open(ctx context.Context, meetingID string)
 		}
 		return nil, fmt.Errorf("dial meeting realtime websocket: %w", err)
 	}
-	serviceID := meetingRealtimeServiceID(endpoint.WebSocketURL)
 	session := &larkRealtimeSession{
-		conn:      conn,
-		serviceID: serviceID,
-		readDone:  make(chan struct{}),
+		conn:     conn,
+		readDone: make(chan struct{}),
 	}
 	if err := session.create(ctx); err != nil {
 		_ = conn.Close()
@@ -704,22 +855,8 @@ func (f *larkRealtimeSessionFactory) Open(ctx context.Context, meetingID string)
 	return session, nil
 }
 
-func meetingRealtimeServiceID(rawURL string) int32 {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return meetingRealtimeFrontierServiceID
-	}
-	value := parsed.Query().Get("service_id")
-	number, err := strconv.ParseInt(value, 10, 32)
-	if err != nil {
-		return meetingRealtimeFrontierServiceID
-	}
-	return int32(number)
-}
-
 type larkRealtimeSession struct {
 	conn      *websocket.Conn
-	serviceID int32
 	sessionID uint64
 	sequence  uint64
 	writeMu   sync.Mutex
@@ -728,8 +865,8 @@ type larkRealtimeSession struct {
 }
 
 func (s *larkRealtimeSession) create(ctx context.Context) error {
-	payload := marshalMeetingRealtimeSessionCreate()
-	if err := s.writeClientEvent(ctx, payload); err != nil {
+	event := marshalMeetingRealtimeSessionCreate()
+	if err := s.writeClientEvent(ctx, event); err != nil {
 		return fmt.Errorf("send meeting realtime session.create: %w", err)
 	}
 	deadline := time.Now().Add(meetingRealtimeSessionTimeout)
@@ -745,6 +882,16 @@ func (s *larkRealtimeSession) create(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("wait for meeting realtime session.created: %w", err)
 		}
+		if messageType == websocket.TextMessage {
+			message := strings.TrimSpace(string(body))
+			if message != "" {
+				if len(message) > 512 {
+					message = message[:512]
+				}
+				return fmt.Errorf("meeting realtime server returned text while creating session: %s", message)
+			}
+			continue
+		}
 		if messageType != websocket.BinaryMessage {
 			continue
 		}
@@ -753,6 +900,10 @@ func (s *larkRealtimeSession) create(ctx context.Context) error {
 			return fmt.Errorf("decode meeting realtime server event: %w", err)
 		}
 		switch event.Type {
+		case "":
+			if event.Skip {
+				continue
+			}
 		case "session.created":
 			if event.SessionID == 0 {
 				return errors.New("meeting realtime session.created is missing session_id")
@@ -760,7 +911,10 @@ func (s *larkRealtimeSession) create(ctx context.Context) error {
 			s.sessionID = event.SessionID
 			return nil
 		case "error":
-			return errors.New("meeting realtime server rejected session.create")
+			if event.ErrorMessage != "" {
+				return fmt.Errorf("meeting realtime server rejected session.create: %s (code %d)", event.ErrorMessage, event.ErrorCode)
+			}
+			return fmt.Errorf("meeting realtime server rejected session.create (code %d)", event.ErrorCode)
 		}
 	}
 }
@@ -800,21 +954,29 @@ func (s *larkRealtimeSession) Close(ctx context.Context) error {
 	return closeErr
 }
 
-func (s *larkRealtimeSession) writeClientEvent(ctx context.Context, payload []byte) error {
+func (s *larkRealtimeSession) writeClientEvent(ctx context.Context, event meetingRealtimeClientEvent) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	s.sequence++
 	frame := &larkws.Frame{
-		SeqID:       s.sequence,
-		Service:     s.serviceID,
-		Method:      int32(larkws.FrameTypeData),
-		PayloadType: meetingRealtimePayloadType,
-		Payload:     payload,
+		SeqID:           s.sequence,
+		LogID:           0,
+		Service:         meetingRealtimeFrontierService,
+		Method:          meetingRealtimeFrontierMethod,
+		PayloadEncoding: meetingRealtimePayloadEncoding,
+		PayloadType:     meetingRealtimePayloadType,
+		Payload:         event.payload,
+		LogIDNew:        "",
 	}
 	encoded, err := frame.Marshal()
 	if err != nil {
 		return err
 	}
+	// The OpenAPI SDK's Frontier proto predates these two optional fields.
+	// Realtime audio requires the current schema, so append them using their
+	// official field numbers from frontier.proto.
+	encoded = appendPBString(encoded, 11, event.eventID)
+	encoded = appendPBVarint(encoded, 12, meetingRealtimeFrontierNormal)
 	deadline := time.Now().Add(meetingRealtimeWriteTimeout)
 	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
 		deadline = requested
@@ -865,9 +1027,15 @@ func streamMeetingPCM(ctx context.Context, session meetingAudioSession, source i
 }
 
 // The limited-preview realtime API exposes ClientEvent/ServerEvent as
-// protobuf messages. Keeping their small wire codec local avoids checking in
-// generated code while preserving the documented field layout.
-func marshalMeetingRealtimeSessionCreate() []byte {
+// protobuf messages. Keep the small wire codec local, matching the official
+// meeting_realtime.proto distributed with the voice-meeting starter.
+type meetingRealtimeClientEvent struct {
+	eventID string
+	payload []byte
+}
+
+func marshalMeetingRealtimeSessionCreate() meetingRealtimeClientEvent {
+	eventID := newMeetingRealtimeEventID()
 	format := appendPBString(nil, 1, "audio/pcm")
 	format = appendPBString(format, 2, "s16le")
 	format = appendPBVarint(format, 3, meetingRealtimeSampleRate)
@@ -876,29 +1044,62 @@ func marshalMeetingRealtimeSessionCreate() []byte {
 	session := appendPBMessage(nil, 1, media)
 	create := appendPBMessage(nil, 1, session)
 	event := appendPBString(nil, 1, "session.create")
-	event = appendPBVarint(event, 2, 0)
-	return appendPBMessage(event, 3, create)
+	event = appendPBString(event, 2, eventID)
+	event = appendPBString(event, 4, meetingRealtimeCreatedAt())
+	event = appendPBMessage(event, 10, create)
+	return meetingRealtimeClientEvent{eventID: eventID, payload: event}
 }
 
-func marshalMeetingRealtimeAudioAppend(sessionID uint64, pcm []byte) []byte {
+func marshalMeetingRealtimeAudioAppend(sessionID uint64, pcm []byte) meetingRealtimeClientEvent {
 	appendEvent := appendPBBytes(nil, 1, pcm)
 	event := appendPBString(nil, 1, "audio.upstream.append")
-	event = appendPBVarint(event, 2, sessionID)
-	return appendPBMessage(event, 4, appendEvent)
+	event = appendPBVarint(event, 3, sessionID)
+	event = appendPBString(event, 4, meetingRealtimeCreatedAt())
+	event = appendPBMessage(event, 11, appendEvent)
+	return meetingRealtimeClientEvent{payload: event}
 }
 
-func marshalMeetingRealtimeSessionClose(sessionID uint64) []byte {
+func marshalMeetingRealtimeSessionClose(sessionID uint64) meetingRealtimeClientEvent {
+	eventID := newMeetingRealtimeEventID()
+	closeEvent := appendPBVarint(nil, 1, 1) // ClientCloseReason.USER_LEFT.
 	event := appendPBString(nil, 1, "session.close")
-	event = appendPBVarint(event, 2, sessionID)
-	return appendPBMessage(event, 5, nil)
+	event = appendPBString(event, 2, eventID)
+	event = appendPBVarint(event, 3, sessionID)
+	event = appendPBString(event, 4, meetingRealtimeCreatedAt())
+	event = appendPBMessage(event, 13, closeEvent)
+	return meetingRealtimeClientEvent{eventID: eventID, payload: event}
+}
+
+func meetingRealtimeCreatedAt() string {
+	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func newMeetingRealtimeEventID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return fmt.Sprintf("agentmux-%d", time.Now().UnixNano())
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
 }
 
 type meetingRealtimeServerEvent struct {
-	Type      string
-	SessionID uint64
+	Type         string
+	SessionID    uint64
+	ErrorCode    uint64
+	ErrorMessage string
+	Skip         bool
 }
 
 func unmarshalMeetingRealtimeServerEvent(frameBytes []byte) (meetingRealtimeServerEvent, error) {
+	frameType, ok, err := protobufVarintField(frameBytes, 12)
+	if err != nil {
+		return meetingRealtimeServerEvent{}, err
+	}
+	if ok && (frameType == 1 || frameType == 2 || frameType == 16 || frameType == 32) {
+		return meetingRealtimeServerEvent{Skip: true}, nil
+	}
 	var frame larkws.Frame
 	if err := frame.Unmarshal(frameBytes); err != nil {
 		return meetingRealtimeServerEvent{}, err
@@ -919,12 +1120,21 @@ func unmarshalMeetingRealtimeServerEvent(frameBytes []byte) (meetingRealtimeServ
 			}
 			event.Type = string(value)
 			payload = next
-		case field == 2 && wire == 0:
+		case field == 3 && wire == 0:
 			value, next, err := consumePBVarint(payload)
 			if err != nil {
 				return event, err
 			}
 			event.SessionID = value
+			payload = next
+		case field == 90 && wire == 2:
+			value, next, err := consumePBBytes(payload)
+			if err != nil {
+				return event, err
+			}
+			if err := unmarshalMeetingRealtimeError(value, &event); err != nil {
+				return event, err
+			}
 			payload = next
 		default:
 			next, err := skipPBValue(payload, wire)
@@ -935,6 +1145,59 @@ func unmarshalMeetingRealtimeServerEvent(frameBytes []byte) (meetingRealtimeServ
 		}
 	}
 	return event, nil
+}
+
+func unmarshalMeetingRealtimeError(payload []byte, event *meetingRealtimeServerEvent) error {
+	for len(payload) > 0 {
+		field, wire, rest, err := consumePBTag(payload)
+		if err != nil {
+			return err
+		}
+		payload = rest
+		switch {
+		case field == 2 && wire == 0:
+			value, next, err := consumePBVarint(payload)
+			if err != nil {
+				return err
+			}
+			event.ErrorCode = value
+			payload = next
+		case field == 3 && wire == 2:
+			value, next, err := consumePBBytes(payload)
+			if err != nil {
+				return err
+			}
+			event.ErrorMessage = string(value)
+			payload = next
+		default:
+			next, err := skipPBValue(payload, wire)
+			if err != nil {
+				return err
+			}
+			payload = next
+		}
+	}
+	return nil
+}
+
+func protobufVarintField(payload []byte, wanted int) (uint64, bool, error) {
+	for len(payload) > 0 {
+		field, wire, rest, err := consumePBTag(payload)
+		if err != nil {
+			return 0, false, err
+		}
+		payload = rest
+		if field == wanted && wire == 0 {
+			value, _, err := consumePBVarint(payload)
+			return value, err == nil, err
+		}
+		next, err := skipPBValue(payload, wire)
+		if err != nil {
+			return 0, false, err
+		}
+		payload = next
+	}
+	return 0, false, nil
 }
 
 func appendPBTag(dst []byte, field int, wire byte) []byte {
