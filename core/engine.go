@@ -34,6 +34,10 @@ type Engine struct {
 	conversations           ConversationStore
 	channelControl          ChannelControlStore
 	runtimeSettingsDefaults RuntimeSettingsDefaultStore
+	meetingResponseModes    MeetingResponseModeStore
+	meetingEventMu          sync.Mutex
+	meetingEventSubscribers map[uint64]chan MeetingEvent
+	nextMeetingEventID      uint64
 	remoteWorkMu            sync.Mutex
 	remoteWorkLocks         map[string]*sync.Mutex
 	msgLog                  *MessageLogger
@@ -45,13 +49,14 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		log = slog.Default()
 	}
 	return &Engine{
-		log:             log,
-		hooks:           hooks,
-		sinks:           map[uint64]EventSink{},
-		projects:        map[string]*projectRuntime{},
-		channels:        map[string]*channelRuntime{},
-		inbound:         make(chan *Message, 256),
-		remoteWorkLocks: map[string]*sync.Mutex{},
+		log:                     log,
+		hooks:                   hooks,
+		sinks:                   map[uint64]EventSink{},
+		projects:                map[string]*projectRuntime{},
+		channels:                map[string]*channelRuntime{},
+		inbound:                 make(chan *Message, 256),
+		meetingEventSubscribers: map[uint64]chan MeetingEvent{},
+		remoteWorkLocks:         map[string]*sync.Mutex{},
 	}
 }
 
@@ -115,6 +120,10 @@ type RuntimeSettingsDefaultStore interface {
 
 func (e *Engine) SetRuntimeSettingsDefaultStore(store RuntimeSettingsDefaultStore) {
 	e.runtimeSettingsDefaults = store
+}
+
+func (e *Engine) SetMeetingResponseModeStore(store MeetingResponseModeStore) {
+	e.meetingResponseModes = store
 }
 
 // emit dispatches a lifecycle event to config.toml hooks and the event sink.

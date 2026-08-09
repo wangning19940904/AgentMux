@@ -25,15 +25,17 @@ type fakeMeetingInviteTransport struct {
 	sendErrors     []error
 	updates        []meetingInvite
 	joinCalls      []string
+	joinCallIDs    []string
 	joinResults    []fakeMeetingJoinResult
 	observedJoinID string
 	observedUserID string
 	observedChatID string
+	meetingChanges int
 }
 
 type fakeMeetingJoinResult struct {
-	meetingID string
-	err       error
+	outcome meetingJoinOutcome
+	err     error
 }
 
 func (f *fakeMeetingInviteTransport) SendMeetingInviteCard(_ context.Context, recipient string, invite meetingInvite) (string, error) {
@@ -59,16 +61,17 @@ func (f *fakeMeetingInviteTransport) UpdateMeetingInviteCard(_ context.Context, 
 	return nil
 }
 
-func (f *fakeMeetingInviteTransport) JoinMeeting(_ context.Context, meetingNo string) (string, error) {
+func (f *fakeMeetingInviteTransport) JoinMeeting(_ context.Context, request meetingJoinRequest) (meetingJoinOutcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.joinCalls = append(f.joinCalls, meetingNo)
+	f.joinCalls = append(f.joinCalls, request.MeetingNo)
+	f.joinCallIDs = append(f.joinCallIDs, request.CallID)
 	if len(f.joinResults) == 0 {
-		return "meeting-long-id", nil
+		return meetingJoinOutcome{MeetingID: "meeting-long-id", GreetingSent: true}, nil
 	}
 	result := f.joinResults[0]
 	f.joinResults = f.joinResults[1:]
-	return result.meetingID, result.err
+	return result.outcome, result.err
 }
 
 func (f *fakeMeetingInviteTransport) MeetingInviteJoined(meetingID, inviterOpenID, approvalChatID string) {
@@ -77,6 +80,12 @@ func (f *fakeMeetingInviteTransport) MeetingInviteJoined(meetingID, inviterOpenI
 	f.observedJoinID = meetingID
 	f.observedUserID = inviterOpenID
 	f.observedChatID = approvalChatID
+}
+
+func (f *fakeMeetingInviteTransport) MeetingInviteChanged() {
+	f.mu.Lock()
+	f.meetingChanges++
+	f.mu.Unlock()
 }
 
 func newTestMeetingInviteController(transport meetingInviteTransport) *meetingInviteController {
@@ -97,17 +106,22 @@ func meetingInvitePayload(eventID string) []byte {
 			"app_id":     "cli_test",
 		},
 		"event": map[string]any{
+			"call_id": "call-invite-1",
 			"meeting": map[string]any{
 				"id":         "meeting-source-id",
 				"meeting_no": "123456789",
 				"topic":      "研发周会",
 			},
 			"bot": map[string]any{
-				"id":        "ou_bot",
+				"id": map[string]any{
+					"open_id": "ou_bot",
+				},
 				"user_name": "AgentMux",
 			},
 			"inviter": map[string]any{
-				"id":        "ou_inviter",
+				"id": map[string]any{
+					"open_id": "ou_inviter",
+				},
 				"user_name": "张三",
 			},
 			"invite_time": "1800000000000",
@@ -155,6 +169,9 @@ func TestMeetingInvitationSendsOneApprovalCardForDuplicateEvent(t *testing.T) {
 	}
 	if len(transport.sentCards) != 1 {
 		t.Fatalf("sent cards = %d, want 1", len(transport.sentCards))
+	}
+	if transport.meetingChanges != 1 {
+		t.Fatalf("meeting change notifications = %d, want 1", transport.meetingChanges)
 	}
 	card := transport.sentCards[0]
 	if !json.Valid([]byte(card)) {
@@ -216,6 +233,9 @@ func TestMeetingInviteJoinRequiresExplicitAuthorizedClickAndIsIdempotent(t *test
 	if len(transport.joinCalls) != 1 || transport.joinCalls[0] != "123456789" {
 		t.Fatalf("join calls = %v", transport.joinCalls)
 	}
+	if len(transport.joinCallIDs) != 1 || transport.joinCallIDs[0] != "call-invite-1" {
+		t.Fatalf("join call ids = %v", transport.joinCallIDs)
+	}
 	if len(transport.updates) != 2 ||
 		transport.updates[0].State != meetingInviteJoining ||
 		transport.updates[1].State != meetingInviteJoined ||
@@ -263,6 +283,30 @@ func TestMeetingInviteRejectNeverCallsJoin(t *testing.T) {
 	}
 }
 
+func TestMeetingInvitationCanBeConfirmedFromLocalConsole(t *testing.T) {
+	transport := &fakeMeetingInviteTransport{}
+	controller := newTestMeetingInviteController(transport)
+	if err := controller.HandleInvitation(context.Background(), meetingInvitePayload("evt-console")); err != nil {
+		t.Fatal(err)
+	}
+	pending := controller.PendingInvitations()
+	if len(pending) != 1 || pending[0].ID != "evt-console" {
+		t.Fatalf("pending invitations = %+v", pending)
+	}
+	joined, err := controller.RespondFromConsole(
+		context.Background(), pending[0].ID, pending[0].Nonce, meetingInviteDecisionJoin,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined.State != meetingInviteJoined || joined.JoinedMeetingID != "meeting-long-id" || !joined.GreetingSent {
+		t.Fatalf("joined invitation = %+v", joined)
+	}
+	if got := controller.PendingInvitations(); len(got) != 0 {
+		t.Fatalf("pending invitations after join = %+v", got)
+	}
+}
+
 func TestMeetingInviteRejectsUnauthorizedOrTamperedActions(t *testing.T) {
 	transport := &fakeMeetingInviteTransport{}
 	controller := newTestMeetingInviteController(transport)
@@ -300,7 +344,7 @@ func TestMeetingInviteJoinFailureCanBeRetried(t *testing.T) {
 	transport := &fakeMeetingInviteTransport{
 		joinResults: []fakeMeetingJoinResult{
 			{err: errors.New("meeting is not ready")},
-			{meetingID: "meeting-after-retry"},
+			{outcome: meetingJoinOutcome{MeetingID: "meeting-after-retry", GreetingSent: true}},
 		},
 	}
 	controller := newTestMeetingInviteController(transport)
@@ -347,8 +391,33 @@ func TestParseMeetingInvitationValidatesMeetingNumberAndInviter(t *testing.T) {
 	}
 }
 
+func TestParseMeetingInvitationAcceptsLegacyStringActorID(t *testing.T) {
+	var payload map[string]any
+	if err := json.Unmarshal(meetingInvitePayload("evt-legacy-actor-id"), &payload); err != nil {
+		t.Fatal(err)
+	}
+	event := payload["event"].(map[string]any)
+	event["bot"].(map[string]any)["id"] = "ou_bot"
+	event["inviter"].(map[string]any)["id"] = "ou_inviter"
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invite, err := parseMeetingInvitation(encoded, time.Unix(1_800_000_000, 0), func() (string, error) {
+		return "nonce", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invite.InviterOpenID != "ou_inviter" {
+		t.Fatalf("inviter open ID = %q, want ou_inviter", invite.InviterOpenID)
+	}
+}
+
 func TestJoinMeetingUsesTenantTokenAndRequiredJoinType(t *testing.T) {
 	var joinRequests int
+	var greetingRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
@@ -364,6 +433,7 @@ func TestJoinMeetingUsesTenantTokenAndRequiredJoinType(t *testing.T) {
 				t.Fatal(err)
 			}
 			var payload struct {
+				CallID       string `json:"call_id"`
 				JoinIdentify struct {
 					MeetingNo string `json:"meeting_no"`
 				} `json:"join_identify"`
@@ -372,10 +442,107 @@ func TestJoinMeetingUsesTenantTokenAndRequiredJoinType(t *testing.T) {
 			if err := json.Unmarshal(body, &payload); err != nil {
 				t.Fatalf("decode join request: %v; body=%s", err, body)
 			}
-			if payload.JoinIdentify.MeetingNo != "123456789" || payload.JoinType != 1 {
+			if payload.JoinIdentify.MeetingNo != "123456789" || payload.JoinType != 1 || payload.CallID != "call-invite-test" {
 				t.Errorf("join payload = %+v", payload)
 			}
 			_, _ = writer.Write([]byte(`{"code":0,"msg":"success","data":{"meeting":{"id":"meeting-long-id"}}}`))
+		case meetingInviteMessageAPIPath:
+			greetingRequests++
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				MeetingID string `json:"meeting_id"`
+				MsgType   string `json:"msg_type"`
+				Content   string `json:"content"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("decode greeting request: %v; body=%s", err, body)
+			}
+			if payload.MeetingID != "meeting-long-id" || payload.MsgType != "text" || payload.Content != "大家好，我是测试智能体" {
+				t.Errorf("greeting payload = %+v", payload)
+			}
+			_, _ = writer.Write([]byte(`{"code":0,"msg":"success"}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client := &larkClient{
+		platform:        "feishu",
+		meetingGreeting: "大家好，我是测试智能体",
+		api: lark.NewClient(
+			"cli_test",
+			"secret",
+			lark.WithOpenBaseUrl(server.URL),
+		),
+	}
+	outcome, err := client.JoinMeeting(context.Background(), meetingJoinRequest{
+		MeetingNo: "123456789",
+		CallID:    "call-invite-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.MeetingID != "meeting-long-id" || !outcome.GreetingSent || joinRequests != 1 || greetingRequests != 1 {
+		t.Fatalf("outcome=%+v joinRequests=%d greetingRequests=%d", outcome, joinRequests, greetingRequests)
+	}
+}
+
+func TestSendMeetingTextSurfacesMissingScope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_, _ = writer.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"tenant-token"}`))
+		case meetingInviteMessageAPIPath:
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"code":99991672,"msg":"access denied","error":{"log_id":"log-scope-test"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client := &larkClient{
+		api: lark.NewClient("cli_test", "secret", lark.WithOpenBaseUrl(server.URL)),
+	}
+	err := client.SendMeetingText(context.Background(), "meeting-long-id", "大家好")
+	if err == nil {
+		t.Fatal("SendMeetingText() error = nil")
+	}
+	for _, want := range []string{meetingMessageWriteScope, "99991672", "log-scope-test"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("SendMeetingText() error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestUpdateMeetingInviteCardUsesInteractiveCardPatch(t *testing.T) {
+	var patchRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_, _ = writer.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"tenant-token"}`))
+		case "/open-apis/im/v1/messages/om_meeting_invite":
+			patchRequests++
+			if request.Method != http.MethodPatch {
+				t.Errorf("method = %s, want PATCH", request.Method)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := payload["msg_type"]; exists {
+				t.Errorf("card patch unexpectedly contains msg_type: %s", payload["msg_type"])
+			}
+			if len(payload["content"]) == 0 {
+				t.Error("card patch is missing content")
+			}
+			_, _ = writer.Write([]byte(`{"code":0,"msg":"success"}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -384,17 +551,14 @@ func TestJoinMeetingUsesTenantTokenAndRequiredJoinType(t *testing.T) {
 
 	client := &larkClient{
 		platform: "feishu",
-		api: lark.NewClient(
-			"cli_test",
-			"secret",
-			lark.WithOpenBaseUrl(server.URL),
-		),
+		api:      lark.NewClient("cli_test", "secret", lark.WithOpenBaseUrl(server.URL)),
 	}
-	meetingID, err := client.JoinMeeting(context.Background(), "123456789")
-	if err != nil {
+	if err := client.UpdateMeetingInviteCard(context.Background(), "om_meeting_invite", meetingInvite{
+		State: meetingInviteJoining,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if meetingID != "meeting-long-id" || joinRequests != 1 {
-		t.Fatalf("meetingID=%q joinRequests=%d", meetingID, joinRequests)
+	if patchRequests != 1 {
+		t.Fatalf("patch requests = %d, want 1", patchRequests)
 	}
 }

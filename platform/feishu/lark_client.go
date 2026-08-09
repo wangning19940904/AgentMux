@@ -41,14 +41,21 @@ const (
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
 // and an API client for outbound messages.
 type larkClient struct {
-	platform  string
-	domain    string
-	appID     string
-	appSecret string
-	api       *lark.Client
-	ws        *larkws.Client
-	cancel    context.CancelFunc
-	botOpenID string
+	platform         string
+	domain           string
+	appID            string
+	appSecret        string
+	api              *lark.Client
+	ws               *larkws.Client
+	cancel           context.CancelFunc
+	botOpenID        string
+	botName          string
+	meetingGreeting  string
+	meetingNotify    func(core.MeetingEvent)
+	agentName        string
+	channelName      string
+	meetingUsers     []string
+	meetingWakeWords []string
 
 	mu              sync.Mutex
 	closing         bool
@@ -60,26 +67,54 @@ type larkClient struct {
 	lastEventAt     time.Time
 	lastInboundAt   time.Time
 
-	meetingInvites *meetingInviteController
-	meetingVoice   *meetingVoiceManager
+	meetingInvites  *meetingInviteController
+	meetingActivity *meetingActivityManager
+	meetingVoiceMu  sync.RWMutex
+	meetingVoice    *meetingVoiceManager
 }
 
-func newLarkClient(platform, domain, appID, appSecret string, voiceConfig meetingVoiceConfig) (clientAPI, error) {
+func newLarkClient(
+	platform, domain, appID, appSecret string,
+	voiceConfig meetingVoiceConfig,
+	meetingGreeting string,
+	agentName string,
+	channelName string,
+	meetingUsers []string,
+	meetingWakeWords []string,
+	meetingNotify func(core.MeetingEvent),
+) (clientAPI, error) {
 	client := &larkClient{
-		platform:  platform,
-		domain:    domain,
-		appID:     appID,
-		appSecret: appSecret,
-		api:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(domain)),
+		platform:         platform,
+		domain:           domain,
+		appID:            appID,
+		appSecret:        appSecret,
+		api:              lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(domain)),
+		meetingGreeting:  strings.TrimSpace(meetingGreeting),
+		meetingNotify:    meetingNotify,
+		agentName:        strings.TrimSpace(agentName),
+		channelName:      strings.TrimSpace(channelName),
+		meetingUsers:     append([]string(nil), meetingUsers...),
+		meetingWakeWords: append([]string(nil), meetingWakeWords...),
 	}
 	client.meetingInvites = newMeetingInviteController(client)
+	client.meetingActivity = newMeetingActivityManager(client)
 	client.meetingVoice = newMeetingVoiceManager(client, voiceConfig)
 	return client, nil
+}
+
+func (c *larkClient) MeetingInviteChanged() {
+	if c.meetingNotify != nil {
+		c.meetingNotify(core.MeetingEvent{Type: "meeting.changed"})
+	}
 }
 
 func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
 	c.beginHealth()
 	botOpenID := c.loadBotOpenID(ctx)
+	if c.meetingActivity != nil {
+		c.meetingActivity.SetInbound(project, inbound)
+		go c.meetingActivity.BootstrapActiveMeetings(ctx, c.meetingUsers)
+	}
 	handler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
 			c.markEvent()
@@ -148,12 +183,28 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			}
 			return c.meetingInvites.HandleInvitation(eventCtx, event.Body)
 		}).
-		OnCustomizedEvent(meetingEndedEventType, func(_ context.Context, event *larkevent.EventReq) error {
+		OnCustomizedEvent(meetingActivityEventType, func(eventCtx context.Context, event *larkevent.EventReq) error {
 			c.markEvent()
-			if c.meetingVoice == nil || event == nil {
+			if c.meetingActivity == nil || event == nil {
 				return nil
 			}
-			c.meetingVoice.HandleMeetingEnded(event.Body)
+			// Malformed/unknown activity is logged and acknowledged so the
+			// platform does not retry poison payloads indefinitely.
+			if err := c.meetingActivity.Handle(eventCtx, event.Body); err != nil {
+				c.meetingActivity.report("handle meeting activity", err)
+			}
+			return nil
+		}).
+		OnCustomizedEvent(meetingEndedEventType, func(_ context.Context, event *larkevent.EventReq) error {
+			c.markEvent()
+			manager := c.currentMeetingVoice()
+			if manager == nil || event == nil {
+				return nil
+			}
+			manager.HandleMeetingEnded(event.Body)
+			if c.meetingActivity != nil {
+				c.meetingActivity.HandleMeetingEnded(event.Body)
+			}
 			return nil
 		}).
 		OnP2CardActionTrigger(func(eventCtx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
@@ -189,7 +240,12 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 		larkws.WithLogger(logger),
 		larkws.WithOnReady(c.markReady),
 		larkws.WithOnReconnecting(c.markReconnecting),
-		larkws.WithOnReconnected(c.markReady),
+		larkws.WithOnReconnected(func() {
+			c.markReady()
+			if c.meetingActivity != nil {
+				go c.meetingActivity.Recover(ctx)
+			}
+		}),
 		larkws.WithOnDisconnected(c.markDisconnected),
 		larkws.WithOnError(c.markError),
 	)
@@ -223,8 +279,8 @@ func (c *larkClient) Close() error {
 	if ws != nil {
 		ws.Close()
 	}
-	if c.meetingVoice != nil {
-		c.meetingVoice.Close()
+	if manager := c.currentMeetingVoice(); manager != nil {
+		manager.Close()
 	}
 	return nil
 }
@@ -235,14 +291,22 @@ func (c *larkClient) loadBotOpenID(ctx context.Context) string {
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	openID, err := fetchBotOpenID(reqCtx, c.domain, c.appID, c.appSecret)
+	identity, err := fetchBotIdentity(reqCtx, c.domain, c.appID, c.appSecret)
 	if err == nil {
-		c.botOpenID = openID
+		c.botOpenID = identity.OpenID
+		c.botName = identity.Name
 	}
 	return c.botOpenID
 }
 
+type botIdentity struct{ OpenID, Name string }
+
 func fetchBotOpenID(ctx context.Context, domain, appID, appSecret string) (string, error) {
+	identity, err := fetchBotIdentity(ctx, domain, appID, appSecret)
+	return identity.OpenID, err
+}
+
+func fetchBotIdentity(ctx context.Context, domain, appID, appSecret string) (botIdentity, error) {
 	base := strings.TrimRight(domain, "/")
 	payload, _ := json.Marshal(map[string]string{
 		"app_id":     appID,
@@ -250,17 +314,17 @@ func fetchBotOpenID(ctx context.Context, domain, appID, appSecret string) (strin
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/open-apis/auth/v3/app_access_token/internal", bytes.NewReader(payload))
 	if err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("token request failed: HTTP %d", resp.StatusCode)
+		return botIdentity{}, fmt.Errorf("token request failed: HTTP %d", resp.StatusCode)
 	}
 	var tokenResp struct {
 		Code           int    `json:"code"`
@@ -268,45 +332,46 @@ func fetchBotOpenID(ctx context.Context, domain, appID, appSecret string) (strin
 		AppAccessToken string `json:"app_access_token"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	if tokenResp.Code != 0 {
-		return "", fmt.Errorf("token request failed: %s", tokenResp.Msg)
+		return botIdentity{}, fmt.Errorf("token request failed: %s", tokenResp.Msg)
 	}
 	if tokenResp.AppAccessToken == "" {
-		return "", fmt.Errorf("token request returned empty token")
+		return botIdentity{}, fmt.Errorf("token request returned empty token")
 	}
 
 	req, err = http.NewRequestWithContext(ctx, http.MethodGet, base+"/open-apis/bot/v3/info", nil)
 	if err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tokenResp.AppAccessToken)
 	resp, err = client.Do(req)
 	if err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("bot info request failed: HTTP %d", resp.StatusCode)
+		return botIdentity{}, fmt.Errorf("bot info request failed: HTTP %d", resp.StatusCode)
 	}
 	var infoResp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 		Bot  struct {
-			OpenID string `json:"open_id"`
+			OpenID  string `json:"open_id"`
+			AppName string `json:"app_name"`
 		} `json:"bot"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&infoResp); err != nil {
-		return "", err
+		return botIdentity{}, err
 	}
 	if infoResp.Code != 0 {
-		return "", fmt.Errorf("bot info request failed: %s", infoResp.Msg)
+		return botIdentity{}, fmt.Errorf("bot info request failed: %s", infoResp.Msg)
 	}
 	if infoResp.Bot.OpenID == "" {
-		return "", fmt.Errorf("bot info returned empty open_id")
+		return botIdentity{}, fmt.Errorf("bot info returned empty open_id")
 	}
-	return infoResp.Bot.OpenID, nil
+	return botIdentity{OpenID: strings.TrimSpace(infoResp.Bot.OpenID), Name: strings.TrimSpace(infoResp.Bot.AppName)}, nil
 }
 
 func mentionState(msg *larkim.EventMessage, botOpenID, text string) (bool, bool) {

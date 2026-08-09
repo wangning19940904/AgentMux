@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/provider"
 	"github.com/wangning19940904/AgentMux/store"
+	ttspkg "github.com/wangning19940904/AgentMux/tts"
 
 	// Register agent adapters for agent instance validation.
 	_ "github.com/wangning19940904/AgentMux/agent"
@@ -120,6 +122,7 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 			"approval_mode":                     "prompt",
 			core.ChannelConfigAckReaction:       "yes",
 			core.ChannelConfigAckReactionEmojis: " OK, THANKS, ",
+			core.ChannelConfigMeetingWakeWords:  " 王宁同学，小王小王\n王宁同学 ",
 		},
 		Enabled: false,
 	})
@@ -137,11 +140,14 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		t.Fatalf("legacy channel approval_mode was not removed: %+v", saved.Config)
 	}
 	want := map[string]string{
-		core.ChannelConfigReplyScope:        core.ReplyScopeDMAndMentions,
-		core.ChannelConfigReplyMode:         core.ReplyModeStreamMessage,
-		core.ChannelConfigAckReaction:       "true",
-		core.ChannelConfigAckReactionEmojis: "OK,THANKS",
-		core.ChannelConfigMeetingVoice:      "false",
+		core.ChannelConfigReplyScope:          core.ReplyScopeDMAndMentions,
+		core.ChannelConfigReplyMode:           core.ReplyModeStreamMessage,
+		core.ChannelConfigAckReaction:         "true",
+		core.ChannelConfigAckReactionEmojis:   "OK,THANKS",
+		core.ChannelConfigMeetingVoice:        "false",
+		core.ChannelConfigMeetingReplyMode:    core.MeetingReplyModeStream,
+		core.ChannelConfigMeetingResponseMode: core.MeetingResponseModeStreamText,
+		core.ChannelConfigMeetingWakeWords:    "王宁同学\n小王小王",
 	}
 	for k, v := range want {
 		if saved.Config[k] != v {
@@ -164,6 +170,7 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 
 	saved.Config["app_secret"] = "<redacted>"
 	saved.Config[core.ChannelConfigReplyMode] = core.ReplyModeStreamCard
+	saved.Config[core.ChannelConfigMeetingReplyMode] = core.MeetingReplyModeFinal
 	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", saved)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("round-trip: code = %d body = %s", rec.Code, rec.Body.String())
@@ -172,7 +179,9 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 	if err != nil || stored == nil {
 		t.Fatal(err)
 	}
-	if stored.Config["app_secret"] != "secret" || stored.Config[core.ChannelConfigReplyMode] != core.ReplyModeStreamCard {
+	if stored.Config["app_secret"] != "secret" ||
+		stored.Config[core.ChannelConfigReplyMode] != core.ReplyModeStreamCard ||
+		stored.Config[core.ChannelConfigMeetingReplyMode] != core.MeetingReplyModeFinal {
 		t.Fatalf("stored after round-trip = %+v", stored.Config)
 	}
 
@@ -189,8 +198,16 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		{Name: "bad scope", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyScope: "direct"}},
 		{Name: "bad mode", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigReplyMode: "lark_cli"}},
 		{Name: "bad ack", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigAckReaction: "sometimes"}},
+		{Name: "bad meeting reply", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingReplyMode: "paragraph"}},
+		{Name: "bad meeting response", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingResponseMode: "hologram"}},
 		{Name: "bad voice", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingVoice: "sometimes"}},
 		{Name: "missing TTS key", Type: "feishu", Config: map[string]string{"app_id": "cli_test", "app_secret": "secret", core.ChannelConfigMeetingVoice: "true"}},
+		{Name: "bad local TTS model", Type: "feishu", Config: map[string]string{
+			"app_id": "cli_test", "app_secret": "secret",
+			core.ChannelConfigMeetingVoice:      "true",
+			core.ChannelConfigMeetingTTSMode:    core.MeetingTTSModeLocal,
+			core.ChannelConfigMeetingLocalModel: "unknown",
+		}},
 		{Name: "bad TTS URL", Type: "feishu", Config: map[string]string{
 			"app_id": "cli_test", "app_secret": "secret",
 			core.ChannelConfigMeetingVoice:      "true",
@@ -203,6 +220,37 @@ func TestFeishuChannelConfigDefaultsValidationAndSecretRoundTrip(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: code = %d body = %s", ch.Name, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestFeishuLocalTTSConfigDoesNotRequireAPIKey(t *testing.T) {
+	server, _ := newTestServer(t)
+	root := t.TempDir()
+	server.ttsModels = ttspkg.NewManager(root, nil)
+	modelDir := filepath.Join(root, "models", core.DefaultMeetingLocalModel)
+	for _, name := range []string{"model.int8.onnx", "voices.bin", "tokens.txt", "lexicon-zh.txt"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(modelDir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(modelDir, name), []byte("test"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(modelDir, "espeak-ng-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	recorder := doJSON(t, server, http.MethodPost, "/api/v1/channels", core.Channel{
+		Name: "Local Voice", Type: "feishu", Enabled: false,
+		Config: map[string]string{
+			"app_id": "cli_test", "app_secret": "secret",
+			core.ChannelConfigMeetingVoice:      "true",
+			core.ChannelConfigMeetingTTSMode:    core.MeetingTTSModeLocal,
+			core.ChannelConfigMeetingLocalModel: core.DefaultMeetingLocalModel,
+			core.ChannelConfigMeetingLocalVoice: "58",
+		},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("local TTS upsert: code = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 

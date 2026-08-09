@@ -11,6 +11,7 @@ package feishu
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -28,12 +29,18 @@ func init() {
 
 // Platform is the Feishu adapter.
 type Platform struct {
-	name      string
-	domain    string
-	appID     string
-	appSecret string
-	project   string
-	voice     meetingVoiceConfig
+	name             string
+	domain           string
+	appID            string
+	appSecret        string
+	project          string
+	voice            meetingVoiceConfig
+	meetingGreeting  string
+	meetingNotify    func(core.MeetingEvent)
+	agentName        string
+	channelName      string
+	meetingUsers     []string
+	meetingWakeWords []string
 
 	client clientAPI
 }
@@ -43,11 +50,28 @@ func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
 	p.appID, _ = cfg["app_id"].(string)
 	p.appSecret, _ = cfg["app_secret"].(string)
 	p.project, _ = cfg["project"].(string)
+	p.meetingGreeting, _ = cfg[core.ChannelConfigMeetingGreeting].(string)
+	customMeetingGreeting := strings.TrimSpace(p.meetingGreeting) != ""
+	p.meetingNotify, _ = cfg["meeting_event_notify"].(func(core.MeetingEvent))
+	p.agentName, _ = cfg["agent_name"].(string)
+	p.channelName, _ = cfg["channel_name"].(string)
+	p.meetingUsers = meetingBootstrapUsers(cfg)
+	wakeWords, err := core.ParseMeetingVoiceWakeWords(configString(cfg, core.ChannelConfigMeetingWakeWords))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	p.meetingWakeWords = wakeWords
+	if strings.TrimSpace(p.meetingGreeting) == "" {
+		p.meetingGreeting = "大家好，我是 {{agent_name}}，由 AgentMux 驱动的会议智能体。\n使用说明：@{{bot_name}} 可以跟机器人对话。"
+	}
 	voice, err := parseMeetingVoiceConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	p.voice = voice
+	if voice.Enabled && !customMeetingGreeting {
+		p.meetingGreeting += "\n语音提问：在会议中说“{{bot_name}}，……”即可唤醒我回答。"
+	}
 	if p.appID == "" || p.appSecret == "" {
 		return nil, fmt.Errorf("%s: app_id and app_secret are required", name)
 	}
@@ -72,13 +96,113 @@ func (p *Platform) ChannelHealth() core.PlatformHealth {
 // Start opens the long connection and forwards inbound messages.
 func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) error {
 	if p.client == nil {
-		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice)
+		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice, p.meetingGreeting, p.agentName, p.channelName, p.meetingUsers, p.meetingWakeWords, p.meetingNotify)
 		if err != nil {
 			return err
 		}
 		p.client = c
 	}
 	return p.client.Listen(ctx, p.project, inbound)
+}
+
+func configString(cfg map[string]any, key string) string {
+	value, _ := cfg[key].(string)
+	return value
+}
+
+func meetingBootstrapUsers(cfg map[string]any) []string {
+	seen := map[string]struct{}{}
+	var users []string
+	for _, key := range []string{core.ChannelConfigAllowedUserIDs, core.ChannelConfigAdminUserIDs} {
+		value, _ := cfg[key].(string)
+		for _, userID := range strings.FieldsFunc(value, func(r rune) bool {
+			return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+		}) {
+			userID = strings.TrimSpace(userID)
+			if userID == "" {
+				continue
+			}
+			if _, exists := seen[userID]; exists {
+				continue
+			}
+			seen[userID] = struct{}{}
+			users = append(users, userID)
+		}
+	}
+	return users
+}
+
+func (p *Platform) ActiveMeetings() []core.ActiveMeeting {
+	client, ok := p.client.(meetingActivityClient)
+	if !ok {
+		return []core.ActiveMeeting{}
+	}
+	return client.ActiveMeetings()
+}
+
+func (p *Platform) MeetingActivity(meetingID string) (core.MeetingDetail, error) {
+	client, ok := p.client.(meetingActivityClient)
+	if !ok {
+		return core.MeetingDetail{}, fmt.Errorf("%s: meeting activity is unavailable", p.name)
+	}
+	return client.MeetingActivity(meetingID)
+}
+
+func (p *Platform) SendMeetingMessage(ctx context.Context, meetingID, text, uuid string) error {
+	client, ok := p.client.(meetingActivityClient)
+	if !ok {
+		return fmt.Errorf("%s: meeting messages are unavailable", p.name)
+	}
+	return client.SendMeetingMessage(ctx, meetingID, text, uuid)
+}
+
+func (p *Platform) UserActiveMeetings(ctx context.Context, userID string) ([]core.ActiveMeeting, error) {
+	client, ok := p.client.(meetingActivityClient)
+	if !ok {
+		return nil, fmt.Errorf("%s: active meeting lookup is unavailable", p.name)
+	}
+	return client.UserActiveMeetings(ctx, userID)
+}
+
+func (p *Platform) MeetingPromptContext(meetingID string) string {
+	client, ok := p.client.(meetingActivityClient)
+	if !ok {
+		return ""
+	}
+	return client.MeetingPromptContext(meetingID)
+}
+
+func (p *Platform) UpsertMeetingTurn(turn core.MeetingTurn) {
+	if client, ok := p.client.(meetingActivityClient); ok {
+		client.UpsertMeetingTurn(turn)
+	}
+}
+
+func (p *Platform) MeetingInvitations() []core.MeetingInvitation {
+	client, ok := p.client.(meetingControlClient)
+	if !ok {
+		return []core.MeetingInvitation{}
+	}
+	return client.MeetingInvitations()
+}
+
+func (p *Platform) RespondMeetingInvitation(
+	ctx context.Context,
+	invitationID, nonce, decision string,
+) (core.MeetingInvitation, error) {
+	client, ok := p.client.(meetingControlClient)
+	if !ok {
+		return core.MeetingInvitation{}, fmt.Errorf("%s: meeting controls are unavailable", p.name)
+	}
+	return client.RespondMeetingInvitation(ctx, invitationID, nonce, decision)
+}
+
+func (p *Platform) JoinMeetingByNumber(ctx context.Context, meetingNumber string) (core.MeetingJoinResult, error) {
+	client, ok := p.client.(meetingControlClient)
+	if !ok {
+		return core.MeetingJoinResult{}, fmt.Errorf("%s: meeting controls are unavailable", p.name)
+	}
+	return client.JoinMeetingDirect(ctx, meetingNumber)
 }
 
 // Reply responds to the chat that originated msg.
@@ -175,13 +299,33 @@ func (p *Platform) BeginSpeechReply(ctx context.Context, msg *core.Message) (cor
 	if !ok {
 		return nil, nil
 	}
-	userID := ""
-	chatID := ""
-	if msg != nil {
-		userID = msg.UserID
-		chatID = msg.ChatID
+	return client.BeginMeetingSpeech(ctx, msg)
+}
+
+// ConfigureMeetingResponseMode hot-swaps the TTS worker while preserving the
+// live Lark connection and the meeting activation correlation.
+func (p *Platform) ConfigureMeetingResponseMode(config map[string]string) error {
+	values := make(map[string]any, len(config))
+	for key, value := range config {
+		values[key] = value
 	}
-	return client.BeginMeetingSpeech(ctx, userID, chatID)
+	voice, err := parseMeetingVoiceConfig(values)
+	if err != nil {
+		return err
+	}
+	p.voice = voice
+	if p.client == nil {
+		return nil
+	}
+	client, ok := p.client.(meetingVoiceConfigurableClient)
+	if !ok {
+		if voice.Enabled {
+			return fmt.Errorf("%s: live meeting voice configuration is unavailable", p.name)
+		}
+		return nil
+	}
+	client.ConfigureMeetingVoice(voice)
+	return nil
 }
 
 // ReplyModelPicker renders /model status as an interactive selector.

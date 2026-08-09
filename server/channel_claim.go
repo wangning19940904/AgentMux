@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -68,6 +70,146 @@ func (c *remoteChannelPeerClient) UpsertChannel(ctx context.Context, id string, 
 		return nil, err
 	}
 	return &saved, nil
+}
+
+func (c *remoteChannelPeerClient) MeetingSnapshot(ctx context.Context, id string) (core.MeetingSnapshot, error) {
+	var snapshot core.MeetingSnapshot
+	if err := c.request(ctx, id, http.MethodGet, "/api/v1/meetings", nil, &snapshot); err != nil {
+		return core.MeetingSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func (c *remoteChannelPeerClient) RespondMeetingInvitation(
+	ctx context.Context,
+	id string,
+	request meetingInvitationActionRequest,
+) (core.MeetingInvitation, error) {
+	request.TargetID = ""
+	var invitation core.MeetingInvitation
+	if err := c.request(ctx, id, http.MethodPost, "/api/v1/meetings/invitations/respond", request, &invitation); err != nil {
+		return core.MeetingInvitation{}, err
+	}
+	return invitation, nil
+}
+
+func (c *remoteChannelPeerClient) JoinMeeting(
+	ctx context.Context,
+	id string,
+	request meetingJoinRequest,
+) (core.MeetingJoinResult, error) {
+	request.TargetID = ""
+	var result core.MeetingJoinResult
+	if err := c.request(ctx, id, http.MethodPost, "/api/v1/meetings/join", request, &result); err != nil {
+		return core.MeetingJoinResult{}, err
+	}
+	return result, nil
+}
+
+func (c *remoteChannelPeerClient) MeetingActivity(ctx context.Context, id, channelID, meetingID string) (core.MeetingDetail, error) {
+	params := url.Values{"channel_id": {channelID}, "meeting_id": {meetingID}}
+	var detail core.MeetingDetail
+	if err := c.request(ctx, id, http.MethodGet, "/api/v1/meetings/activity?"+params.Encode(), nil, &detail); err != nil {
+		return core.MeetingDetail{}, err
+	}
+	return detail, nil
+}
+
+func (c *remoteChannelPeerClient) SendMeetingMessage(ctx context.Context, id string, request meetingMessageRequest) error {
+	request.TargetID = ""
+	return c.request(ctx, id, http.MethodPost, "/api/v1/meetings/messages", request, nil)
+}
+
+func (c *remoteChannelPeerClient) AskMeeting(ctx context.Context, id string, request meetingQuestionRequest) (core.MeetingTurn, error) {
+	request.TargetID = ""
+	var turn core.MeetingTurn
+	if err := c.request(ctx, id, http.MethodPost, "/api/v1/meetings/questions", request, &turn); err != nil {
+		return core.MeetingTurn{}, err
+	}
+	return turn, nil
+}
+
+func (c *remoteChannelPeerClient) SetMeetingResponseMode(ctx context.Context, id string, request meetingResponseModeRequest) (string, error) {
+	request.TargetID = ""
+	var result struct {
+		ResponseMode string `json:"response_mode"`
+	}
+	if err := c.request(ctx, id, http.MethodPost, "/api/v1/meetings/response-mode", request, &result); err != nil {
+		return "", err
+	}
+	return result.ResponseMode, nil
+}
+
+func (c *remoteChannelPeerClient) StreamMeetingEvents(ctx context.Context, id string, notify func()) error {
+	return c.StreamMeetingEventPayloads(ctx, id, func(name string, _ json.RawMessage) {
+		if notify != nil && (name == "ready" || strings.HasPrefix(name, "meeting.")) {
+			notify()
+		}
+	})
+}
+
+func (c *remoteChannelPeerClient) StreamMeetingEventPayloads(ctx context.Context, id string, notify func(string, json.RawMessage)) error {
+	if c == nil || c.manager == nil {
+		return errors.New("remote SSH control unavailable")
+	}
+	host, ok := c.manager.Get(id)
+	if !ok {
+		return fmt.Errorf("remote host %q not found", id)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host.RemoteAddr+"/api/v1/meetings/events", nil)
+	if err != nil {
+		return err
+	}
+	if host.APIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+host.APIToken)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return c.manager.DialContext(ctx, id, network)
+		},
+		DisableKeepAlives: true,
+	}
+	defer transport.CloseIdleConnections()
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("remote meeting event stream returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 4096), 2<<20)
+	eventName := ""
+	dataLines := []string{}
+	emit := func() {
+		if notify != nil && eventName != "" {
+			notify(eventName, json.RawMessage(strings.Join(dataLines, "\n")))
+		}
+		eventName = ""
+		dataLines = dataLines[:0]
+	}
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if line == "" {
+			emit()
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		} else if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	emit()
+	return io.EOF
 }
 
 func (c *remoteChannelPeerClient) request(

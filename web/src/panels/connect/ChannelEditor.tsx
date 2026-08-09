@@ -1,18 +1,23 @@
 import {
   CheckCircle2,
+	Download,
+	HardDrive,
   Loader2,
   RefreshCw,
   Save,
   Smartphone,
+	Trash2,
   XCircle,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
-import { Channel, api } from "../../api";
+import { Channel, OperationProgress, TTSCatalogStatus, TTSModel, api } from "../../api";
+import { OperationProgress as OperationProgressView } from "../../components/OperationProgress";
 import { useI18n } from "../../i18n";
 import {
   CHANNEL_FIELDS,
   FEISHU_DEFAULTS,
+  FEISHU_MEETING_RESPONSE_MODES,
   FEISHU_REPLY_MODES,
   FEISHU_REPLY_SCOPES,
   FeishuSetupPhase,
@@ -247,8 +252,69 @@ export function FeishuChannelOptions({
   const config = draft.config ?? {};
   const replyMode = configValue(config, "reply_mode", FEISHU_DEFAULTS.reply_mode);
   const ackEnabled = configValue(config, "ack_reaction_enabled", FEISHU_DEFAULTS.ack_reaction_enabled) !== "false";
-  const meetingVoice = configValue(config, "meeting_voice_enabled", FEISHU_DEFAULTS.meeting_voice_enabled) === "true";
+  const legacyMeetingVoice = configValue(config, "meeting_voice_enabled", FEISHU_DEFAULTS.meeting_voice_enabled) === "true";
+  const legacyMeetingReplyMode = configValue(config, "meeting_reply_mode", FEISHU_DEFAULTS.meeting_reply_mode);
+  const meetingResponseMode = configValue(
+    config,
+    "meeting_response_mode",
+    legacyMeetingVoice ? "text_voice" : legacyMeetingReplyMode === "final" ? "final_text" : FEISHU_DEFAULTS.meeting_response_mode,
+  );
+  const meetingVoice = meetingResponseMode === "text_voice" || meetingResponseMode === "voice";
+	const ttsMode = configValue(config, "meeting_voice_tts_mode", FEISHU_DEFAULTS.meeting_voice_tts_mode);
+	const localModelID = configValue(config, "meeting_voice_local_model", FEISHU_DEFAULTS.meeting_voice_local_model);
+	const localVoiceID = configValue(config, "meeting_voice_local_voice", FEISHU_DEFAULTS.meeting_voice_local_voice);
+	const [ttsCatalog, setTTSCatalog] = useState<TTSCatalogStatus | null>(null);
+	const [ttsCatalogError, setTTSCatalogError] = useState("");
+	const [ttsBusy, setTTSBusy] = useState("");
+	const [ttsProgress, setTTSProgress] = useState<Record<string, OperationProgress>>({});
   const codexControl = configValue(config, "codex_control_enabled", FEISHU_DEFAULTS.codex_control_enabled) === "true";
+
+	async function loadTTSModels() {
+		try {
+			setTTSCatalog(await api.ttsModels());
+			setTTSCatalogError("");
+		} catch (err) {
+			setTTSCatalogError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	useEffect(() => {
+		if (meetingVoice && ttsMode === "local") void loadTTSModels();
+	}, [meetingVoice, ttsMode]);
+
+	async function downloadTTSModel(model: TTSModel) {
+		setTTSBusy(model.id);
+		setTTSCatalogError("");
+		try {
+			await api.downloadTTSModel(model.id, (progress) => {
+				setTTSProgress((current) => ({ ...current, [model.id]: progress }));
+			});
+			updateConfig("meeting_voice_local_model", model.id);
+			updateConfig("meeting_voice_local_voice", model.voices[0]?.id ?? "0");
+			await loadTTSModels();
+		} catch (err) {
+			setTTSCatalogError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setTTSBusy("");
+			setTTSProgress((current) => {
+				const next = { ...current };
+				delete next[model.id];
+				return next;
+			});
+		}
+	}
+
+	async function deleteTTSModel(model: TTSModel) {
+		setTTSBusy(model.id);
+		setTTSCatalogError("");
+		try {
+			setTTSCatalog(await api.deleteTTSModel(model.id));
+		} catch (err) {
+			setTTSCatalogError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setTTSBusy("");
+		}
+	}
 
   return (
     <div className="channel-options">
@@ -367,19 +433,61 @@ export function FeishuChannelOptions({
             onChange={(e) => updateConfig("ack_reaction_emojis", e.target.value)}
           />
         </label>
-        <label className="switch-row channel-option-toggle">
-          <span>
-            <strong>{t("connect.meetingVoice")}</strong>
-            <small>{t("connect.meetingVoiceHint")}</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={meetingVoice}
-            onChange={(e) => updateConfig("meeting_voice_enabled", e.target.checked ? "true" : "false")}
+        <label className="field" style={{ gridColumn: "1 / -1" }}>
+          <span>{t("connect.meetingGreeting")}</span>
+          <textarea
+            rows={4}
+            value={configValue(config, "meeting_greeting", FEISHU_DEFAULTS.meeting_greeting)}
+            onChange={(e) => updateConfig("meeting_greeting", e.target.value)}
+            placeholder={t("connect.meetingGreetingPlaceholder")}
           />
+          <small>{t("connect.meetingGreetingHint")}</small>
         </label>
+        <label className="field">
+          <span>{t("connect.meetingReplyMode")}</span>
+          <select
+            value={meetingResponseMode}
+            onChange={(e) => {
+              const value = e.target.value;
+              updateConfig("meeting_response_mode", value);
+              updateConfig("meeting_voice_enabled", value === "text_voice" || value === "voice" ? "true" : "false");
+              updateConfig("meeting_reply_mode", value === "final_text" || value === "voice" ? "final" : "stream");
+            }}
+          >
+            {FEISHU_MEETING_RESPONSE_MODES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </option>
+            ))}
+          </select>
+          <small>{t("connect.meetingReplyModeHint")}</small>
+        </label>
+        <div className="field">
+          <span>{t("connect.meetingVoice")}</span>
+          <small>{t("connect.meetingVoiceHint")}</small>
+        </div>
         {meetingVoice && (
           <>
+				<label className="field" style={{ gridColumn: "1 / -1" }}>
+					<span>{t("connect.meetingWakeWords")}</span>
+					<textarea
+						rows={3}
+						value={configValue(config, "meeting_voice_wake_words", FEISHU_DEFAULTS.meeting_voice_wake_words)}
+						onChange={(event) => updateConfig("meeting_voice_wake_words", event.target.value)}
+						placeholder={t("connect.meetingWakeWordsPlaceholder")}
+					/>
+					<small>{t("connect.meetingWakeWordsHint")}</small>
+				</label>
+			<label className="field">
+				<span>{t("connect.meetingTTSMode")}</span>
+				<select value={ttsMode} onChange={(event) => updateConfig("meeting_voice_tts_mode", event.target.value)}>
+					<option value="api">{t("connect.meetingTTSModeApi")}</option>
+					<option value="local">{t("connect.meetingTTSModeLocal")}</option>
+				</select>
+				<small>{t(ttsMode === "local" ? "connect.meetingTTSLocalHint" : "connect.meetingTTSApiHint")}</small>
+			</label>
+			{ttsMode === "api" ? (
+				<>
             <label className="field">
               <span>{t("connect.meetingTTSBaseUrl")}</span>
               <input
@@ -411,11 +519,153 @@ export function FeishuChannelOptions({
                 onChange={(e) => updateConfig("meeting_voice_tts_voice", e.target.value)}
               />
             </label>
+				</>
+			) : (
+				<LocalTTSModelManager
+					catalog={ttsCatalog}
+					error={ttsCatalogError}
+					busy={ttsBusy}
+					progress={ttsProgress}
+					selectedModelID={localModelID}
+					selectedVoiceID={localVoiceID}
+					onSelectModel={(model) => {
+						updateConfig("meeting_voice_local_model", model.id);
+						updateConfig("meeting_voice_local_voice", model.voices[0]?.id ?? "0");
+					}}
+					onSelectVoice={(voice) => updateConfig("meeting_voice_local_voice", voice)}
+					onDownload={downloadTTSModel}
+					onDelete={deleteTTSModel}
+					onRetry={() => void loadTTSModels()}
+				/>
+			)}
           </>
         )}
       </div>
     </div>
   );
+}
+
+function LocalTTSModelManager({
+	catalog,
+	error,
+	busy,
+	progress,
+	selectedModelID,
+	selectedVoiceID,
+	onSelectModel,
+	onSelectVoice,
+	onDownload,
+	onDelete,
+	onRetry,
+}: {
+	catalog: TTSCatalogStatus | null;
+	error: string;
+	busy: string;
+	progress: Record<string, OperationProgress>;
+	selectedModelID: string;
+	selectedVoiceID: string;
+	onSelectModel: (model: TTSModel) => void;
+	onSelectVoice: (voice: string) => void;
+	onDownload: (model: TTSModel) => void;
+	onDelete: (model: TTSModel) => void;
+	onRetry: () => void;
+}) {
+	const { t } = useI18n();
+	const models = catalog?.models ?? [];
+	const selected = models.find((model) => model.id === selectedModelID) ?? models[0];
+	const selectedVoice = selected?.voices.some((voice) => voice.id === selectedVoiceID)
+		? selectedVoiceID
+		: selected?.voices[0]?.id ?? "0";
+	return (
+		<div className="tts-model-manager">
+			<div className="tts-local-fields">
+				<label className="field">
+					<span>{t("connect.meetingTTSLocalModel")}</span>
+					<select
+						value={selected?.id ?? selectedModelID}
+						disabled={!models.length}
+						onChange={(event) => {
+							const model = models.find((item) => item.id === event.target.value);
+							if (model) onSelectModel(model);
+						}}
+					>
+						{models.map((model) => (
+							<option key={model.id} value={model.id}>
+								{model.name}{model.installed ? ` · ${t("frameworks.installed")}` : ""}
+							</option>
+						))}
+					</select>
+				</label>
+				<label className="field">
+					<span>{t("connect.meetingTTSLocalVoice")}</span>
+					<select value={selectedVoice} disabled={!selected} onChange={(event) => onSelectVoice(event.target.value)}>
+						{selected?.voices.map((voice) => (
+							<option key={voice.id} value={voice.id}>{voice.name}{voice.notes ? ` · ${voice.notes}` : ""}</option>
+						))}
+					</select>
+				</label>
+			</div>
+			<div className="tts-runtime-row">
+				<HardDrive size={15} />
+				{catalog ? (
+					<span>
+						{t("connect.meetingTTSRuntime")} {catalog.runtime.version} · {catalog.runtime.platform} ·{" "}
+						{catalog.runtime.installed ? t("connect.meetingTTSReady") : formatTTSBytes(catalog.runtime.download_bytes ?? 0)}
+					</span>
+				) : <span>{t("common.loading")}</span>}
+			</div>
+			{error && (
+				<div className="notice error tts-model-error">
+					<span>{error}</span>
+					<button className="ghost-action" type="button" onClick={onRetry}><RefreshCw size={13} />{t("common.retry")}</button>
+				</div>
+			)}
+			<div className="tts-model-grid">
+				{models.map((model) => {
+					const isBusy = busy === model.id || model.downloading;
+					return (
+						<div key={model.id} className={`tts-model-card${model.id === selectedModelID ? " selected" : ""}${model.installed ? " installed" : ""}`}>
+							<div className="tts-model-card-head">
+								<div>
+									<strong>{model.name}</strong>
+									<small>{model.parameters} · {model.engine} · {model.license}</small>
+								</div>
+								{model.installed && <CheckCircle2 size={17} />}
+							</div>
+							<p>{model.description}</p>
+							<div className="tts-model-card-foot">
+								<span>{formatTTSBytes(model.download_bytes)}</span>
+								<div className="table-actions">
+									{model.installed ? (
+										<>
+											<button className="ghost-action" type="button" onClick={() => onSelectModel(model)}>{t("connect.meetingTTSUseModel")}</button>
+											{model.id !== selectedModelID && (
+												<button className="ghost-action danger-action" type="button" disabled={Boolean(busy)} onClick={() => onDelete(model)}>
+													<Trash2 size={13} />{t("common.delete")}
+												</button>
+											)}
+										</>
+									) : (
+										<button className="action" type="button" disabled={Boolean(busy) || catalog?.runtime.supported === false} onClick={() => onDownload(model)}>
+											{isBusy ? <Loader2 className="spin" size={14} /> : <Download size={14} />}
+											{isBusy ? t("connect.meetingTTSDownloading") : t("connect.meetingTTSDownload")}
+										</button>
+									)}
+								</div>
+							</div>
+							{progress[model.id] && <OperationProgressView progress={progress[model.id]} />}
+						</div>
+					);
+				})}
+			</div>
+			{catalog && !catalog.runtime.supported && <small className="error-text">{t("connect.meetingTTSUnsupported")}</small>}
+		</div>
+	);
+}
+
+function formatTTSBytes(bytes: number): string {
+	if (!bytes) return "—";
+	return `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
 }
 
 export function FeishuSetupBox({

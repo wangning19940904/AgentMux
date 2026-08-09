@@ -76,3 +76,20 @@ type interactionCardClient interface {
 type helpCardClient interface {
 	SendHelpCard(ctx context.Context, msg *core.Message, state core.HelpCardState) (messageID string, err error)
 }
+
+type meetingControlClient interface {
+	MeetingInvitations() []core.MeetingInvitation
+	RespondMeetingInvitation(ctx context.Context, invitationID, nonce, decision string) (core.MeetingInvitation, error)
+	JoinMeetingDirect(ctx context.Context, meetingNumber string) (core.MeetingJoinResult, error)
+}
+
+type meetingActivityClient interface {
+	ActiveMeetings() []core.ActiveMeeting
+	MeetingActivity(meetingID string) (core.MeetingDetail, error)
+	SendMeetingMessage(ctx context.Context, meetingID, text, uuid string) error
+	UserActiveMeetings(ctx context.Context, userID string) ([]core.ActiveMeeting, error)
+	MeetingPromptContext(meetingID string) string
+	UpsertMeetingTurn(turn core.MeetingTurn)
+}
+
+var _ meetingActivityClient = (*larkClient)(nil)

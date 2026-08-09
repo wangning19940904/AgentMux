@@ -26,8 +26,11 @@ import {
   Sparkles,
   Sun,
   Workflow,
+  Video,
 } from "lucide-react";
 import { RemoteTargetSelector } from "./RemoteTargetSelector";
+import { MeetingControls } from "./MeetingControls";
+import { MeetingProvider } from "./MeetingContext";
 
 // Panels load lazily so the initial bundle only carries the shell; each panel
 // chunk downloads when its tab is first selected.
@@ -46,6 +49,7 @@ const GuardPanel = lazy(() => import("./panels/GuardPanel").then((m) => ({ defau
 const SessionsPanel = lazy(() => import("./panels/SessionsPanel").then((m) => ({ default: m.SessionsPanel })));
 const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ default: m.MenuBarPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
+const MeetingsPanel = lazy(() => import("./panels/MeetingsPanel").then((m) => ({ default: m.MeetingsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
   api,
@@ -70,6 +74,7 @@ type Tab =
   | "gateway"
   | "memory"
   | "sessions"
+  | "meetings"
   | "skills"
   | "mcp"
   | "guard";
@@ -91,6 +96,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
       { id: "memory", labelKey: "nav.memory", icon: Brain },
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
+      { id: "meetings", labelKey: "nav.meetings", icon: Video },
     ],
   },
   {
@@ -205,14 +211,16 @@ export function App() {
 
   return (
     <I18nProvider language={language}>
-      <Shell
-        tab={tab}
-        setTab={selectTab}
-        language={language}
-        setLanguage={setLanguage}
-        themeMode={themeMode}
-        setThemeMode={setThemeMode}
-      />
+      <MeetingProvider>
+        <Shell
+          tab={tab}
+          setTab={selectTab}
+          language={language}
+          setLanguage={setLanguage}
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+        />
+      </MeetingProvider>
     </I18nProvider>
   );
 }
@@ -337,6 +345,7 @@ function Shell({
               <input placeholder={t("app.search")} />
             </label>
           </div>
+          <MeetingControls />
           <RemoteTargetSelector onManage={() => setTab("machines")} />
           <details className="topbar-preferences">
             <summary title={t("app.settings")} aria-label={t("app.settings")}>
@@ -370,6 +379,7 @@ function Shell({
               {tab === "menubar" && <MenuBarPanel />}
               {tab === "machines" && <RemoteHostsPanel />}
               {tab === "sessions" && <SessionsPanel />}
+              {tab === "meetings" && <MeetingsPanel />}
               {tab === "providers" && <ProvidersPanel />}
               {tab === "gateway" && <GatewayPanel />}
               {tab === "memory" && <MemoryPanel />}

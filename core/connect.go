@@ -47,6 +47,7 @@ func NewConnectService(log *slog.Logger, eng *Engine, store ConnectStore) *Conne
 	c.sched = NewScheduler(log, c.runScheduled)
 	c.unsubscribeEvents = eng.SubscribeEventSink(c.onEvent)
 	eng.SetRuntimeSettingsDefaultStore(c)
+	eng.SetMeetingResponseModeStore(c)
 	return c
 }
 
@@ -199,6 +200,134 @@ func (c *ConnectService) BindChannelConversation(ctx context.Context, channelID,
 
 func (c *ConnectService) ResolveChannelInteractionLocal(ctx context.Context, action AgentInteractionAction) error {
 	return c.eng.ResolveChannelInteractionLocal(ctx, action)
+}
+
+func (c *ConnectService) MeetingSnapshot() MeetingSnapshot {
+	if c == nil || c.eng == nil {
+		return MeetingSnapshot{Channels: []MeetingChannel{}, Invitations: []MeetingInvitation{}, Meetings: []ActiveMeeting{}}
+	}
+	return c.eng.MeetingSnapshot()
+}
+
+func (c *ConnectService) SubscribeMeetingEvents() (<-chan MeetingEvent, func()) {
+	if c == nil || c.eng == nil {
+		closed := make(chan MeetingEvent)
+		close(closed)
+		return closed, func() {}
+	}
+	return c.eng.SubscribeMeetingEvents()
+}
+
+func (c *ConnectService) RespondMeetingInvitation(
+	ctx context.Context,
+	channelID, invitationID, nonce, decision string,
+) (MeetingInvitation, error) {
+	if c == nil || c.eng == nil {
+		return MeetingInvitation{}, fmt.Errorf("connect runtime is not running")
+	}
+	return c.eng.RespondMeetingInvitation(ctx, channelID, invitationID, nonce, decision)
+}
+
+func (c *ConnectService) JoinMeetingByNumber(ctx context.Context, channelID, meetingNumber string) (MeetingJoinResult, error) {
+	if c == nil || c.eng == nil {
+		return MeetingJoinResult{}, fmt.Errorf("connect runtime is not running")
+	}
+	return c.eng.JoinMeetingByNumber(ctx, channelID, meetingNumber)
+}
+
+func (c *ConnectService) MeetingActivity(channelID, meetingID string) (MeetingDetail, error) {
+	if c == nil || c.eng == nil {
+		return MeetingDetail{}, fmt.Errorf("connect runtime is not running")
+	}
+	return c.eng.MeetingActivity(channelID, meetingID)
+}
+
+func (c *ConnectService) SendMeetingMessage(ctx context.Context, channelID, meetingID, text, uuid string) error {
+	if c == nil || c.eng == nil {
+		return fmt.Errorf("connect runtime is not running")
+	}
+	return c.eng.SendMeetingMessage(ctx, channelID, meetingID, text, uuid)
+}
+
+func (c *ConnectService) AskMeeting(channelID, meetingID, question, source, userID string) (MeetingTurn, error) {
+	if c == nil || c.eng == nil {
+		return MeetingTurn{}, fmt.Errorf("connect runtime is not running")
+	}
+	return c.eng.AskMeeting(channelID, meetingID, question, source, userID)
+}
+
+type channelStoreWriter interface {
+	UpsertChannel(context.Context, *Channel) error
+}
+
+// SetMeetingResponseMode persists and hot-applies the meeting output mode.
+// Hot application keeps the current long connection and active meeting state
+// intact, which is important when this is invoked from the Meetings page or
+// from a /meeting command while the bot is already in a call.
+func (c *ConnectService) SetMeetingResponseMode(ctx context.Context, channelID, value string) (string, error) {
+	if c == nil || c.eng == nil || c.store == nil {
+		return "", fmt.Errorf("connect runtime is not running")
+	}
+	mode := NormalizeMeetingResponseMode(value)
+	if mode == "" {
+		return "", fmt.Errorf("invalid meeting response mode %q", strings.TrimSpace(value))
+	}
+	writer, ok := c.store.(channelStoreWriter)
+	if !ok {
+		return "", fmt.Errorf("channel store is read-only")
+	}
+	channelID = strings.TrimSpace(channelID)
+	channel, err := c.store.GetChannel(ctx, channelID)
+	if err != nil {
+		return "", err
+	}
+	if channel == nil {
+		return "", fmt.Errorf("channel %q not found", channelID)
+	}
+	if channel.Type != "feishu" && channel.Type != "lark" {
+		return "", fmt.Errorf("channel %q does not support meeting replies", channelID)
+	}
+	previous := *channel
+	previous.Config = copyChannelConfig(channel.Config)
+	channel.Config = copyChannelConfig(channel.Config)
+	if err := ApplyMeetingResponseMode(channel, mode); err != nil {
+		return "", err
+	}
+	if MeetingResponseModeUsesVoice(mode) {
+		ttsMode := strings.ToLower(strings.TrimSpace(channel.Config[ChannelConfigMeetingTTSMode]))
+		if ttsMode == "" {
+			ttsMode = DefaultMeetingTTSMode
+		}
+		if ttsMode == MeetingTTSModeLocal {
+			if strings.TrimSpace(channel.Config[ChannelConfigMeetingLocalModel]) == "" {
+				return "", fmt.Errorf("请先在渠道设置中选择并下载本地 TTS 模型，再启用会议语音回复")
+			}
+		} else {
+			apiKey := strings.TrimSpace(channel.Config[ChannelConfigMeetingTTSAPIKey])
+			if apiKey == "" || apiKey == "<redacted>" {
+				return "", fmt.Errorf("请先在渠道设置中配置 TTS API Key，再启用会议语音回复")
+			}
+		}
+	}
+	updatedAt := time.Now()
+	channel.UpdatedAt = updatedAt
+	if err := c.eng.applyMeetingResponseMode(channelID, *channel, updatedAt); err != nil {
+		return "", err
+	}
+	if err := writer.UpsertChannel(ctx, channel); err != nil {
+		_ = c.eng.applyMeetingResponseMode(channelID, previous, previous.UpdatedAt)
+		return "", err
+	}
+	c.eng.publishMeetingEvent(channelID)
+	return mode, nil
+}
+
+func copyChannelConfig(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source)+3)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 // RunTriggerNow executes a trigger asynchronously (manual run: fires even

@@ -75,7 +75,7 @@ desktop: web remote-assets
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
 	@mkdir -p desktop/build
 	@cp assets/branding/agentmux-logo.png desktop/build/appicon.png
-	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings
+	cd desktop && $(WAILS) build -tags "desktop embedweb" -skipbindings -ldflags "$(LDFLAGS)"
 	@for app_dir in desktop/build/bin/*.app; do \
 		[ -d "$$app_dir" ] || continue; \
 		mkdir -p "$$app_dir/Contents/Resources/agentmux-remote"; \

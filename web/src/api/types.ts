@@ -459,6 +459,132 @@ export interface ChannelInteraction {
   expires_at?: string;
 }
 
+export type MeetingResponseMode = "stream_text" | "final_text" | "text_voice" | "voice";
+
+export interface MeetingChannel {
+  channel_id: string;
+  channel_name: string;
+  platform: string;
+  bot_name?: string;
+  agent_name?: string;
+  response_mode: MeetingResponseMode;
+  state: string;
+  connected: boolean;
+  error?: string;
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface MeetingInvitation {
+  id: string;
+  nonce: string;
+  channel_id: string;
+  channel_name: string;
+  platform: string;
+  meeting_id?: string;
+  meeting_number: string;
+  topic: string;
+  inviter_name: string;
+  state: string;
+  last_error?: string;
+  greeting_sent?: boolean;
+  greeting_warning?: string;
+  created_at: string;
+  expires_at: string;
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface MeetingJoinResult {
+  channel_id: string;
+  channel_name: string;
+  platform: string;
+  meeting_id: string;
+  meeting_number: string;
+  greeting_sent: boolean;
+  greeting_warning?: string;
+}
+
+export interface MeetingActor {
+  id?: string;
+  name?: string;
+  participant_type?: string;
+  role?: string;
+}
+
+export interface MeetingTimelineItem {
+  id: string;
+  meeting_id: string;
+  kind: "chat" | "reaction" | "transcript" | "participant_joined" | "participant_left" | "share_started" | "share_ended" | "bot" | string;
+  event_time: string;
+  actor?: MeetingActor;
+  text?: string;
+  message_type?: number;
+  share_title?: string;
+  share_url?: string;
+  visibility?: string;
+  turn_id?: string;
+}
+
+export interface ActiveMeeting {
+  id: string;
+  meeting_number?: string;
+  topic?: string;
+  status: string;
+  channel_id: string;
+  channel_name: string;
+  platform: string;
+  bot_name?: string;
+  agent_name?: string;
+  response_mode: MeetingResponseMode;
+  joined_at?: string;
+  started_at?: string;
+  ended_at?: string;
+  last_activity_at?: string;
+  participant_count?: number;
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface MeetingTurn {
+  id: string;
+  meeting_id: string;
+  question: string;
+  source: string;
+  status: string;
+  error?: string;
+  created_at: string;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface MeetingDetail {
+  meeting: ActiveMeeting;
+  items: MeetingTimelineItem[];
+  turns: MeetingTurn[];
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface MeetingStreamEvent {
+  type?: "meeting.changed" | "meeting.activity" | "meeting.turn" | string;
+  channel_id?: string;
+  meeting_id?: string;
+  meeting?: ActiveMeeting;
+  items?: MeetingTimelineItem[];
+  turn?: MeetingTurn;
+  created_at?: string;
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface MeetingOverview {
+  channels: MeetingChannel[];
+  invitations: MeetingInvitation[];
+  meetings: ActiveMeeting[];
+  warnings?: string[];
+}
+
 export interface FeishuSetupBeginResponse {
   device_code: string;
   qr_url: string;
@@ -703,6 +829,40 @@ export interface OperationProgress {
   detail?: string;
   percent: number;
   started_at?: number;
+}
+
+export interface TTSVoice {
+	id: string;
+	name: string;
+	notes?: string;
+}
+
+export interface TTSModel {
+	id: string;
+	name: string;
+	description: string;
+	languages: string[];
+	parameters?: string;
+	download_bytes: number;
+	license: string;
+	engine: string;
+	recommended?: boolean;
+	voices: TTSVoice[];
+	installed: boolean;
+	downloading?: boolean;
+}
+
+export interface TTSRuntimeStatus {
+	version: string;
+	supported: boolean;
+	installed: boolean;
+	download_bytes?: number;
+	platform: string;
+}
+
+export interface TTSCatalogStatus {
+	models: TTSModel[];
+	runtime: TTSRuntimeStatus;
 }
 
 export interface MarketplaceSkill {

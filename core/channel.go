@@ -47,15 +47,22 @@ const (
 
 // Feishu/Lark channel config keys.
 const (
-	ChannelConfigReplyScope        = "reply_scope"
-	ChannelConfigReplyMode         = "reply_mode"
-	ChannelConfigAckReaction       = "ack_reaction_enabled"
-	ChannelConfigAckReactionEmojis = "ack_reaction_emojis"
-	ChannelConfigMeetingVoice      = "meeting_voice_enabled"
-	ChannelConfigMeetingTTSBaseURL = "meeting_voice_tts_base_url"
-	ChannelConfigMeetingTTSAPIKey  = "meeting_voice_tts_api_key"
-	ChannelConfigMeetingTTSModel   = "meeting_voice_tts_model"
-	ChannelConfigMeetingTTSVoice   = "meeting_voice_tts_voice"
+	ChannelConfigReplyScope          = "reply_scope"
+	ChannelConfigReplyMode           = "reply_mode"
+	ChannelConfigAckReaction         = "ack_reaction_enabled"
+	ChannelConfigAckReactionEmojis   = "ack_reaction_emojis"
+	ChannelConfigMeetingVoice        = "meeting_voice_enabled"
+	ChannelConfigMeetingTTSBaseURL   = "meeting_voice_tts_base_url"
+	ChannelConfigMeetingTTSAPIKey    = "meeting_voice_tts_api_key"
+	ChannelConfigMeetingTTSModel     = "meeting_voice_tts_model"
+	ChannelConfigMeetingTTSVoice     = "meeting_voice_tts_voice"
+	ChannelConfigMeetingTTSMode      = "meeting_voice_tts_mode"
+	ChannelConfigMeetingLocalModel   = "meeting_voice_local_model"
+	ChannelConfigMeetingLocalVoice   = "meeting_voice_local_voice"
+	ChannelConfigMeetingWakeWords    = "meeting_voice_wake_words"
+	ChannelConfigMeetingGreeting     = "meeting_greeting"
+	ChannelConfigMeetingReplyMode    = "meeting_reply_mode"
+	ChannelConfigMeetingResponseMode = "meeting_response_mode"
 )
 
 // Channel reply scopes.
@@ -71,13 +78,38 @@ const (
 	ReplyModeStreamCard    = "stream_card"
 )
 
+// Meeting reply modes control how Agent output is delivered to the in-meeting
+// chat. Stream mode sends throttled coherent chunks; final mode sends exactly
+// once after the Agent event stream has closed.
 const (
-	DefaultAckReactionEnabled = "true"
-	DefaultAckReactionEmojis  = "OK,THUMBSUP,MUSCLE,THANKS"
-	DefaultMeetingVoice       = "false"
-	DefaultMeetingTTSBaseURL  = "https://api.openai.com/v1"
-	DefaultMeetingTTSModel    = "gpt-4o-mini-tts"
-	DefaultMeetingTTSVoice    = "alloy"
+	MeetingReplyModeStream = "stream"
+	MeetingReplyModeFinal  = "final"
+)
+
+// Meeting response modes are the user-facing combinations exposed by the
+// meeting console and /meeting command. The older reply-mode and voice keys
+// remain synchronized for backwards compatibility with existing channels.
+const (
+	MeetingResponseModeStreamText = "stream_text"
+	MeetingResponseModeFinalText  = "final_text"
+	MeetingResponseModeTextVoice  = "text_voice"
+	MeetingResponseModeVoice      = "voice"
+)
+
+const (
+	MeetingTTSModeAPI          = "api"
+	MeetingTTSModeLocal        = "local"
+	DefaultAckReactionEnabled  = "true"
+	DefaultAckReactionEmojis   = "OK,THUMBSUP,MUSCLE,THANKS"
+	DefaultMeetingVoice        = "false"
+	DefaultMeetingTTSBaseURL   = "https://api.openai.com/v1"
+	DefaultMeetingTTSModel     = "gpt-4o-mini-tts"
+	DefaultMeetingTTSVoice     = "alloy"
+	DefaultMeetingTTSMode      = MeetingTTSModeAPI
+	DefaultMeetingLocalModel   = "kokoro-82m-zh-int8"
+	DefaultMeetingLocalVoice   = "3"
+	DefaultMeetingReplyMode    = MeetingReplyModeStream
+	DefaultMeetingResponseMode = MeetingResponseModeStreamText
 )
 
 // Trigger kinds. A trigger is the unified automation entry: cron schedules,

@@ -1,6 +1,6 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
-import type { LaunchAtLoginStatus, OperationProgress, RemoteHost } from "./types";
+import type { LaunchAtLoginStatus, MeetingStreamEvent, OperationProgress, RemoteHost } from "./types";
 
 declare global {
   interface Window {
@@ -125,6 +125,7 @@ export async function postProgress<T>(
   const decoder = new TextDecoder();
   let buffer = "";
   let finalResult: T | undefined;
+	let streamError = "";
 
   const consumeEvent = (block: string) => {
     const data = block
@@ -137,9 +138,11 @@ export async function postProgress<T>(
       type?: string;
       progress?: OperationProgress;
       result?: T;
+		error?: string;
     };
     if (event.type === "progress" && event.progress) onProgress(event.progress);
     if (event.type === "result" && event.result !== undefined) finalResult = event.result;
+		if (event.type === "error") streamError = event.error || "Operation failed.";
   };
 
   while (true) {
@@ -151,8 +154,48 @@ export async function postProgress<T>(
     if (done) break;
   }
   if (buffer.trim()) consumeEvent(buffer);
+	if (streamError) throw new Error(streamError);
   if (finalResult === undefined) throw new Error("Installation progress stream ended unexpectedly.");
   return finalResult;
+}
+
+export async function streamMeetingEvents(
+  signal: AbortSignal,
+  onEvent: (eventName: "ready" | "meeting.changed" | "meeting.activity" | "meeting.turn", payload: MeetingStreamEvent) => void,
+): Promise<void> {
+  const path = "/api/v1/remote/meetings/events";
+  const res = await fetch(apiPath(path), {
+    cache: "no-store",
+    headers: { Accept: "text/event-stream" },
+    signal,
+  });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  if (!res.body) throw new Error("Meeting event stream is unavailable.");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const consumeBlock = (block: string) => {
+    const eventLine = block.split(/\r?\n/).find((line) => line.startsWith("event:"));
+    const eventName = eventLine?.slice(6).trim();
+    if (eventName === "ready" || eventName === "meeting.changed" || eventName === "meeting.activity" || eventName === "meeting.turn") {
+      const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+      let payload: MeetingStreamEvent = {};
+      if (data) { try { payload = JSON.parse(data) as MeetingStreamEvent; } catch { payload = {}; } }
+      onEvent(eventName, payload);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() ?? "";
+    blocks.forEach(consumeBlock);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeBlock(buffer);
+  if (!signal.aborted) throw new Error("Meeting event stream ended unexpectedly.");
 }
 
 export async function del<T>(path: string): Promise<T> {

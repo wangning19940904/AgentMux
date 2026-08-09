@@ -20,6 +20,7 @@ import (
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 	"github.com/wangning19940904/AgentMux/store"
+	ttspkg "github.com/wangning19940904/AgentMux/tts"
 )
 
 // Server is the management/bridge HTTP server.
@@ -45,6 +46,8 @@ type Server struct {
 	remote          *remotepkg.Manager
 	keepAwake       *keepAwakeManager
 	channelPeers    channelPeerClient
+	meetingPeers    meetingPeerClient
+	ttsModels       *ttspkg.Manager
 	channelClaimMu  sync.Mutex
 	mux             *http.ServeMux
 	httpSrv         *http.Server
@@ -65,6 +68,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		usageFn:   usageFn,
 		sessions:  sessionstore.New(),
 		keepAwake: newKeepAwakeManager(),
+		ttsModels: ttspkg.NewManager("", log),
 		mux:       http.NewServeMux(),
 	}
 	s.providerMonitor = newProviderMonitor(log, st, pm)
@@ -79,7 +83,9 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		}
 	} else {
 		s.remote = remoteManager
-		s.channelPeers = &remoteChannelPeerClient{manager: remoteManager}
+		peer := &remoteChannelPeerClient{manager: remoteManager}
+		s.channelPeers = peer
+		s.meetingPeers = peer
 	}
 	s.routes()
 	return s
@@ -165,6 +171,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/system/directories", s.handleSystemDirectoryEnsure)
 	s.mux.HandleFunc("GET /api/v1/system/keep-awake", s.handleKeepAwakeGet)
 	s.mux.HandleFunc("PUT /api/v1/system/keep-awake", s.handleKeepAwakePut)
+	s.mux.HandleFunc("GET /api/v1/tts/models", s.handleTTSModels)
+	s.mux.HandleFunc("POST /api/v1/tts/models/download/stream", s.handleTTSModelDownload)
+	s.mux.HandleFunc("DELETE /api/v1/tts/models", s.handleTTSModelDelete)
 	s.mux.HandleFunc("GET /api/v1/frameworks", s.handleFrameworksList)
 	s.mux.HandleFunc("GET /api/v1/frameworks/auth", s.handleFrameworkAuthStatus)
 	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
@@ -193,6 +202,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/channel-tasks", s.handleChannelTasks)
 	s.mux.HandleFunc("GET /api/v1/channel-interactions", s.handleChannelInteractions)
 	s.mux.HandleFunc("POST /api/v1/channel-interactions/respond", s.handleChannelInteractionRespond)
+	s.mux.HandleFunc("GET /api/v1/meetings", s.handleMeetingSnapshot)
+	s.mux.HandleFunc("GET /api/v1/meetings/events", s.handleMeetingEvents)
+	s.mux.HandleFunc("GET /api/v1/meetings/activity", s.handleMeetingActivity)
+	s.mux.HandleFunc("POST /api/v1/meetings/messages", s.handleMeetingMessageSend)
+	s.mux.HandleFunc("POST /api/v1/meetings/questions", s.handleMeetingQuestion)
+	s.mux.HandleFunc("POST /api/v1/meetings/response-mode", s.handleMeetingResponseMode)
+	s.mux.HandleFunc("POST /api/v1/meetings/invitations/respond", s.handleMeetingInvitationRespond)
+	s.mux.HandleFunc("POST /api/v1/meetings/join", s.handleMeetingJoin)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/begin", s.handleFeishuSetupBegin)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/poll", s.handleFeishuSetupPoll)
 	s.registerRemoteRoutes()

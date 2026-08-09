@@ -19,6 +19,7 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 const (
@@ -31,6 +32,8 @@ const (
 	meetingInviteTTL             = 30 * time.Minute
 	meetingInviteActionTimeout   = 45 * time.Second
 	meetingInviteJoinAPIPath     = "/open-apis/vc/v1/bots/join"
+	meetingInviteMessageAPIPath  = "/open-apis/vc/v1/bots/message"
+	meetingMessageWriteScope     = "vc:meeting.message:write"
 	meetingInviteMaxDisplayError = 160
 )
 
@@ -61,10 +64,12 @@ type botMeetingInvitedEvent struct {
 		CreateTime string `json:"create_time"`
 	} `json:"header"`
 	Event struct {
+		CallID  string `json:"call_id"`
 		Meeting struct {
 			ID        string `json:"id"`
 			MeetingNo string `json:"meeting_no"`
 			Topic     string `json:"topic"`
+			CallID    string `json:"call_id"`
 		} `json:"meeting"`
 		Bot        meetingInviteActor `json:"bot"`
 		Inviter    meetingInviteActor `json:"inviter"`
@@ -73,10 +78,38 @@ type botMeetingInvitedEvent struct {
 }
 
 type meetingInviteActor struct {
-	ID       string `json:"id"`
-	OpenID   string `json:"open_id"`
-	UserName string `json:"user_name"`
-	Name     string `json:"name"`
+	ID       meetingInviteActorID `json:"id"`
+	OpenID   string               `json:"open_id"`
+	UserName string               `json:"user_name"`
+	Name     string               `json:"name"`
+}
+
+// meetingInviteActorID accepts both the current VC callback shape
+// ("id":{"open_id":"ou_..."}) and the legacy flat string used by older
+// examples. Keeping both forms here prevents a schema variation in the bot
+// actor from dropping the entire invitation before it reaches the Console.
+type meetingInviteActorID struct {
+	OpenID string `json:"open_id"`
+	legacy string
+}
+
+func (id *meetingInviteActorID) UnmarshalJSON(data []byte) error {
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		id.OpenID = ""
+		id.legacy = strings.TrimSpace(legacy)
+		return nil
+	}
+
+	type actorID meetingInviteActorID
+	var nested actorID
+	if err := json.Unmarshal(data, &nested); err != nil {
+		return fmt.Errorf("decode meeting invite actor id: %w", err)
+	}
+	*id = meetingInviteActorID(nested)
+	id.OpenID = strings.TrimSpace(id.OpenID)
+	id.legacy = ""
+	return nil
 }
 
 type meetingInvite struct {
@@ -84,6 +117,7 @@ type meetingInvite struct {
 	Nonce           string
 	MeetingID       string
 	MeetingNo       string
+	CallID          string
 	Topic           string
 	InviterOpenID   string
 	InviterName     string
@@ -91,20 +125,38 @@ type meetingInvite struct {
 	CardMessageID   string
 	ApprovalChatID  string
 	JoinedMeetingID string
+	GreetingSent    bool
+	GreetingWarning string
 	State           meetingInviteState
 	LastError       string
+	CreatedAt       time.Time
 	ExpiresAt       time.Time
 	prompting       bool
+}
+
+type meetingJoinRequest struct {
+	MeetingNo string
+	CallID    string
+}
+
+type meetingJoinOutcome struct {
+	MeetingID       string
+	GreetingSent    bool
+	GreetingWarning string
 }
 
 type meetingInviteTransport interface {
 	SendMeetingInviteCard(context.Context, string, meetingInvite) (string, error)
 	UpdateMeetingInviteCard(context.Context, string, meetingInvite) error
-	JoinMeeting(context.Context, string) (string, error)
+	JoinMeeting(context.Context, meetingJoinRequest) (meetingJoinOutcome, error)
 }
 
 type meetingInviteJoinObserver interface {
 	MeetingInviteJoined(meetingID, inviterOpenID, approvalChatID string)
+}
+
+type meetingInviteChangeObserver interface {
+	MeetingInviteChanged()
 }
 
 type meetingInviteController struct {
@@ -139,6 +191,7 @@ func (c *meetingInviteController) HandleInvitation(ctx context.Context, payload 
 	if !shouldPrompt {
 		return nil
 	}
+	c.notifyChanged()
 
 	messageID, err := c.transport.SendMeetingInviteCard(ctx, invite.InviterOpenID, invite)
 	if err != nil {
@@ -191,6 +244,7 @@ func (c *meetingInviteController) HandleAction(appCtx context.Context, event *ca
 			return true, meetingInviteToast("error", "无法处理这条会议邀请")
 		}
 	}
+	c.notifyChanged()
 
 	switch decision {
 	case meetingInviteDecisionReject:
@@ -200,7 +254,7 @@ func (c *meetingInviteController) HandleAction(appCtx context.Context, event *ca
 		c.runAsync(func() {
 			actionCtx, cancel := context.WithTimeout(appCtx, meetingInviteActionTimeout)
 			defer cancel()
-			c.processJoin(actionCtx, invite)
+			_, _ = c.processJoin(actionCtx, invite)
 		})
 		return true, meetingInviteToast("success", "正在加入会议…")
 	default:
@@ -208,17 +262,21 @@ func (c *meetingInviteController) HandleAction(appCtx context.Context, event *ca
 	}
 }
 
-func (c *meetingInviteController) processJoin(ctx context.Context, invite meetingInvite) {
+func (c *meetingInviteController) processJoin(ctx context.Context, invite meetingInvite) (meetingInvite, error) {
 	if err := c.transport.UpdateMeetingInviteCard(ctx, invite.CardMessageID, invite); err != nil {
 		c.report("update meeting invite card to joining", err)
 	}
 
-	meetingID, joinErr := c.transport.JoinMeeting(ctx, invite.MeetingNo)
-	finalInvite, err := c.finishJoin(invite.ID, meetingID, joinErr)
+	outcome, joinErr := c.transport.JoinMeeting(ctx, meetingJoinRequest{
+		MeetingNo: invite.MeetingNo,
+		CallID:    invite.CallID,
+	})
+	finalInvite, err := c.finishJoin(invite.ID, outcome, joinErr)
 	if err != nil {
 		c.report("finish meeting invite join state", err)
-		return
+		return meetingInvite{}, err
 	}
+	c.notifyChanged()
 	if joinErr != nil {
 		c.report("join meeting after approval", joinErr)
 	}
@@ -230,6 +288,7 @@ func (c *meetingInviteController) processJoin(ctx context.Context, invite meetin
 	if err := c.transport.UpdateMeetingInviteCard(ctx, finalInvite.CardMessageID, finalInvite); err != nil {
 		c.report("update meeting invite card after join", err)
 	}
+	return finalInvite, joinErr
 }
 
 func (c *meetingInviteController) updateCardAsync(appCtx context.Context, invite meetingInvite) {
@@ -276,6 +335,47 @@ func (c *meetingInviteController) releasePrompt(inviteID string) {
 	}
 }
 
+func (c *meetingInviteController) PendingInvitations() []meetingInvite {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pruneLocked()
+	now := c.now()
+	out := make([]meetingInvite, 0, len(c.invites))
+	for _, invite := range c.invites {
+		if invite.State == meetingInvitePending && !now.Before(invite.ExpiresAt) {
+			invite.State = meetingInviteExpired
+		}
+		if invite.State == meetingInvitePending {
+			out = append(out, *invite)
+		}
+	}
+	return out
+}
+
+func (c *meetingInviteController) RespondFromConsole(
+	ctx context.Context,
+	inviteID, nonce, decision string,
+) (meetingInvite, error) {
+	invite, err := c.beginConsoleDecision(inviteID, nonce, decision)
+	if err != nil {
+		return invite, err
+	}
+	c.notifyChanged()
+	if decision == meetingInviteDecisionReject {
+		if err := c.transport.UpdateMeetingInviteCard(ctx, invite.CardMessageID, invite); err != nil {
+			c.report("update meeting invite card after console rejection", err)
+		}
+		return invite, nil
+	}
+	return c.processJoin(ctx, invite)
+}
+
+func (c *meetingInviteController) notifyChanged() {
+	if observer, ok := c.transport.(meetingInviteChangeObserver); ok {
+		observer.MeetingInviteChanged()
+	}
+}
+
 func (c *meetingInviteController) beginDecision(inviteID, nonce, operatorOpenID, messageID, chatID, decision string) (meetingInvite, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -296,7 +396,31 @@ func (c *meetingInviteController) beginDecision(inviteID, nonce, operatorOpenID,
 	if invite.State != meetingInvitePending {
 		return *invite, errMeetingInviteAlreadyDecided
 	}
+	return transitionMeetingInviteLocked(invite, decision, chatID)
+}
 
+func (c *meetingInviteController) beginConsoleDecision(inviteID, nonce, decision string) (meetingInvite, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	invite := c.invites[inviteID]
+	if invite == nil {
+		return meetingInvite{}, errMeetingInviteNotFound
+	}
+	if !c.now().Before(invite.ExpiresAt) {
+		invite.State = meetingInviteExpired
+		return *invite, errMeetingInviteExpired
+	}
+	if !constantTimeStringEqual(nonce, invite.Nonce) {
+		return *invite, errMeetingInviteUnauthorized
+	}
+	if invite.State != meetingInvitePending {
+		return *invite, errMeetingInviteAlreadyDecided
+	}
+	return transitionMeetingInviteLocked(invite, decision, "")
+}
+
+func transitionMeetingInviteLocked(invite *meetingInvite, decision, chatID string) (meetingInvite, error) {
 	switch decision {
 	case meetingInviteDecisionJoin:
 		invite.State = meetingInviteJoining
@@ -312,7 +436,7 @@ func (c *meetingInviteController) beginDecision(inviteID, nonce, operatorOpenID,
 	return *invite, nil
 }
 
-func (c *meetingInviteController) finishJoin(inviteID, meetingID string, joinErr error) (meetingInvite, error) {
+func (c *meetingInviteController) finishJoin(inviteID string, outcome meetingJoinOutcome, joinErr error) (meetingInvite, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -328,13 +452,15 @@ func (c *meetingInviteController) finishJoin(inviteID, meetingID string, joinErr
 		invite.LastError = safeMeetingInviteError(joinErr)
 		return *invite, nil
 	}
-	if strings.TrimSpace(meetingID) == "" {
+	if strings.TrimSpace(outcome.MeetingID) == "" {
 		invite.State = meetingInvitePending
 		invite.LastError = "飞书未返回会议 ID，请重试"
 		return *invite, nil
 	}
 	invite.State = meetingInviteJoined
-	invite.JoinedMeetingID = strings.TrimSpace(meetingID)
+	invite.JoinedMeetingID = strings.TrimSpace(outcome.MeetingID)
+	invite.GreetingSent = outcome.GreetingSent
+	invite.GreetingWarning = strings.TrimSpace(outcome.GreetingWarning)
 	invite.LastError = ""
 	return *invite, nil
 }
@@ -386,16 +512,22 @@ func parseMeetingInvitation(payload []byte, now time.Time, nonceFactory func() (
 	if inviterName == "" {
 		inviterName = inviterOpenID
 	}
+	callID := strings.TrimSpace(event.Event.CallID)
+	if callID == "" {
+		callID = strings.TrimSpace(event.Event.Meeting.CallID)
+	}
 	return meetingInvite{
 		ID:            inviteID,
 		Nonce:         nonce,
 		MeetingID:     strings.TrimSpace(event.Event.Meeting.ID),
 		MeetingNo:     meetingNo,
+		CallID:        callID,
 		Topic:         topic,
 		InviterOpenID: inviterOpenID,
 		InviterName:   inviterName,
 		InviteTime:    strings.TrimSpace(event.Event.InviteTime),
 		State:         meetingInvitePending,
+		CreatedAt:     now,
 		ExpiresAt:     now.Add(meetingInviteTTL),
 	}, nil
 }
@@ -404,7 +536,10 @@ func (a meetingInviteActor) approvalOpenID() string {
 	if openID := strings.TrimSpace(a.OpenID); strings.HasPrefix(openID, "ou_") {
 		return openID
 	}
-	if id := strings.TrimSpace(a.ID); strings.HasPrefix(id, "ou_") {
+	if openID := strings.TrimSpace(a.ID.OpenID); strings.HasPrefix(openID, "ou_") {
+		return openID
+	}
+	if id := strings.TrimSpace(a.ID.legacy); strings.HasPrefix(id, "ou_") {
 		return id
 	}
 	return ""
@@ -485,14 +620,13 @@ func (c *larkClient) SendMeetingInviteCard(ctx context.Context, recipientOpenID 
 }
 
 func (c *larkClient) UpdateMeetingInviteCard(ctx context.Context, messageID string, invite meetingInvite) error {
-	req := larkim.NewUpdateMessageReqBuilder().
+	req := larkim.NewPatchMessageReqBuilder().
 		MessageId(messageID).
-		Body(larkim.NewUpdateMessageReqBodyBuilder().
-			MsgType(larkim.MsgTypeInteractive).
+		Body(larkim.NewPatchMessageReqBodyBuilder().
 			Content(buildMeetingInviteCard(invite)).
 			Build()).
 		Build()
-	resp, err := c.api.Im.Message.Update(ctx, req)
+	resp, err := c.api.Im.Message.Patch(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -502,20 +636,23 @@ func (c *larkClient) UpdateMeetingInviteCard(ctx context.Context, messageID stri
 	return nil
 }
 
-func (c *larkClient) JoinMeeting(ctx context.Context, meetingNo string) (string, error) {
+func (c *larkClient) JoinMeeting(ctx context.Context, request meetingJoinRequest) (meetingJoinOutcome, error) {
 	body := map[string]any{
-		"join_identify": map[string]string{"meeting_no": meetingNo},
+		"join_identify": map[string]string{"meeting_no": strings.TrimSpace(request.MeetingNo)},
 		"join_type":     1,
+	}
+	if callID := strings.TrimSpace(request.CallID); callID != "" {
+		body["call_id"] = callID
 	}
 	resp, err := c.api.Post(ctx, meetingInviteJoinAPIPath, body, larkcore.AccessTokenTypeTenant)
 	if err != nil {
-		return "", err
+		return meetingJoinOutcome{}, err
 	}
 	if resp == nil {
-		return "", errors.New("join meeting returned an empty response")
+		return meetingJoinOutcome{}, errors.New("join meeting returned an empty response")
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("join meeting returned HTTP %d", resp.StatusCode)
+		return meetingJoinOutcome{}, fmt.Errorf("join meeting returned HTTP %d", resp.StatusCode)
 	}
 	var result struct {
 		Code int    `json:"code"`
@@ -527,16 +664,177 @@ func (c *larkClient) JoinMeeting(ctx context.Context, meetingNo string) (string,
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(resp.RawBody, &result); err != nil {
-		return "", fmt.Errorf("decode join meeting response: %w", err)
+		return meetingJoinOutcome{}, fmt.Errorf("decode join meeting response: %w", err)
 	}
 	if result.Code != 0 {
-		return "", fmt.Errorf("join meeting failed: %s (code %d)", strings.TrimSpace(result.Msg), result.Code)
+		return meetingJoinOutcome{}, fmt.Errorf("join meeting failed: %s (code %d)", strings.TrimSpace(result.Msg), result.Code)
 	}
 	meetingID := strings.TrimSpace(result.Data.Meeting.ID)
 	if meetingID == "" {
-		return "", errors.New("join meeting response is missing meeting.id")
+		return meetingJoinOutcome{}, errors.New("join meeting response is missing meeting.id")
 	}
-	return meetingID, nil
+	outcome := meetingJoinOutcome{MeetingID: meetingID}
+	if c.meetingActivity != nil {
+		c.meetingActivity.RegisterJoin(meetingID, strings.TrimSpace(request.MeetingNo), "", strings.TrimSpace(request.CallID))
+		go c.meetingActivity.Backfill(context.Background(), meetingID, true)
+	}
+	if greeting := c.renderMeetingGreeting(); greeting != "" {
+		if err := c.SendMeetingText(ctx, meetingID, greeting); err != nil {
+			outcome.GreetingWarning = safeMeetingInviteError(err)
+		} else {
+			outcome.GreetingSent = true
+		}
+	}
+	return outcome, nil
+}
+
+func (c *larkClient) SendMeetingText(ctx context.Context, meetingID, text string) error {
+	return c.SendMeetingMessage(ctx, meetingID, text, "")
+}
+
+func (c *larkClient) SendMeetingMessage(ctx context.Context, meetingID, text, uuid string) error {
+	body := map[string]any{
+		"meeting_id": strings.TrimSpace(meetingID),
+		"msg_type":   "text",
+		"content":    strings.TrimSpace(text),
+	}
+	if uuid = strings.TrimSpace(uuid); uuid != "" {
+		body["uuid"] = uuid
+	}
+	resp, err := c.api.Post(ctx, meetingInviteMessageAPIPath, body, larkcore.AccessTokenTypeTenant)
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return errors.New("send meeting greeting returned an empty response")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return meetingAPIResponseError("send meeting greeting", resp)
+	}
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(resp.RawBody, &result); err != nil {
+		return fmt.Errorf("decode meeting greeting response: %w", err)
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("send meeting greeting failed: %s (code %d)", strings.TrimSpace(result.Msg), result.Code)
+	}
+	if c.meetingActivity != nil {
+		c.meetingActivity.RecordBotMessage(strings.TrimSpace(meetingID), strings.TrimSpace(text), strings.TrimSpace(uuid))
+	}
+	return nil
+}
+
+func (c *larkClient) renderMeetingGreeting() string {
+	template := strings.TrimSpace(c.meetingGreeting)
+	if template == "" {
+		return ""
+	}
+	botName := strings.TrimSpace(c.botName)
+	if botName == "" {
+		botName = strings.TrimSpace(c.agentName)
+	}
+	if botName == "" {
+		botName = strings.TrimSpace(c.channelName)
+	}
+	if botName == "" {
+		botName = "AgentMux"
+	}
+	agentName := strings.TrimSpace(c.agentName)
+	if agentName == "" {
+		agentName = strings.TrimSpace(c.channelName)
+	}
+	if agentName == "" {
+		agentName = botName
+	}
+	replacer := strings.NewReplacer(
+		"{{bot_name}}", botName,
+		"{{agent_name}}", agentName,
+		"{{channel_name}}", strings.TrimSpace(c.channelName),
+	)
+	return strings.TrimSpace(replacer.Replace(template))
+}
+
+func meetingAPIResponseError(action string, resp *larkcore.ApiResp) error {
+	if resp == nil {
+		return fmt.Errorf("%s returned an empty response", action)
+	}
+	var result struct {
+		Code  int    `json:"code"`
+		Msg   string `json:"msg"`
+		Error struct {
+			LogID string `json:"log_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(resp.RawBody, &result); err == nil && (result.Code != 0 || strings.TrimSpace(result.Msg) != "") {
+		message := strings.TrimSpace(result.Msg)
+		if result.Code == 99991672 {
+			message = "missing required app scope " + meetingMessageWriteScope
+		}
+		if message == "" {
+			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		detail := fmt.Sprintf("%s failed: %s", action, message)
+		if result.Code != 0 {
+			detail += fmt.Sprintf(" (code %d)", result.Code)
+		}
+		if logID := strings.TrimSpace(result.Error.LogID); logID != "" {
+			detail += ", log_id " + logID
+		}
+		return errors.New(detail)
+	}
+	return fmt.Errorf("%s returned HTTP %d", action, resp.StatusCode)
+}
+
+func (c *larkClient) MeetingInvitations() []core.MeetingInvitation {
+	if c.meetingInvites == nil {
+		return []core.MeetingInvitation{}
+	}
+	invites := c.meetingInvites.PendingInvitations()
+	out := make([]core.MeetingInvitation, 0, len(invites))
+	for _, invite := range invites {
+		out = append(out, meetingInvitationView(invite))
+	}
+	return out
+}
+
+func (c *larkClient) RespondMeetingInvitation(
+	ctx context.Context,
+	invitationID, nonce, decision string,
+) (core.MeetingInvitation, error) {
+	if c.meetingInvites == nil {
+		return core.MeetingInvitation{}, errors.New("meeting invitation controller is unavailable")
+	}
+	invite, err := c.meetingInvites.RespondFromConsole(ctx, invitationID, nonce, decision)
+	return meetingInvitationView(invite), err
+}
+
+func (c *larkClient) JoinMeetingDirect(ctx context.Context, meetingNumber string) (core.MeetingJoinResult, error) {
+	meetingNumber = strings.TrimSpace(meetingNumber)
+	if !isNineDigitMeetingNumber(meetingNumber) {
+		return core.MeetingJoinResult{}, errors.New("meeting number must be exactly 9 digits")
+	}
+	outcome, err := c.JoinMeeting(ctx, meetingJoinRequest{MeetingNo: meetingNumber})
+	if err != nil {
+		return core.MeetingJoinResult{}, err
+	}
+	c.MeetingInviteJoined(outcome.MeetingID, "", "")
+	return core.MeetingJoinResult{
+		MeetingID: outcome.MeetingID, MeetingNumber: meetingNumber,
+		GreetingSent: outcome.GreetingSent, GreetingWarning: outcome.GreetingWarning,
+	}, nil
+}
+
+func meetingInvitationView(invite meetingInvite) core.MeetingInvitation {
+	return core.MeetingInvitation{
+		ID: invite.ID, Nonce: invite.Nonce,
+		MeetingID: invite.JoinedMeetingID, MeetingNumber: invite.MeetingNo,
+		Topic: invite.Topic, InviterName: invite.InviterName, State: string(invite.State),
+		LastError: invite.LastError, GreetingSent: invite.GreetingSent, GreetingWarning: invite.GreetingWarning,
+		CreatedAt: invite.CreatedAt, ExpiresAt: invite.ExpiresAt,
+	}
 }
 
 func buildMeetingInviteCard(invite meetingInvite) string {
