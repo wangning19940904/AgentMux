@@ -305,7 +305,7 @@ func TestTakeoverCodexRoundtrip(t *testing.T) {
 	if block["experimental_bearer_token"] != ProxyManagedToken {
 		t.Fatalf("bearer = %v", block["experimental_bearer_token"])
 	}
-	if block["wire_api"] != "chat" {
+	if block["wire_api"] != "responses" {
 		t.Fatalf("wire_api = %v", block["wire_api"])
 	}
 	if doc["approval_policy"] != "never" {

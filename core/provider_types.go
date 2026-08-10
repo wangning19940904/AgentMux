@@ -37,7 +37,7 @@ type Provider struct {
 // provider row to know every downstream config shape.
 type ProviderMeta struct {
 	APIFormat       string   `json:"api_format,omitempty"`     // anthropic, openai_responses, openai_chat
-	CodexWireAPI    string   `json:"codex_wire_api,omitempty"` // responses, chat
+	CodexWireAPI    string   `json:"codex_wire_api,omitempty"` // responses (Codex dropped "chat")
 	SupportedModels []string `json:"supported_models,omitempty"`
 	// Explicit runtime controls for custom providers. They are exposed only
 	// when the selected adapter can carry the corresponding protocol field.

@@ -111,9 +111,9 @@ func claudePrimaryAPIKeyConfigured(home string, p *core.Provider) bool {
 }
 
 // writeCodexTakeoverConfig rewrites ~/.codex/config.toml so the agentmux
-// provider block targets the proxy with a placeholder bearer token. wire_api
-// mirrors the active provider so the client calls the endpoint the proxy can
-// pass through. auth.json is untouched.
+// provider block targets the proxy with a placeholder bearer token. Codex
+// always talks the responses wire API; the proxy translates it to whatever
+// the upstream speaks. auth.json is untouched.
 func writeCodexTakeoverConfig(home string, p *core.Provider, proxyBaseURL string) error {
 	dir := codexConfigDir(home, p)
 	path := filepath.Join(dir, "config.toml")
@@ -126,7 +126,7 @@ func writeCodexTakeoverConfig(home string, p *core.Provider, proxyBaseURL string
 	providers[codexModelProviderID] = map[string]any{
 		"name":                      "AgentMux Local Routing",
 		"base_url":                  proxyBaseURL + "/v1",
-		"wire_api":                  codexWireAPI(p),
+		"wire_api":                  codexWireAPI,
 		"experimental_bearer_token": ProxyManagedToken,
 	}
 	if err := syncCodexModelCatalog(dir, doc, codexCatalogModels(p)); err != nil {

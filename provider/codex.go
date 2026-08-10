@@ -14,6 +14,12 @@ import (
 // accumulate stale per-provider blocks.
 const codexModelProviderID = "agentmux"
 
+// codexWireAPI is the only wire protocol Codex still accepts. Codex removed
+// wire_api = "chat" in February 2026 (openai/codex#7782) and now rejects the
+// whole config.toml when it sees it, so chat-only upstreams must be reached
+// through the local proxy, which serves /v1/responses and translates.
+const codexWireAPI = "responses"
+
 // codexModelCatalogFilename mirrors cc-switch's cc-switch-model-catalog.json:
 // a catalog file the Codex desktop app reads so third-party models appear in
 // its model picker.
@@ -68,7 +74,7 @@ func writeCodexConfig(home string, p, prev *core.Provider) error {
 	block := map[string]any{
 		"name":     p.Name,
 		"base_url": p.BaseURL,
-		"wire_api": codexWireAPI(p),
+		"wire_api": codexWireAPI,
 	}
 	if key := providerAPIKey(p); key != "" {
 		block["experimental_bearer_token"] = key
@@ -133,23 +139,6 @@ func legacyCodexProviderID(p *core.Provider) string {
 		}
 		return '_'
 	}, id)
-}
-
-func codexWireAPI(p *core.Provider) string {
-	if p.Meta.CodexWireAPI != "" {
-		return p.Meta.CodexWireAPI
-	}
-	switch p.Meta.APIFormat {
-	case "openai_responses":
-		return "responses"
-	case "openai_chat":
-		return "chat"
-	default:
-		if strings.Contains(strings.ToLower(p.ID), "openai") {
-			return "responses"
-		}
-		return "chat"
-	}
 }
 
 // codexCatalogModels resolves the desktop-visible model list: the provider's

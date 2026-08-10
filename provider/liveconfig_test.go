@@ -194,7 +194,7 @@ func TestWriteCodexConfigUsesBearerTokenAndPreservesAuth(t *testing.T) {
 		t.Fatalf("codex route = %#v", doc)
 	}
 	block := doc["model_providers"].(map[string]any)[codexModelProviderID].(map[string]any)
-	if block["wire_api"] != "chat" || block["base_url"] != p.BaseURL {
+	if block["wire_api"] != "responses" || block["base_url"] != p.BaseURL {
 		t.Fatalf("provider block = %#v", block)
 	}
 	if block["experimental_bearer_token"] != "sk-or" {
