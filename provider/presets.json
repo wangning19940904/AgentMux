@@ -74,7 +74,7 @@
     "api_key_env": "OPENROUTER_API_KEY",
     "tools": ["codex", "codex-app", "claudecode"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "deepseek",
@@ -85,7 +85,7 @@
     "tools": ["codex", "codex-app"],
     "model": "deepseek-chat",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "deepseek-claude",
@@ -110,7 +110,7 @@
     "tools": ["codex", "codex-app"],
     "model": "kimi-k2.6",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "moonshot-kimi-claude",
@@ -134,7 +134,7 @@
     "tools": ["codex", "codex-app"],
     "model": "glm-4.6",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "zhipu-glm-claude",
@@ -168,7 +168,7 @@
     "tools": ["codex", "codex-app"],
     "model": "Pro/moonshotai/Kimi-K2.5",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "groq",
@@ -178,7 +178,7 @@
     "api_key_env": "GROQ_API_KEY",
     "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "together",
@@ -188,7 +188,7 @@
     "api_key_env": "TOGETHER_API_KEY",
     "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "fireworks",
@@ -198,7 +198,7 @@
     "api_key_env": "FIREWORKS_API_KEY",
     "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "nvidia-nim",
@@ -208,7 +208,7 @@
     "api_key_env": "NVIDIA_API_KEY",
     "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "mistral",
@@ -218,7 +218,7 @@
     "api_key_env": "MISTRAL_API_KEY",
     "tools": ["codex", "codex-app"],
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "xai-grok",
@@ -229,7 +229,7 @@
     "tools": ["codex", "codex-app"],
     "model": "grok-4",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   },
   {
     "id": "qwen-dashscope",
@@ -240,6 +240,6 @@
     "tools": ["codex", "codex-app"],
     "model": "qwen-max",
     "api_format": "openai_chat",
-    "codex_wire_api": "chat"
+    "codex_wire_api": "responses"
   }
 ]

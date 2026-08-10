@@ -183,15 +183,13 @@ func recommendAPIFormat(formats []providerProbeCheck, preferred string) string {
 	return ""
 }
 
+// recommendCodexWireAPI reports the wire_api Codex should be configured with.
+// Codex dropped "chat" (openai/codex#7782), so a chat-only upstream still gets
+// "responses" and reaches the provider through the local proxy's translation.
 func recommendCodexWireAPI(protocols []providerProbeCheck) string {
 	for _, check := range protocols {
-		if check.Name == "responses" && check.OK {
+		if check.OK && (check.Name == "responses" || check.Name == "chat_completions") {
 			return "responses"
-		}
-	}
-	for _, check := range protocols {
-		if check.Name == "chat_completions" && check.OK {
-			return "chat"
 		}
 	}
 	return ""
