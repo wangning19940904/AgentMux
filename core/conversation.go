@@ -15,6 +15,7 @@ import (
 // Scope namespaces a chat to the runtime that owns it:
 //   - "channel:<channelID>" for console-managed channels
 //   - "project:<name>"      for config.toml projects
+//   - "api-agent:<agentID>" for direct API invocations of managed Agents
 //
 // Group chats are shared per chat (all members share one Conversation, keyed
 // by the platform chat id); direct messages are naturally per-user because
@@ -28,7 +29,7 @@ type Conversation struct {
 	ChatID          string `json:"chat_id"`
 	ChatType        string `json:"chat_type,omitempty"`
 	AgentID         string `json:"agent_id,omitempty"`
-	// WorkDir is this conversation's isolated working directory (sandbox).
+	// WorkDir is the configured directory in which this conversation's agent runs.
 	WorkDir string `json:"work_dir,omitempty"`
 	// NativeSessionID is the agent-native resume handle (e.g. Claude Code's
 	// session id) used to restore context across turns and restarts.

@@ -73,12 +73,12 @@ type WorkspaceInitOptions struct {
 	RuntimeDefaults RuntimeSettings `json:"runtime_defaults,omitempty"`
 }
 
-// ConversationBaseDir returns the root under which per-conversation working
-// directories live for the given agent workspace. When the agent configures a
-// WorkDir it lives beside it under .agentmux/conversations; otherwise it
-// falls back to ~/.agentmux/conversations.
+// ConversationBaseDir returns the configured agent working directory.
+//
+// Deprecated: conversations now run directly in WorkDir and no longer create
+// nested per-conversation working directories.
 func (o WorkspaceInitOptions) ConversationBaseDir() string {
-	return conversationBaseDir(o.WorkDir)
+	return o.WorkDir
 }
 
 // WorkspaceInitResult reports what the initializer created or warned about.

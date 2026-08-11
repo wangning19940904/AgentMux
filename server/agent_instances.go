@@ -256,7 +256,7 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 	}
 	out := make([]core.AgentInstance, 0, len(s.cfg.Projects))
 	for projectIndex, p := range s.cfg.Projects {
-		id := "config:" + slugID(p.Name) + "-" + strconv.Itoa(projectIndex+1)
+		id := configAgentInstanceID(p.Name, projectIndex)
 		channels := make([]core.AgentChannelBinding, 0, len(p.Platforms))
 		for i, raw := range p.Platforms {
 			typ, _ := raw["type"].(string)
@@ -287,6 +287,10 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 		})
 	}
 	return out
+}
+
+func configAgentInstanceID(projectName string, projectIndex int) string {
+	return "config:" + slugID(projectName) + "-" + strconv.Itoa(projectIndex+1)
 }
 
 func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *core.AgentInstance) error {

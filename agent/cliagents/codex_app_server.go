@@ -647,6 +647,10 @@ func containsCodexOption(options []string, value string) bool {
 }
 
 func (s *codexSession) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
+	return s.SendInput(ctx, core.AgentTurnInput{Text: text})
+}
+
+func (s *codexSession) SendInput(ctx context.Context, input core.AgentTurnInput) (<-chan *core.Event, error) {
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
@@ -654,11 +658,11 @@ func (s *codexSession) Send(ctx context.Context, text string) (<-chan *core.Even
 		return nil, fmt.Errorf("codex session is closed")
 	}
 	out := make(chan *core.Event, 128)
-	go s.runTurn(ctx, text, out)
+	go s.runTurn(ctx, input, out)
 	return out, nil
 }
 
-func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *core.Event) {
+func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, out chan<- *core.Event) {
 	defer close(out)
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
@@ -674,7 +678,7 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 		s.activeTurnID = ""
 		s.mu.Unlock()
 	}()
-	params := s.turnStartParams(threadID, text)
+	params := s.turnStartParamsInput(threadID, input)
 	result, err := s.call(ctx, "turn/start", params)
 	if err != nil {
 		out <- &core.Event{Type: core.EventError, Err: s.withStderr(err)}
@@ -698,7 +702,7 @@ func (s *codexSession) runTurn(ctx context.Context, text string, out chan<- *cor
 	if event := mapper.modelRequestEvent(); event != nil {
 		out <- event
 	}
-	s.nameFreshThread(ctx, text)
+	s.nameFreshThread(ctx, input.Text)
 	for {
 		var message map[string]any
 		select {
@@ -775,12 +779,30 @@ func (s *codexSession) nameFreshThread(ctx context.Context, text string) {
 }
 
 func (s *codexSession) turnStartParams(threadID, text string) map[string]any {
+	return s.turnStartParamsInput(threadID, core.AgentTurnInput{Text: text})
+}
+
+func (s *codexSession) turnStartParamsInput(threadID string, input core.AgentTurnInput) map[string]any {
+	turnItems := []map[string]string{{"type": "text", "text": input.Text}}
+	for _, attachment := range input.Attachments {
+		if attachment.Kind != "image" {
+			continue
+		}
+		if attachment.Path != "" {
+			turnItems = append(turnItems, map[string]string{"type": "localImage", "path": attachment.Path})
+		} else if attachment.URL != "" {
+			turnItems = append(turnItems, map[string]string{"type": "image", "url": attachment.URL})
+		}
+	}
 	params := map[string]any{
 		"threadId": threadID,
-		"input":    []map[string]string{{"type": "text", "text": text}},
+		"input":    turnItems,
 		// This asks Codex for its supported reasoning summary, never its hidden
 		// chain-of-thought. The summary is safe to render as progress to users.
 		"summary": "auto",
+	}
+	if len(input.OutputSchema) > 0 {
+		params["outputSchema"] = input.OutputSchema
 	}
 	settings := s.CurrentRuntimeSettings()
 	if model := settings.Model; model != "" {

@@ -10,12 +10,13 @@ import (
 
 // projectRuntime holds the live platform/agent instances for one project.
 type projectRuntime struct {
-	owner     *Engine
-	name      string
-	agent     Agent
-	platforms []Platform
-	workDir   string
-	workspace WorkspaceInitOptions
+	owner             *Engine
+	name              string
+	conversationScope string
+	agent             Agent
+	platforms         []Platform
+	workDir           string
+	workspace         WorkspaceInitOptions
 
 	mu       sync.Mutex
 	sessions map[string]AgentSession // chatID -> session
@@ -41,7 +42,12 @@ func (e *Engine) handleProjectConversationCommand(ctx context.Context, pr *proje
 	return true
 }
 
-func (pr *projectRuntime) scope() string { return "project:" + pr.name }
+func (pr *projectRuntime) scope() string {
+	if pr.conversationScope != "" {
+		return pr.conversationScope
+	}
+	return "project:" + pr.name
+}
 
 // dropSession closes and removes the cached in-memory session for cacheKey.
 // With durable conversations cacheKey is the conversation id; without them it
@@ -134,25 +140,22 @@ func (pr *projectRuntime) session(ctx context.Context, chatID, chatType, convers
 }
 
 // prepareConversation resolves (or creates) the durable conversation for
-// (scope, chatID) and prepares its isolated working directory. When no
-// conversation store is attached it returns a nil conversation and the
+// (scope, chatID) and prepares the agent's configured working directory. Every
+// conversation for an agent runs directly in that directory while conversation
+// context remains separate through each persisted native session id.
+// When no conversation store is attached it returns a nil conversation and the
 // initialized fallback work dir, preserving the legacy chatID-keyed behavior.
 func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatType, conversationKey string, ws WorkspaceInitOptions, fallbackWorkDir string) (*Conversation, string, error) {
-	if e.conversations == nil {
-		workDir, err := e.initializeWorkspace(ctx, ws, fallbackWorkDir)
-		return nil, workDir, err
-	}
-
-	baseWorkDir := ws.WorkDir
-	if baseWorkDir == "" {
-		baseWorkDir = fallbackWorkDir
-	}
-	if conversationKey == "" {
-		conversationKey = "chat:" + chatID
-	}
-	cwd, err := conversationCwd(conversationBaseDir(baseWorkDir), ws.AgentID, scope, conversationKey)
+	workDir, err := e.initializeWorkspace(ctx, ws, fallbackWorkDir)
 	if err != nil {
 		return nil, "", err
+	}
+	if e.conversations == nil {
+		return nil, workDir, nil
+	}
+
+	if conversationKey == "" {
+		conversationKey = "chat:" + chatID
 	}
 	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
 		Scope:           scope,
@@ -160,26 +163,22 @@ func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatTyp
 		ChatID:          chatID,
 		ChatType:        chatType,
 		AgentID:         ws.AgentID,
-		WorkDir:         cwd,
+		WorkDir:         workDir,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve conversation: %w", err)
 	}
-	target := conv.WorkDir
-	if target == "" {
-		target = cwd
-	}
-	convOpts := ws
-	convOpts.WorkDir = target
-	workDir, err := e.initializeWorkspace(ctx, convOpts, target)
-	if err != nil {
-		return nil, "", err
-	}
+
+	// Older AgentMux versions stored each conversation under
+	// <work_dir>/.agentmux/conversations/.../cwd. Migrate those records to the
+	// configured work directory. Clear the native resume handle at the same time
+	// because runtimes such as Codex can retain the old cwd in a resumed thread.
 	if conv.WorkDir != workDir {
-		if uerr := e.conversations.UpdateConversationSession(ctx, conv.ID, conv.NativeSessionID, workDir); uerr != nil {
+		if uerr := e.conversations.UpdateConversationSession(ctx, conv.ID, "", workDir); uerr != nil {
 			e.log.Warn("persist conversation workdir", "conversation", conv.ID, "err", uerr)
 		}
 		conv.WorkDir = workDir
+		conv.NativeSessionID = ""
 	}
 	return conv, workDir, nil
 }

@@ -33,6 +33,9 @@ type Server struct {
 	proxySvc        *providerpkg.Service
 	usageFn         UsageReporter
 	sender          core.Sender
+	invoker         core.Invoker
+	openAIResponses *openAIResponseRegistry
+	openAIFiles     *openAIFileRegistry
 	connect         *core.ConnectService
 	presets         any
 	memory          core.MemoryStore
@@ -60,16 +63,18 @@ type UsageReporter func(ctx context.Context, period string, since, until time.Ti
 // New builds a server.
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
 	s := &Server{
-		cfg:       cfg,
-		version:   "0.1.0",
-		log:       log,
-		st:        st,
-		provider:  pm,
-		usageFn:   usageFn,
-		sessions:  sessionstore.New(),
-		keepAwake: newKeepAwakeManager(),
-		ttsModels: ttspkg.NewManager("", log),
-		mux:       http.NewServeMux(),
+		cfg:             cfg,
+		version:         "0.1.0",
+		log:             log,
+		st:              st,
+		provider:        pm,
+		usageFn:         usageFn,
+		sessions:        sessionstore.New(),
+		keepAwake:       newKeepAwakeManager(),
+		ttsModels:       ttspkg.NewManager("", log),
+		openAIResponses: newOpenAIResponseRegistry(),
+		openAIFiles:     newOpenAIFileRegistry(),
+		mux:             http.NewServeMux(),
 	}
 	s.providerMonitor = newProviderMonitor(log, st, pm)
 	remoteManager, err := remotepkg.NewManager(
@@ -100,6 +105,11 @@ func (s *Server) SetVersion(value string) {
 
 // SetSender attaches the engine as the bridge message sender.
 func (s *Server) SetSender(sender core.Sender) { s.sender = sender }
+
+// SetInvoker attaches the direct Agent execution service. It is separate from
+// Sender because an invocation runs an Agent and returns its result; it does
+// not publish a message to a channel.
+func (s *Server) SetInvoker(invoker core.Invoker) { s.invoker = invoker }
 
 // SetPresets attaches the provider presets list exposed by the API.
 func (s *Server) SetPresets(presets any) { s.presets = presets }
@@ -191,6 +201,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/menubar/settings", s.handleMenubarSettingsGet)
 	s.mux.HandleFunc("PUT /api/v1/menubar/settings", s.handleMenubarSettingsPut)
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
+	s.mux.HandleFunc("POST /api/v1/invocations", s.handleInvocation)
+	s.mux.HandleFunc("POST /api/v1/invocations/stream", s.handleInvocationStream)
+	s.mux.HandleFunc("POST /v1/responses", s.handleOpenAIResponse)
+	s.mux.HandleFunc("GET /v1/responses/{response_id}", s.handleOpenAIResponseGet)
+	s.mux.HandleFunc("DELETE /v1/responses/{response_id}", s.handleOpenAIResponseDelete)
+	s.mux.HandleFunc("POST /v1/responses/{response_id}/cancel", s.handleOpenAIResponseCancel)
+	s.mux.HandleFunc("GET /v1/responses/{response_id}/input_items", s.handleOpenAIResponseInputItems)
+	s.mux.HandleFunc("POST /v1/files", s.handleOpenAIFileCreate)
+	s.mux.HandleFunc("GET /v1/files", s.handleOpenAIFileList)
+	s.mux.HandleFunc("GET /v1/files/{file_id}", s.handleOpenAIFileGet)
+	s.mux.HandleFunc("DELETE /v1/files/{file_id}", s.handleOpenAIFileDelete)
+	s.mux.HandleFunc("GET /v1/files/{file_id}/content", s.handleOpenAIFileContent)
 	s.mux.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
 	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
 	s.mux.HandleFunc("POST /api/v1/channels/validate", s.handleChannelValidate)
@@ -250,7 +272,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return nil
 }
 
-// withAuth enforces the bridge token on /api/ routes when the bridge is on.
+// withAuth enforces the bridge token on management and OpenAI-compatible API
+// routes when the bridge is on.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isObservabilityPath(r.URL.Path) {
@@ -265,24 +288,32 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
+		if isBridgeAPIPath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Project, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 		}
-		if s.cfg.Bridge.Enabled && len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
+		if s.cfg.Bridge.Enabled && isBridgeAPIPath(r.URL.Path) {
 			tok := r.Header.Get("Authorization")
 			if tok != "Bearer "+s.cfg.Bridge.Token {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				if strings.HasPrefix(r.URL.Path, "/v1/") {
+					writeOpenAIError(w, http.StatusUnauthorized, "invalid or missing API key", "authentication_error", nil, "invalid_api_key")
+				} else {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+				}
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isBridgeAPIPath(path string) bool {
+	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/")
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

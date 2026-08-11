@@ -10,6 +10,7 @@ addr = "127.0.0.1:8765"
 
 [bridge]
 enabled = false
+# Protects /api/v1 management, send, and Agent invocation endpoints.
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
 
 # ---- SSH remote control ----

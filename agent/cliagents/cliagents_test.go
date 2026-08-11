@@ -317,6 +317,30 @@ func TestCodexTurnStartCarriesModelEffortAndServiceTier(t *testing.T) {
 	}
 }
 
+func TestCodexTurnStartCarriesRichInputAndOutputSchema(t *testing.T) {
+	s := &codexSession{}
+	params := s.turnStartParamsInput("thread-1", core.AgentTurnInput{
+		Text: "inspect",
+		Attachments: []core.AgentAttachment{
+			{Kind: "image", Path: "/tmp/local.png"},
+			{Kind: "image", URL: "https://example.com/remote.png"},
+			{Kind: "file", Path: "/tmp/report.txt"},
+		},
+		OutputSchema: map[string]any{"type": "object"},
+	})
+	items, ok := params["input"].([]map[string]string)
+	if !ok || len(items) != 3 {
+		t.Fatalf("input items = %#v", params["input"])
+	}
+	if items[0]["type"] != "text" || items[1]["type"] != "localImage" || items[1]["path"] != "/tmp/local.png" || items[2]["type"] != "image" {
+		t.Fatalf("input items = %#v", items)
+	}
+	schema, ok := params["outputSchema"].(map[string]any)
+	if !ok || schema["type"] != "object" {
+		t.Fatalf("output schema = %#v", params["outputSchema"])
+	}
+}
+
 func TestCodexApprovalModesMapToTurnPolicy(t *testing.T) {
 	s := &codexSession{
 		defaultApprovalMode:    core.ApprovalModeManual,

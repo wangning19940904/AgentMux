@@ -79,6 +79,7 @@ func AttachRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, st
 	connectSvc := core.NewConnectService(log, eng, st)
 	connectSvc.SetCLINoteResolver(cliNotes)
 	srv.SetSender(eng)
+	srv.SetInvoker(connectSvc)
 	srv.SetConnect(connectSvc)
 	return eng, connectSvc, nil
 }

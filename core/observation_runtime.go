@@ -231,9 +231,28 @@ func (e *Engine) observeHookRun(run HookRun) {
 // observeSend is the common AgentSession.Send decorator used by project,
 // dynamic channel, cron, webhook and config-backed executions.
 func (e *Engine) observeSend(ctx context.Context, sess AgentSession, text string, data map[string]string) (<-chan *Event, error) {
+	return e.observeSendWith(ctx, sess, text, data, func(sendCtx context.Context) (<-chan *Event, error) {
+		return sess.Send(sendCtx, text)
+	})
+}
+
+func (e *Engine) observeSendInput(ctx context.Context, sess AgentSession, input AgentTurnInput, data map[string]string) (<-chan *Event, error) {
+	prompt := input.Text
+	rich, supportsRichInput := sess.(RichAgentSession)
+	prompt = promptWithAttachmentReferences(prompt, input.Attachments, !supportsRichInput)
+	input.Text = prompt
+	return e.observeSendWith(ctx, sess, prompt, data, func(sendCtx context.Context) (<-chan *Event, error) {
+		if supportsRichInput {
+			return rich.SendInput(sendCtx, input)
+		}
+		return sess.Send(sendCtx, input.Text)
+	})
+}
+
+func (e *Engine) observeSendWith(ctx context.Context, sess AgentSession, text string, data map[string]string, send func(context.Context) (<-chan *Event, error)) (<-chan *Event, error) {
 	bus, _ := e.observationBackends()
 	if bus == nil {
-		return sess.Send(ctx, text)
+		return send(ctx)
 	}
 	ensureObservationData(data)
 	if data["session_id"] == "" {
@@ -256,7 +275,7 @@ func (e *Engine) observeSend(ctx context.Context, sess AgentSession, text string
 		telemetry.AgentID = turn.data["agent_id"]
 		sendCtx = WithObservationChildTelemetry(sendCtx, telemetry)
 	}
-	events, err := sess.Send(sendCtx, text)
+	events, err := send(sendCtx)
 	if err != nil {
 		turn.firstErr = err
 		turn.finish(sess)
@@ -281,6 +300,34 @@ func (e *Engine) observeSend(ctx context.Context, sess AgentSession, text string
 		turn.finish(sess)
 	}()
 	return out, nil
+}
+
+func promptWithAttachmentReferences(prompt string, attachments []AgentAttachment, includeImages bool) string {
+	if len(attachments) == 0 {
+		return prompt
+	}
+	var refs []string
+	for _, attachment := range attachments {
+		if attachment.Kind == "image" && !includeImages {
+			continue
+		}
+		location := attachment.Path
+		if location == "" {
+			location = attachment.URL
+		}
+		if location == "" {
+			continue
+		}
+		label := attachment.Kind
+		if attachment.Name != "" {
+			label += " " + attachment.Name
+		}
+		refs = append(refs, "- "+label+": "+location)
+	}
+	if len(refs) == 0 {
+		return prompt
+	}
+	return prompt + "\n\nAttachments available to this turn:\n" + strings.Join(refs, "\n")
 }
 
 func (t *observedTurn) nextSequence() int64 {
