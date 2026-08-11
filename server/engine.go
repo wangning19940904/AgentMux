@@ -25,7 +25,7 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 		eng.SetWorkspaceInitializer(initializer[0])
 	}
 
-	for _, p := range cfg.Projects {
+	for projectIndex, p := range cfg.Projects {
 		ag, err := core.CreateAgent(p.Agent, map[string]any{
 			"work_dir": p.WorkDir, "system_prompt": p.SystemPrompt, "model": p.DefaultModel, "env": p.Env,
 		})
@@ -47,6 +47,7 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 			RuntimeID: p.Agent,
 			WorkDir:   p.WorkDir,
 		})
+		eng.AddProjectAgentAlias(p.Name, configAgentInstanceID(p.Name, projectIndex))
 	}
 	return eng, nil
 }

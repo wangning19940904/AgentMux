@@ -446,6 +446,36 @@ type AgentSession interface {
 	Close(ctx context.Context) error
 }
 
+// AgentAttachment is one image or file supplied with an Agent turn. API
+// ingress may initially populate Data or URL; the invocation runtime
+// materializes Data into Path before calling a RichAgentSession.
+type AgentAttachment struct {
+	Kind     string `json:"kind"`
+	Name     string `json:"name,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
+	Data     []byte `json:"-"`
+	Path     string `json:"path,omitempty"`
+	URL      string `json:"url,omitempty"`
+}
+
+// AgentTurnInput extends the legacy text-only AgentSession input without
+// breaking third-party runtimes. OutputSchema is a JSON Schema applied to this
+// turn only when the runtime supports native structured output.
+type AgentTurnInput struct {
+	Text         string
+	Attachments  []AgentAttachment
+	OutputSchema map[string]any
+}
+
+// RichAgentSession is an optional capability for runtimes that can consume
+// images/files or a per-turn output schema natively. The Engine falls back to
+// a text prompt containing local attachment paths for ordinary AgentSession
+// implementations.
+type RichAgentSession interface {
+	AgentSession
+	SendInput(ctx context.Context, input AgentTurnInput) (<-chan *Event, error)
+}
+
 // InteractiveAgentSession is implemented by runtimes that support mutating an
 // active turn and resolving correlated native interactions.
 type InteractiveAgentSession interface {

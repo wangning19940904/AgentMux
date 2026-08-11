@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 )
 
@@ -28,6 +29,7 @@ type Engine struct {
 	childTelemetry          ObservationChildTelemetry
 	mu                      sync.RWMutex
 	projects                map[string]*projectRuntime
+	projectByAgentID        map[string]string
 	channels                map[string]*channelRuntime
 	inbound                 chan *Message
 	workspace               WorkspaceInitializer
@@ -40,6 +42,8 @@ type Engine struct {
 	nextMeetingEventID      uint64
 	remoteWorkMu            sync.Mutex
 	remoteWorkLocks         map[string]*sync.Mutex
+	invocationMu            sync.Mutex
+	activeInvocations       map[string]struct{}
 	msgLog                  *MessageLogger
 }
 
@@ -53,10 +57,12 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		hooks:                   hooks,
 		sinks:                   map[uint64]EventSink{},
 		projects:                map[string]*projectRuntime{},
+		projectByAgentID:        map[string]string{},
 		channels:                map[string]*channelRuntime{},
 		inbound:                 make(chan *Message, 256),
 		meetingEventSubscribers: map[uint64]chan MeetingEvent{},
 		remoteWorkLocks:         map[string]*sync.Mutex{},
+		activeInvocations:       map[string]struct{}{},
 	}
 }
 
@@ -188,6 +194,25 @@ func (e *Engine) AddProject(name, workDir string, agent Agent, platforms []Platf
 		workDir:   workDir,
 		workspace: opts,
 		sessions:  map[string]AgentSession{},
+	}
+	if opts.AgentID != "" {
+		e.projectByAgentID[opts.AgentID] = name
+	}
+}
+
+// AddProjectAgentAlias lets management APIs address a config.toml project by
+// the same Agent ID exposed from their catalog. The project's canonical
+// workspace AgentID remains unchanged for conversation compatibility.
+func (e *Engine) AddProjectAgentAlias(project, agentID string) {
+	project = strings.TrimSpace(project)
+	agentID = strings.TrimSpace(agentID)
+	if project == "" || agentID == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.projects[project] != nil {
+		e.projectByAgentID[agentID] = project
 	}
 }
 

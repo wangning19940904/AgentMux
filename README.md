@@ -102,7 +102,7 @@ make release
 要点:
 
 - `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
-- `[bridge]` 暴露 HTTP send API;**启用时必须设置 token**。
+- 开启 `[bridge]` 可用 Bearer Token 保护 HTTP send 与 Agent Invocation API；**启用时必须设置 token**。
 - `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
 - `[observability]` 默认启用；完整内容先脱敏、分块压缩并以 AES-256-GCM 加密，默认保留 30 天，详细元数据保留 180 天。每个 `[[observability.exporters]]` 独立配置 OTLP 队列，`include_content` 默认关闭。
@@ -126,9 +126,19 @@ amux send --text "..." --project <name> [--token <bridge-token>]
 
 ## HTTP API(节选)
 
-Console 与各客户端共用一套 `/api/v1`:
+Console 与各客户端共用 `/api/v1`，其他服务也可以使用 OpenAI Responses 兼容入口：
 
 ```
+POST /v1/responses                    # OpenAI Responses：同步或流式运行 Agent
+GET  /v1/responses/{id}               # 查询/轮询已存储或 background Response
+POST /v1/responses/{id}/cancel        # 取消 background Response
+DELETE /v1/responses/{id}             # 删除已存储 Response
+POST /v1/files                        # OpenAI Files multipart 上传
+GET  /v1/files/{id}/content           # 下载上传文件
+POST /api/v1/invocations             # 直接运行 Agent，并同步返回最终答案
+POST /api/v1/invocations/stream      # 直接运行 Agent，并以 SSE 返回实时事件
+GET  /api/v1/agent-instances         # 查询可用于 agent_id 的全部 Agent
+
 GET  /api/v1/modules                 # 各模块注册/激活状态
 GET  /api/v1/memory?scope=&q=&limit= # Memory 检索
 POST /api/v1/memory                  # 写入记忆 {scope,content,tags}
@@ -165,6 +175,225 @@ GET  /api/v1/observability/settings            # 保留期、密钥与 Exporter 
 GET  /api/v1/observability/integrations        # Plugin/OTel/Transcript/Proxy Doctor
 POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall|doctor}
 ```
+
+### OpenAI Responses 兼容 API
+
+其他服务可以把 AgentMux 直接配置成 OpenAI SDK 的 `base_url`，然后通过标准 `responses.create` 调用。`model` 默认作为 Agent ID；如果没有同名 Agent，服务端会再尝试把它作为 `config.toml` 的 project 名称：
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["BRIDGE_TOKEN"],
+    base_url="http://127.0.0.1:8765/v1",
+)
+
+response = client.responses.create(
+    model="agent-abc123",
+    input="检查当前项目并运行测试",
+)
+print(response.output_text)
+```
+
+流式响应使用 Responses API 的标准类型化 SSE 事件，不使用 Chat Completions 的 `[DONE]`：
+
+```python
+stream = client.responses.create(
+    model="agent-abc123",
+    input="检查当前项目并运行测试",
+    stream=True,
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="", flush=True)
+    elif event.type == "response.completed":
+        print()
+```
+
+继续同一段 Agent 上下文时，传入上次返回的 Responses ID：
+
+```python
+next_response = client.responses.create(
+    model="agent-abc123",
+    previous_response_id=response.id,
+    input="根据刚才的结果修复失败项",
+)
+```
+
+如果希望 `model` 保持业务自己的名称，可通过额外 Header 显式选择 AgentMux 目标；两个 Header 不能同时设置：
+
+```python
+# 指定 Agent ID
+client.responses.create(
+    model="my-service-agent",
+    input="...",
+    extra_headers={"X-AgentMux-Agent-ID": "agent-abc123"},
+)
+
+# 指定 config.toml project
+client.responses.create(
+    model="my-service-agent",
+    input="...",
+    extra_headers={"X-AgentMux-Project": "demo"},
+)
+```
+
+支持请求级 function tools，并返回标准 `function_call` output item；调用方执行函数后，再提交 `function_call_output`：
+
+```python
+response = client.responses.create(
+    model="agent-abc123",
+    input="巴黎天气怎么样？",
+    tools=[{
+        "type": "function",
+        "name": "get_weather",
+        "description": "查询城市天气",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }],
+    tool_choice="required",
+)
+
+call = response.output[0]
+response = client.responses.create(
+    model="agent-abc123",
+    previous_response_id=response.id,
+    input=[{
+        "type": "function_call_output",
+        "call_id": call.call_id,
+        "output": '{"temperature": 22, "unit": "celsius"}',
+    }],
+)
+```
+
+多模态输入支持 `input_image` 的 HTTP(S)/data URL，以及 `input_file` 的 `file_url`、`file_data` 和 AgentMux Files API 的 `file_id`。Codex app-server Agent 原生接收图片和逐次 output schema；其他 Agent 会收到安全临时文件的路径：
+
+```python
+uploaded = client.files.create(file=open("report.pdf", "rb"), purpose="user_data")
+response = client.responses.create(
+    model="agent-abc123",
+    input=[{
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "总结报告"},
+            {"type": "input_file", "file_id": uploaded.id},
+        ],
+    }],
+)
+```
+
+结构化输出支持 `json_object` 和 `json_schema`；完成前会解析并校验最终 JSON，不符合 schema 时返回 `output_validation_failed`：
+
+```python
+response = client.responses.create(
+    model="agent-abc123",
+    input="提取姓名和年龄",
+    text={"format": {
+        "type": "json_schema",
+        "name": "person",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name", "age"],
+            "additionalProperties": False,
+        },
+    }},
+)
+```
+
+长任务可用 background mode 创建后轮询、取消；`background=True, stream=True` 也会记录 `sequence_number`，断线后可用 `GET /v1/responses/{id}?stream=true&starting_after=N` 续传：
+
+```python
+import time
+
+response = client.responses.create(
+    model="agent-abc123",
+    input="执行完整代码审计",
+    background=True,
+)
+while response.status in {"queued", "in_progress"}:
+    time.sleep(1)
+    response = client.responses.retrieve(response.id)
+```
+
+兼容范围还包括：字符串/消息数组输入、`instructions`、同步 Response、标准类型化 SSE、`previous_response_id`/`conversation`、stored Response 的 retrieve/delete/input-items、Files create/list/retrieve/content/delete、usage 和 OpenAI 格式错误。请求体上限 32 MiB，单个内联或上传附件上限 25 MiB。
+
+请求中的 hosted tools（如 `web_search`、`file_search`、`code_interpreter`、`image_generation`、`mcp`）会按原结构接收、回显，并要求 Agent 使用自身已配置的等价工具。AgentMux 不会凭 OpenAI 的 vector store ID 或 hosted container ID 自动获得 OpenAI 云端资源；要实现同等语义，需要给目标 Agent 配置对应的 Web、文件检索、代码执行或 MCP 工具。`temperature`、`top_p`、`reasoning` 和 `max_output_tokens` 仍按协议接收和回显，实际模型参数由 AgentMux Agent 配置决定。
+
+当前 stored Response、background 事件日志和 Files 对象保存在 AgentMux 进程内存中，客户端断线不会中止 background 任务，但 AgentMux 进程重启后这些 API 对象不会保留；AgentMux 自身的 Agent conversation/session 仍按原机制持久化。
+
+`/v1/responses` 与 `/api/v1` 使用同一套 `[bridge]` Bearer Token。对外提供服务时务必开启 Token，并配合防火墙或反向代理限制来源。
+
+### Agent Invocation API
+
+其他本机服务不需要伪装成消息渠道，也不需要先配置 IM/Webhook Channel。直接调用独立的 Invocation API 即可复用 AgentMux 的 Agent 配置、工作目录、Provider 路由、系统提示词、会话持久化和 Observability：
+
+`/api/v1/send` 仍只负责向已有渠道发送出站消息，不会运行 Agent；需要 Agent 产出结果时使用 `/api/v1/invocations`。即使只监听 `127.0.0.1`，服务间调用也建议开启 `[bridge]` Bearer Token 鉴权。
+
+```bash
+# 任意 Agent（含 config.toml 项目）：agent_id 来自 GET /api/v1/agent-instances
+curl -sS http://127.0.0.1:8765/api/v1/invocations \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $BRIDGE_TOKEN" \
+  -d '{
+    "agent_id": "agent-abc123",
+    "input": "检查当前项目并运行测试"
+  }'
+
+# config.toml 中的 [[projects]]：使用 project 名称
+curl -sS http://127.0.0.1:8765/api/v1/invocations \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $BRIDGE_TOKEN" \
+  -d '{"project":"demo","input":"总结最近的改动"}'
+```
+
+成功响应：
+
+```json
+{
+  "id": "inv_...",
+  "agent_id": "agent-abc123",
+  "conversation_id": "conv_...",
+  "session_id": "...",
+  "answer": "...",
+  "duration_ms": 1234
+}
+```
+
+流式调用使用相同请求体，响应格式为 Server-Sent Events：
+
+```bash
+curl -N http://127.0.0.1:8765/api/v1/invocations/stream \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -H "Authorization: Bearer $BRIDGE_TOKEN" \
+  -d '{"agent_id":"agent-abc123","input":"检查当前项目并运行测试"}'
+```
+
+```text
+event: started
+data: {"type":"started","invocation_id":"inv_...","conversation_id":"conv_..."}
+
+event: output
+data: {"type":"output","text":"当前完整答案快照..."}
+
+event: completed
+data: {"type":"completed","final":true,"result":{"answer":"最终答案..."}}
+```
+
+事件类型包括 `started`、`thinking`、`tool_use`、`output`、`final`、`permission`、`model_request`、`model_response`、`compaction`、`completed` 和 `error`。`output`/`thinking` 的 `text` 是当前完整快照，客户端应替换已有显示内容，不要逐条追加；`completed.result` 与同步接口响应结构一致。服务端每 15 秒发送 SSE keepalive 注释，客户端应忽略以 `:` 开头的行。
+
+`agent_id` 与 `project` 必须且只能提供一个。首次调用可省略 `conversation_id`；要继续同一段上下文，把 `started` 事件或最终响应中的 `conversation_id` 原样传给后续请求。同步调用请让上游 HTTP 客户端设置足够长的超时；同一目标、同一 `conversation_id` 同时只能运行一个请求，冲突返回 `409`。请求体上限为 1 MiB。
+
+Invocation API 没有消息渠道可承载交互式审批；如果 Agent 在执行中请求人工审批，当前调用会安全地拒绝该请求。服务化 Agent 应按自身安全策略配置适合无人值守执行的 approval mode。
 
 ### 渠道命令
 
