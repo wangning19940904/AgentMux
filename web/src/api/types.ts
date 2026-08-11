@@ -71,7 +71,6 @@ export interface ProviderProbeResult {
   count: number;
   message: string;
   api_format?: string;
-  codex_wire_api?: string;
   formats?: ProviderProbeCheck[];
   protocols?: ProviderProbeCheck[];
 }

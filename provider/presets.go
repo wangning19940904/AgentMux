@@ -19,7 +19,6 @@ type presetEntry struct {
 	APIKeyEnv             string                    `json:"api_key_env"`
 	Model                 string                    `json:"model"`
 	APIFormat             string                    `json:"api_format"`
-	CodexWireAPI          string                    `json:"codex_wire_api"`
 	ClaudeAuthScheme      string                    `json:"claude_auth_scheme"`
 	ClaudeSonnetModel     string                    `json:"claude_sonnet_model"`
 	ClaudeOpusModel       string                    `json:"claude_opus_model"`
@@ -47,7 +46,6 @@ func Presets() []*core.Provider {
 			Model:     e.Model,
 			Meta: core.ProviderMeta{
 				APIFormat:             e.APIFormat,
-				CodexWireAPI:          e.CodexWireAPI,
 				ClaudeAuthScheme:      e.ClaudeAuthScheme,
 				ClaudeSonnetModel:     e.ClaudeSonnetModel,
 				ClaudeOpusModel:       e.ClaudeOpusModel,

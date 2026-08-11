@@ -52,6 +52,7 @@ import {
   routeToolsForProvider,
   sortTools,
   supportsLocalRouting,
+  requiresLocalRouting,
   toolLabel,
   toolsForDraft,
   uniqueValues,
@@ -248,6 +249,9 @@ export function GatewayPanel() {
     if (routeTool === "claude-desktop" && routeMetaDraft.claude_desktop_mode === "proxy") {
       localMode = "takeover";
     }
+    if (supportsTakeover && requiresLocalRouting(provider, routeTool)) {
+      localMode = "takeover";
+    }
     return {
       tool: routeTool,
       provider_id: selectedProviderID,
@@ -289,6 +293,9 @@ export function GatewayPanel() {
       } else if (current.tool === "claude-desktop" && ["direct", "official"].includes(routeMetaDraft.claude_desktop_mode)) {
         localMode = "direct";
       } else if (supportsLocalRouting(current.tool) && !current.original_tool) {
+        localMode = "takeover";
+      }
+      if (supportsLocalRouting(current.tool) && requiresLocalRouting(provider, current.tool)) {
         localMode = "takeover";
       }
       return {
@@ -349,7 +356,6 @@ export function GatewayPanel() {
       const probedDraft: ProviderDraft = {
         ...draft,
         api_format: result.api_format || draft.api_format,
-        codex_wire_api: result.codex_wire_api || draft.codex_wire_api,
         supported_models: models,
         supported_api_formats: supportedAPIFormats,
         supported_protocols: supportedProtocols,
@@ -360,13 +366,11 @@ export function GatewayPanel() {
         protocols: result.protocols ?? [],
         inferredTools,
         apiFormat: result.api_format,
-        codexWireAPI: result.codex_wire_api,
       });
       if (models.length > 0) {
         setDraft((current) => ({
           ...current,
           api_format: result.api_format || current.api_format,
-          codex_wire_api: result.codex_wire_api || current.codex_wire_api,
           model: current.model.trim() && models.includes(current.model.trim()) ? current.model : models[0],
           model_list: current.manual_models ? desktopProxyModelListForModels(models) : current.model_list,
           tools: inferredTools.length > 0 ? inferredTools : current.tools,
@@ -378,7 +382,6 @@ export function GatewayPanel() {
         setDraft((current) => ({
           ...current,
           api_format: result.api_format || current.api_format,
-          codex_wire_api: result.codex_wire_api || current.codex_wire_api,
           tools: inferredTools.length > 0 ? inferredTools : current.tools,
           supported_api_formats: supportedAPIFormats,
           supported_protocols: supportedProtocols,
@@ -444,7 +447,10 @@ export function GatewayPanel() {
     setBusy(`save-route:${tool}`);
     setNotice("");
     try {
-      const localTakeover = supportsLocalRouting(tool) ? routeDraft.local_mode === "takeover" : undefined;
+      const provider = providerList.find((item) => item.id === providerID);
+      const localTakeover = supportsLocalRouting(tool)
+        ? routeDraft.local_mode === "takeover" || requiresLocalRouting(provider, tool)
+        : undefined;
       await api.switchProvider(providerID, tool, routeDraftToMeta(routeDraft), localTakeover);
       if (routeDraft.original_tool && routeDraft.original_tool !== tool) {
         await api.disableRoute(routeDraft.original_tool);
@@ -710,18 +716,9 @@ export function GatewayPanel() {
                       </div>
                     </div>
                   )}
-                  {(probeCapabilities.apiFormat || probeCapabilities.codexWireAPI) && (
+                  {probeCapabilities.apiFormat && (
                     <span className="muted">
-                      {[
-                        probeCapabilities.apiFormat
-                          ? `${t("gateway.detectedApiFormat")}: ${capabilityName(probeCapabilities.apiFormat)}`
-                          : "",
-                        probeCapabilities.codexWireAPI
-                          ? `${t("gateway.detectedWireApi")}: ${probeCapabilities.codexWireAPI}`
-                          : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
+                      {`${t("gateway.detectedApiFormat")}: ${capabilityName(probeCapabilities.apiFormat)}`}
                     </span>
                   )}
                 </div>
@@ -752,7 +749,8 @@ export function GatewayPanel() {
     const showClaudeRouteOptions = ["claudecode", "claude-desktop"].includes(routeLocalTool);
     const showClaudeDesktopRouteOptions = routeLocalTool === "claude-desktop";
     const routeSupportsTakeover = supportsLocalRouting(routeDraft.tool);
-    const routeTakeoverSelected = Boolean(routeSupportsTakeover && routeDraft.local_mode === "takeover");
+    const routeRequiresTakeover = routeSupportsTakeover && requiresLocalRouting(selectedRouteProvider, routeDraft.tool);
+    const routeTakeoverSelected = Boolean(routeSupportsTakeover && (routeRequiresTakeover || routeDraft.local_mode === "takeover"));
     const routeModelRows = repairClaudeDesktopModelRows(parseModelRows(routeDraft.model_list));
     const visibleRouteOptions = uniqueValues([
       ...CLAUDE_DESKTOP_ROUTE_MODELS,
@@ -915,13 +913,18 @@ export function GatewayPanel() {
                   <div className="route-mode-options">
                     <button
                       className={routeTakeoverSelected ? "route-mode-option" : "route-mode-option active"}
+                      disabled={routeRequiresTakeover}
                       onClick={() => updateRouteLocalMode("direct")}
                       type="button"
                     >
                       <PowerOff size={16} />
                       <span>
                         <strong>{t("gateway.routeDirectMode")}</strong>
-                        <small>{t("gateway.routeDirectModeDescription")}</small>
+                        <small>
+                          {routeRequiresTakeover
+                            ? t("gateway.routeDirectUnsupported")
+                            : t("gateway.routeDirectModeDescription")}
+                        </small>
                       </span>
                     </button>
                     <button

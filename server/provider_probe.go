@@ -32,15 +32,14 @@ type providerProbeCheck struct {
 }
 
 type providerProbeResult struct {
-	OK           bool                 `json:"ok"`
-	URL          string               `json:"url,omitempty"`
-	Models       []string             `json:"models"`
-	Count        int                  `json:"count"`
-	Message      string               `json:"message"`
-	APIFormat    string               `json:"api_format,omitempty"`
-	CodexWireAPI string               `json:"codex_wire_api,omitempty"`
-	Formats      []providerProbeCheck `json:"formats,omitempty"`
-	Protocols    []providerProbeCheck `json:"protocols,omitempty"`
+	OK        bool                 `json:"ok"`
+	URL       string               `json:"url,omitempty"`
+	Models    []string             `json:"models"`
+	Count     int                  `json:"count"`
+	Message   string               `json:"message"`
+	APIFormat string               `json:"api_format,omitempty"`
+	Formats   []providerProbeCheck `json:"formats,omitempty"`
+	Protocols []providerProbeCheck `json:"protocols,omitempty"`
 }
 
 func (s *Server) handleProviderProbe(w http.ResponseWriter, r *http.Request) {
@@ -139,15 +138,14 @@ func probeProviderModels(ctx context.Context, p *core.Provider) (providerProbeRe
 		message = "Connection OK, but no models were found."
 	}
 	return providerProbeResult{
-		OK:           true,
-		URL:          firstURL,
-		Models:       models,
-		Count:        len(models),
-		Message:      message,
-		APIFormat:    apiFormat,
-		CodexWireAPI: recommendCodexWireAPI(protocols),
-		Formats:      formats,
-		Protocols:    protocols,
+		OK:        true,
+		URL:       firstURL,
+		Models:    models,
+		Count:     len(models),
+		Message:   message,
+		APIFormat: apiFormat,
+		Formats:   formats,
+		Protocols: protocols,
 	}, nil
 }
 
@@ -178,18 +176,6 @@ func recommendAPIFormat(formats []providerProbeCheck, preferred string) string {
 	for _, check := range formats {
 		if check.OK {
 			return check.Name
-		}
-	}
-	return ""
-}
-
-// recommendCodexWireAPI reports the wire_api Codex should be configured with.
-// Codex dropped "chat" (openai/codex#7782), so a chat-only upstream still gets
-// "responses" and reaches the provider through the local proxy's translation.
-func recommendCodexWireAPI(protocols []providerProbeCheck) string {
-	for _, check := range protocols {
-		if check.OK && (check.Name == "responses" || check.Name == "chat_completions") {
-			return "responses"
 		}
 	}
 	return ""

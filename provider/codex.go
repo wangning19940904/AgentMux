@@ -14,11 +14,12 @@ import (
 // accumulate stale per-provider blocks.
 const codexModelProviderID = "agentmux"
 
-// codexWireAPI is the only wire protocol Codex still accepts. Codex removed
-// wire_api = "chat" in February 2026 (openai/codex#7782) and now rejects the
-// whole config.toml when it sees it, so chat-only upstreams must be reached
-// through the local proxy, which serves /v1/responses and translates.
-const codexWireAPI = "responses"
+// codexWireAPIResponses is the only wire_api modern Codex accepts. Support for
+// chat/completions was removed in Feb 2026 (openai/codex#10157), and writing
+// wire_api = "chat" makes Codex reject the whole config with
+// "invalid configuration". Chat-only upstreams must go through the local
+// routing proxy, which translates Responses <-> chat/completions.
+const codexWireAPIResponses = "responses"
 
 // codexModelCatalogFilename mirrors cc-switch's cc-switch-model-catalog.json:
 // a catalog file the Codex desktop app reads so third-party models appear in
@@ -74,7 +75,7 @@ func writeCodexConfig(home string, p, prev *core.Provider) error {
 	block := map[string]any{
 		"name":     p.Name,
 		"base_url": p.BaseURL,
-		"wire_api": codexWireAPI,
+		"wire_api": codexWireAPIResponses,
 	}
 	if key := providerAPIKey(p); key != "" {
 		block["experimental_bearer_token"] = key

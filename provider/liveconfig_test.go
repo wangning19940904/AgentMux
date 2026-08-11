@@ -178,7 +178,7 @@ func TestWriteCodexConfigUsesBearerTokenAndPreservesAuth(t *testing.T) {
 		BaseURL:   "https://openrouter.ai/api/v1",
 		APIKeyEnv: "OPENROUTER_API_KEY",
 		Model:     "anthropic/claude-sonnet-4.5",
-		Meta:      core.ProviderMeta{CodexWireAPI: "chat"},
+		Meta:      core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := writeCodexConfig(home, p, nil); err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestWriteCodexConfigUsesBearerTokenAndPreservesAuth(t *testing.T) {
 		t.Fatalf("codex route = %#v", doc)
 	}
 	block := doc["model_providers"].(map[string]any)[codexModelProviderID].(map[string]any)
-	if block["wire_api"] != "responses" || block["base_url"] != p.BaseURL {
+	if block["wire_api"] != codexWireAPIResponses || block["base_url"] != p.BaseURL {
 		t.Fatalf("provider block = %#v", block)
 	}
 	if block["experimental_bearer_token"] != "sk-or" {
@@ -282,7 +282,7 @@ env_key = "OPENROUTER_API_KEY"
 	prev := &core.Provider{ID: "openrouter", Name: "OpenRouter"}
 	next := &core.Provider{
 		ID: "deepseek", Name: "DeepSeek", Category: "third_party",
-		BaseURL: "https://api.deepseek.com", Meta: core.ProviderMeta{CodexWireAPI: "chat"},
+		BaseURL: "https://api.deepseek.com", Meta: core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := writeCodexConfig(home, next, prev); err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestSwitchCodexAppRouteUsesCodexProviderConfig(t *testing.T) {
 		SettingsConfig: map[string]any{
 			"codex_home": codexDir,
 		},
-		Meta: core.ProviderMeta{CodexWireAPI: "chat"},
+		Meta: core.ProviderMeta{APIFormat: "openai_responses"},
 	}
 	if err := mgr.Upsert(ctx, p); err != nil {
 		t.Fatal(err)

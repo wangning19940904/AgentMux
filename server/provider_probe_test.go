@@ -47,7 +47,7 @@ func TestProbeProviderModelsOpenAICompatible(t *testing.T) {
 	if !got.OK || got.Count != 2 || got.Models[0] != "a-model" || got.Models[1] != "z-model" {
 		t.Fatalf("probe = %+v", got)
 	}
-	if got.APIFormat != "openai_chat" || got.CodexWireAPI != "responses" {
+	if got.APIFormat != "openai_chat" {
 		t.Fatalf("detected formats = %+v", got)
 	}
 	if len(got.Formats) != 3 || len(got.Protocols) != 2 {
@@ -143,9 +143,6 @@ func TestProbeProviderModelsDetectsResponsesProtocol(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got.CodexWireAPI != "responses" {
-		t.Fatalf("CodexWireAPI = %q, result = %+v", got.CodexWireAPI, got)
 	}
 	var responsesOK bool
 	for _, check := range got.Protocols {

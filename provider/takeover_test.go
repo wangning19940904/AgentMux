@@ -280,7 +280,10 @@ func TestTakeoverCodexRoundtrip(t *testing.T) {
 		BaseURL: "https://relay.example/v1", APIKeyEnv: "CODEX_TK_KEY",
 		Model:          "some-model",
 		SettingsConfig: map[string]any{"codex_home": codexDir},
-		Meta:           core.ProviderMeta{CodexWireAPI: "chat", APIFormat: "openai_chat"},
+		Meta: core.ProviderMeta{
+			APIFormat:           "openai_chat",
+			SupportedAPIFormats: []string{"openai_chat", "openai_responses"},
+		},
 	}
 	if err := svc.Upsert(ctx, p); err != nil {
 		t.Fatal(err)
@@ -305,7 +308,7 @@ func TestTakeoverCodexRoundtrip(t *testing.T) {
 	if block["experimental_bearer_token"] != ProxyManagedToken {
 		t.Fatalf("bearer = %v", block["experimental_bearer_token"])
 	}
-	if block["wire_api"] != "responses" {
+	if block["wire_api"] != codexWireAPIResponses {
 		t.Fatalf("wire_api = %v", block["wire_api"])
 	}
 	if doc["approval_policy"] != "never" {
@@ -640,5 +643,82 @@ func TestSwitchRouteWithLocalTakeoverAllowsConvertingFormats(t *testing.T) {
 	}
 	if env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] != "1" {
 		t.Fatalf("gateway model discovery = %v", env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
+	}
+}
+
+func TestRestoreProxyStateRepairsLegacyCodexWireAPI(t *testing.T) {
+	ctx := context.Background()
+	codexDir := filepath.Join(t.TempDir(), "codex-home")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `model_provider = "agentmux"
+approval_policy = "never"
+
+[model_providers.agentmux]
+name = "AgentMux Local Routing"
+base_url = "http://127.0.0.1:8787/v1"
+wire_api = "chat"
+
+[model_providers.openai]
+name = "OpenAI"
+wire_api = "chat"
+`
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc, st := newTestService(t)
+	p := &core.Provider{
+		ID: "codex-relay", Name: "Codex Relay", Category: "third_party",
+		BaseURL:        "https://relay.example/v1",
+		SettingsConfig: map[string]any{"codex_home": codexDir},
+		Meta:           core.ProviderMeta{APIFormat: "openai_chat"},
+	}
+	if err := st.UpsertProvider(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetActiveProvider(ctx, "codex", p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RestoreProxyState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if _, err := toml.DecodeFile(configPath, &doc); err != nil {
+		t.Fatal(err)
+	}
+	providers := doc["model_providers"].(map[string]any)
+	own := providers[codexModelProviderID].(map[string]any)
+	if own["wire_api"] != codexWireAPIResponses {
+		t.Fatalf("agentmux wire_api = %v", own["wire_api"])
+	}
+	if own["base_url"] != "http://127.0.0.1:8787/v1" {
+		t.Fatalf("base_url should be preserved: %#v", own)
+	}
+	builtin := providers["openai"].(map[string]any)
+	if builtin["wire_api"] != "chat" {
+		t.Fatalf("built-in provider block must not be rewritten: %#v", builtin)
+	}
+	if doc["approval_policy"] != "never" {
+		t.Fatalf("approval_policy lost: %#v", doc)
+	}
+}
+
+func TestDirectCodexSwitchRejectsChatOnlyProvider(t *testing.T) {
+	p := &core.Provider{
+		ID: "chat-only",
+		Meta: core.ProviderMeta{
+			APIFormat:          "openai_chat",
+			SupportedProtocols: []string{"chat_completions"},
+		},
+	}
+	err := validateDirectSwitch(p, "codex")
+	if err == nil || !strings.Contains(err.Error(), "local routing takeover") {
+		t.Fatalf("expected takeover requirement, got %v", err)
+	}
+	p.Meta.SupportedProtocols = append(p.Meta.SupportedProtocols, "responses")
+	if err := validateDirectSwitch(p, "codex"); err != nil {
+		t.Fatalf("responses-capable provider should pass: %v", err)
 	}
 }
