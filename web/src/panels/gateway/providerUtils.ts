@@ -33,7 +33,6 @@ export type ProbeCapabilities = {
   protocols: ProviderProbeCheck[];
   inferredTools: string[];
   apiFormat?: string;
-  codexWireAPI?: string;
 };
 
 export type ProviderDraft = {
@@ -47,7 +46,6 @@ export type ProviderDraft = {
   note: string;
   website: string;
   api_format: string;
-  codex_wire_api: string;
   claude_auth_scheme: string;
   claude_sonnet_model: string;
   claude_opus_model: string;
@@ -132,7 +130,6 @@ export const emptyDraft: ProviderDraft = {
   note: "",
   website: "",
   api_format: "",
-  codex_wire_api: "",
   claude_auth_scheme: "",
   claude_sonnet_model: "",
   claude_opus_model: "",
@@ -318,7 +315,6 @@ export function providerToDraft(provider: Provider): ProviderDraft {
     note: extraString(provider, "note"),
     website: extraString(provider, "website"),
     api_format: metaString(provider, "api_format"),
-    codex_wire_api: metaString(provider, "codex_wire_api"),
     claude_auth_scheme: metaString(provider, "claude_auth_scheme"),
     claude_sonnet_model: metaString(provider, "claude_sonnet_model"),
     claude_opus_model: metaString(provider, "claude_opus_model"),
@@ -391,6 +387,25 @@ export function supportsLocalRouting(tool: string) {
   return ["claudecode", "claude-desktop", "codex"].includes(localRoutingTool(tool));
 }
 
+// requiresLocalRouting reports whether a route can only work through the local
+// routing proxy. Codex dropped chat/completions support in Feb 2026, so a
+// chat-only upstream has to be translated by the proxy; pointing Codex at it
+// directly makes Codex reject its own config.
+export function requiresLocalRouting(provider: Provider | undefined, tool: string) {
+  if (!provider) return false;
+  const localTool = localRoutingTool(tool);
+  const values = providerProtocolValues(provider);
+  if (localTool === "codex") {
+    if (hasAnyCapability(values, ["openai_responses", "responses"])) return false;
+    return hasAnyCapability(values, ["openai_chat", "chat", "chat_completions", "anthropic", "gemini", "gemini_native"]);
+  }
+  if (localTool === "claudecode" || localTool === "claude-desktop") {
+    if (hasAnyCapability(values, ["anthropic"])) return false;
+    return hasAnyCapability(values, ["openai_chat", "openai_responses", "chat", "chat_completions", "responses", "gemini", "gemini_native"]);
+  }
+  return false;
+}
+
 export function providerSupportsRouteTool(provider: Provider, tool: string) {
   const normalizedTool = normalizeTool(tool);
   return routeToolsForProvider(provider).some((candidate) => {
@@ -423,7 +438,6 @@ export function providerProtocolValues(provider: Provider) {
     ...metaStringArray(provider, "supported_api_formats"),
     ...metaStringArray(provider, "supported_protocols"),
     metaString(provider, "api_format"),
-    metaString(provider, "codex_wire_api"),
   ]);
 }
 
@@ -459,7 +473,6 @@ export function generateProviderID(name: string, providers: Provider[]) {
 
 export type ToolInferenceSignals = {
   apiFormat?: string;
-  codexWireAPI?: string;
   supportedAPIFormats?: string[];
   supportedProtocols?: string[];
   claudeDesktopMode?: string;
@@ -474,7 +487,7 @@ export function hasAnyCapability(values: string[], candidates: string[]) {
 
 export function inferredToolsForSignals(signals: ToolInferenceSignals) {
   const formats = uniqueValues([...(signals.supportedAPIFormats ?? []), signals.apiFormat ?? ""]);
-  const protocols = uniqueValues([...(signals.supportedProtocols ?? []), signals.codexWireAPI ?? ""]);
+  const protocols = uniqueValues(signals.supportedProtocols ?? []);
   const hasAnthropic = hasAnyCapability(formats, ["anthropic"]);
   const hasOpenAI = hasAnyCapability(formats, ["openai_chat", "openai_responses"]) ||
     hasAnyCapability(protocols, ["chat", "chat_completions", "responses", "openai_chat", "openai_responses"]);
@@ -497,7 +510,6 @@ export function inferredToolsForSignals(signals: ToolInferenceSignals) {
 export function inferredToolsForDraft(draft: ProviderDraft) {
   return inferredToolsForSignals({
     apiFormat: draft.api_format,
-    codexWireAPI: draft.codex_wire_api,
     supportedAPIFormats: draft.supported_api_formats,
     supportedProtocols: draft.supported_protocols,
     claudeDesktopMode: draft.claude_desktop_mode,
@@ -510,7 +522,6 @@ export function inferredToolsForProvider(provider: Provider) {
   const desktopModels = claudeDesktopModelIDs(provider);
   return inferredToolsForSignals({
     apiFormat: metaString(provider, "api_format"),
-    codexWireAPI: metaString(provider, "codex_wire_api"),
     supportedAPIFormats: metaStringArray(provider, "supported_api_formats"),
     supportedProtocols: metaStringArray(provider, "supported_protocols"),
     claudeDesktopMode: metaString(provider, "claude_desktop_mode"),
@@ -567,7 +578,6 @@ export function draftToProvider(draft: ProviderDraft, providers: Provider[]): Pr
   const extra: Record<string, string> = {};
   const id = draft.id.trim() || generateProviderID(draft.name, providers);
   if (draft.api_format) meta.api_format = draft.api_format;
-  if (draft.codex_wire_api) meta.codex_wire_api = draft.codex_wire_api;
   if (draft.claude_auth_scheme) meta.claude_auth_scheme = draft.claude_auth_scheme;
   if (draft.claude_sonnet_model.trim()) meta.claude_sonnet_model = draft.claude_sonnet_model.trim();
   if (draft.claude_opus_model.trim()) meta.claude_opus_model = draft.claude_opus_model.trim();

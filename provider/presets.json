@@ -44,8 +44,7 @@
     "api_key_env": "OPENAI_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "gpt-5",
-    "api_format": "openai_responses",
-    "codex_wire_api": "responses"
+    "api_format": "openai_responses"
   },
   {
     "id": "gemini-official",
@@ -73,8 +72,7 @@
     "base_url": "https://openrouter.ai/api/v1",
     "api_key_env": "OPENROUTER_API_KEY",
     "tools": ["codex", "codex-app", "claudecode"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "deepseek",
@@ -84,8 +82,7 @@
     "api_key_env": "DEEPSEEK_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "deepseek-chat",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "deepseek-claude",
@@ -109,8 +106,7 @@
     "api_key_env": "MOONSHOT_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "kimi-k2.6",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "moonshot-kimi-claude",
@@ -133,8 +129,7 @@
     "api_key_env": "ZHIPU_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "glm-4.6",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "zhipu-glm-claude",
@@ -167,8 +162,7 @@
     "api_key_env": "SILICONFLOW_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "Pro/moonshotai/Kimi-K2.5",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "groq",
@@ -177,8 +171,7 @@
     "base_url": "https://api.groq.com/openai/v1",
     "api_key_env": "GROQ_API_KEY",
     "tools": ["codex", "codex-app"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "together",
@@ -187,8 +180,7 @@
     "base_url": "https://api.together.xyz/v1",
     "api_key_env": "TOGETHER_API_KEY",
     "tools": ["codex", "codex-app"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "fireworks",
@@ -197,8 +189,7 @@
     "base_url": "https://api.fireworks.ai/inference/v1",
     "api_key_env": "FIREWORKS_API_KEY",
     "tools": ["codex", "codex-app"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "nvidia-nim",
@@ -207,8 +198,7 @@
     "base_url": "https://integrate.api.nvidia.com/v1",
     "api_key_env": "NVIDIA_API_KEY",
     "tools": ["codex", "codex-app"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "mistral",
@@ -217,8 +207,7 @@
     "base_url": "https://api.mistral.ai/v1",
     "api_key_env": "MISTRAL_API_KEY",
     "tools": ["codex", "codex-app"],
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "xai-grok",
@@ -228,8 +217,7 @@
     "api_key_env": "XAI_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "grok-4",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   },
   {
     "id": "qwen-dashscope",
@@ -239,7 +227,6 @@
     "api_key_env": "DASHSCOPE_API_KEY",
     "tools": ["codex", "codex-app"],
     "model": "qwen-max",
-    "api_format": "openai_chat",
-    "codex_wire_api": "responses"
+    "api_format": "openai_chat"
   }
 ]

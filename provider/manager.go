@@ -117,11 +117,31 @@ func validateDirectSwitch(p *core.Provider, tool string) error {
 			return fmt.Errorf("provider %q speaks %s; enable local routing takeover for %s to use it", p.ID, format, tool)
 		}
 	case "codex":
-		if format == "anthropic" {
-			return fmt.Errorf("provider %q speaks anthropic; codex needs an openai_chat/openai_responses endpoint", p.ID)
+		if format == "anthropic" || format == "gemini_native" {
+			return fmt.Errorf("provider %q speaks %s; enable local routing takeover for codex to use it", p.ID, format)
+		}
+		if !codexSupportsResponses(p) {
+			return fmt.Errorf("provider %q only speaks chat/completions; codex removed chat/completions support, so enable local routing takeover for codex to use it", p.ID)
 		}
 	}
 	return nil
+}
+
+// codexSupportsResponses reports whether the provider can serve Codex directly.
+// Codex only speaks the Responses API now, so a chat/completions-only upstream
+// must go through the local routing proxy.
+func codexSupportsResponses(p *core.Provider) bool {
+	if p.Meta.APIFormat == "openai_responses" {
+		return true
+	}
+	for _, value := range append(p.Meta.SupportedAPIFormats, p.Meta.SupportedProtocols...) {
+		if normalizeProto(value) == protoResponses {
+			return true
+		}
+	}
+	// Unknown/unprobed providers keep the previous permissive behaviour; the
+	// upstream call is what ultimately decides.
+	return p.Meta.APIFormat == ""
 }
 
 // writeLive is the live-config write step of a switch; the takeover layer

@@ -36,8 +36,12 @@ type Provider struct {
 // ProviderMeta carries tool-specific routing hints without forcing the core
 // provider row to know every downstream config shape.
 type ProviderMeta struct {
-	APIFormat       string   `json:"api_format,omitempty"`     // anthropic, openai_responses, openai_chat
-	CodexWireAPI    string   `json:"codex_wire_api,omitempty"` // responses (Codex dropped "chat")
+	// APIFormat is the upstream wire the provider speaks: anthropic,
+	// openai_responses, openai_chat, gemini_native. Codex's own wire_api is no
+	// longer configurable per provider: it dropped chat/completions in Feb
+	// 2026, so AgentMux always writes wire_api = "responses" and lets the local
+	// routing proxy translate for chat-only upstreams.
+	APIFormat       string   `json:"api_format,omitempty"`
 	SupportedModels []string `json:"supported_models,omitempty"`
 	// Explicit runtime controls for custom providers. They are exposed only
 	// when the selected adapter can carry the corresponding protocol field.

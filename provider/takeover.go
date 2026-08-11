@@ -111,9 +111,9 @@ func claudePrimaryAPIKeyConfigured(home string, p *core.Provider) bool {
 }
 
 // writeCodexTakeoverConfig rewrites ~/.codex/config.toml so the agentmux
-// provider block targets the proxy with a placeholder bearer token. Codex
-// always talks the responses wire API; the proxy translates it to whatever
-// the upstream speaks. auth.json is untouched.
+// provider block targets the proxy with a placeholder bearer token. wire_api is
+// always "responses" (the only wire Codex still supports); the proxy translates
+// to whatever the upstream speaks. auth.json is untouched.
 func writeCodexTakeoverConfig(home string, p *core.Provider, proxyBaseURL string) error {
 	dir := codexConfigDir(home, p)
 	path := filepath.Join(dir, "config.toml")
@@ -126,7 +126,7 @@ func writeCodexTakeoverConfig(home string, p *core.Provider, proxyBaseURL string
 	providers[codexModelProviderID] = map[string]any{
 		"name":                      "AgentMux Local Routing",
 		"base_url":                  proxyBaseURL + "/v1",
-		"wire_api":                  codexWireAPI,
+		"wire_api":                  codexWireAPIResponses,
 		"experimental_bearer_token": ProxyManagedToken,
 	}
 	if err := syncCodexModelCatalog(dir, doc, codexCatalogModels(p)); err != nil {
@@ -536,10 +536,59 @@ func (s *Service) RestoreProxyState(ctx context.Context) error {
 	}
 	for _, cfg := range cfgs {
 		if cfg.Enabled {
-			return s.proxy.Start()
+			if err := s.proxy.Start(); err != nil {
+				return err
+			}
+			break
 		}
 	}
-	return nil
+	return s.repairCodexWireAPI(ctx)
+}
+
+// repairCodexWireAPI upgrades configs written by older AgentMux builds. They
+// wrote wire_api = "chat" into the agentmux provider block, which modern Codex
+// rejects outright ("invalid configuration: `wire_api = \"chat\"` is no longer
+// supported"). Only our own block is touched, and only that one key.
+func (s *Service) repairCodexWireAPI(ctx context.Context) error {
+	active, err := s.activeProviderFor(ctx, "codex")
+	if err != nil || active == nil {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	path := filepath.Join(codexConfigDir(home, active), "config.toml")
+	return withLiveFileLocks(ctx, []string{path}, func() error {
+		if _, err := os.Stat(path); err != nil {
+			return nil
+		}
+		doc := readTOMLObject(path)
+		providers, ok := doc["model_providers"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		block, ok := providers[codexModelProviderID].(map[string]any)
+		if !ok {
+			return nil
+		}
+		if wire, _ := block["wire_api"].(string); wire == "" || wire == codexWireAPIResponses {
+			return nil
+		}
+		block["wire_api"] = codexWireAPIResponses
+		if err := writeTOMLObject(path, doc); err != nil {
+			return err
+		}
+		s.log().Warn("repaired unsupported codex wire_api", "path", path, "wire_api", codexWireAPIResponses)
+		return nil
+	})
+}
+
+func (s *Service) log() *slog.Logger {
+	if s.proxy != nil && s.proxy.log != nil {
+		return s.proxy.log
+	}
+	return slog.Default()
 }
 
 // SetFailoverQueue toggles a provider's failover queue membership.

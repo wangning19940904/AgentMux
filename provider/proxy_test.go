@@ -608,7 +608,7 @@ func TestProxyCodexChatPassthrough(t *testing.T) {
 	p := &core.Provider{
 		ID: "codex-relay", Name: "Codex Relay", BaseURL: upstream.URL + "/v1",
 		APIKeyEnv: "CODEX_RELAY_KEY",
-		Meta:      core.ProviderMeta{CodexWireAPI: "chat", APIFormat: "openai_chat"},
+		Meta:      core.ProviderMeta{APIFormat: "openai_chat"},
 	}
 	if err := st.UpsertProvider(ctx, p); err != nil {
 		t.Fatal(err)
