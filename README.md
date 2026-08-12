@@ -64,6 +64,39 @@ Memory/Skills/MCP/Guard 四个模块当前为 **Console 管理层实现**(Postgr
 
 ## 快速开始
 
+### 安装发布版
+
+首个 Release 发布后，macOS/Linux 推荐通过 Homebrew 安装完整版本
+（包含 Web Console 与原生 Observer Hook）：
+
+```bash
+brew install wangning19940904/tap/agentmux
+```
+
+也可以使用会校验 SHA-256 的通用安装脚本。默认安装到
+`~/.local/bin`，可通过 `AMUX_INSTALL_DIR` 修改：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh | sh
+
+# 安装指定版本
+curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh \
+  | sh -s -- v0.1.0
+```
+
+已经安装 Go 1.25+ 的开发者也可以安装精简 CLI。该方式不包含 React
+Web Console 和 `agentmux-hook`，完整版本请使用 Homebrew 或 GitHub Release：
+
+```bash
+go install github.com/wangning19940904/AgentMux/cmd/amux@latest
+```
+
+所有平台的预编译包和 `checksums.txt` 位于
+[GitHub Releases](https://github.com/wangning19940904/AgentMux/releases)。
+发布维护说明见 [RELEASING.md](RELEASING.md)。运行时仍需 PostgreSQL 16+。
+
+### 从源码构建
+
 ```bash
 # 1. 构建(仅 CLI,占位 WebUI)
 make build

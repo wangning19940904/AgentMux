@@ -31,7 +31,9 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(config.Default(), nil, st, nil, nil), st
+	cfg := config.Default()
+	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
+	return New(cfg, nil, st, nil, nil), st
 }
 
 func newTestServerWithProvider(t *testing.T) (*Server, *store.Store) {
@@ -41,7 +43,9 @@ func newTestServerWithProvider(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(config.Default(), nil, st, provider.NewManager(st), nil), st
+	cfg := config.Default()
+	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
+	return New(cfg, nil, st, provider.NewManager(st), nil), st
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any) *httptest.ResponseRecorder {

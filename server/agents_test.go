@@ -61,6 +61,17 @@ func TestAgentCreationRejectsUninstalledRuntime(t *testing.T) {
 	}
 }
 
+func TestAgentInstancesListReturnsEmptyJSONArray(t *testing.T) {
+	s, _ := newTestServer(t)
+	recorder := doJSON(t, s, http.MethodGet, "/api/v1/agent-instances", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := strings.TrimSpace(recorder.Body.String()); got != "[]" {
+		t.Fatalf("body = %s, want []", got)
+	}
+}
+
 func TestFrameworkAuthEndpointReturnsConfigurationStatus(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

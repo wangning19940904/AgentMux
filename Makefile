@@ -22,8 +22,9 @@ LDFLAGS     := -s -w -X main.version=$(VERSION)
 HOOK_LDFLAGS := -s -w
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 WAILS       ?= $(HOME)/go/bin/wails
+GORELEASER  ?= goreleaser
 
-.PHONY: all build web release cross remote-assets desktop menubar test vet clean tidy
+.PHONY: all build web release cross remote-assets desktop menubar test vet clean tidy release-check snapshot
 
 all: release
 
@@ -106,6 +107,12 @@ vet:
 
 tidy:
 	go mod tidy
+
+release-check:
+	$(GORELEASER) check
+
+snapshot:
+	HOMEBREW_TAP_GITHUB_TOKEN='' $(GORELEASER) release --snapshot --clean --skip=publish
 
 clean:
 	rm -rf $(DIST) $(REMOTE_ASSETS) $(BINARY) $(ALIAS) $(HOOK_BINARY) web/dist macos-menubar/AgentMuxMenuBar

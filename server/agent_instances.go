@@ -45,13 +45,13 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 	}
 	if a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
 		if err := s.provider.Switch(r.Context(), a.ProviderID, a.ProviderTool); err != nil {
-			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: " + err.Error())
+			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: "+err.Error())
 			return
 		}
 	}
 	if s.connect != nil {
 		if err := s.connect.RestartChannelsForAgent(r.Context(), a.ID); err != nil {
-			writeErr(w, http.StatusInternalServerError, "agent saved, but bound channels failed to restart: " + err.Error())
+			writeErr(w, http.StatusInternalServerError, "agent saved, but bound channels failed to restart: "+err.Error())
 			return
 		}
 	}
@@ -126,7 +126,7 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 	}
 	if s.connect != nil {
 		if err := s.connect.RestartChannelsForAgent(r.Context(), id); err != nil {
-			writeErr(w, http.StatusInternalServerError, "agent deleted, but bound channels failed to restart: " + err.Error())
+			writeErr(w, http.StatusInternalServerError, "agent deleted, but bound channels failed to restart: "+err.Error())
 			return
 		}
 	}
@@ -134,7 +134,7 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, error) {
-	var items []core.AgentInstance
+	items := make([]core.AgentInstance, 0)
 	if s.st != nil {
 		stored, err := s.st.ListAgentInstances(ctx)
 		if err != nil {

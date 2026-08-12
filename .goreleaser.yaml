@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: agentmux
+
+before:
+  hooks:
+    - npm ci --prefix web
+    - npm run build --prefix web
+
+builds:
+  - id: amux
+    main: ./cmd/amux
+    binary: amux
+    tags:
+      - embedweb
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+  - id: agentmux-hook
+    main: ./cmd/agentmux-hook
+    binary: agentmux-hook
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: release
+    ids:
+      - amux
+      - agentmux-hook
+    name_template: >-
+      agentmux_{{ .Os }}_{{ .Arch }}
+      {{- with .Arm }}v{{ . }}{{ end }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - INSTALL.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - '^Merge '
+
+release:
+  draft: false
+  prerelease: auto
+  mode: replace
+
+# GoReleaser v2.10+ recommends Casks for pre-built CLI archives. When the
+# HOMEBREW_TAP_GITHUB_TOKEN secret is absent, the Cask is generated in dist/
+# but is not pushed, so GitHub Releases remain independently usable.
+homebrew_casks:
+  - name: agentmux
+    ids:
+      - release
+    binaries:
+      - amux
+      - agentmux-hook
+    homepage: https://github.com/wangning19940904/AgentMux
+    description: One control plane for chat-driven coding agents
+    caveats: |
+      AgentMux uses PostgreSQL as its runtime store. Initialize it with:
+        amux database setup
+
+      Then create a config and start the local client:
+        amux config init
+        amux client --web
+    repository:
+      owner: wangning19940904
+      name: homebrew-tap
+      branch: main
+      token: '{{ envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "" }}'
+    commit_author:
+      name: agentmux-release-bot
+      email: actions@users.noreply.github.com
+    skip_upload: '{{ if or .Prerelease (eq (envOrDefault "HOMEBREW_TAP_GITHUB_TOKEN" "") "") }}true{{ else }}false{{ end }}'

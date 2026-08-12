@@ -1,5 +1,37 @@
 # Installing & building AgentMux
 
+## Install a release
+
+The supported full installation includes the embedded Web Console and the
+`agentmux-hook` companion binary.
+
+After the first release, install on macOS or Linux with Homebrew:
+
+```bash
+brew install wangning19940904/tap/agentmux
+```
+
+On macOS or Linux without Homebrew, use the checksum-verifying installer. It
+installs to `~/.local/bin` by default:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh | sh
+
+# Optional custom location or pinned version:
+curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh \
+  | AMUX_INSTALL_DIR=/usr/local/bin sh -s -- v0.1.0
+```
+
+Windows users can download the amd64 zip and `checksums.txt` from
+[GitHub Releases](https://github.com/wangning19940904/AgentMux/releases).
+
+Developers with Go 1.25+ can install the lightweight CLI directly. This build
+does not include the React Web Console or `agentmux-hook`:
+
+```bash
+go install github.com/wangning19940904/AgentMux/cmd/amux@latest
+```
+
 ## Prerequisites
 
 - **Go 1.25+** (core, CLI, daemon)
