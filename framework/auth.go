@@ -275,6 +275,25 @@ func StartLogin(kind string) (LoginResult, error) {
 		case <-settleC:
 			return result, nil
 		case waitErr := <-session.done:
+			// A short-lived login command can exit immediately after printing its
+			// URL and verification code on separate lines. In that case both the
+			// completion signal and one or more buffered updates may be ready, and
+			// select is allowed to choose completion first. Drain the buffered
+			// output before returning so callers never observe a partial result.
+		drainUpdates:
+			for {
+				select {
+				case update := <-session.updates:
+					if update.url != "" {
+						result.LoginURL = update.url
+					}
+					if update.code != "" {
+						result.VerificationCode = update.code
+					}
+				default:
+					break drainUpdates
+				}
+			}
 			if result.LoginURL != "" {
 				return result, nil
 			}
