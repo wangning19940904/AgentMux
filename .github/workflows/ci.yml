@@ -32,8 +32,11 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: Install Web dependencies
-        run: npm ci --prefix web
+        working-directory: web
+        run: npm ci --registry=https://registry.npmjs.org
       - name: Web tests
-        run: npm test --prefix web
+        working-directory: web
+        run: npm test
       - name: Web production build
-        run: npm run build --prefix web
+        working-directory: web
+        run: npm run build
