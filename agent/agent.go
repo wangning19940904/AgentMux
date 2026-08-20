@@ -7,6 +7,7 @@ import (
 	_ "github.com/wangning19940904/AgentMux/agent/claudecode"
 	_ "github.com/wangning19940904/AgentMux/agent/cliagents"
 	"github.com/wangning19940904/AgentMux/agent/sdkagent"
+	_ "github.com/wangning19940904/AgentMux/agent/terminal"
 )
 
 func init() {

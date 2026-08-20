@@ -282,7 +282,17 @@ func (p *Platform) BeginTaskReply(ctx context.Context, msg *core.Message, taskID
 	if p.client == nil {
 		return nil, fmt.Errorf("%s: client not started", p.name)
 	}
-	control := newStreamCardControl(msg, taskID)
+	control := newStreamCardControl(msg, taskID, "")
+	return &cardStream{
+		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
+	}, nil
+}
+
+func (p *Platform) BeginFeedbackTaskReply(ctx context.Context, msg *core.Message, task core.ChannelTask) (core.ReplyStream, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("%s: client not started", p.name)
+	}
+	control := newStreamCardControl(msg, task.ID, task.FeedbackNonce)
 	return &cardStream{
 		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
 	}, nil
@@ -459,17 +469,18 @@ type cardStream struct {
 
 type streamCardControl struct {
 	taskID          string
+	feedbackNonce   string
 	chatID          string
 	chatType        string
 	conversationKey string
 }
 
-func newStreamCardControl(msg *core.Message, taskID string) *streamCardControl {
+func newStreamCardControl(msg *core.Message, taskID, feedbackNonce string) *streamCardControl {
 	if msg == nil || taskID == "" {
 		return nil
 	}
 	return &streamCardControl{
-		taskID: taskID, chatID: msg.ChatID, chatType: msg.ChatType,
+		taskID: taskID, feedbackNonce: feedbackNonce, chatID: msg.ChatID, chatType: msg.ChatType,
 		conversationKey: core.ResolveConversationKey(msg),
 	}
 }

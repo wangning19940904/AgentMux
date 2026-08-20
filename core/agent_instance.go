@@ -32,6 +32,9 @@ type AgentInstance struct {
 	Name                   string                `json:"name"`
 	RuntimeID              string                `json:"runtime_id"`
 	WorkDir                string                `json:"work_dir,omitempty"`
+	WorkspaceMode          string                `json:"workspace_mode,omitempty"`
+	WorktreeBaseRef        string                `json:"worktree_base_ref,omitempty"`
+	SessionBackend         string                `json:"session_backend,omitempty"`
 	SystemPrompt           string                `json:"system_prompt,omitempty"`
 	ProviderTool           string                `json:"provider_tool,omitempty"`
 	ProviderID             string                `json:"provider_id,omitempty"`

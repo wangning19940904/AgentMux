@@ -57,6 +57,9 @@ export function SessionsPanel() {
   const [bindChannelID, setBindChannelID] = useState("");
   const [bindConversationID, setBindConversationID] = useState("");
   const [localAnswers, setLocalAnswers] = useState<Record<string, string>>({});
+  const [terminalVisible, setTerminalVisible] = useState(false);
+  const [terminalDraft, setTerminalDraft] = useState("");
+  const [terminalBusy, setTerminalBusy] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
 	const stopRequestedRef = useRef(false);
 
@@ -140,6 +143,13 @@ export function SessionsPanel() {
     () => (interactionChannelID ? api.channelInteractions(interactionChannelID, interactionConversationID) : Promise.resolve([])),
     [interactionChannelID, interactionConversationID]
   );
+  const terminal = useAsync(
+    () => terminalVisible && selected?.terminal_backend && selected.channel_id && selected.conversation_id
+      ? api.terminalSession(selected)
+      : Promise.resolve(null),
+    [terminalVisible, selected?.channel_id, selected?.conversation_id, selected?.terminal_backend]
+  );
+  usePolling(terminal.reload, 750, { enabled: terminalVisible && Boolean(selected?.terminal_backend) });
   const visibleMessages = [...(messages.data ?? []), ...optimisticMessages];
   const transcriptMessages = visibleMessages.filter((message) =>
     message.role === "user" || message.role === "assistant" || message.role === "tool"
@@ -166,11 +176,41 @@ export function SessionsPanel() {
   useEffect(() => {
     setOptimisticMessages([]);
     setDraft("");
+    setTerminalVisible(false);
+    setTerminalDraft("");
     if (selected?.channel_id) {
       setBindChannelID(selected.channel_id);
       setBindConversationID(selected.conversation_id || "");
     }
   }, [selectedKey]);
+
+  async function sendTerminalInput() {
+    if (!selected || !terminalDraft || terminalBusy) return;
+    setTerminalBusy(true);
+    try {
+      await api.writeTerminal(selected, terminalDraft, true);
+      setTerminalDraft("");
+      await terminal.reload();
+    } catch (error) {
+      showNotice(String(error), true);
+    } finally {
+      setTerminalBusy(false);
+    }
+  }
+
+  async function interruptTerminal() {
+    if (!selected || terminalBusy) return;
+    setTerminalBusy(true);
+    try {
+      // ETX is interpreted by tmux-backed sessions as Ctrl+C.
+      await api.writeTerminal(selected, "\u0003", false);
+      await terminal.reload();
+    } catch (error) {
+      showNotice(String(error), true);
+    } finally {
+      setTerminalBusy(false);
+    }
+  }
 
   useEffect(() => {
     const node = transcriptRef.current;
@@ -464,6 +504,16 @@ export function SessionsPanel() {
                         {t("sessions.terminal")}
                       </button>
                     )}
+                    {selected.terminal_backend && (
+                      <button
+                        className={terminalVisible ? "action" : "ghost-action"}
+                        onClick={() => setTerminalVisible((current) => !current)}
+                        title={t("sessions.webTerminal")}
+                      >
+                        <TerminalSquare size={15} />
+                        {t("sessions.webTerminal")}
+                      </button>
+                    )}
                     {selected.file_backed && (
                       <button className="ghost-action danger-action" disabled={busy === "delete"} onClick={remove} title={t("common.delete")}>
                         <Trash2 size={15} />
@@ -482,6 +532,48 @@ export function SessionsPanel() {
                 </div>
 
                 <div className="session-chat">
+                  {terminalVisible && selected.terminal_backend && (
+                    <section className="session-terminal" aria-label={t("sessions.webTerminal")}>
+                      <header>
+                        <div>
+                          <strong>{t("sessions.webTerminal")}</strong>
+                          <span>{terminal.data?.info.backend || selected.terminal_backend}</span>
+                        </div>
+                        <div className="control-row">
+                          <button className="ghost-action" disabled={terminalBusy} onClick={interruptTerminal}>Ctrl+C</button>
+                          {terminal.data?.info.attach_command && (
+                            <button className="ghost-action" onClick={() => copy(terminal.data?.info.attach_command || "")}>
+                              <Clipboard size={14} /> {t("sessions.copyAttach")}
+                            </button>
+                          )}
+                          <button className="ghost-action" onClick={terminal.reload}>
+                            <RefreshCw size={14} /> {t("sessions.refresh")}
+                          </button>
+                        </div>
+                      </header>
+                      {terminal.error && <div className="error">{terminal.error}</div>}
+                      <pre className="session-terminal-screen">
+                        {terminal.data?.snapshot || (terminal.loading ? t("common.loading") : t("sessions.terminalUnavailable"))}
+                      </pre>
+                      <div className="session-terminal-composer">
+                        <textarea
+                          rows={2}
+                          value={terminalDraft}
+                          onChange={(event) => setTerminalDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              event.preventDefault();
+                              void sendTerminalInput();
+                            }
+                          }}
+                          placeholder={t("sessions.terminalInputPlaceholder")}
+                        />
+                        <button className="action" disabled={!terminalDraft || terminalBusy} onClick={sendTerminalInput}>
+                          <Send size={14} /> {t("sessions.send")}
+                        </button>
+                      </div>
+                    </section>
+                  )}
                   <div className="transcript" ref={transcriptRef} aria-live="polite">
                     {messages.loading && !messages.data && <div className="empty-state compact">{t("common.loading")}</div>}
                     {messages.error && <div className="error">{messages.error}</div>}

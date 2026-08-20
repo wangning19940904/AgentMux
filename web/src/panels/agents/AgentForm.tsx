@@ -325,6 +325,42 @@ export function AgentForm({
             {directoryNotice && <small className="directory-notice">{directoryNotice}</small>}
           </label>
           <label className="field">
+            <span>{t("agents.workspaceMode")}</span>
+            <select
+              disabled={readOnly}
+              value={draft.workspace_mode || "shared"}
+              onChange={(event) => onUpdate("workspace_mode", event.target.value as AgentInstance["workspace_mode"])}
+            >
+              <option value="shared">{t("agents.workspaceModeShared")}</option>
+              <option value="worktree">{t("agents.workspaceModeWorktree")}</option>
+            </select>
+            <small>{draft.workspace_mode === "worktree" ? t("agents.workspaceModeWorktreeHelp") : t("agents.workspaceModeSharedHelp")}</small>
+          </label>
+          {draft.workspace_mode === "worktree" && (
+            <label className="field">
+              <span>{t("agents.worktreeBaseRef")}</span>
+              <input
+                disabled={readOnly}
+                value={draft.worktree_base_ref ?? ""}
+                onChange={(event) => onUpdate("worktree_base_ref", event.target.value)}
+                placeholder="HEAD"
+              />
+              <small>{t("agents.worktreeBaseRefHelp")}</small>
+            </label>
+          )}
+          <label className="field">
+            <span>{t("agents.sessionBackend")}</span>
+            <select
+              disabled={readOnly}
+              value={draft.session_backend || "structured"}
+              onChange={(event) => onUpdate("session_backend", event.target.value as AgentInstance["session_backend"])}
+            >
+              <option value="structured">{t("agents.sessionBackendStructured")}</option>
+              <option value="tmux">{t("agents.sessionBackendTmux")}</option>
+            </select>
+            <small>{draft.session_backend === "tmux" ? t("agents.sessionBackendTmuxHelp") : t("agents.sessionBackendStructuredHelp")}</small>
+          </label>
+          <label className="field">
             <span>{t("agents.memoryScope")}</span>
             <input
               disabled={readOnly}

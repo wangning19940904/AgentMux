@@ -146,6 +146,7 @@ func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSessi
 	// card change affects future sessions without restarting the channel, while
 	// leaving already cached sessions untouched.
 	rt.applyRuntimeDefaults(s)
+	rt.owner.persistConversationSessionHandle(ctx, conv, s)
 	rt.sessions[cacheKey] = s
 	return s, conv, true, nil
 }
@@ -265,7 +266,11 @@ func (rt *channelRuntime) close(ctx context.Context) {
 			data["agent_name"] = agent.Name()
 		}
 		rt.owner.emit(ctx, HookSessionEnded, data)
-		_ = s.Close(ctx)
+		if detachable, ok := s.(DetachableAgentSession); ok {
+			_ = detachable.Detach(ctx)
+		} else {
+			_ = s.Close(ctx)
+		}
 	}
 	if agent != nil {
 		_ = agent.Stop(ctx)

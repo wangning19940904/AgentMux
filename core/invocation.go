@@ -478,7 +478,11 @@ func (e *Engine) closeInvocationRuntime(runtime *projectRuntime) {
 			data["agent_name"] = runtime.agent.Name()
 		}
 		e.emit(closeCtx, HookSessionEnded, data)
-		_ = session.Close(closeCtx)
+		if detachable, ok := session.(DetachableAgentSession); ok {
+			_ = detachable.Detach(closeCtx)
+		} else {
+			_ = session.Close(closeCtx)
+		}
 	}
 	if runtime.agent != nil {
 		_ = runtime.agent.Stop(closeCtx)

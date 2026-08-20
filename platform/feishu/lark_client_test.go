@@ -128,6 +128,31 @@ func TestStreamingTaskCardsExposeStopOnlyWhileRunning(t *testing.T) {
 		if strings.Contains(card, "codex_task_control") || strings.Contains(card, "停止任务") {
 			t.Fatalf("%s completed card is still actionable: %s", name, card)
 		}
+		for _, want := range []string{"新会话", "会话状态", `"agentmux_action":"channel_session_control"`} {
+			if !strings.Contains(card, want) {
+				t.Fatalf("%s completed card missing session control %q: %s", name, want, card)
+			}
+		}
+	}
+}
+
+func TestCompletedTaskCardsExposeScopedFeedback(t *testing.T) {
+	control := &streamCardControl{
+		taskID: "task-feedback", feedbackNonce: "feedback-secret", chatID: "oc_1", chatType: "group", conversationKey: "root:om_1",
+	}
+	for name, card := range map[string]string{
+		"native": buildStreamCardJSON("done", true, false, control),
+		"legacy": buildCard("done", true, false, control),
+	} {
+		for _, want := range []string{"结论可用", "有效推进", "结论有误", `"agentmux_action":"channel_feedback"`, `"nonce":"feedback-secret"`, `"task_id":"task-feedback"`} {
+			if !strings.Contains(card, want) {
+				t.Fatalf("%s feedback card missing %q: %s", name, want, card)
+			}
+		}
+	}
+	failed := buildStreamCardJSON("failed", true, true, control)
+	if strings.Contains(failed, "channel_feedback") {
+		t.Fatalf("failed card exposed feedback actions: %s", failed)
 	}
 }
 
@@ -180,6 +205,56 @@ func TestTaskStopCardActionKeepsTaskCorrelation(t *testing.T) {
 	if msg.ChannelTaskAction.TaskID != "task-1" || msg.ChannelTaskAction.Action != core.ChannelTaskActionStop ||
 		msg.ChatID != "oc_1" || msg.ConversationKey != "root:om_1" || msg.UserID != "ou_controller" {
 		t.Fatalf("task stop action message = %+v", msg)
+	}
+}
+
+func TestFeedbackCardActionKeepsNonceOutOfAuditLog(t *testing.T) {
+	client := &larkClient{platform: "feishu"}
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_owner"},
+		Context:  &callback.Context{OpenChatID: "oc_1", OpenMessageID: "om_feedback_card"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			modelPickerActionKey: channelFeedbackAction,
+			"task_id":            "task-feedback",
+			"nonce":              "feedback-secret",
+			"semantic":           core.FeedbackNegative,
+			"chat_id":            "oc_1",
+			"chat_type":          "group",
+			"conversation_key":   "root:om_1",
+		}},
+	}}
+	msg, ok := client.messageFromCardAction("channel:c1", event)
+	if !ok || msg == nil || msg.LogOnly || msg.ChannelFeedbackAction == nil {
+		t.Fatalf("feedback action was not recognized: %+v", msg)
+	}
+	if msg.ChannelFeedbackAction.TaskID != "task-feedback" || msg.ChannelFeedbackAction.Semantic != core.FeedbackNegative || msg.ChannelFeedbackAction.Nonce != "feedback-secret" || msg.UserID != "ou_owner" {
+		t.Fatalf("feedback action message = %+v", msg)
+	}
+	if strings.Contains(msg.Callback.ActionValue, "feedback-secret") {
+		t.Fatalf("logged callback retained feedback nonce: %s", msg.Callback.ActionValue)
+	}
+}
+
+func TestCompletedCardSessionActionKeepsTaskCorrelation(t *testing.T) {
+	client := &larkClient{platform: "feishu"}
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_owner"},
+		Context:  &callback.Context{OpenChatID: "oc_1", OpenMessageID: "om_session_card"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			modelPickerActionKey: channelSessionControlAction,
+			"task_id":            "task-session",
+			"action":             core.ChannelSessionActionNew,
+			"chat_id":            "oc_1",
+			"chat_type":          "group",
+			"conversation_key":   "root:om_1",
+		}},
+	}}
+	msg, ok := client.messageFromCardAction("channel:c1", event)
+	if !ok || msg == nil || msg.LogOnly || msg.ChannelSessionAction == nil {
+		t.Fatalf("session action was not recognized: %+v", msg)
+	}
+	if msg.ChannelSessionAction.TaskID != "task-session" || msg.ChannelSessionAction.Action != core.ChannelSessionActionNew || msg.UserID != "ou_owner" {
+		t.Fatalf("session action message = %+v", msg)
 	}
 }
 

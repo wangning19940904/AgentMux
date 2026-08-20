@@ -135,6 +135,7 @@ func (pr *projectRuntime) session(ctx context.Context, chatID, chatType, convers
 	if err != nil {
 		return nil, nil, false, err
 	}
+	pr.owner.persistConversationSessionHandle(ctx, conv, s)
 	pr.sessions[cacheKey] = s
 	return s, conv, true, nil
 }
@@ -146,6 +147,11 @@ func (pr *projectRuntime) session(ctx context.Context, chatID, chatType, convers
 // When no conversation store is attached it returns a nil conversation and the
 // initialized fallback work dir, preserving the legacy chatID-keyed behavior.
 func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatType, conversationKey string, ws WorkspaceInitOptions, fallbackWorkDir string) (*Conversation, string, error) {
+	if conversationKey == "" {
+		conversationKey = "chat:" + chatID
+	}
+	ws.ConversationScope = scope
+	ws.ConversationKey = conversationKey
 	workDir, err := e.initializeWorkspace(ctx, ws, fallbackWorkDir)
 	if err != nil {
 		return nil, "", err
@@ -154,9 +160,6 @@ func (e *Engine) prepareConversation(ctx context.Context, scope, chatID, chatTyp
 		return nil, workDir, nil
 	}
 
-	if conversationKey == "" {
-		conversationKey = "chat:" + chatID
-	}
 	conv, _, err := e.conversations.GetOrCreateConversation(ctx, Conversation{
 		Scope:           scope,
 		ConversationKey: conversationKey,
@@ -227,6 +230,18 @@ func (e *Engine) persistConversationTurn(ctx context.Context, conv *Conversation
 	}
 	if err := e.conversations.TouchConversation(ctx, conv.ID); err != nil {
 		e.log.Warn("touch conversation", "conversation", conv.ID, "err", err)
+	}
+	e.persistConversationSessionHandle(ctx, conv, sess)
+}
+
+// persistConversationSessionHandle records a resume handle as soon as a
+// session exposes it. Persistent terminal runtimes know their tmux identity
+// before the first turn, so a daemon crash during that turn must not orphan the
+// backing process merely because the ordinary completed-turn persistence did
+// not run yet.
+func (e *Engine) persistConversationSessionHandle(ctx context.Context, conv *Conversation, sess AgentSession) {
+	if e.conversations == nil || conv == nil || sess == nil {
+		return
 	}
 	ns, ok := sess.(NativeSessioned)
 	if !ok {

@@ -60,6 +60,18 @@ func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		if providerID != "" {
 			req.ProviderID = providerID
 		}
+		if terminal, ok := s.sender.(core.ConversationTerminalController); ok {
+			info, terminalErr := terminal.TerminalSessionInfo(r.Context(), strings.TrimPrefix(conversation.Scope, "channel:"), *conversation)
+			if terminalErr == nil && info.Backend != "" {
+				snapshot, snapshotErr := terminal.TerminalSnapshot(r.Context(), strings.TrimPrefix(conversation.Scope, "channel:"), *conversation)
+				if snapshotErr != nil {
+					writeErr(w, http.StatusConflict, snapshotErr.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, []sessionstore.Message{{Role: "assistant", Kind: "terminal", Content: snapshot}})
+				return
+			}
+		}
 	}
 	items, err := s.sessions.Messages(r.Context(), req)
 	if err != nil {
@@ -317,6 +329,15 @@ func (s *Server) enrichSessionRows(
 				}
 			}
 		}
+		if agent.SessionBackend == "tmux" {
+			row.TerminalBackend = "tmux"
+			if terminal, ok := s.sender.(core.ConversationTerminalController); ok {
+				if info, infoErr := terminal.TerminalSessionInfo(ctx, channelID, conversation); infoErr == nil {
+					row.TerminalAvailable = info.Available
+					row.TerminalAttachCommand = info.AttachCommand
+				}
+			}
+		}
 		rows = append(rows, row)
 	}
 	for i, item := range native {
@@ -328,6 +349,101 @@ func (s *Server) enrichSessionRows(
 		return rows[i].LastActiveAt.After(rows[j].LastActiveAt)
 	})
 	return rows, nil
+}
+
+func (s *Server) handleSessionTerminalGet(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "terminal access is available only from the local console")
+		return
+	}
+	conversation, err := s.channelConversation(r, r.URL.Query().Get("channel_id"), r.URL.Query().Get("conversation_id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	controller, ok := s.sender.(core.ConversationTerminalController)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "terminal control is unavailable")
+		return
+	}
+	channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	info, err := controller.TerminalSessionInfo(r.Context(), channelID, *conversation)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if info.Backend == "" {
+		writeErr(w, http.StatusNotFound, "conversation has no managed terminal session")
+		return
+	}
+	snapshot, err := controller.TerminalSnapshot(r.Context(), channelID, *conversation)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"info": info, "snapshot": snapshot})
+}
+
+func (s *Server) handleSessionTerminalInput(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "terminal input is available only from the local console")
+		return
+	}
+	var req struct {
+		ChannelID      string `json:"channel_id"`
+		ConversationID string `json:"conversation_id"`
+		Text           string `json:"text"`
+		Submit         bool   `json:"submit"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	conversation, err := s.channelConversation(r, req.ChannelID, req.ConversationID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	controller, ok := s.sender.(core.ConversationTerminalController)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "terminal control is unavailable")
+		return
+	}
+	if err := controller.WriteTerminal(r.Context(), strings.TrimSpace(req.ChannelID), *conversation, req.Text, req.Submit); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeOK(w)
+}
+
+func (s *Server) handleSessionTerminalResize(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "terminal resize is available only from the local console")
+		return
+	}
+	var req struct {
+		ChannelID      string `json:"channel_id"`
+		ConversationID string `json:"conversation_id"`
+		Columns        int    `json:"columns"`
+		Rows           int    `json:"rows"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	conversation, err := s.channelConversation(r, req.ChannelID, req.ConversationID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	controller, ok := s.sender.(core.ConversationTerminalController)
+	if !ok {
+		writeErr(w, http.StatusServiceUnavailable, "terminal control is unavailable")
+		return
+	}
+	if err := controller.ResizeTerminal(r.Context(), strings.TrimSpace(req.ChannelID), *conversation, req.Columns, req.Rows); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeOK(w)
 }
 
 func sessionConversationTaskKey(channelID, conversationKey string) string {

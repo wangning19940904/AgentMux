@@ -92,6 +92,12 @@ func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Re
 		if opts.WorkDir == "" {
 			opts.WorkDir = inst.WorkDir
 		}
+		if opts.WorkspaceMode == "" {
+			opts.WorkspaceMode = inst.WorkspaceMode
+		}
+		if opts.WorktreeBaseRef == "" {
+			opts.WorktreeBaseRef = inst.WorktreeBaseRef
+		}
 		if len(opts.Skills) == 0 {
 			opts.Skills = append([]string(nil), inst.Skills...)
 		}
@@ -178,6 +184,9 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.Name = strings.TrimSpace(a.Name)
 	a.RuntimeID = strings.TrimSpace(a.RuntimeID)
 	a.WorkDir = strings.TrimSpace(a.WorkDir)
+	a.WorkspaceMode = strings.ToLower(strings.TrimSpace(a.WorkspaceMode))
+	a.WorktreeBaseRef = strings.TrimSpace(a.WorktreeBaseRef)
+	a.SessionBackend = strings.ToLower(strings.TrimSpace(a.SessionBackend))
 	a.ProviderTool = strings.TrimSpace(a.ProviderTool)
 	a.ProviderID = strings.TrimSpace(a.ProviderID)
 	a.DefaultModel = strings.TrimSpace(a.DefaultModel)
@@ -193,6 +202,27 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	}
 	if !knownAgentRuntime(a.RuntimeID) {
 		return fmt.Errorf("unknown agent runtime %q", a.RuntimeID)
+	}
+	if a.WorkspaceMode == "" {
+		a.WorkspaceMode = "shared"
+	}
+	if a.WorkspaceMode != "shared" && a.WorkspaceMode != "worktree" {
+		return fmt.Errorf("workspace mode must be shared or worktree")
+	}
+	if a.WorkspaceMode == "worktree" && a.WorkDir == "" {
+		return fmt.Errorf("worktree workspace mode requires a working directory")
+	}
+	if a.SessionBackend == "" {
+		a.SessionBackend = "structured"
+	}
+	if a.SessionBackend != "structured" && a.SessionBackend != "tmux" {
+		return fmt.Errorf("session backend must be structured or tmux")
+	}
+	if a.SessionBackend == "tmux" {
+		spec, ok := framework.Lookup(a.RuntimeID)
+		if !ok || spec.KindType != framework.KindCLI {
+			return fmt.Errorf("tmux session backend requires a CLI runtime")
+		}
 	}
 	newRecord := strings.TrimSpace(a.ID) == ""
 	creatingRecord := newRecord
@@ -276,6 +306,9 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 			Name:            p.Name,
 			RuntimeID:       p.Agent,
 			WorkDir:         p.WorkDir,
+			WorkspaceMode:   firstAgentWorkspaceMode(p.WorkspaceMode),
+			WorktreeBaseRef: p.WorktreeBaseRef,
+			SessionBackend:  firstAgentSessionBackend(p.SessionBackend),
 			SystemPrompt:    p.SystemPrompt,
 			ProviderTool:    p.Agent,
 			DefaultModel:    p.DefaultModel,
@@ -287,6 +320,20 @@ func (s *Server) configAgentInstances() []core.AgentInstance {
 		})
 	}
 	return out
+}
+
+func firstAgentWorkspaceMode(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "worktree") {
+		return "worktree"
+	}
+	return "shared"
+}
+
+func firstAgentSessionBackend(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "tmux") {
+		return "tmux"
+	}
+	return "structured"
 }
 
 func configAgentInstanceID(projectName string, projectIndex int) string {

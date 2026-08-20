@@ -73,6 +73,42 @@ enabled = true
 	}
 }
 
+func TestProjectWorkspacePolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[[projects]]
+name = "isolated"
+agent = "codex"
+work_dir = "/tmp/project"
+workspace_mode = "worktree"
+worktree_base_ref = "origin/main"
+session_backend = "tmux"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := cfg.Projects[0]
+	if project.WorkspaceMode != "worktree" || project.WorktreeBaseRef != "origin/main" || project.SessionBackend != "tmux" {
+		t.Fatalf("workspace policy = %+v", project)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.toml")
+	if err := os.WriteFile(bad, []byte(`[[projects]]
+name = "bad"
+agent = "codex"
+workspace_mode = "container"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(bad); err == nil {
+		t.Fatal("invalid workspace mode was accepted")
+	}
+}
+
 func TestObservabilityDefaultsAndExporter(t *testing.T) {
 	content := `
 [observability]

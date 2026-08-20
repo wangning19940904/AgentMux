@@ -18,12 +18,17 @@ import type {
   CLIUpdateCheck,
   Channel,
   ChannelConversation,
+  ChannelFeedback,
   ChannelInteraction,
   ChannelTask,
   Claude3PStatus,
   DiscoveredRemoteHost,
   FeishuSetupBeginResponse,
   FeishuSetupPollResponse,
+  FeishuAutomationBeginResponse,
+  FeishuAutomationPollResponse,
+  FeishuAutomationResult,
+  FeedbackReport,
   FrameworkAuthStatus,
   FrameworkInstallResult,
   FrameworkLoginResult,
@@ -49,6 +54,8 @@ import type {
   ObservationTrace,
   ObservationTraceDetail,
   ObservationTraceFilters,
+  Orchestration,
+  OrchestrationTask,
   OperationProgress,
   Provider,
   ProviderMonitorConfig,
@@ -63,6 +70,7 @@ import type {
   Skill,
   Status,
   SystemDirectoryListing,
+  TerminalSessionView,
   ToolsResponse,
 	TTSCatalogStatus,
 	TTSModel,
@@ -380,6 +388,17 @@ export const api = {
   beginFeishuSetup: () => postChecked<FeishuSetupBeginResponse>("/api/v1/setup/feishu/begin", {}),
   pollFeishuSetup: (deviceCode: string, baseUrl = "") =>
     postChecked<FeishuSetupPollResponse>("/api/v1/setup/feishu/poll", { device_code: deviceCode, base_url: baseUrl }),
+  beginFeishuAutomation: () =>
+    postChecked<FeishuAutomationBeginResponse>("/api/v1/setup/feishu/automation/begin", {}),
+  pollFeishuAutomation: (sessionID: string) =>
+    postChecked<FeishuAutomationPollResponse>("/api/v1/setup/feishu/automation/poll", { session_id: sessionID }),
+  configureFeishuAutomation: (sessionID: string, appID: string, visibility: "owner" | "all") =>
+    postChecked<FeishuAutomationResult>("/api/v1/setup/feishu/automation/configure", {
+      session_id: sessionID,
+      app_id: appID,
+      publish: true,
+      visibility,
+    }),
   triggers: () => get<Trigger[] | null>("/api/v1/triggers"),
   upsertTrigger: (tr: Partial<Trigger>) => postChecked<Trigger>("/api/v1/triggers", tr),
   deleteTrigger: (id: string) => del<{ ok: boolean }>(`/api/v1/triggers?id=${encodeURIComponent(id)}`),
@@ -457,6 +476,38 @@ export const api = {
 			conversation_id: session.conversation_id,
 			active_task_id: session.active_task_id,
 		}),
+  terminalSession: (session: Pick<AgentSession, "channel_id" | "conversation_id">) =>
+    get<TerminalSessionView>(
+      `/api/v1/sessions/terminal?channel_id=${encodeURIComponent(session.channel_id ?? "")}&conversation_id=${encodeURIComponent(session.conversation_id ?? "")}`
+    ),
+  writeTerminal: (session: Pick<AgentSession, "channel_id" | "conversation_id">, text: string, submit = true) =>
+    postChecked<{ ok: boolean }>("/api/v1/sessions/terminal/input", {
+      channel_id: session.channel_id,
+      conversation_id: session.conversation_id,
+      text,
+      submit,
+    }),
+  resizeTerminal: (session: Pick<AgentSession, "channel_id" | "conversation_id">, columns: number, rows: number) =>
+    postChecked<{ ok: boolean }>("/api/v1/sessions/terminal/resize", {
+      channel_id: session.channel_id,
+      conversation_id: session.conversation_id,
+      columns,
+      rows,
+    }),
+  feedback: (filters: { channelID?: string; taskID?: string; limit?: number } = {}) =>
+    get<FeedbackReport>(
+      `/api/v1/feedback?channel_id=${encodeURIComponent(filters.channelID ?? "")}&task_id=${encodeURIComponent(filters.taskID ?? "")}&limit=${filters.limit ?? 200}`
+    ),
+  updateFeedbackDetail: (feedback: Pick<ChannelFeedback, "id"> & { reason?: string; comment?: string }) =>
+    postChecked<{ ok: boolean }>("/api/v1/feedback/detail", feedback),
+  orchestrations: (active = false) =>
+    get<Orchestration[] | null>(`/api/v1/orchestrations?active=${active}`),
+  orchestration: (id: string) =>
+    get<Orchestration>(`/api/v1/orchestrations?id=${encodeURIComponent(id)}`),
+  createOrchestration: (payload: { name?: string; max_concurrency?: number; tasks: Array<Pick<OrchestrationTask, "id" | "agent_id" | "project" | "input" | "depends_on">> }) =>
+    postChecked<Orchestration>("/api/v1/orchestrations", payload),
+  cancelOrchestration: (id: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/orchestrations/cancel", { id }),
   deleteSession: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path">) =>
     del<{ ok: boolean }>(
       `/api/v1/sessions?provider=${encodeURIComponent(session.provider_id)}&surface=${encodeURIComponent(

@@ -28,6 +28,18 @@ type runtimeChannelTask struct {
 // every classic channel/runtime on the existing direct path.
 func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data map[string]string) {
 	rt := e.channelRuntime(msg.ChannelID)
+	if rt != nil && msg.ChannelFeedbackAction != nil {
+		e.handleChannelFeedback(ctx, rt, msg, data, *msg.ChannelFeedbackAction)
+		return
+	}
+	if rt != nil && msg.ChannelSessionAction != nil {
+		e.handleChannelSessionAction(ctx, rt, msg, data, *msg.ChannelSessionAction)
+		return
+	}
+	if rt != nil && !rt.remoteControlEnabled() && msg.ChannelTaskAction != nil {
+		e.handleDirectTaskAction(ctx, rt, msg, data, *msg.ChannelTaskAction)
+		return
+	}
 	if rt != nil && e.handleMeetingMessage(ctx, rt, msg, data) {
 		return
 	}
@@ -196,8 +208,9 @@ func (rt *channelRuntime) attachRemoteSession(key string, session AgentSession, 
 
 func (e *Engine) newRemoteTask(rt *channelRuntime, msg *Message, prompt string, status ChannelTaskStatus) *runtimeChannelTask {
 	now := time.Now().UTC()
+	taskID := NewChannelControlID("task")
 	task := ChannelTask{
-		ID:              NewChannelControlID("task"),
+		ID:              taskID,
 		ChannelID:       rt.channel.ID,
 		ConversationKey: ResolveConversationKey(msg),
 		ChatID:          msg.ChatID,
@@ -208,6 +221,9 @@ func (e *Engine) newRemoteTask(rt *channelRuntime, msg *Message, prompt string, 
 		UserID:          msg.UserID,
 		ControllerID:    msg.UserID,
 		Status:          status,
+		DeliveryKey:     "turn:" + taskID,
+		DeliveryStatus:  ChannelDeliveryPending,
+		FeedbackNonce:   NewChannelControlID("feedback"),
 		Prompt:          prompt,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -226,6 +242,8 @@ func cloneChannelMessage(msg *Message) *Message {
 	clone.RuntimeSettingsAction = nil
 	clone.AgentInteractionAction = nil
 	clone.ChannelTaskAction = nil
+	clone.ChannelFeedbackAction = nil
+	clone.ChannelSessionAction = nil
 	clone.Callback = nil
 	clone.LogOnly = false
 	return &clone
@@ -373,12 +391,18 @@ func (e *Engine) markRemoteTaskError(data map[string]string) {
 	rt.controlMu.Lock()
 	defer rt.controlMu.Unlock()
 	state := rt.controlStateLocked(data["conversation_key"])
-	if state.active == nil || state.active.task.ID != data["task_id"] {
+	if state.active != nil && state.active.task.ID == data["task_id"] {
+		state.active.runErr = strings.TrimSpace(data["error"])
+		if state.active.runErr == "" {
+			state.active.runErr = "Agent task failed"
+		}
 		return
 	}
-	state.active.runErr = strings.TrimSpace(data["error"])
-	if state.active.runErr == "" {
-		state.active.runErr = "Codex task failed"
+	if direct := rt.directTurns[data["conversation_key"]]; direct != nil && direct.task != nil && direct.task.ID == data["task_id"] {
+		direct.runErr = strings.TrimSpace(data["error"])
+		if direct.runErr == "" {
+			direct.runErr = "Agent task failed"
+		}
 	}
 }
 
@@ -410,16 +434,33 @@ func (e *Engine) updateRemoteTaskFromEvent(data map[string]string, event *Event)
 	}
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(data["conversation_key"])
-	if state.active == nil || state.active.task.ID != data["task_id"] || state.active.task.TurnID == event.TurnID {
+	if state.active != nil && state.active.task.ID == data["task_id"] {
+		if state.active.task.TurnID == event.TurnID {
+			rt.controlMu.Unlock()
+			return
+		}
+		state.active.task.TurnID = event.TurnID
+		state.active.task.UpdatedAt = time.Now().UTC()
+		task := state.active.task
+		data["native_turn_id"] = event.TurnID
 		rt.controlMu.Unlock()
+		_ = e.updateRemoteTask(context.Background(), task)
 		return
 	}
-	state.active.task.TurnID = event.TurnID
-	state.active.task.UpdatedAt = time.Now().UTC()
-	task := state.active.task
-	data["native_turn_id"] = event.TurnID
+	if direct := rt.directTurns[data["conversation_key"]]; direct != nil && direct.task != nil && direct.task.ID == data["task_id"] {
+		if direct.task.TurnID == event.TurnID {
+			rt.controlMu.Unlock()
+			return
+		}
+		direct.task.TurnID = event.TurnID
+		direct.task.UpdatedAt = time.Now().UTC()
+		task := *direct.task
+		data["native_turn_id"] = event.TurnID
+		rt.controlMu.Unlock()
+		_ = e.updateRemoteTask(context.Background(), task)
+		return
+	}
 	rt.controlMu.Unlock()
-	_ = e.updateRemoteTask(context.Background(), task)
 }
 
 func (e *Engine) finishRemoteTask(rt *channelRuntime, task *runtimeChannelTask, status ChannelTaskStatus, errText string) {
@@ -473,6 +514,72 @@ func (e *Engine) updateRemoteTask(ctx context.Context, task ChannelTask) error {
 	return e.channelControl.UpdateChannelTask(ctx, task)
 }
 
+// recordChannelDeliveryAttempt persists the final-response delivery state for
+// both queued remote-control tasks and ordinary channel turns. finalFailure is
+// true only after retry exhaustion; transient failures remain pending.
+func (e *Engine) recordChannelDeliveryAttempt(data map[string]string, deliveryErr error, finalFailure bool) {
+	if data == nil || data["channel_id"] == "" || data["conversation_key"] == "" || data["task_id"] == "" {
+		return
+	}
+	rt := e.channelRuntime(data["channel_id"])
+	if rt == nil {
+		return
+	}
+	rt.controlMu.Lock()
+	var task *ChannelTask
+	if state := rt.controlStateLocked(data["conversation_key"]); state.active != nil && state.active.task.ID == data["task_id"] {
+		task = &state.active.task
+		if deliveryErr != nil && finalFailure {
+			state.active.runErr = "final response delivery failed: " + deliveryErr.Error()
+		}
+	} else if direct := rt.directTurns[data["conversation_key"]]; direct != nil && direct.task != nil && direct.task.ID == data["task_id"] {
+		task = direct.task
+		if deliveryErr != nil && finalFailure {
+			direct.runErr = "final response delivery failed: " + deliveryErr.Error()
+		}
+	}
+	if task == nil {
+		rt.controlMu.Unlock()
+		return
+	}
+	task.DeliveryAttempts++
+	task.UpdatedAt = time.Now().UTC()
+	if deliveryErr == nil {
+		task.DeliveryStatus = ChannelDeliverySent
+		task.DeliveryError = ""
+		task.DeliveredAt = task.UpdatedAt
+	} else {
+		task.DeliveryError = deliveryErr.Error()
+		if finalFailure {
+			task.DeliveryStatus = ChannelDeliveryFailed
+		} else {
+			task.DeliveryStatus = ChannelDeliveryPending
+		}
+	}
+	snapshot := *task
+	rt.controlMu.Unlock()
+	_ = e.updateRemoteTask(context.Background(), snapshot)
+}
+
+func (e *Engine) activeChannelTask(data map[string]string) (ChannelTask, bool) {
+	if data == nil || data["channel_id"] == "" || data["conversation_key"] == "" || data["task_id"] == "" {
+		return ChannelTask{}, false
+	}
+	rt := e.channelRuntime(data["channel_id"])
+	if rt == nil {
+		return ChannelTask{}, false
+	}
+	rt.controlMu.Lock()
+	defer rt.controlMu.Unlock()
+	if state := rt.controlStateLocked(data["conversation_key"]); state.active != nil && state.active.task.ID == data["task_id"] {
+		return state.active.task, true
+	}
+	if direct := rt.directTurns[data["conversation_key"]]; direct != nil && direct.task != nil && direct.task.ID == data["task_id"] {
+		return *direct.task, true
+	}
+	return ChannelTask{}, false
+}
+
 func (e *Engine) remoteWorkLock(workDir string) *sync.Mutex {
 	key := strings.TrimSpace(workDir)
 	if key == "" {
@@ -510,12 +617,15 @@ func withTaskData(data map[string]string, task ChannelTask, action string) map[s
 }
 
 func (e *Engine) recoverRemoteTasks(rt *channelRuntime) {
-	if rt == nil || !rt.remoteControlEnabled() || e.channelControl == nil {
+	if rt == nil || e.channelControl == nil {
 		return
 	}
 	tasks, err := e.channelControl.RecoverChannelTasks(context.Background(), rt.channel.ID)
 	if err != nil {
 		e.log.Warn("recover channel tasks", "channel", rt.channel.ID, "err", err)
+		return
+	}
+	if !rt.remoteControlEnabled() {
 		return
 	}
 	if updater, ok := rt.platform.(AgentInteractionUpdateReplier); ok {

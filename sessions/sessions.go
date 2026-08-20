@@ -21,36 +21,39 @@ import (
 
 // Meta is the UI-facing shape for one local or app-server backed agent session.
 type Meta struct {
-	ProviderID      string    `json:"provider_id"`
-	Surface         string    `json:"surface"` // cli, app-server
-	SessionID       string    `json:"session_id"`
-	NativeSessionID string    `json:"native_session_id,omitempty"`
-	Title           string    `json:"title,omitempty"`
-	Summary         string    `json:"summary,omitempty"`
-	ProjectDir      string    `json:"project_dir,omitempty"`
-	CreatedAt       time.Time `json:"created_at,omitempty"`
-	LastActiveAt    time.Time `json:"last_active_at,omitempty"`
-	SourcePath      string    `json:"source_path,omitempty"`
-	ResumeCommand   string    `json:"resume_command,omitempty"`
-	FileBacked      bool      `json:"file_backed"`
-	MessageCount    int       `json:"message_count"`
-	MessagesPartial bool      `json:"messages_partial,omitempty"`
-	Available       bool      `json:"available"`
-	StatusMessage   string    `json:"status_message,omitempty"`
-	Origin          string    `json:"origin,omitempty"` // local, channel
-	AgentID         string    `json:"agent_id,omitempty"`
-	AgentName       string    `json:"agent_name,omitempty"`
-	ChannelID       string    `json:"channel_id,omitempty"`
-	ChannelName     string    `json:"channel_name,omitempty"`
-	ChannelType     string    `json:"channel_type,omitempty"`
-	ConversationID  string    `json:"conversation_id,omitempty"`
-	ConversationKey string    `json:"conversation_key,omitempty"`
-	ChatID          string    `json:"chat_id,omitempty"`
-	ChatType        string    `json:"chat_type,omitempty"`
-	CanChat         bool      `json:"can_chat,omitempty"`
-	RunStatus       string    `json:"run_status,omitempty"`
-	CanStop         bool      `json:"can_stop,omitempty"`
-	ActiveTaskID    string    `json:"active_task_id,omitempty"`
+	ProviderID            string    `json:"provider_id"`
+	Surface               string    `json:"surface"` // cli, app-server
+	SessionID             string    `json:"session_id"`
+	NativeSessionID       string    `json:"native_session_id,omitempty"`
+	Title                 string    `json:"title,omitempty"`
+	Summary               string    `json:"summary,omitempty"`
+	ProjectDir            string    `json:"project_dir,omitempty"`
+	CreatedAt             time.Time `json:"created_at,omitempty"`
+	LastActiveAt          time.Time `json:"last_active_at,omitempty"`
+	SourcePath            string    `json:"source_path,omitempty"`
+	ResumeCommand         string    `json:"resume_command,omitempty"`
+	FileBacked            bool      `json:"file_backed"`
+	MessageCount          int       `json:"message_count"`
+	MessagesPartial       bool      `json:"messages_partial,omitempty"`
+	Available             bool      `json:"available"`
+	StatusMessage         string    `json:"status_message,omitempty"`
+	Origin                string    `json:"origin,omitempty"` // local, channel
+	AgentID               string    `json:"agent_id,omitempty"`
+	AgentName             string    `json:"agent_name,omitempty"`
+	ChannelID             string    `json:"channel_id,omitempty"`
+	ChannelName           string    `json:"channel_name,omitempty"`
+	ChannelType           string    `json:"channel_type,omitempty"`
+	ConversationID        string    `json:"conversation_id,omitempty"`
+	ConversationKey       string    `json:"conversation_key,omitempty"`
+	ChatID                string    `json:"chat_id,omitempty"`
+	ChatType              string    `json:"chat_type,omitempty"`
+	CanChat               bool      `json:"can_chat,omitempty"`
+	RunStatus             string    `json:"run_status,omitempty"`
+	CanStop               bool      `json:"can_stop,omitempty"`
+	ActiveTaskID          string    `json:"active_task_id,omitempty"`
+	TerminalBackend       string    `json:"terminal_backend,omitempty"`
+	TerminalAvailable     bool      `json:"terminal_available,omitempty"`
+	TerminalAttachCommand string    `json:"terminal_attach_command,omitempty"`
 }
 
 // Message is a compact transcript row extracted from a session source.

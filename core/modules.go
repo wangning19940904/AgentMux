@@ -64,13 +64,25 @@ type SkillManager interface {
 // WorkspaceInitOptions describes the agent workspace that must be prepared
 // before a local agent runtime starts.
 type WorkspaceInitOptions struct {
-	AgentID         string          `json:"agent_id,omitempty"`
-	AgentName       string          `json:"agent_name,omitempty"`
-	RuntimeID       string          `json:"runtime_id,omitempty"`
-	WorkDir         string          `json:"work_dir,omitempty"`
-	Skills          []string        `json:"skills,omitempty"`
-	MCPServers      []string        `json:"mcp_servers,omitempty"`
-	RuntimeDefaults RuntimeSettings `json:"runtime_defaults,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
+	RuntimeID string `json:"runtime_id,omitempty"`
+	WorkDir   string `json:"work_dir,omitempty"`
+	// WorkspaceMode controls whether conversations share WorkDir or receive a
+	// dedicated git worktree. The empty value is the backwards-compatible
+	// shared mode.
+	WorkspaceMode string `json:"workspace_mode,omitempty"`
+	// WorktreeBaseRef is the git ref used when a new conversation worktree is
+	// created. Empty means the repository's current HEAD.
+	WorktreeBaseRef string `json:"worktree_base_ref,omitempty"`
+	// ConversationScope and ConversationKey are the stable, transport-neutral
+	// identity used to derive a deterministic worktree path. They are supplied
+	// by the Engine at runtime and are never user-editable settings.
+	ConversationScope string          `json:"conversation_scope,omitempty"`
+	ConversationKey   string          `json:"conversation_key,omitempty"`
+	Skills            []string        `json:"skills,omitempty"`
+	MCPServers        []string        `json:"mcp_servers,omitempty"`
+	RuntimeDefaults   RuntimeSettings `json:"runtime_defaults,omitempty"`
 }
 
 // ConversationBaseDir returns the configured agent working directory.
@@ -83,12 +95,15 @@ func (o WorkspaceInitOptions) ConversationBaseDir() string {
 
 // WorkspaceInitResult reports what the initializer created or warned about.
 type WorkspaceInitResult struct {
-	WorkDir   string   `json:"work_dir"`
-	Created   []string `json:"created,omitempty"`
-	Updated   []string `json:"updated,omitempty"`
-	Warnings  []string `json:"warnings,omitempty"`
-	RuntimeID string   `json:"runtime_id,omitempty"`
-	AgentID   string   `json:"agent_id,omitempty"`
+	WorkDir        string   `json:"work_dir"`
+	BaseWorkDir    string   `json:"base_work_dir,omitempty"`
+	WorkspaceMode  string   `json:"workspace_mode,omitempty"`
+	WorktreeBranch string   `json:"worktree_branch,omitempty"`
+	Created        []string `json:"created,omitempty"`
+	Updated        []string `json:"updated,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+	RuntimeID      string   `json:"runtime_id,omitempty"`
+	AgentID        string   `json:"agent_id,omitempty"`
 }
 
 // WorkspaceInitializer prepares a work directory for one agent run.

@@ -29,6 +29,9 @@ connect_timeout_seconds = 10
 # name = "demo"
 # agent = "claudecode"
 # work_dir = "."
+# workspace_mode = "shared" # shared | worktree
+# worktree_base_ref = "main" # optional; worktree mode defaults to HEAD
+# session_backend = "structured" # structured | tmux (persistent interactive CLI)
 # system_prompt = "You are a helpful coding assistant."
 # default_model = "sonnet"
 #

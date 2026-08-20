@@ -144,6 +144,11 @@ func buildCard(text string, done, failed bool, control *streamCardControl) strin
 		if control != nil {
 			elements = append(elements, legacyStreamStopButton(control))
 		}
+	} else if !failed && control != nil {
+		elements = append(elements, legacySessionButtons(control))
+		if control.feedbackNonce != "" {
+			elements = append(elements, legacyFeedbackButtons(control))
+		}
 	}
 
 	template := "blue"
@@ -203,6 +208,11 @@ func buildStreamCardJSON(text string, done, failed bool, control *streamCardCont
 	}
 	if !done && control != nil {
 		elements = append(elements, modelPickerButton("停止任务", "danger", streamStopActionValue(control)))
+	} else if done && !failed && control != nil {
+		elements = append(elements, sessionButtonColumns(control))
+		if control.feedbackNonce != "" {
+			elements = append(elements, feedbackButtonColumns(control))
+		}
 	}
 	card := map[string]any{
 		"schema": "2.0",
@@ -307,6 +317,70 @@ func streamStopActionValue(control *streamCardControl) map[string]any {
 		modelPickerActionKey: codexTaskControlAction,
 		"action":             core.ChannelTaskActionStop,
 		"task_id":            control.taskID,
+		"chat_id":            control.chatID,
+		"chat_type":          control.chatType,
+		"conversation_key":   control.conversationKey,
+	}
+}
+
+func legacyFeedbackButtons(control *streamCardControl) map[string]any {
+	return map[string]any{
+		"tag": "action",
+		"actions": []map[string]any{
+			{"tag": "button", "type": "primary", "text": map[string]any{"tag": "plain_text", "content": "结论可用"}, "value": feedbackActionValue(control, core.FeedbackPositive)},
+			{"tag": "button", "type": "default", "text": map[string]any{"tag": "plain_text", "content": "有效推进"}, "value": feedbackActionValue(control, core.FeedbackProgress)},
+			{"tag": "button", "type": "danger", "text": map[string]any{"tag": "plain_text", "content": "结论有误"}, "value": feedbackActionValue(control, core.FeedbackNegative)},
+		},
+	}
+}
+
+func legacySessionButtons(control *streamCardControl) map[string]any {
+	return map[string]any{"tag": "action", "actions": []map[string]any{
+		{"tag": "button", "type": "default", "text": map[string]any{"tag": "plain_text", "content": "新会话"}, "value": sessionActionValue(control, core.ChannelSessionActionNew)},
+		{"tag": "button", "type": "default", "text": map[string]any{"tag": "plain_text", "content": "会话状态"}, "value": sessionActionValue(control, core.ChannelSessionActionStatus)},
+	}}
+}
+
+func sessionButtonColumns(control *streamCardControl) map[string]any {
+	buttons := []map[string]any{
+		modelPickerButton("新会话", "default", sessionActionValue(control, core.ChannelSessionActionNew)),
+		modelPickerButton("会话状态", "default", sessionActionValue(control, core.ChannelSessionActionStatus)),
+	}
+	return map[string]any{"tag": "column_set", "flex_mode": "stretch", "columns": interactionButtonColumns(buttons)}
+}
+
+func sessionActionValue(control *streamCardControl, action string) map[string]any {
+	if control == nil {
+		return nil
+	}
+	return map[string]any{
+		modelPickerActionKey: channelSessionControlAction,
+		"task_id":            control.taskID,
+		"action":             action,
+		"chat_id":            control.chatID,
+		"chat_type":          control.chatType,
+		"conversation_key":   control.conversationKey,
+	}
+}
+
+func feedbackButtonColumns(control *streamCardControl) map[string]any {
+	buttons := []map[string]any{
+		modelPickerButton("结论可用", "primary", feedbackActionValue(control, core.FeedbackPositive)),
+		modelPickerButton("有效推进", "default", feedbackActionValue(control, core.FeedbackProgress)),
+		modelPickerButton("结论有误", "danger", feedbackActionValue(control, core.FeedbackNegative)),
+	}
+	return map[string]any{"tag": "column_set", "flex_mode": "stretch", "columns": interactionButtonColumns(buttons)}
+}
+
+func feedbackActionValue(control *streamCardControl, semantic string) map[string]any {
+	if control == nil {
+		return nil
+	}
+	return map[string]any{
+		modelPickerActionKey: channelFeedbackAction,
+		"task_id":            control.taskID,
+		"nonce":              control.feedbackNonce,
+		"semantic":           semantic,
 		"chat_id":            control.chatID,
 		"chat_type":          control.chatType,
 		"conversation_key":   control.conversationKey,

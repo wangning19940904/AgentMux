@@ -75,7 +75,8 @@ func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier,
 	if err != nil {
 		e.log.Error("send to session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
-		e.emitMessageStreamOnce(ctx, mr, msg, "failed: "+err.Error(), true)
+		deliveryErr := e.emitMessageStreamOnce(ctx, mr, msg, "failed: "+err.Error(), true)
+		e.recordChannelDeliveryAttempt(data, deliveryErr, deliveryErr != nil)
 		return
 	}
 
@@ -83,14 +84,21 @@ func (e *Engine) streamTurnMessage(ctx context.Context, mr StreamMessageReplier,
 	if err != nil {
 		e.log.Error("begin streaming message reply", "err", err)
 		var reply func(string)
+		var deliveryErr error
 		if p, ok := mr.(Platform); ok {
 			reply = func(text string) {
 				if rerr := p.Reply(ctx, msg, text); rerr != nil {
+					deliveryErr = rerr
 					e.log.Error("channel reply", "err", rerr)
 				}
 			}
 		}
-		e.consumeTurn(ctx, sess, events, reply, data)
+		answer, _ := e.consumeTurn(ctx, sess, events, reply, data)
+		if deliveryErr != nil {
+			e.recordChannelDeliveryAttempt(data, deliveryErr, true)
+		} else if answer != "" {
+			e.recordChannelDeliveryAttempt(data, nil, false)
+		}
 		return
 	}
 	defer func() { _ = stream.Close(ctx) }()
@@ -111,14 +119,17 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 	if err != nil {
 		e.log.Error("send to session", "err", err)
 		e.emit(ctx, HookError, withError(data, err))
-		e.emitCardOnce(ctx, sr, msg, "failed: "+err.Error(), true)
+		deliveryErr := e.emitCardOnce(ctx, sr, msg, "failed: "+err.Error(), true)
+		e.recordChannelDeliveryAttempt(data, deliveryErr, deliveryErr != nil)
 		return
 	}
 
 	var stream ReplyStream
-	if taskID := strings.TrimSpace(data["task_id"]); taskID != "" {
-		if taskReplier, ok := sr.(TaskStreamReplier); ok {
-			stream, err = taskReplier.BeginTaskReply(ctx, msg, taskID)
+	if task, found := e.activeChannelTask(data); found {
+		if feedbackReplier, ok := sr.(FeedbackTaskStreamReplier); ok {
+			stream, err = feedbackReplier.BeginFeedbackTaskReply(ctx, msg, task)
+		} else if taskReplier, ok := sr.(TaskStreamReplier); ok {
+			stream, err = taskReplier.BeginTaskReply(ctx, msg, task.ID)
 		}
 	}
 	if stream == nil && err == nil {
@@ -129,14 +140,21 @@ func (e *Engine) streamTurnCard(ctx context.Context, sr StreamReplier, sess Agen
 		// Degrade to per-event replies using the platform's Reply (the
 		// StreamReplier is always also a Platform).
 		var reply func(string)
+		var deliveryErr error
 		if p, ok := sr.(Platform); ok {
 			reply = func(text string) {
 				if rerr := p.Reply(ctx, msg, text); rerr != nil {
+					deliveryErr = rerr
 					e.log.Error("channel reply", "err", rerr)
 				}
 			}
 		}
-		e.consumeTurn(ctx, sess, events, reply, data)
+		answer, _ := e.consumeTurn(ctx, sess, events, reply, data)
+		if deliveryErr != nil {
+			e.recordChannelDeliveryAttempt(data, deliveryErr, true)
+		} else if answer != "" {
+			e.recordChannelDeliveryAttempt(data, nil, false)
+		}
 		return
 	}
 	defer func() { _ = stream.Close(ctx) }()
@@ -283,7 +301,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 		finalCtx, cancelFinal = context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	}
 	defer cancelFinal()
-	if err := stream.Update(finalCtx, tools.render(thinking, answer, true), true, failed); err != nil {
+	if err := e.finalizeReplyStream(finalCtx, stream, tools.render(thinking, answer, true), failed, data); err != nil {
 		e.log.Error("stream finalize", "err", err)
 	}
 	if speech != nil && !failed && answer != "" && answer != "NO_REPLY" {
@@ -291,6 +309,31 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			e.log.Warn("speech finalize", "err", err)
 		}
 	}
+}
+
+func (e *Engine) finalizeReplyStream(ctx context.Context, stream ReplyStream, body string, failed bool, data map[string]string) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		lastErr = stream.Update(ctx, body, true, failed)
+		if lastErr == nil {
+			e.recordChannelDeliveryAttempt(data, nil, false)
+			return nil
+		}
+		final := attempt == 2
+		e.recordChannelDeliveryAttempt(data, lastErr, final)
+		if final {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			e.recordChannelDeliveryAttempt(data, ctx.Err(), true)
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
 }
 
 func (e *Engine) remoteTaskStopRequested(data map[string]string) bool {
@@ -304,7 +347,11 @@ func (e *Engine) remoteTaskStopRequested(data map[string]string) bool {
 	rt.controlMu.Lock()
 	defer rt.controlMu.Unlock()
 	state := rt.controlStateLocked(data["conversation_key"])
-	return state.active != nil && state.active.task.ID == data["task_id"] && state.active.stopRequested
+	if state.active != nil && state.active.task.ID == data["task_id"] && state.active.stopRequested {
+		return true
+	}
+	direct := rt.directTurns[data["conversation_key"]]
+	return direct != nil && direct.task != nil && direct.task.ID == data["task_id"] && direct.stopRequested
 }
 
 func shouldPreserveCompletedCursorAnswer(ev *Event, answer string, answerAfterLastTool bool, tools toolProgress) bool {
@@ -317,28 +364,32 @@ func shouldPreserveCompletedCursorAnswer(ev *Event, answer string, answerAfterLa
 	return strings.Contains(strings.ToLower(ev.Err.Error()), "writableiterable is closed")
 }
 
-func (e *Engine) emitMessageStreamOnce(ctx context.Context, mr StreamMessageReplier, msg *Message, text string, failed bool) {
+func (e *Engine) emitMessageStreamOnce(ctx context.Context, mr StreamMessageReplier, msg *Message, text string, failed bool) error {
 	stream, err := mr.BeginMessageReply(ctx, msg)
 	if err != nil {
 		e.log.Error("begin streaming message reply", "err", err)
-		return
+		return err
 	}
 	defer func() { _ = stream.Close(ctx) }()
 	if err := stream.Update(ctx, text, true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
+		return err
 	}
+	return nil
 }
 
 // emitCardOnce sends a single terminal streaming message, used when the turn
 // fails before any events could be produced.
-func (e *Engine) emitCardOnce(ctx context.Context, sr StreamReplier, msg *Message, text string, failed bool) {
+func (e *Engine) emitCardOnce(ctx context.Context, sr StreamReplier, msg *Message, text string, failed bool) error {
 	stream, err := sr.BeginReply(ctx, msg)
 	if err != nil {
 		e.log.Error("begin streaming reply", "err", err)
-		return
+		return err
 	}
 	defer func() { _ = stream.Close(ctx) }()
 	if err := stream.Update(ctx, text, true, failed); err != nil {
 		e.log.Error("stream finalize", "err", err)
+		return err
 	}
+	return nil
 }

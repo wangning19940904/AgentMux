@@ -7,6 +7,9 @@ export const EMPTY_AGENT: AgentInstance = {
   name: "",
   runtime_id: "",
   work_dir: "",
+  workspace_mode: "shared",
+  worktree_base_ref: "",
+  session_backend: "structured",
   system_prompt: "",
   provider_tool: "",
   provider_id: "",
@@ -154,6 +157,7 @@ export function normalizeTool(tool: string): string {
     case "claude":
     case "claudecode":
     case "claudecode-cli":
+    case "claude-code":
     case "claude-code-cli":
       return "claudecode";
     case "claude-desktop":

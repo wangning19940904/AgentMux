@@ -216,6 +216,9 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	name TEXT NOT NULL,
 	runtime_id TEXT NOT NULL,
 	work_dir TEXT,
+	workspace_mode TEXT,
+	worktree_base_ref TEXT,
+	session_backend TEXT,
 	system_prompt TEXT,
 	provider_tool TEXT,
 	provider_id TEXT,
@@ -331,6 +334,12 @@ CREATE TABLE IF NOT EXISTS channel_tasks (
 	turn_id TEXT,
 	status TEXT NOT NULL,
 	error TEXT,
+	delivery_key TEXT,
+	delivery_status TEXT,
+	delivery_attempts INTEGER DEFAULT 0,
+	delivery_error TEXT,
+	delivered_at TEXT,
+	feedback_nonce TEXT,
 	prompt TEXT,
 	created_at TEXT,
 	started_at TEXT,
@@ -358,7 +367,55 @@ CREATE TABLE IF NOT EXISTS channel_interactions (
 	resolved_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_channel_interactions_pending
-	ON channel_interactions(channel_id, conversation_key, status, created_at);`
+	ON channel_interactions(channel_id, conversation_key, status, created_at);
+CREATE TABLE IF NOT EXISTS channel_feedback (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	channel_id TEXT NOT NULL,
+	conversation_id TEXT,
+	user_id TEXT NOT NULL,
+	semantic TEXT NOT NULL,
+	reason TEXT,
+	comment TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	UNIQUE(task_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_channel_feedback_channel_updated
+	ON channel_feedback(channel_id, updated_at);
+CREATE TABLE IF NOT EXISTS orchestrations (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	status TEXT NOT NULL,
+	max_concurrency INTEGER NOT NULL,
+	error TEXT,
+	created_at TEXT NOT NULL,
+	started_at TEXT,
+	finished_at TEXT,
+	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orchestration_tasks (
+	orchestration_id TEXT NOT NULL,
+	id TEXT NOT NULL,
+	agent_id TEXT,
+	project TEXT,
+	input TEXT NOT NULL,
+	depends_on TEXT,
+	status TEXT NOT NULL,
+	output TEXT,
+	error TEXT,
+	invocation_id TEXT,
+	conversation_id TEXT,
+	created_at TEXT NOT NULL,
+	started_at TEXT,
+	finished_at TEXT,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY(orchestration_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_orchestrations_status_updated
+	ON orchestrations(status,updated_at);
+CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
+	ON orchestration_tasks(orchestration_id,status);`
 
 func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
@@ -379,6 +436,15 @@ func (s *Store) migrateSQLite() error {
 		}
 	}
 	if err := s.ensureColumn("agent_instances", "default_model", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "workspace_mode", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "worktree_base_ref", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "session_backend", "TEXT"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("agent_instances", "default_reasoning_effort", "TEXT"); err != nil {
@@ -410,10 +476,20 @@ func (s *Store) migrateSQLite() error {
 		{"chat_type", "TEXT"},
 		{"root_id", "TEXT"},
 		{"thread_id", "TEXT"},
+		{"delivery_key", "TEXT"},
+		{"delivery_status", "TEXT"},
+		{"delivery_attempts", "INTEGER DEFAULT 0"},
+		{"delivery_error", "TEXT"},
+		{"delivered_at", "TEXT"},
+		{"feedback_nonce", "TEXT"},
 	} {
 		if err := s.ensureColumn("channel_tasks", column.name, column.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.writer.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_tasks_delivery_key
+		ON channel_tasks(delivery_key) WHERE delivery_key IS NOT NULL AND delivery_key <> ''`); err != nil {
+		return err
 	}
 	if _, err := s.writer.Exec(`UPDATE conversations
 		SET conversation_key=CASE

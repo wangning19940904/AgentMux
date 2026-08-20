@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand"
 	"strings"
+	"time"
 )
 
 // handleChannelMessage routes an inbound message from an attached channel to
@@ -145,15 +146,46 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 
 	if managedDirectTurn {
 		turnCtx, cancelTurn := context.WithTimeout(ctx, ChannelTurnTimeout(rt.channel))
-		turn, started := rt.beginDirectTurn(ResolveConversationKey(msg), msg.UserID, cancelTurn)
+		conversationKey := ResolveConversationKey(msg)
+		turn, started := rt.beginDirectTurn(conversationKey, msg.UserID, cancelTurn)
 		if !started {
 			cancelTurn()
 			_ = rt.platform.Reply(ctx, msg, "上一条消息仍在处理中。请等待完成，或发送 /stop 终止后再试。")
 			e.emit(ctx, HookMessageSent, data)
 			return
 		}
+		directTask := e.newRemoteTask(rt, msg, "", ChannelTaskRunning).task
+		directTask.StartedAt = time.Now().UTC()
+		directTask.UpdatedAt = directTask.StartedAt
+		directTask.DeliveryKey = "turn:" + directTask.ID
+		directTask.DeliveryStatus = ChannelDeliveryPending
+		if conv != nil {
+			directTask.ConversationID = conv.ID
+			directTask.NativeThreadID = conv.NativeSessionID
+		}
+		if native, ok := sess.(NativeSessioned); ok && native.NativeSessionID() != "" {
+			directTask.NativeThreadID = native.NativeSessionID()
+		}
+		if !rt.attachDirectTask(conversationKey, turn, directTask, msg) {
+			cancelTurn()
+			return
+		}
+		if e.channelControl != nil {
+			if err := e.channelControl.CreateChannelTask(ctx, directTask); err != nil {
+				rt.controlMu.Lock()
+				turn.task = nil
+				turn.runErr = err.Error()
+				rt.controlMu.Unlock()
+				cancelTurn()
+				rt.finishDirectTurn(conversationKey, turn)
+				_ = rt.platform.Reply(ctx, msg, "创建任务失败："+err.Error())
+				return
+			}
+		}
+		data = withTaskData(data, directTask, "started")
+		e.emit(ctx, HookTaskStarted, data)
 		defer cancelTurn()
-		defer rt.finishDirectTurn(ResolveConversationKey(msg), turn)
+		defer rt.finishDirectTurn(conversationKey, turn)
 		ctx = turnCtx
 	}
 
@@ -182,11 +214,18 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		return
 	}
 
-	_, _ = e.streamTurn(ctx, sess, agentMsg.Text, func(text string) {
+	var deliveryErr error
+	answer, _ := e.streamTurn(ctx, sess, agentMsg.Text, func(text string) {
 		if err := rt.platform.Reply(ctx, msg, text); err != nil {
+			deliveryErr = err
 			e.log.Error("channel reply", "channel", rt.channel.Name, "err", err)
 		}
 	}, data)
+	if deliveryErr != nil {
+		e.recordChannelDeliveryAttempt(data, deliveryErr, true)
+	} else if answer != "" {
+		e.recordChannelDeliveryAttempt(data, nil, false)
+	}
 	e.emit(ctx, HookMessageSent, data)
 }
 

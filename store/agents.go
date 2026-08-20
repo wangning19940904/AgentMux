@@ -11,7 +11,7 @@ import (
 
 // ListAgentInstances returns all console-managed Agent instances.
 func (s *Store) ListAgentInstances(ctx context.Context) ([]core.AgentInstance, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,runtime_id,work_dir,system_prompt,
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,runtime_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,
 		provider_tool,provider_id,default_model,default_reasoning_effort,default_service_tier,default_approval_mode,memory_scope,env,channel_bindings,schedules,mcp_servers,
 		skills,clis,enabled,source,created_at,updated_at FROM agent_instances ORDER BY updated_at DESC, name`)
 	if err != nil {
@@ -31,7 +31,7 @@ func (s *Store) ListAgentInstances(ctx context.Context) ([]core.AgentInstance, e
 
 // GetAgentInstance returns one Agent instance or (nil,nil) if absent.
 func (s *Store) GetAgentInstance(ctx context.Context, id string) (*core.AgentInstance, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,name,runtime_id,work_dir,system_prompt,
+	row := s.db.QueryRowContext(ctx, `SELECT id,name,runtime_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,
 		provider_tool,provider_id,default_model,default_reasoning_effort,default_service_tier,default_approval_mode,memory_scope,env,channel_bindings,schedules,mcp_servers,
 		skills,clis,enabled,source,created_at,updated_at FROM agent_instances WHERE id=?`, id)
 	a, err := scanAgentInstance(row)
@@ -54,11 +54,11 @@ func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) 
 		enabled = 1
 	}
 	_, err := s.writer.ExecContext(ctx, `INSERT INTO agent_instances
-		(id,name,runtime_id,work_dir,system_prompt,provider_tool,provider_id,memory_scope,
+		(id,name,runtime_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,provider_tool,provider_id,memory_scope,
 		 default_model,default_reasoning_effort,default_service_tier,default_approval_mode,env,channel_bindings,schedules,mcp_servers,skills,clis,enabled,source,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,runtime_id=excluded.runtime_id,
-		work_dir=excluded.work_dir,system_prompt=excluded.system_prompt,
+		work_dir=excluded.work_dir,workspace_mode=excluded.workspace_mode,worktree_base_ref=excluded.worktree_base_ref,session_backend=excluded.session_backend,system_prompt=excluded.system_prompt,
 		provider_tool=excluded.provider_tool,provider_id=excluded.provider_id,
 		memory_scope=excluded.memory_scope,default_model=excluded.default_model,
 		default_reasoning_effort=excluded.default_reasoning_effort,default_service_tier=excluded.default_service_tier,
@@ -66,7 +66,7 @@ func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) 
 		channel_bindings=excluded.channel_bindings,schedules=excluded.schedules,
 		mcp_servers=excluded.mcp_servers,skills=excluded.skills,clis=excluded.clis,enabled=excluded.enabled,
 		source=excluded.source,updated_at=excluded.updated_at`,
-		a.ID, a.Name, a.RuntimeID, a.WorkDir, a.SystemPrompt, a.ProviderTool,
+		a.ID, a.Name, a.RuntimeID, a.WorkDir, a.WorkspaceMode, a.WorktreeBaseRef, a.SessionBackend, a.SystemPrompt, a.ProviderTool,
 		a.ProviderID, a.MemoryScope, a.DefaultModel, a.DefaultReasoningEffort, a.DefaultServiceTier, a.DefaultApprovalMode, string(env), string(channels), string(schedules),
 		string(mcpServers), string(skills), string(clis), enabled, a.Source,
 		a.CreatedAt.Format(time.RFC3339Nano), a.UpdatedAt.Format(time.RFC3339Nano))
@@ -92,15 +92,18 @@ func (s *Store) UpdateAgentRuntimeSettings(ctx context.Context, id string, setti
 
 func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	var a core.AgentInstance
-	var workDir, systemPrompt, providerTool, providerID, defaultModel, defaultReasoningEffort, defaultServiceTier, defaultApprovalMode, memoryScope sql.NullString
+	var workDir, workspaceMode, worktreeBaseRef, sessionBackend, systemPrompt, providerTool, providerID, defaultModel, defaultReasoningEffort, defaultServiceTier, defaultApprovalMode, memoryScope sql.NullString
 	var env, channels, schedules, mcpServers, skills, clis, source, created, updated sql.NullString
 	var enabled int
-	if err := sc.Scan(&a.ID, &a.Name, &a.RuntimeID, &workDir, &systemPrompt,
+	if err := sc.Scan(&a.ID, &a.Name, &a.RuntimeID, &workDir, &workspaceMode, &worktreeBaseRef, &sessionBackend, &systemPrompt,
 		&providerTool, &providerID, &defaultModel, &defaultReasoningEffort, &defaultServiceTier, &defaultApprovalMode, &memoryScope, &env, &channels, &schedules,
 		&mcpServers, &skills, &clis, &enabled, &source, &created, &updated); err != nil {
 		return a, err
 	}
 	a.WorkDir = workDir.String
+	a.WorkspaceMode = workspaceMode.String
+	a.WorktreeBaseRef = worktreeBaseRef.String
+	a.SessionBackend = sessionBackend.String
 	a.SystemPrompt = systemPrompt.String
 	a.ProviderTool = providerTool.String
 	a.ProviderID = providerID.String
