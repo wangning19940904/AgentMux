@@ -57,6 +57,10 @@ type Message struct {
 	// ChannelTaskAction carries an id-scoped action from a live task card. It is
 	// separate from Text so a stale callback cannot become a generic /stop.
 	ChannelTaskAction *ChannelTaskAction
+	// ChannelFeedbackAction is an authenticated, task-scoped rating submitted
+	// from a final answer card. It is never converted into agent input.
+	ChannelFeedbackAction *ChannelFeedbackAction
+	ChannelSessionAction  *ChannelSessionAction
 	// InteractionMessageID is the card/message that an interactive action
 	// updates. ID remains the unique inbound event id used for deduplication.
 	InteractionMessageID string
@@ -295,6 +299,13 @@ type TaskStreamReplier interface {
 	BeginTaskReply(ctx context.Context, msg *Message, taskID string) (ReplyStream, error)
 }
 
+// FeedbackTaskStreamReplier receives the trusted task snapshot so a rich
+// platform can render a feedback nonce without routing that nonce through
+// hook or observation metadata.
+type FeedbackTaskStreamReplier interface {
+	BeginFeedbackTaskReply(ctx context.Context, msg *Message, task ChannelTask) (ReplyStream, error)
+}
+
 // ReplyStream is a live, in-place updating reply produced by a StreamReplier.
 // Update may be called repeatedly with the full accumulated text so far; the
 // implementation is responsible for rendering it. Close finalizes the message.
@@ -484,4 +495,35 @@ type InteractiveAgentSession interface {
 	Interrupt(ctx context.Context) error
 	ResolveInteraction(ctx context.Context, interactionID string, response AgentInteractionResponse) error
 	ActiveTurnID() string
+}
+
+// TerminalSessionInfo describes a live interactive terminal without exposing
+// credentials or transport tokens. AttachCommand is intended for the local
+// owner; rich platforms should deliver it only through an owner-authorized
+// control surface.
+type TerminalSessionInfo struct {
+	Backend       string `json:"backend"`
+	SessionID     string `json:"session_id"`
+	AttachCommand string `json:"attach_command,omitempty"`
+	Available     bool   `json:"available"`
+}
+
+// TerminalAgentSession is an optional AgentSession capability implemented by
+// persistent interactive runtimes. Structured turn adapters continue to omit
+// it and retain their native JSON/app-server behavior.
+type TerminalAgentSession interface {
+	AgentSession
+	TerminalInfo() TerminalSessionInfo
+	TerminalSnapshot(ctx context.Context) (string, error)
+	WriteTerminal(ctx context.Context, text string, submit bool) error
+	ResizeTerminal(ctx context.Context, columns, rows int) error
+}
+
+// DetachableAgentSession separates daemon shutdown from explicit session
+// destruction. Persistent terminal runtimes detach on shutdown so their
+// backing process survives; /clear, deletion, and user-requested close still
+// call AgentSession.Close and destroy it.
+type DetachableAgentSession interface {
+	AgentSession
+	Detach(ctx context.Context) error
 }

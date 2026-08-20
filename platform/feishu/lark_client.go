@@ -27,15 +27,17 @@ import (
 const streamCardElementID = "answer"
 
 const (
-	modelPickerActionKey    = "agentmux_action"
-	modelPickerActionSelect = "model_select"
-	modelPickerActionReset  = "model_reset"
-	runtimeSettingsAction   = "runtime_settings"
-	helpCommandAction       = "help_command"
-	codexTaskControlAction  = "codex_task_control"
-	codexInteractionAction  = "codex_interaction"
-	larkWSStartupTimeout    = 45 * time.Second
-	larkWSHeartbeatTimeout  = 6 * time.Minute
+	modelPickerActionKey        = "agentmux_action"
+	modelPickerActionSelect     = "model_select"
+	modelPickerActionReset      = "model_reset"
+	runtimeSettingsAction       = "runtime_settings"
+	helpCommandAction           = "help_command"
+	codexTaskControlAction      = "codex_task_control"
+	codexInteractionAction      = "codex_interaction"
+	channelFeedbackAction       = "channel_feedback"
+	channelSessionControlAction = "channel_session_control"
+	larkWSStartupTimeout        = 45 * time.Second
+	larkWSHeartbeatTimeout      = 6 * time.Minute
 )
 
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events

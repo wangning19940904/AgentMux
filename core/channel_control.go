@@ -45,29 +45,90 @@ type ChannelTaskAction struct {
 	Action string
 }
 
+type ChannelFeedbackAction struct {
+	TaskID   string
+	Nonce    string
+	Semantic string
+}
+
+type ChannelSessionAction struct {
+	TaskID string
+	Action string
+}
+
+const (
+	ChannelSessionActionNew    = "new"
+	ChannelSessionActionStatus = "status"
+)
+
 // ChannelTask is the durable, prompt-redacted task summary exposed to the
 // console. Prompt is only populated internally while the task is queued.
 type ChannelTask struct {
-	ID              string            `json:"id"`
-	ChannelID       string            `json:"channel_id"`
-	ConversationID  string            `json:"conversation_id,omitempty"`
-	ConversationKey string            `json:"conversation_key"`
-	ChatID          string            `json:"chat_id"`
-	MessageID       string            `json:"-"`
-	ChatType        string            `json:"-"`
-	RootID          string            `json:"-"`
-	ThreadID        string            `json:"-"`
-	UserID          string            `json:"user_id"`
-	ControllerID    string            `json:"controller_id"`
-	NativeThreadID  string            `json:"native_thread_id,omitempty"`
-	TurnID          string            `json:"turn_id,omitempty"`
-	Status          ChannelTaskStatus `json:"status"`
-	Error           string            `json:"error,omitempty"`
-	Prompt          string            `json:"-"`
-	CreatedAt       time.Time         `json:"created_at"`
-	StartedAt       time.Time         `json:"started_at,omitempty"`
-	FinishedAt      time.Time         `json:"finished_at,omitempty"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	ID               string            `json:"id"`
+	ChannelID        string            `json:"channel_id"`
+	ConversationID   string            `json:"conversation_id,omitempty"`
+	ConversationKey  string            `json:"conversation_key"`
+	ChatID           string            `json:"chat_id"`
+	MessageID        string            `json:"-"`
+	ChatType         string            `json:"-"`
+	RootID           string            `json:"-"`
+	ThreadID         string            `json:"-"`
+	UserID           string            `json:"user_id"`
+	ControllerID     string            `json:"controller_id"`
+	NativeThreadID   string            `json:"native_thread_id,omitempty"`
+	TurnID           string            `json:"turn_id,omitempty"`
+	Status           ChannelTaskStatus `json:"status"`
+	Error            string            `json:"error,omitempty"`
+	DeliveryKey      string            `json:"delivery_key,omitempty"`
+	DeliveryStatus   string            `json:"delivery_status,omitempty"`
+	DeliveryAttempts int               `json:"delivery_attempts,omitempty"`
+	DeliveryError    string            `json:"delivery_error,omitempty"`
+	DeliveredAt      time.Time         `json:"delivered_at,omitempty"`
+	FeedbackNonce    string            `json:"-"`
+	Prompt           string            `json:"-"`
+	CreatedAt        time.Time         `json:"created_at"`
+	StartedAt        time.Time         `json:"started_at,omitempty"`
+	FinishedAt       time.Time         `json:"finished_at,omitempty"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+const (
+	ChannelDeliveryPending = "pending"
+	ChannelDeliverySent    = "sent"
+	ChannelDeliveryFailed  = "failed"
+)
+
+type ChannelFeedback struct {
+	ID             string    `json:"id"`
+	TaskID         string    `json:"task_id"`
+	ChannelID      string    `json:"channel_id"`
+	ConversationID string    `json:"conversation_id,omitempty"`
+	UserID         string    `json:"user_id"`
+	Semantic       string    `json:"semantic"`
+	Reason         string    `json:"reason,omitempty"`
+	Comment        string    `json:"comment,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+const (
+	FeedbackPositive = "positive"
+	FeedbackProgress = "progress"
+	FeedbackNegative = "negative"
+)
+
+func ValidFeedbackSemantic(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case FeedbackPositive, FeedbackProgress, FeedbackNegative:
+		return true
+	default:
+		return false
+	}
+}
+
+type ChannelFeedbackStore interface {
+	SubmitChannelFeedback(ctx context.Context, feedback ChannelFeedback, nonce string) (bool, error)
+	ListChannelFeedback(ctx context.Context, channelID, taskID string, limit int) ([]ChannelFeedback, error)
 }
 
 type ChannelInteractionStatus string
@@ -102,6 +163,7 @@ type ChannelInteraction struct {
 type ChannelControlStore interface {
 	CreateChannelTask(ctx context.Context, task ChannelTask) error
 	UpdateChannelTask(ctx context.Context, task ChannelTask) error
+	GetChannelTask(ctx context.Context, id string) (*ChannelTask, error)
 	ListChannelTasks(ctx context.Context, channelID, conversationID string, activeOnly bool) ([]ChannelTask, error)
 	RecoverChannelTasks(ctx context.Context, channelID string) ([]ChannelTask, error)
 	CreateChannelInteraction(ctx context.Context, interaction ChannelInteraction) error

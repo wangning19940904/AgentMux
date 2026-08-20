@@ -31,14 +31,22 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 	inputValue := event.Event.Action.InputValue
 	option := event.Event.Action.Option
 	options := strings.Join(event.Event.Action.Options, ",")
-	if action == codexInteractionAction {
+	if action == codexInteractionAction || action == channelFeedbackAction {
 		// Approval nonces and user answers are used only for the in-memory
 		// control action. Channel JSONL/audit records retain correlation but
 		// never the replay token or submitted answer values.
-		actionValue = jsonValue(map[string]any{
-			modelPickerActionKey: codexInteractionAction,
-			"interaction_id":     stringValue(value["interaction_id"]),
-		})
+		if action == codexInteractionAction {
+			actionValue = jsonValue(map[string]any{
+				modelPickerActionKey: codexInteractionAction,
+				"interaction_id":     stringValue(value["interaction_id"]),
+			})
+		} else {
+			actionValue = jsonValue(map[string]any{
+				modelPickerActionKey: channelFeedbackAction,
+				"task_id":            stringValue(value["task_id"]),
+				"semantic":           stringValue(value["semantic"]),
+			})
+		}
 		formValue = ""
 		inputValue = ""
 		option = ""
@@ -88,6 +96,27 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 		}
 		msg.LogOnly = false
 		msg.ChannelTaskAction = &core.ChannelTaskAction{TaskID: taskID, Action: taskAction}
+		return msg, true
+	}
+	if action == channelFeedbackAction {
+		taskID := stringValue(value["task_id"])
+		nonce := stringValue(value["nonce"])
+		semantic := stringValue(value["semantic"])
+		if taskID == "" || nonce == "" || !core.ValidFeedbackSemantic(semantic) {
+			return msg, true
+		}
+		msg.LogOnly = false
+		msg.ChannelFeedbackAction = &core.ChannelFeedbackAction{TaskID: taskID, Nonce: nonce, Semantic: semantic}
+		return msg, true
+	}
+	if action == channelSessionControlAction {
+		taskID := stringValue(value["task_id"])
+		sessionAction := stringValue(value["action"])
+		if taskID == "" || (sessionAction != core.ChannelSessionActionNew && sessionAction != core.ChannelSessionActionStatus) {
+			return msg, true
+		}
+		msg.LogOnly = false
+		msg.ChannelSessionAction = &core.ChannelSessionAction{TaskID: taskID, Action: sessionAction}
 		return msg, true
 	}
 	if action == codexInteractionAction {

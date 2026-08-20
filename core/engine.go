@@ -35,6 +35,7 @@ type Engine struct {
 	workspace               WorkspaceInitializer
 	conversations           ConversationStore
 	channelControl          ChannelControlStore
+	feedbackStore           ChannelFeedbackStore
 	runtimeSettingsDefaults RuntimeSettingsDefaultStore
 	meetingResponseModes    MeetingResponseModeStore
 	meetingEventMu          sync.Mutex
@@ -115,6 +116,9 @@ func (e *Engine) SetConversationStore(cs ConversationStore) {
 	e.conversations = cs
 	if control, ok := cs.(ChannelControlStore); ok {
 		e.channelControl = control
+	}
+	if feedback, ok := cs.(ChannelFeedbackStore); ok {
+		e.feedbackStore = feedback
 	}
 }
 
@@ -420,7 +424,11 @@ func (e *Engine) shutdown() error {
 				data["agent_name"] = pr.agent.Name()
 			}
 			e.emit(ctx, HookSessionEnded, data)
-			_ = s.Close(ctx)
+			if detachable, ok := s.(DetachableAgentSession); ok {
+				_ = detachable.Detach(ctx)
+			} else {
+				_ = s.Close(ctx)
+			}
 		}
 		pr.mu.Unlock()
 		if pr.agent != nil {

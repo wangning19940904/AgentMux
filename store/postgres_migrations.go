@@ -157,6 +157,89 @@ CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp);
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS default_approval_mode TEXT;
 `,
 		},
+		{
+			version: 6,
+			name:    "agent_workspace_policy",
+			sql: `
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS workspace_mode TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS worktree_base_ref TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS session_backend TEXT;
+`,
+		},
+		{
+			version: 7,
+			name:    "channel_task_delivery_state",
+			sql: `
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS delivery_key TEXT;
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS delivery_attempts BIGINT DEFAULT 0;
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS delivery_error TEXT;
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS delivered_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_tasks_delivery_key
+	ON channel_tasks(delivery_key) WHERE delivery_key IS NOT NULL AND delivery_key <> '';
+`,
+		},
+		{
+			version: 8,
+			name:    "channel_feedback",
+			sql: `
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS feedback_nonce TEXT;
+CREATE TABLE IF NOT EXISTS channel_feedback (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	channel_id TEXT NOT NULL,
+	conversation_id TEXT,
+	user_id TEXT NOT NULL,
+	semantic TEXT NOT NULL,
+	reason TEXT,
+	comment TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	UNIQUE(task_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_channel_feedback_channel_updated
+	ON channel_feedback(channel_id, updated_at);
+`,
+		},
+		{
+			version: 9,
+			name:    "orchestrations",
+			sql: `
+CREATE TABLE IF NOT EXISTS orchestrations (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	status TEXT NOT NULL,
+	max_concurrency BIGINT NOT NULL,
+	error TEXT,
+	created_at TEXT NOT NULL,
+	started_at TEXT,
+	finished_at TEXT,
+	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS orchestration_tasks (
+	orchestration_id TEXT NOT NULL,
+	id TEXT NOT NULL,
+	agent_id TEXT,
+	project TEXT,
+	input TEXT NOT NULL,
+	depends_on TEXT,
+	status TEXT NOT NULL,
+	output TEXT,
+	error TEXT,
+	invocation_id TEXT,
+	conversation_id TEXT,
+	created_at TEXT NOT NULL,
+	started_at TEXT,
+	finished_at TEXT,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY(orchestration_id,id)
+);
+CREATE INDEX IF NOT EXISTS idx_orchestrations_status_updated
+	ON orchestrations(status,updated_at);
+CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
+	ON orchestration_tasks(orchestration_id,status);
+`,
+		},
 	}
 }
 

@@ -63,6 +63,17 @@ type ConversationRuntimeController interface {
 	StopConversation(ctx context.Context, channelID, conversationKey, expectedTaskID string) (ConversationRuntimeState, error)
 }
 
+// ConversationTerminalController exposes only AgentMux-managed terminal
+// sessions. The full Conversation is supplied by the authenticated management
+// server so callers cannot substitute a different native session id or work
+// directory in the request body.
+type ConversationTerminalController interface {
+	TerminalSessionInfo(ctx context.Context, channelID string, conversation Conversation) (TerminalSessionInfo, error)
+	TerminalSnapshot(ctx context.Context, channelID string, conversation Conversation) (string, error)
+	WriteTerminal(ctx context.Context, channelID string, conversation Conversation, text string, submit bool) error
+	ResizeTerminal(ctx context.Context, channelID string, conversation Conversation, columns, rows int) error
+}
+
 // SendToProject implements Sender on the Engine: it sends an unsolicited
 // message to every platform of the named project.
 func (e *Engine) SendToProject(ctx context.Context, project, text string) error {

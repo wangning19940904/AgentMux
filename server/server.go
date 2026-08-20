@@ -25,35 +25,39 @@ import (
 
 // Server is the management/bridge HTTP server.
 type Server struct {
-	cfg             *config.Config
-	version         string
-	log             *slog.Logger
-	st              *store.Store
-	provider        core.ProviderManager
-	proxySvc        *providerpkg.Service
-	usageFn         UsageReporter
-	sender          core.Sender
-	invoker         core.Invoker
-	openAIResponses *openAIResponseRegistry
-	openAIFiles     *openAIFileRegistry
-	connect         *core.ConnectService
-	presets         any
-	memory          core.MemoryStore
-	skills          core.SkillManager
-	mcp             core.MCPRegistry
-	guard           core.Guard
-	workspace       core.WorkspaceInitializer
-	sessions        *sessionstore.Service
-	obs             *observabilityRuntime
-	providerMonitor *providerMonitor
-	remote          *remotepkg.Manager
-	keepAwake       *keepAwakeManager
-	channelPeers    channelPeerClient
-	meetingPeers    meetingPeerClient
-	ttsModels       *ttspkg.Manager
-	channelClaimMu  sync.Mutex
-	mux             *http.ServeMux
-	httpSrv         *http.Server
+	cfg                  *config.Config
+	version              string
+	log                  *slog.Logger
+	st                   *store.Store
+	provider             core.ProviderManager
+	proxySvc             *providerpkg.Service
+	usageFn              UsageReporter
+	sender               core.Sender
+	invoker              core.Invoker
+	openAIResponses      *openAIResponseRegistry
+	openAIFiles          *openAIFileRegistry
+	connect              *core.ConnectService
+	presets              any
+	memory               core.MemoryStore
+	skills               core.SkillManager
+	mcp                  core.MCPRegistry
+	guard                core.Guard
+	workspace            core.WorkspaceInitializer
+	sessions             *sessionstore.Service
+	obs                  *observabilityRuntime
+	providerMonitor      *providerMonitor
+	remote               *remotepkg.Manager
+	keepAwake            *keepAwakeManager
+	channelPeers         channelPeerClient
+	meetingPeers         meetingPeerClient
+	ttsModels            *ttspkg.Manager
+	channelClaimMu       sync.Mutex
+	orchestrationMu      sync.Mutex
+	orchestrationCancels map[string]context.CancelFunc
+	feishuAutomationMu   sync.Mutex
+	feishuAutomations    map[string]*feishuAutomationSession
+	mux                  *http.ServeMux
+	httpSrv              *http.Server
 }
 
 // UsageReporter produces an aggregated usage report for the API. until is an
@@ -63,18 +67,20 @@ type UsageReporter func(ctx context.Context, period string, since, until time.Ti
 // New builds a server.
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
 	s := &Server{
-		cfg:             cfg,
-		version:         "0.1.0",
-		log:             log,
-		st:              st,
-		provider:        pm,
-		usageFn:         usageFn,
-		sessions:        sessionstore.New(),
-		keepAwake:       newKeepAwakeManager(),
-		ttsModels:       ttspkg.NewManager("", log),
-		openAIResponses: newOpenAIResponseRegistry(),
-		openAIFiles:     newOpenAIFileRegistry(),
-		mux:             http.NewServeMux(),
+		cfg:                  cfg,
+		version:              "0.1.0",
+		log:                  log,
+		st:                   st,
+		provider:             pm,
+		usageFn:              usageFn,
+		sessions:             sessionstore.New(),
+		keepAwake:            newKeepAwakeManager(),
+		ttsModels:            ttspkg.NewManager("", log),
+		openAIResponses:      newOpenAIResponseRegistry(),
+		openAIFiles:          newOpenAIFileRegistry(),
+		orchestrationCancels: map[string]context.CancelFunc{},
+		feishuAutomations:    map[string]*feishuAutomationSession{},
+		mux:                  http.NewServeMux(),
 	}
 	s.providerMonitor = newProviderMonitor(log, st, pm)
 	remoteManager, err := remotepkg.NewManager(
@@ -109,7 +115,12 @@ func (s *Server) SetSender(sender core.Sender) { s.sender = sender }
 // SetInvoker attaches the direct Agent execution service. It is separate from
 // Sender because an invocation runs an Agent and returns its result; it does
 // not publish a message to a channel.
-func (s *Server) SetInvoker(invoker core.Invoker) { s.invoker = invoker }
+func (s *Server) SetInvoker(invoker core.Invoker) {
+	s.invoker = invoker
+	if invoker != nil && s.st != nil {
+		go s.recoverOrchestrations()
+	}
+}
 
 // SetPresets attaches the provider presets list exposed by the API.
 func (s *Server) SetPresets(presets any) { s.presets = presets }
@@ -196,6 +207,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/sessions/messages", s.handleSessionMessageSend)
 	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
 	s.mux.HandleFunc("POST /api/v1/sessions/stop", s.handleSessionStop)
+	s.mux.HandleFunc("GET /api/v1/sessions/terminal", s.handleSessionTerminalGet)
+	s.mux.HandleFunc("POST /api/v1/sessions/terminal/input", s.handleSessionTerminalInput)
+	s.mux.HandleFunc("POST /api/v1/sessions/terminal/resize", s.handleSessionTerminalResize)
+	s.mux.HandleFunc("GET /api/v1/feedback", s.handleFeedbackList)
+	s.mux.HandleFunc("POST /api/v1/feedback/detail", s.handleFeedbackDetail)
 	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
 	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
 	s.mux.HandleFunc("GET /api/v1/menubar/settings", s.handleMenubarSettingsGet)
@@ -203,6 +219,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
 	s.mux.HandleFunc("POST /api/v1/invocations", s.handleInvocation)
 	s.mux.HandleFunc("POST /api/v1/invocations/stream", s.handleInvocationStream)
+	s.mux.HandleFunc("GET /api/v1/orchestrations", s.handleOrchestrationsList)
+	s.mux.HandleFunc("POST /api/v1/orchestrations", s.handleOrchestrationCreate)
+	s.mux.HandleFunc("POST /api/v1/orchestrations/cancel", s.handleOrchestrationCancel)
 	s.mux.HandleFunc("POST /v1/responses", s.handleOpenAIResponse)
 	s.mux.HandleFunc("GET /v1/responses/{response_id}", s.handleOpenAIResponseGet)
 	s.mux.HandleFunc("DELETE /v1/responses/{response_id}", s.handleOpenAIResponseDelete)
@@ -234,6 +253,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/meetings/join", s.handleMeetingJoin)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/begin", s.handleFeishuSetupBegin)
 	s.mux.HandleFunc("POST /api/v1/setup/feishu/poll", s.handleFeishuSetupPoll)
+	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/begin", s.handleFeishuAutomationBegin)
+	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/poll", s.handleFeishuAutomationPoll)
+	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/configure", s.handleFeishuAutomationConfigure)
 	s.registerRemoteRoutes()
 	s.mux.HandleFunc("GET /api/v1/triggers", s.handleTriggersList)
 	s.mux.HandleFunc("POST /api/v1/triggers", s.handleTriggerUpsert)

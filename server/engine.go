@@ -2,6 +2,7 @@ package server
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
@@ -26,8 +27,13 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 	}
 
 	for projectIndex, p := range cfg.Projects {
-		ag, err := core.CreateAgent(p.Agent, map[string]any{
+		agentKind := p.Agent
+		if strings.EqualFold(strings.TrimSpace(p.SessionBackend), "tmux") {
+			agentKind = "terminal"
+		}
+		ag, err := core.CreateAgent(agentKind, map[string]any{
 			"work_dir": p.WorkDir, "system_prompt": p.SystemPrompt, "model": p.DefaultModel, "env": p.Env,
+			"terminal_runtime": p.Agent,
 		})
 		if err != nil {
 			return nil, err
@@ -42,10 +48,12 @@ func BuildEngine(log *slog.Logger, cfg *config.Config, initializer ...core.Works
 			plats = append(plats, plat)
 		}
 		eng.AddProject(p.Name, p.WorkDir, ag, plats, core.WorkspaceInitOptions{
-			AgentID:   "config:" + p.Name,
-			AgentName: p.Name,
-			RuntimeID: p.Agent,
-			WorkDir:   p.WorkDir,
+			AgentID:         "config:" + p.Name,
+			AgentName:       p.Name,
+			RuntimeID:       p.Agent,
+			WorkDir:         p.WorkDir,
+			WorkspaceMode:   p.WorkspaceMode,
+			WorktreeBaseRef: p.WorktreeBaseRef,
 		})
 		eng.AddProjectAgentAlias(p.Name, configAgentInstanceID(p.Name, projectIndex))
 	}

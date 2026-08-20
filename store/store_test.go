@@ -274,6 +274,9 @@ func TestAgentInstanceCRUD(t *testing.T) {
 		Name:                   "Research Codex",
 		RuntimeID:              "codex",
 		WorkDir:                "/tmp/work",
+		WorkspaceMode:          "worktree",
+		WorktreeBaseRef:        "main",
+		SessionBackend:         "tmux",
 		ProviderTool:           "codex",
 		ProviderID:             "openai",
 		DefaultModel:           "gpt-5",
@@ -317,7 +320,7 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" || got.DefaultApprovalMode != core.ApprovalModeAutoEdit {
+	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.WorkspaceMode != "worktree" || got.WorktreeBaseRef != "main" || got.SessionBackend != "tmux" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" || got.DefaultApprovalMode != core.ApprovalModeAutoEdit {
 		t.Fatalf("agent = %+v", got)
 	}
 	if err := st.UpdateAgentRuntimeSettings(ctx, "agent-test", core.RuntimeSettings{Model: "gpt-5-mini", ReasoningEffort: "xhigh", ServiceTier: "default", ApprovalMode: core.ApprovalModeYolo}); err != nil {

@@ -46,6 +46,8 @@ const MemoryPanel = lazy(() => import("./panels/MemoryPanel").then((m) => ({ def
 const SkillsPanel = lazy(() => import("./panels/SkillsPanel").then((m) => ({ default: m.SkillsPanel })));
 const MCPPanel = lazy(() => import("./panels/MCPPanel").then((m) => ({ default: m.MCPPanel })));
 const GuardPanel = lazy(() => import("./panels/GuardPanel").then((m) => ({ default: m.GuardPanel })));
+const FeedbackPanel = lazy(() => import("./panels/FeedbackPanel").then((m) => ({ default: m.FeedbackPanel })));
+const OrchestrationsPanel = lazy(() => import("./panels/OrchestrationsPanel").then((m) => ({ default: m.OrchestrationsPanel })));
 const SessionsPanel = lazy(() => import("./panels/SessionsPanel").then((m) => ({ default: m.SessionsPanel })));
 const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ default: m.MenuBarPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
@@ -77,7 +79,9 @@ type Tab =
   | "meetings"
   | "skills"
   | "mcp"
-  | "guard";
+  | "guard"
+  | "feedback"
+  | "orchestrations";
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
@@ -91,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Bot,
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
+      { id: "orchestrations", labelKey: "nav.orchestrations", icon: Workflow },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
       { id: "skills", labelKey: "nav.skills", icon: Sparkles },
       { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
@@ -116,6 +121,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "observability", labelKey: "nav.observability", icon: Activity },
       { id: "usage", labelKey: "nav.usage", icon: Gauge },
+      { id: "feedback", labelKey: "nav.feedback", icon: MessageSquareText },
       { id: "guard", labelKey: "nav.guard", icon: ShieldCheck },
     ],
   },
@@ -372,6 +378,7 @@ function Shell({
             <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
               {tab === "overview" && <OverviewPanel />}
               {tab === "agents" && <AgentsPanel />}
+              {tab === "orchestrations" && <OrchestrationsPanel />}
               {tab === "connect" && <ConnectPanel />}
               {tab === "frameworks" && <FrameworksPanel />}
               {tab === "observability" && <ObservabilityPanel />}
@@ -385,6 +392,7 @@ function Shell({
               {tab === "memory" && <MemoryPanel />}
               {tab === "skills" && <SkillsPanel />}
               {tab === "mcp" && <MCPPanel />}
+              {tab === "feedback" && <FeedbackPanel />}
               {tab === "guard" && <GuardPanel />}
             </Suspense>
           </PanelErrorBoundary>

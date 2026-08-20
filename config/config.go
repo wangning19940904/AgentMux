@@ -56,13 +56,16 @@ type RemoteConfig struct {
 
 // ProjectConfig pairs one agent with one or more platforms.
 type ProjectConfig struct {
-	Name         string            `toml:"name"`
-	Agent        string            `toml:"agent"`
-	WorkDir      string            `toml:"work_dir"`
-	SystemPrompt string            `toml:"system_prompt"`
-	DefaultModel string            `toml:"default_model"`
-	Env          map[string]string `toml:"env"`
-	Platforms    []map[string]any  `toml:"platforms"`
+	Name            string            `toml:"name"`
+	Agent           string            `toml:"agent"`
+	WorkDir         string            `toml:"work_dir"`
+	WorkspaceMode   string            `toml:"workspace_mode"`
+	WorktreeBaseRef string            `toml:"worktree_base_ref"`
+	SessionBackend  string            `toml:"session_backend"`
+	SystemPrompt    string            `toml:"system_prompt"`
+	DefaultModel    string            `toml:"default_model"`
+	Env             map[string]string `toml:"env"`
+	Platforms       []map[string]any  `toml:"platforms"`
 }
 
 // HookConfig is a single lifecycle hook.
@@ -174,6 +177,16 @@ func (c *Config) validate() error {
 		}
 		if p.Agent == "" {
 			return fmt.Errorf("project %q has no agent", p.Name)
+		}
+		switch strings.ToLower(strings.TrimSpace(p.WorkspaceMode)) {
+		case "", "shared", "worktree":
+		default:
+			return fmt.Errorf("project %q has invalid workspace_mode %q", p.Name, p.WorkspaceMode)
+		}
+		switch strings.ToLower(strings.TrimSpace(p.SessionBackend)) {
+		case "", "structured", "tmux":
+		default:
+			return fmt.Errorf("project %q has invalid session_backend %q", p.Name, p.SessionBackend)
 		}
 	}
 	switch c.Observability.CaptureContent {

@@ -23,6 +23,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | MCP 管理 | **AgentMux MCP Registry** | `mcp/` |
 | 权限审批 | **AgentMux Guard** | `guard/` |
 | Web 控制台 | **AgentMux Console** | `web/` + `server/` |
+| 多 Agent 编排 | **AgentMux Orchestrations** | `server/orchestrations.go` + `store/orchestrations.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
 - **Router** — 支持 Claude Code、Codex、Cursor、Gemini、Qoder、OpenCode、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移。
@@ -35,6 +36,10 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，验证 SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
+- **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
+- **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
+- **Orchestrations** — 通过持久 DAG 跨 Agent/Project 分派任务，支持依赖输出传递、并发上限、失败阻断、取消和 daemon 重启恢复。
 
 ## 架构
 
@@ -135,6 +140,9 @@ make release
 要点:
 
 - `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
+- `workspace_mode = "worktree"` 会为每个渠道话题/API conversation 创建确定性的同级 Git worktree 与 `agentmux/*` 分支；默认 `shared` 继续让所有会话使用 `work_dir`。可用 `worktree_base_ref` 指定新 worktree 的基准引用。
+- `session_backend = "tmux"` 启用持久交互式 CLI，会话使用真实 tmux 进程并可跨 daemon 重启恢复；默认 `structured` 保留当前原生 JSON/app-server 事件流。
+- 飞书渠道扫码取得 App ID/Secret 后，Console 可继续执行“补全开放平台配置”：二次扫码建立仅内存 Web session，自动导入消息/CardKit/会议权限、配置长连接事件与卡片回调，并按明确选择的可见范围发布版本。该能力使用飞书开放平台 Console 接口，接口变化时会 fail closed 并返回具体失败步骤。
 - 开启 `[bridge]` 可用 Bearer Token 保护 HTTP send 与 Agent Invocation API；**启用时必须设置 token**。
 - `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
@@ -200,6 +208,14 @@ POST /api/v1/triggers                # 新建/更新触发(校验 cron 表达式
 DELETE /api/v1/triggers?id=          # 删除触发
 POST /api/v1/triggers/run?id=        # 立即执行一次触发
 POST /hook/{id}                      # 入站 Webhook 触发端点(token 鉴权,payload 附加到 prompt)
+
+POST /api/v1/orchestrations          # 创建并运行多 Agent DAG
+GET  /api/v1/orchestrations?id=      # 查询编排与各任务输出
+POST /api/v1/orchestrations/cancel   # 取消活动编排
+GET  /api/v1/feedback                # 查询最终答案反馈与三态汇总
+POST /api/v1/feedback/detail         # 本地 Console 补充反馈原因/备注
+GET  /api/v1/sessions/terminal       # 读取托管 tmux 会话快照
+POST /api/v1/sessions/terminal/input # 向托管终端写入/提交输入
 
 GET  /api/v1/observability/traces              # Trace 列表与筛选
 GET  /api/v1/observability/traces/{trace_id}   # Span/Event 时间线与授权解密内容

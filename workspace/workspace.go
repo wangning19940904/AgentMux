@@ -3,12 +3,16 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -21,6 +25,7 @@ const initVersion = 1
 // agent directories.
 type Initializer struct {
 	SkillRoots []string
+	worktreeMu sync.Mutex
 }
 
 // New builds an Initializer using the default global skill roots.
@@ -32,12 +37,16 @@ func New(skillRoots ...string) *Initializer {
 }
 
 type workspaceFile struct {
-	Version       int       `json:"version"`
-	RuntimeID     string    `json:"runtime_id,omitempty"`
-	AgentID       string    `json:"agent_id,omitempty"`
-	Skills        []string  `json:"skills,omitempty"`
-	MCPServers    []string  `json:"mcp_servers,omitempty"`
-	InitializedAt time.Time `json:"initialized_at"`
+	Version         int       `json:"version"`
+	RuntimeID       string    `json:"runtime_id,omitempty"`
+	AgentID         string    `json:"agent_id,omitempty"`
+	WorkspaceMode   string    `json:"workspace_mode,omitempty"`
+	BaseWorkDir     string    `json:"base_work_dir,omitempty"`
+	WorktreeBranch  string    `json:"worktree_branch,omitempty"`
+	ConversationKey string    `json:"conversation_key,omitempty"`
+	Skills          []string  `json:"skills,omitempty"`
+	MCPServers      []string  `json:"mcp_servers,omitempty"`
+	InitializedAt   time.Time `json:"initialized_at"`
 }
 
 // InitializeWorkspace ensures the directory and runtime-native scaffolding
@@ -49,17 +58,39 @@ func (i *Initializer) InitializeWorkspace(ctx context.Context, opts core.Workspa
 	default:
 	}
 
-	workDir, err := normalizeWorkDir(opts.WorkDir)
+	baseWorkDir, err := normalizeWorkDir(opts.WorkDir)
 	if err != nil {
 		return nil, err
 	}
+	mode := normalizeWorkspaceMode(opts.WorkspaceMode)
+	workDir := baseWorkDir
 	res := &core.WorkspaceInitResult{
-		WorkDir:   workDir,
-		RuntimeID: opts.RuntimeID,
-		AgentID:   opts.AgentID,
+		WorkDir:       workDir,
+		BaseWorkDir:   baseWorkDir,
+		WorkspaceMode: mode,
+		RuntimeID:     opts.RuntimeID,
+		AgentID:       opts.AgentID,
 	}
-	if err := ensureDir(workDir, res); err != nil {
+	if err := ensureDir(baseWorkDir, res); err != nil {
 		return nil, err
+	}
+	if mode == "worktree" {
+		if strings.TrimSpace(opts.ConversationKey) == "" {
+			if _, err := gitRepositoryRoot(ctx, baseWorkDir); err != nil {
+				return nil, fmt.Errorf("worktree workspace: %w", err)
+			}
+			res.Warnings = append(res.Warnings, "worktree mode is enabled; a dedicated worktree will be created when the first conversation starts")
+		} else {
+			created := false
+			workDir, res.WorktreeBranch, created, err = i.ensureConversationWorktree(ctx, baseWorkDir, opts)
+			if err != nil {
+				return nil, err
+			}
+			res.WorkDir = workDir
+			if created {
+				res.Created = append(res.Created, workDir)
+			}
+		}
 	}
 	if err := ensureDir(filepath.Join(workDir, ".agentmux"), res); err != nil {
 		return nil, err
@@ -124,6 +155,172 @@ func normalizeWorkDir(raw string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
+func normalizeWorkspaceMode(raw string) string {
+	if strings.EqualFold(strings.TrimSpace(raw), "worktree") {
+		return "worktree"
+	}
+	return "shared"
+}
+
+var worktreeSlugUnsafe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// ensureConversationWorktree returns a deterministic git worktree for one
+// durable conversation. The lock prevents duplicate branch/path creation by
+// concurrent first messages in this process; git itself remains the final
+// cross-process arbiter.
+func (i *Initializer) ensureConversationWorktree(
+	ctx context.Context,
+	baseWorkDir string,
+	opts core.WorkspaceInitOptions,
+) (workDir, branch string, created bool, err error) {
+	i.worktreeMu.Lock()
+	defer i.worktreeMu.Unlock()
+
+	repoRoot, err := gitRepositoryRoot(ctx, baseWorkDir)
+	if err != nil {
+		return "", "", false, fmt.Errorf("worktree workspace: %w", err)
+	}
+	containedBase := baseWorkDir
+	// macOS exposes /var as a symlink to /private/var while git reports the
+	// canonical path. Canonicalize only for containment/relative calculation;
+	// shared workspaces continue to preserve the exact user-facing path.
+	if resolved, resolveErr := filepath.EvalSymlinks(baseWorkDir); resolveErr == nil {
+		containedBase = resolved
+	}
+	rel, err := filepath.Rel(repoRoot, containedBase)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", false, fmt.Errorf("worktree workspace: working directory %q is outside repository %q", baseWorkDir, repoRoot)
+	}
+
+	slug := conversationWorktreeSlug(opts)
+	branch = "agentmux/" + slug
+	worktreeRoot := repoRoot + ".agentmux-worktrees"
+	worktreePath := filepath.Join(worktreeRoot, slug)
+	resolvedWorkDir := worktreePath
+	if rel != "." {
+		resolvedWorkDir = filepath.Join(worktreePath, rel)
+	}
+
+	if info, statErr := os.Stat(worktreePath); statErr == nil {
+		if !info.IsDir() || !isGitWorktree(ctx, worktreePath) {
+			return "", "", false, fmt.Errorf("worktree workspace target %q exists but is not a git worktree", worktreePath)
+		}
+		if err := ensurePlainDir(resolvedWorkDir); err != nil {
+			return "", "", false, err
+		}
+		return resolvedWorkDir, branch, false, nil
+	} else if !os.IsNotExist(statErr) {
+		return "", "", false, statErr
+	}
+
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		return "", "", false, fmt.Errorf("create worktree root: %w", err)
+	}
+	baseRef := strings.TrimSpace(opts.WorktreeBaseRef)
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	if strings.HasPrefix(baseRef, "-") || len(baseRef) > 255 || strings.IndexFunc(baseRef, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return "", "", false, fmt.Errorf("worktree base ref %q is invalid", baseRef)
+	}
+	if output, verifyErr := gitOutput(ctx, repoRoot, "rev-parse", "--verify", baseRef+"^{commit}"); verifyErr != nil {
+		return "", "", false, fmt.Errorf("worktree base ref %q is invalid: %s", baseRef, output)
+	}
+
+	args := []string{"worktree", "add"}
+	if gitBranchExists(ctx, repoRoot, branch) {
+		args = append(args, worktreePath, branch)
+	} else {
+		args = append(args, "-b", branch, worktreePath, baseRef)
+	}
+	if output, addErr := gitOutput(ctx, repoRoot, args...); addErr != nil {
+		// Another daemon may have won the exact same deterministic creation.
+		// Re-probe the path before surfacing the git error.
+		if !isGitWorktree(ctx, worktreePath) {
+			return "", "", false, fmt.Errorf("create conversation worktree: %s", output)
+		}
+	}
+	if err := ensurePlainDir(resolvedWorkDir); err != nil {
+		return "", "", false, err
+	}
+	return resolvedWorkDir, branch, true, nil
+}
+
+func conversationWorktreeSlug(opts core.WorkspaceInitOptions) string {
+	identity := strings.Join([]string{
+		strings.TrimSpace(opts.AgentID),
+		strings.TrimSpace(opts.ConversationScope),
+		strings.TrimSpace(opts.ConversationKey),
+	}, "\x00")
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))[:10]
+	hint := strings.ToLower(strings.TrimSpace(opts.ConversationKey))
+	if _, tail, ok := strings.Cut(hint, ":"); ok {
+		hint = tail
+	}
+	hint = strings.Trim(worktreeSlugUnsafe.ReplaceAllString(hint, "-"), "-")
+	if len(hint) > 32 {
+		hint = strings.Trim(hint[:32], "-")
+	}
+	if hint == "" {
+		hint = "conversation"
+	}
+	return hint + "-" + digest
+}
+
+func gitRepositoryRoot(ctx context.Context, workDir string) (string, error) {
+	output, err := gitOutput(ctx, workDir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("%q is not inside a git repository: %s", workDir, output)
+	}
+	root := strings.TrimSpace(output)
+	if root == "" {
+		return "", fmt.Errorf("git returned an empty repository root for %q", workDir)
+	}
+	return filepath.Clean(root), nil
+}
+
+func gitBranchExists(ctx context.Context, repoRoot, branch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	return cmd.Run() == nil
+}
+
+func isGitWorktree(ctx context.Context, path string) bool {
+	root, err := gitRepositoryRoot(ctx, path)
+	if err != nil {
+		return false
+	}
+	want, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	return samePath(root, want)
+}
+
+func samePath(left, right string) bool {
+	leftResolved, leftErr := filepath.EvalSymlinks(left)
+	rightResolved, rightErr := filepath.EvalSymlinks(right)
+	if leftErr == nil {
+		left = leftResolved
+	}
+	if rightErr == nil {
+		right = rightResolved
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func ensurePlainDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("create worktree subdirectory %q: %w", path, err)
+	}
+	return nil
+}
+
+func gitOutput(ctx context.Context, repoRoot string, args ...string) (string, error) {
+	argv := append([]string{"-C", repoRoot}, args...)
+	output, err := exec.CommandContext(ctx, "git", argv...).CombinedOutput()
+	return strings.TrimSpace(string(output)), err
+}
+
 func normalizeRuntime(runtime string) string {
 	switch strings.ToLower(strings.TrimSpace(runtime)) {
 	case "claude", "claudecode-cli", "claude-code", "claude-code-cli":
@@ -153,12 +350,16 @@ func ensureDir(path string, res *core.WorkspaceInitResult) error {
 
 func writeWorkspaceFile(path string, opts core.WorkspaceInitOptions, res *core.WorkspaceInitResult) error {
 	payload := workspaceFile{
-		Version:       initVersion,
-		RuntimeID:     opts.RuntimeID,
-		AgentID:       opts.AgentID,
-		Skills:        append([]string(nil), opts.Skills...),
-		MCPServers:    append([]string(nil), opts.MCPServers...),
-		InitializedAt: time.Now().UTC(),
+		Version:         initVersion,
+		RuntimeID:       opts.RuntimeID,
+		AgentID:         opts.AgentID,
+		WorkspaceMode:   res.WorkspaceMode,
+		BaseWorkDir:     res.BaseWorkDir,
+		WorktreeBranch:  res.WorktreeBranch,
+		ConversationKey: opts.ConversationKey,
+		Skills:          append([]string(nil), opts.Skills...),
+		MCPServers:      append([]string(nil), opts.MCPServers...),
+		InitializedAt:   time.Now().UTC(),
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

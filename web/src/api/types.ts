@@ -336,6 +336,9 @@ export interface AgentInstance {
   name: string;
   runtime_id: string;
   work_dir?: string;
+  workspace_mode?: "shared" | "worktree";
+  worktree_base_ref?: string;
+  session_backend?: "structured" | "tmux";
   system_prompt?: string;
   provider_tool?: string;
   provider_id?: string;
@@ -405,6 +408,11 @@ export interface ChannelTask {
   turn_id?: string;
   status: string;
   error?: string;
+  delivery_key?: string;
+  delivery_status?: string;
+  delivery_attempts?: number;
+  delivery_error?: string;
+  delivered_at?: string;
   created_at: string;
   started_at?: string;
   finished_at?: string;
@@ -600,6 +608,27 @@ export interface FeishuSetupPollResponse {
   owner_open_id?: string;
   slow_down?: boolean;
   error?: string;
+}
+
+export interface FeishuAutomationBeginResponse {
+  session_id: string;
+  qr_payload: string;
+  expires_in: number;
+}
+
+export interface FeishuAutomationPollResponse {
+  status: "pending" | "scanned" | "completed" | "expired";
+}
+
+export interface FeishuAutomationResult {
+  ok: boolean;
+  app_id: string;
+  scope_count: number;
+  missing_scopes: string[];
+  events: string[];
+  callbacks: string[];
+  published: boolean;
+  version_id?: string;
 }
 
 export interface Trigger {
@@ -878,6 +907,9 @@ export interface MarketplaceSkill {
 
 export interface WorkspaceInitResult {
   work_dir: string;
+  base_work_dir?: string;
+  workspace_mode?: string;
+  worktree_branch?: string;
   created?: string[];
   updated?: string[];
   warnings?: string[];
@@ -924,6 +956,69 @@ export interface AgentSession {
 	run_status?: string;
 	can_stop?: boolean;
 	active_task_id?: string;
+  terminal_backend?: string;
+  terminal_available?: boolean;
+  terminal_attach_command?: string;
+}
+
+export interface TerminalSessionView {
+  info: {
+    backend: string;
+    session_id: string;
+    attach_command?: string;
+    available: boolean;
+  };
+  snapshot: string;
+}
+
+export interface ChannelFeedback {
+  id: string;
+  task_id: string;
+  channel_id: string;
+  conversation_id?: string;
+  user_id: string;
+  semantic: "positive" | "progress" | "negative";
+  reason?: string;
+  comment?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FeedbackReport {
+  items: ChannelFeedback[];
+  counts: Record<"positive" | "progress" | "negative", number>;
+  total: number;
+}
+
+export interface OrchestrationTask {
+  id: string;
+  orchestration_id?: string;
+  agent_id?: string;
+  project?: string;
+  input: string;
+  depends_on?: string[];
+  status: string;
+  output?: string;
+  error?: string;
+  invocation_id?: string;
+  conversation_id?: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  updated_at: string;
+}
+
+export interface Orchestration {
+  id: string;
+  name: string;
+  status: string;
+  max_concurrency: number;
+  error?: string;
+  tasks?: OrchestrationTask[];
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  updated_at: string;
 }
 
 export interface SessionMessage {

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
-import { Channel, OperationProgress, TTSCatalogStatus, TTSModel, api } from "../../api";
+import { Channel, FeishuAutomationResult, OperationProgress, TTSCatalogStatus, TTSModel, api } from "../../api";
 import { OperationProgress as OperationProgressView } from "../../components/OperationProgress";
 import { useI18n } from "../../i18n";
 import {
@@ -53,12 +53,20 @@ export function ChannelEditor({
   const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
   const isCodexAgent = selectedAgent?.runtime_id === "codex";
   const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
+  const automationRef = useRef({ sessionID: "", cancelled: false, polling: false });
   const draftRef = useRef<Partial<Channel>>(draft);
   const [setup, setSetup] = useState<{ phase: FeishuSetupPhase; qrUrl: string; error: string }>({
     phase: "idle",
     qrUrl: "",
     error: "",
   });
+  const [automation, setAutomation] = useState<{
+    phase: "idle" | "loading" | "scanning" | "configuring" | "completed" | "expired" | "error";
+    qrPayload: string;
+    error: string;
+    result?: FeishuAutomationResult;
+  }>({ phase: "idle", qrPayload: "", error: "" });
+  const [automationVisibility, setAutomationVisibility] = useState<"owner" | "all">("owner");
 
   useEffect(() => {
     draftRef.current = draft;
@@ -67,6 +75,7 @@ export function ChannelEditor({
   useEffect(() => {
     return () => {
       setupRef.current.cancelled = true;
+      automationRef.current.cancelled = true;
     };
   }, []);
 
@@ -145,10 +154,64 @@ export function ChannelEditor({
     }
   }
 
+  async function startFeishuAutomation() {
+    const appID = draftRef.current.config?.app_id?.trim();
+    if (!appID) {
+      setAutomation({ phase: "error", qrPayload: "", error: t("connect.openPlatformMissingApp") });
+      return;
+    }
+    automationRef.current.cancelled = false;
+    setAutomation({ phase: "loading", qrPayload: "", error: "" });
+    try {
+      const started = await api.beginFeishuAutomation();
+      automationRef.current = { sessionID: started.session_id, cancelled: false, polling: false };
+      setAutomation({ phase: "scanning", qrPayload: started.qr_payload, error: "" });
+      void pollFeishuAutomation();
+    } catch (error) {
+      setAutomation({ phase: "error", qrPayload: "", error: String(error) });
+    }
+  }
+
+  async function pollFeishuAutomation() {
+    if (automationRef.current.polling) return;
+    automationRef.current.polling = true;
+    try {
+      while (!automationRef.current.cancelled) {
+        const polled = await api.pollFeishuAutomation(automationRef.current.sessionID);
+        if (polled.status === "expired") {
+          setAutomation((current) => ({ ...current, phase: "expired" }));
+          return;
+        }
+        if (polled.status === "completed") {
+          const appID = draftRef.current.config?.app_id?.trim();
+          if (!appID) throw new Error(t("connect.openPlatformMissingApp"));
+          setAutomation((current) => ({ ...current, phase: "configuring", error: "" }));
+          const result = await api.configureFeishuAutomation(automationRef.current.sessionID, appID, automationVisibility);
+          setAutomation({ phase: "completed", qrPayload: "", error: "", result });
+          return;
+        }
+        await sleep(1500);
+      }
+    } catch (error) {
+      if (!automationRef.current.cancelled) {
+        setAutomation((current) => ({ ...current, phase: "error", error: String(error) }));
+      }
+    } finally {
+      automationRef.current.polling = false;
+    }
+  }
+
+  function resetFeishuAutomation() {
+    automationRef.current.cancelled = true;
+    automationRef.current.polling = false;
+    setAutomation({ phase: "idle", qrPayload: "", error: "" });
+  }
+
   function resetSetup() {
     setupRef.current.cancelled = true;
     setupRef.current.polling = false;
     setSetup({ phase: "idle", qrUrl: "", error: "" });
+    resetFeishuAutomation();
   }
 
   return (
@@ -217,6 +280,44 @@ export function ChannelEditor({
             onStart={startFeishuSetup}
             onReset={resetSetup}
           />
+          {draft.type === "feishu" && draft.config?.app_id && (
+            <div className={`qr-setup open-platform-setup${automation.phase === "error" ? " error" : ""}`}>
+              <div className="qr-copy">
+                <strong>{t("connect.openPlatformTitle")}</strong>
+                <span>{t("connect.openPlatformHint")}</span>
+                {automation.phase === "idle" && (
+                  <label className="field compact-field">
+                    <span>{t("connect.openPlatformVisibility")}</span>
+                    <select value={automationVisibility} onChange={(event) => setAutomationVisibility(event.target.value as "owner" | "all")}>
+                      <option value="owner">{t("connect.openPlatformOwner")}</option>
+                      <option value="all">{t("connect.openPlatformAll")}</option>
+                    </select>
+                  </label>
+                )}
+                {automation.phase === "completed" && automation.result && (
+                  <span className="success-text">
+                    {t("connect.openPlatformCompleted")} · {automation.result.scope_count} scopes · {automation.result.version_id || "-"}
+                  </span>
+                )}
+                {automation.error && <span className="error">{automation.error}</span>}
+              </div>
+              {(automation.phase === "scanning" || automation.phase === "configuring") && automation.qrPayload && (
+                <span className="qr-frame"><QRCodeSVG value={automation.qrPayload} size={148} level="M" /></span>
+              )}
+              <div className="control-row">
+                {automation.phase === "idle" || automation.phase === "error" || automation.phase === "expired" ? (
+                  <button className="ghost-action" type="button" onClick={startFeishuAutomation}>
+                    <Smartphone size={15} />
+                    {t("connect.openPlatformStart")}
+                  </button>
+                ) : automation.phase === "completed" ? (
+                  <button className="ghost-action" type="button" onClick={resetFeishuAutomation}>{t("common.reset")}</button>
+                ) : (
+                  <span className="muted"><Loader2 className="spin" size={15} /> {automation.phase === "configuring" ? t("connect.openPlatformConfiguring") : t("connect.scanPrompt")}</span>
+                )}
+              </div>
+            </div>
+          )}
           <FeishuChannelOptions draft={draft} updateConfig={updateConfig} codexAgent={isCodexAgent} />
         </>
       )}

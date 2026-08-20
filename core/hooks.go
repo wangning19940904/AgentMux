@@ -31,6 +31,7 @@ const (
 	HookTaskInterrupted     HookEvent = "task.interrupted"
 	HookTaskCompleted       HookEvent = "task.completed"
 	HookInteractionResolved HookEvent = "interaction.resolved"
+	HookFeedbackReceived    HookEvent = "feedback.received"
 	HookThreadBound         HookEvent = "thread.bound"
 	HookError               HookEvent = "error"
 )

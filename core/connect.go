@@ -455,13 +455,16 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		AgentName:       inst.Name,
 		RuntimeID:       inst.RuntimeID,
 		WorkDir:         inst.WorkDir,
+		WorkspaceMode:   inst.WorkspaceMode,
+		WorktreeBaseRef: inst.WorktreeBaseRef,
 		Skills:          append([]string(nil), inst.Skills...),
 		MCPServers:      append([]string(nil), inst.MCPServers...),
 		RuntimeDefaults: runtimeDefaults,
 	}
 	cfg := map[string]any{
-		"work_dir":      inst.WorkDir,
-		"system_prompt": c.composeAgentPrompt(ctx, inst),
+		"work_dir":         inst.WorkDir,
+		"system_prompt":    c.composeAgentPrompt(ctx, inst),
+		"terminal_runtime": inst.RuntimeID,
 	}
 	if runtimeDefaults.Model != "" {
 		cfg["model"] = runtimeDefaults.Model
@@ -498,7 +501,11 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	if len(inst.Env) > 0 {
 		cfg["env"] = inst.Env
 	}
-	agent, err := CreateAgent(inst.RuntimeID, cfg)
+	agentKind := inst.RuntimeID
+	if strings.EqualFold(strings.TrimSpace(inst.SessionBackend), "tmux") {
+		agentKind = "terminal"
+	}
+	agent, err := CreateAgent(agentKind, cfg)
 	if err != nil {
 		c.log.Error("create agent runtime", "runtime", inst.RuntimeID, "err", err)
 		return nil, "", workspace
