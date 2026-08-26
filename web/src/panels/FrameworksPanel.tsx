@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Download, Package, RefreshCw, TriangleAlert } from "lucide-react";
 import { api, Framework, FrameworkInstallResult, FrameworkUpdateCheck, OperationProgress } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
+import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
 import { OperationProgress as OperationProgressView } from "../components/OperationProgress";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -14,6 +15,7 @@ export function FrameworksPanel() {
   const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<FrameworkInstallResult | null>(null);
+  const [confirming, setConfirming] = useState<Framework | null>(null);
 
   const prereqs = frameworks.data?.prereqs;
   const items = frameworks.data?.frameworks ?? [];
@@ -97,14 +99,14 @@ export function FrameworksPanel() {
     }
   }
 
-  async function install(kind: string, action: "install" | "update") {
+  async function install(kind: string, action: "install" | "update", acknowledgeInternal = false) {
     markBusy(kind, action);
     beginProgress(kind, action === "update" ? "checking" : "preparing");
     setNotice("");
     setResult(null);
     if (action === "install") forgetCheck(kind);
     try {
-      const res = await api.installFramework(kind, action, (update) => updateProgress(kind, update));
+      const res = await api.installFramework(kind, action, (update) => updateProgress(kind, update), acknowledgeInternal);
       setResult(res);
       setNotice(res.ok ? t("frameworks.installed") : frameworkInstallFailureNotice(res, t));
       await frameworks.reload();
@@ -179,7 +181,13 @@ export function FrameworksPanel() {
                   check={checks[item.spec.kind]}
                   disabled={(item.spec.install_requires_npm && Boolean(nodeMissing)) || !item.spec.supported}
                   onCheck={() => checkUpdate(item.spec.kind)}
-                  onInstall={(action) => install(item.spec.kind, action)}
+                  onInstall={(action) => {
+                    if (action === "install" && item.spec.internal_only) {
+                      setConfirming(item);
+                      return;
+                    }
+                    void install(item.spec.kind, action);
+                  }}
                 />
               ))}
               {sortedItems.length === 0 && (
@@ -210,6 +218,17 @@ export function FrameworksPanel() {
             <pre className="framework-log">{result.log}</pre>
           </div>
         </section>
+      )}
+      {confirming && (
+        <InternalOnlyDialog
+          name={confirming.spec.display}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            const kind = confirming.spec.kind;
+            setConfirming(null);
+            void install(kind, "install", true);
+          }}
+        />
       )}
     </div>
   );
@@ -273,6 +292,7 @@ function FrameworkTableRows({
           </span>
           <span className="catalog-primary-copy">
             <strong>{spec.display}</strong>
+            {spec.internal_only && <span className="status-badge warning internal-only-badge">{t("tools.internalBadge")}</span>}
             <small className="mono">{spec.kind}</small>
             {spec.note && <small>{spec.note}</small>}
             {cli && !item.installed && spec.bin && <small className="mono">{spec.bin}</small>}

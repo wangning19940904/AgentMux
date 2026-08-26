@@ -2,6 +2,7 @@ import { Bot, CheckCircle2, Download, ExternalLink, LogIn, RefreshCw, Search, Sh
 import { useEffect, useState } from "react";
 import {
   api,
+  BundleInstallResult,
   CLIAuthSession,
   CLIAuthStatus,
   CLIInstallResult,
@@ -10,14 +11,19 @@ import {
   MarketplaceSkill,
   OperationProgress,
   Skill,
+  ToolBundle,
 } from "../api";
 import { isDesktopApp, openExternalURL } from "../api/desktop";
 import { CATALOG_PAGE_SIZE, CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { OperationProgress as OperationProgressView } from "../components/OperationProgress";
+import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 
 type CLIBusyAction = "install" | "update" | "check" | "sync" | "auth";
+type InternalInstallTarget =
+  | { kind: "cli"; id: string; name: string; action: "install" }
+  | { kind: "bundle"; id: string; name: string; components: string[] };
 
 export function ToolsPanel() {
   const { t } = useI18n();
@@ -32,9 +38,14 @@ export function ToolsPanel() {
   const [cliAuthSessions, setCLIAuthSessions] = useState<Record<string, CLIAuthSession>>({});
   const [notice, setNotice] = useState("");
   const [result, setResult] = useState<CLIInstallResult | null>(null);
+  const [bundleBusy, setBundleBusy] = useState("");
+  const [bundleProgress, setBundleProgress] = useState<Record<string, OperationProgress>>({});
+  const [bundleResult, setBundleResult] = useState<BundleInstallResult | null>(null);
+  const [internalTarget, setInternalTarget] = useState<InternalInstallTarget | null>(null);
 
   const data = tools.data;
   const cli = data?.cli ?? [];
+  const bundles = data?.bundles ?? [];
   const skills = data?.skills ?? [];
   const market = marketplace.data ?? data?.marketplace ?? [];
   const installTarget = cliInstallTarget();
@@ -202,13 +213,23 @@ export function ToolsPanel() {
   }
 
   async function installCLI(id: string, action: "install" | "update") {
+    const item = cli.find((candidate) => candidate.spec.id === id);
+    if (action === "install" && item?.spec.internal_only) {
+      setInternalTarget({ kind: "cli", id, name: item.spec.name, action });
+      return;
+    }
+    await performCLIInstall(id, action);
+  }
+
+  async function performCLIInstall(id: string, action: "install" | "update", acknowledgeInternal = false) {
     markCLIBusy(id, action);
     beginCLIProgress(id, action === "update" ? "checking" : "preparing");
     setNotice("");
     setResult(null);
+    setBundleResult(null);
     if (action === "install") forgetCLICheck(id);
     try {
-      const res = await api.installCLI(id, action, (progress) => updateCLIProgress(id, progress));
+      const res = await api.installCLI(id, action, (progress) => updateCLIProgress(id, progress), acknowledgeInternal);
       setResult(res);
       setNotice(res.ok ? t("tools.cliReady") : res.error || t("tools.cliFailed"));
       await tools.reload();
@@ -219,6 +240,54 @@ export function ToolsPanel() {
       clearCLIProgress(id);
       clearCLIBusy(id);
     }
+  }
+
+  async function installBundle(bundle: ToolBundle, acknowledgeInternal = false) {
+    if (bundle.spec.internal_only && !acknowledgeInternal) {
+      setInternalTarget({
+        kind: "bundle", id: bundle.spec.id, name: bundle.spec.name,
+        components: bundle.spec.components.map((component) => component.name),
+      });
+      return;
+    }
+    const id = bundle.spec.id;
+    setBundleBusy(id);
+    setBundleResult(null);
+    setResult(null);
+    setNotice("");
+    setBundleProgress((current) => ({ ...current, [id]: { phase: "preparing", percent: 4, started_at: Date.now() } }));
+    try {
+      const res = await api.installBundle(id, (progress) => {
+        setBundleProgress((current) => ({
+          ...current,
+          [id]: { ...progress, started_at: current[id]?.started_at ?? Date.now() },
+        }));
+      }, acknowledgeInternal);
+      setBundleResult(res);
+      setNotice(res.ok ? t("tools.bundleReady") : res.error || t("tools.bundleFailed"));
+      await tools.reload();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBundleBusy("");
+      setBundleProgress((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    }
+  }
+
+  function confirmInternalInstall() {
+    const target = internalTarget;
+    setInternalTarget(null);
+    if (!target) return;
+    if (target.kind === "cli") {
+      void performCLIInstall(target.id, target.action, true);
+      return;
+    }
+    const bundle = bundles.find((candidate) => candidate.spec.id === target.id);
+    if (bundle) void installBundle(bundle, true);
   }
 
   async function syncCLISkills(id: string) {
@@ -305,7 +374,52 @@ export function ToolsPanel() {
     <div className="page-stack tools-page">
       <p className="subtle-copy">{t("tools.subtitle")}</p>
       {tools.error && <div className="surface-body error">{tools.error}</div>}
-      {notice && <div className={`session-notice${result && !result.ok ? " error" : ""}`}>{notice}</div>}
+      {notice && <div className={`session-notice${(result && !result.ok) || (bundleResult && !bundleResult.ok) ? " error" : ""}`}>{notice}</div>}
+
+      <section className="surface">
+        <div className="surface-header">
+          <div>
+            <h2>{t("tools.bundleTitle")}</h2>
+            <p className="subtle-copy">{t("tools.bundleSubtitle")}</p>
+          </div>
+        </div>
+        <div className="tool-bundle-grid">
+          {bundles.map((bundle) => (
+            <article className={`tool-bundle-card${bundle.installed ? " installed" : ""}`} key={bundle.spec.id}>
+              <header>
+                <div>
+                  <div className="catalog-badge-list">
+                    <strong>{bundle.spec.name}</strong>
+                    {bundle.spec.internal_only && <span className="status-badge warning internal-only-badge">{t("tools.internalBadge")}</span>}
+                  </div>
+                  <p>{bundle.spec.note}</p>
+                </div>
+                <span className={`status-badge ${bundle.installed ? "success" : ""}`}>
+                  {bundle.installed ? <CheckCircle2 size={14} /> : <TriangleAlert size={14} />}
+                  {bundle.ready_components} / {bundle.total_components}
+                </span>
+              </header>
+              <div className="bundle-component-list">
+                {bundle.components.map((component) => (
+                  <span className={`status-badge ${component.ready ? "success" : ""}`} key={`${component.spec.kind}:${component.spec.id}`} title={component.detail}>
+                    {component.ready ? <CheckCircle2 size={13} /> : <Download size={13} />}
+                    {component.spec.name}{component.version ? ` · ${firstVersionLine(component.version)}` : ""}
+                  </span>
+                ))}
+              </div>
+              {bundle.detail && <div className="framework-hint"><TriangleAlert size={15} /><span>{bundle.detail}</span></div>}
+              <footer>
+                <button className="action" disabled={bundleBusy === bundle.spec.id || Boolean(bundle.detail)} onClick={() => void installBundle(bundle)} type="button">
+                  <Download size={14} />
+                  {bundleBusy === bundle.spec.id ? t("frameworks.installing") : bundle.installed ? t("tools.bundleRepair") : t("tools.bundleInstall")}
+                </button>
+              </footer>
+              {bundleProgress[bundle.spec.id] && <OperationProgressView progress={bundleProgress[bundle.spec.id]} />}
+            </article>
+          ))}
+          {bundles.length === 0 && <div className="empty-state">{t("tools.bundleEmpty")}</div>}
+        </div>
+      </section>
 
       <section className="surface">
         <div className="surface-header">
@@ -487,6 +601,28 @@ export function ToolsPanel() {
           </div>
         </section>
       )}
+      {bundleResult && (
+        <section className="surface">
+          <div className="surface-header"><h2>{t("tools.bundleResult")}</h2></div>
+          <div className="surface-body bundle-result-list">
+            {(bundleResult.components ?? []).map((component) => (
+              <div className={`bundle-result-item${component.ok ? " success" : " error"}`} key={`${component.kind}:${component.id}`}>
+                <strong>{component.id}</strong>
+                <span>{component.skipped ? t("tools.bundleSkipped") : component.ok ? t("tools.bundleComponentReady") : component.error}</span>
+                {component.log && <pre className="framework-log">{component.log}</pre>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {internalTarget && (
+        <InternalOnlyDialog
+          name={internalTarget.name}
+          components={internalTarget.kind === "bundle" ? internalTarget.components : []}
+          onCancel={() => setInternalTarget(null)}
+          onConfirm={confirmInternalInstall}
+        />
+      )}
     </div>
   );
 }
@@ -552,6 +688,7 @@ function CLIManagedRows({
           <span className="provider-icon"><TerminalSquare size={16} /></span>
           <span className="catalog-primary-copy">
             <strong>{item.spec.name}</strong>
+            {item.spec.internal_only && <span className="status-badge warning internal-only-badge">{t("tools.internalBadge")}</span>}
             <small className="mono">{item.spec.bin}</small>
           </span>
         </td>

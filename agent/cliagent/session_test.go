@@ -130,6 +130,18 @@ func TestSessionEventMapperCanReturnMultipleEvents(t *testing.T) {
 	}
 }
 
+func TestSessionRemembersNativeSessionForResume(t *testing.T) {
+	sess := &session{}
+	sess.rememberNativeSessionID(" native-thread ")
+	if got := sess.currentNativeSessionID(); got != "native-thread" {
+		t.Fatalf("native session id = %q", got)
+	}
+	sess.rememberNativeSessionID("")
+	if got := sess.currentNativeSessionID(); got != "native-thread" {
+		t.Fatalf("empty update cleared native session id: %q", got)
+	}
+}
+
 func TestStartSessionDiscoversAndCachesRuntimeModels(t *testing.T) {
 	var parses atomic.Int32
 	agent := New(Spec{

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Provider, ProviderProbeCheck } from "../../api";
 
-export const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
+export const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "traecli", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
 export const DEFAULT_ROUTE_TOOLS = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini"];
 export const CURATED_PRESET_IDS = [
   "anthropic-official",
@@ -666,5 +666,6 @@ export function toolLabel(tool: string) {
   if (normalized === "codex") return "Codex CLI";
   if (normalized === "codex-app") return "Codex Desktop";
   if (normalized === "cursor") return "Cursor";
+  if (normalized === "traecli") return "TRAE CLI";
   return tool;
 }

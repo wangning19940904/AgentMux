@@ -383,7 +383,7 @@ func ApprovalModeValuesForRuntime(runtimeID string) []string {
 	switch strings.ToLower(strings.TrimSpace(runtimeID)) {
 	case "claude", "claudecode", "claude-code", "claudecode-cli", "qoder":
 		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
-	case "codex", "codex-cli":
+	case "codex", "codex-cli", "codex-app", "codex-desktop", "codex-app-server", "trae", "traecli":
 		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
 	case "gemini", "opencode", "iflow":
 		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModePlan, ApprovalModeYolo}

@@ -51,7 +51,7 @@ export function ChannelEditor({
   const fields = CHANNEL_FIELDS[draft.type ?? ""] ?? [];
   const isFeishuLike = draft.type === "feishu" || draft.type === "lark";
   const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
-  const isCodexAgent = selectedAgent?.runtime_id === "codex";
+	const isCodexAgent = selectedAgent?.runtime_id === "codex" || selectedAgent?.runtime_id === "codex-app";
   const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
   const automationRef = useRef({ sessionID: "", cancelled: false, polling: false });
   const draftRef = useRef<Partial<Channel>>(draft);
@@ -245,7 +245,7 @@ export function ChannelEditor({
               const agentID = e.target.value;
               const runtimeID = agents.find((agent) => agent.id === agentID)?.runtime_id;
               const config = { ...(draft.config ?? {}) };
-              if (runtimeID !== "codex") config.codex_control_enabled = "false";
+				if (runtimeID !== "codex" && runtimeID !== "codex-app") config.codex_control_enabled = "false";
               delete config.approval_mode;
               update({ agent_id: agentID, config });
             }}

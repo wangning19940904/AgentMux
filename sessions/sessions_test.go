@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -167,6 +168,61 @@ func TestCodexAppServerMockList(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].SessionID != "thread-1" || items[0].Surface != "app-server" {
 		t.Fatalf("items = %+v", items)
+	}
+}
+
+func TestCodexDesktopListFiltersOriginatorAndSourceKind(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	sessionsDir := filepath.Join(codexHome, "sessions", "2026", "08", "20")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeMeta := func(id, originator string) string {
+		t.Helper()
+		body := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"cwd":"/repo","source":"vscode","originator":%q}}`, id, originator)
+		path := filepath.Join(sessionsDir, "rollout-"+id+".jsonl")
+		if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	desktopPath := writeMeta("desktop-thread", "Codex Desktop")
+	writeMeta("vscode-thread", "Codex VS Code Extension")
+
+	dir := t.TempDir()
+	cmd := filepath.Join(dir, "codex-mock")
+	capture := filepath.Join(dir, "request.json")
+	body1 := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	body2 := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"desktop-thread","name":"Desktop run","cwd":"/repo","path":%q},{"id":"vscode-thread","name":"VS Code run","cwd":"/repo"}]}}`, desktopPath)
+	script := "#!/bin/sh\n" +
+		"IFS= read -r initialize\n" +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body1) +
+		"IFS= read -r initialized\n" +
+		"IFS= read -r request\n" +
+		fmt.Sprintf("printf '%%s\\n' \"$request\" > %q\n", capture) +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body2) +
+		"sleep 1\n"
+	if err := os.WriteFile(cmd, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{app: &CodexAppClient{Command: cmd}}
+	items, err := service.List(context.Background(), "codex", "desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].SessionID != "desktop-thread" || items[0].Surface != "desktop" || items[0].Originator != "Codex Desktop" {
+		t.Fatalf("items = %+v", items)
+	}
+	request, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(request), `"sourceKinds":["vscode"]`) {
+		t.Fatalf("thread/list request = %s", request)
 	}
 }
 

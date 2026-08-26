@@ -335,6 +335,7 @@ export interface AgentInstance {
   id: string;
   name: string;
   runtime_id: string;
+  desktop_thread_id?: string;
   work_dir?: string;
   workspace_mode?: "shared" | "worktree";
   worktree_base_ref?: string;
@@ -706,6 +707,8 @@ export interface FrameworkSpec {
   env_required?: string[];
   supported: boolean;
   note?: string;
+  internal_only?: boolean;
+  install_platforms?: string[];
 }
 
 export interface Framework {
@@ -774,6 +777,7 @@ export interface CLIManagedTool {
     registry?: string;
     note?: string;
     login_supported?: boolean;
+    internal_only?: boolean;
     linked_skills?: CLILinkedSkillSpec[];
   };
   installed: boolean;
@@ -829,6 +833,52 @@ export interface CLIUpdateCheck {
   latest_version?: string;
   update_available: boolean;
   checked_at?: string;
+  error?: string;
+}
+
+export interface BundleComponentSpec {
+  kind: "cli" | "framework";
+  id: string;
+  name: string;
+}
+
+export interface ToolBundle {
+  spec: {
+    id: string;
+    name: string;
+    note?: string;
+    internal_only?: boolean;
+    install_platforms?: string[];
+    components: BundleComponentSpec[];
+  };
+  installed: boolean;
+  ready_components: number;
+  total_components: number;
+  components: Array<{
+    spec: BundleComponentSpec;
+    installed: boolean;
+    ready: boolean;
+    version?: string;
+    detail?: string;
+  }>;
+  detail?: string;
+}
+
+export interface BundleComponentResult {
+  kind: "cli" | "framework";
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  version?: string;
+  command?: string;
+  log?: string;
+  error?: string;
+}
+
+export interface BundleInstallResult {
+  id: string;
+  ok: boolean;
+  components?: BundleComponentResult[];
   error?: string;
 }
 
@@ -919,6 +969,7 @@ export interface WorkspaceInitResult {
 
 export interface ToolsResponse {
   cli: CLIManagedTool[];
+  bundles: ToolBundle[];
   frameworks: Framework[];
   skills: Skill[];
   mcp: MCPServer[];
@@ -930,6 +981,8 @@ export interface AgentSession {
   surface: string;
   session_id: string;
   native_session_id?: string;
+  source_kind?: string;
+  originator?: string;
   title?: string;
   summary?: string;
   project_dir?: string;

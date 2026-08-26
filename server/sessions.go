@@ -31,6 +31,19 @@ func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (s *Server) handleCodexDesktopThreads(w http.ResponseWriter, r *http.Request) {
+	if s.sessions == nil {
+		writeJSON(w, http.StatusOK, []sessionstore.Meta{})
+		return
+	}
+	items, err := s.sessions.List(r.Context(), "codex", "desktop")
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "list Codex Desktop threads: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 func (s *Server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	if s.sessions == nil {
 		writeJSON(w, http.StatusOK, []any{})

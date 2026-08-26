@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +70,7 @@ func CheckUpdate(ctx context.Context, kind string) UpdateCheck {
 }
 
 func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
-	if spec.LatestURL != "" {
+	if spec.ExactLatest {
 		// Self-updating native CLIs may use date+build identifiers whose hash
 		// suffix has no semantic ordering. The official endpoint is the source of
 		// truth, so any different build identifier is an available update.
@@ -81,13 +82,7 @@ func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
 func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs) (string, error) {
 	switch spec.KindType {
 	case KindSDK:
-		if spec.Language != "node" || len(spec.Packages) == 0 {
-			return "", fmt.Errorf("SDK does not have a supported registry package")
-		}
-		if !pre.NPM {
-			return "", fmt.Errorf("npm not found on PATH; install Node.js first")
-		}
-		return npmPackageVersion(ctx, spec.Packages[0])
+		return "", fmt.Errorf("SDK does not have a runnable adapter")
 	case KindCLI:
 		if spec.NPMPackage != "" {
 			if !pre.NPM {
@@ -144,11 +139,23 @@ func officialCLIVersion(ctx context.Context, url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	version := cursorInstallerVersion(string(body))
+	version := officialVersionFromBody(body)
 	if version == "" {
 		return "", fmt.Errorf("latest-version endpoint returned no recognizable version")
 	}
 	return version, nil
+}
+
+func officialVersionFromBody(body []byte) string {
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		if version := normalizeSDKVersion(payload.Version); version != "" {
+			return version
+		}
+	}
+	return cursorInstallerVersion(string(body))
 }
 
 var cursorInstallerVersionRE = regexp.MustCompile(`(?:/lab/|versions/)(\d{4}\.\d{2}\.\d{2}-[0-9A-Za-z]+)(?:/|\b)`)

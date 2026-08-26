@@ -26,7 +26,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | 多 Agent 编排 | **AgentMux Orchestrations** | `server/orchestrations.go` + `store/orchestrations.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
-- **Router** — 支持 Claude Code、Codex、Cursor、Gemini、Qoder、OpenCode、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移。
+- **Router** — 支持 Claude Code、Codex CLI、Codex Desktop Thread、Cursor、Gemini、Qoder、OpenCode、TRAE CLI、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移；Codex Desktop Agent 会校验并固定恢复由 Desktop 创建的原生 Thread。TRAE CLI、bytedcli 与 CIS CLI 可通过 Console 或 `amux tools bundle install bytedance-internal` 一键安装，且仅适用于字节内部环境。
 - **渠道 & 触发** — 渠道是绑定 Agent 的实时 IM 连接(飞书/Telegram/钉钉/Slack/Discord/Webhook),控制台可增删改与启停/重启并显示运行状态;触发统一承载三类自动化:定时任务(robfig/cron,标准 5 段表达式)、入站 Webhook(`POST /hook/{id}`,自带 token 鉴权)、生命周期事件回调(`message.received`/`cron.triggered`/`error` 等 → Shell 或 HTTP)。定时/Webhook 触发把 Prompt 发给绑定 Agent 并将结果推回渠道会话,支持 `reuse`/`new_per_run` 会话模式。
 - **Ledger** — 读取 Claude/Codex/Cursor/Gemini 的本地会话日志,基于 LiteLLM 价格数据计费,按天/周/月/会话/5 小时块出账,并能通过 SSH 采集远程机器用量。
 - **Observability** — 用统一 Trace 串联 Agent Turn、模型请求、重试、工具、Hook 与渠道回复；融合内部事件、Claude/Codex 原生 OTel、Proxy 和增量 Transcript，并生成只读优化建议。
@@ -159,6 +159,8 @@ amux serve                       # IM gateway + management API
 amux web [--no-open]             # serve + open Console
 amux config init|path            # create or inspect config.toml
 amux tools list|check|install|update <id>
+amux tools bundle list
+amux tools bundle install bytedance-internal [--yes]
 amux usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 amux usage statusline            # compact one-liner for status bars/hooks
 amux provider list|presets|import <id>|switch <id> --tool <tool>

@@ -12,10 +12,9 @@ import (
 
 func TestCatalogHasKnownFrameworks(t *testing.T) {
 	want := map[string]KindType{
-		"claudecode":       KindCLI,
-		"claude-agent-sdk": KindSDK,
-		"openai-agents":    KindSDK,
-		"deepagents":       KindSDK,
+		"claudecode": KindCLI,
+		"traecli":    KindCLI,
+		"deepagents": KindSDK,
 	}
 	for kind, kt := range want {
 		spec, ok := Lookup(kind)
@@ -25,6 +24,47 @@ func TestCatalogHasKnownFrameworks(t *testing.T) {
 		if spec.KindType != kt {
 			t.Fatalf("%q kind_type = %q, want %q", kind, spec.KindType, kt)
 		}
+	}
+	for _, removed := range []string{"claude-agent-sdk", "openai-agents"} {
+		if _, ok := Lookup(removed); ok {
+			t.Fatalf("removed Node SDK %q is still catalogued", removed)
+		}
+	}
+}
+
+func TestCatalogOmitsHiddenFrameworks(t *testing.T) {
+	visible := map[string]bool{}
+	for _, spec := range Catalog() {
+		visible[spec.Kind] = true
+	}
+	for _, kind := range []string{"iflow", "kimi"} {
+		if visible[kind] {
+			t.Fatalf("hidden framework %q is present in the public catalog", kind)
+		}
+		spec, ok := Lookup(kind)
+		if !ok || !spec.Hidden {
+			t.Fatalf("hidden framework %q is unavailable for persisted configuration compatibility", kind)
+		}
+	}
+}
+
+func TestTraeCatalogIsInternalAndPlatformLimited(t *testing.T) {
+	spec, ok := Lookup("traecli")
+	if !ok || !spec.InternalOnly || !spec.InstallSupported || !spec.UpdateSupported || spec.Bin != "traecli" {
+		t.Fatalf("TRAE spec = %+v", spec)
+	}
+	if !installPlatformSupported(spec, "darwin") || !installPlatformSupported(spec, "linux") || installPlatformSupported(spec, "windows") {
+		t.Fatalf("TRAE install platforms = %v", spec.InstallPlatforms)
+	}
+	if got := strings.Join(spec.UpdateCommand, " "); got != "traecli update" {
+		t.Fatalf("TRAE update command = %q", got)
+	}
+}
+
+func TestTraeInstallRequiresInternalAcknowledgement(t *testing.T) {
+	res := Install(context.Background(), "traecli")
+	if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
+		t.Fatalf("install result = %+v", res)
 	}
 }
 
@@ -120,6 +160,25 @@ exit 2
 	codex := CheckAuth(context.Background(), "codex")
 	if codex.State != AuthStateUnauthenticated || !codex.LoginSupported {
 		t.Fatalf("Codex auth status = %+v", codex)
+	}
+}
+
+func TestCheckTraeAuthUsesNativeStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	bin := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "traecli"), `#!/bin/sh
+if [ "$1" = "login" ] && [ "$2" = "status" ]; then
+  echo 'Logged in using Trae'
+  exit 0
+fi
+exit 2
+`)
+	t.Setenv("PATH", bin)
+	status := CheckAuth(context.Background(), "traecli")
+	if status.State != AuthStateAuthenticated || !status.LoginSupported {
+		t.Fatalf("TRAE auth = %+v", status)
 	}
 }
 
@@ -388,30 +447,6 @@ func TestInstallRejectsUnsupportedFramework(t *testing.T) {
 	}
 }
 
-func TestCheckUpdateDetectsNewerSDKVersion(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
-	if err := os.MkdirAll(packageDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"version":"1.2.3"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	bin := t.TempDir()
-	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '1.3.0'; exit 0; fi\nexit 1\n")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	res := CheckUpdate(context.Background(), "claude-agent-sdk")
-	if res.Error != "" || !res.Installed || !res.UpdateAvailable || res.CurrentVersion != "1.2.3" || res.LatestVersion != "1.3.0" {
-		t.Fatalf("check result = %+v", res)
-	}
-}
-
 func TestCheckUpdateDetectsNewerCLIVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
@@ -527,8 +562,17 @@ func TestCursorInstallerVersion(t *testing.T) {
 	if got := cursorInstallerVersion(raw); got != "2026.07.09-a3815c0" {
 		t.Fatalf("cursor installer version = %q", got)
 	}
-	if !frameworkUpdateAvailable(Spec{LatestURL: "https://cursor.com/install"}, "2026.07.09-a3815c0", "2026.07.09-fffffff") {
+	if !frameworkUpdateAvailable(Spec{LatestURL: "https://cursor.com/install", ExactLatest: true}, "2026.07.09-a3815c0", "2026.07.09-fffffff") {
 		t.Fatal("different native build identifiers should be treated as an available update")
+	}
+}
+
+func TestOfficialVersionFromJSONManifest(t *testing.T) {
+	if got := officialVersionFromBody([]byte(`{"version":"0.201.6","channel":"stable"}`)); got != "0.201.6" {
+		t.Fatalf("manifest version = %q", got)
+	}
+	if frameworkUpdateAvailable(Spec{}, "0.201.5", "0.201.6") {
+		t.Fatal("ordered versions must not downgrade TRAE")
 	}
 }
 
@@ -565,63 +609,6 @@ func TestCursorUpdateUsesOfficialInstallerAndExactNativeBuild(t *testing.T) {
 	}
 }
 
-func TestUpdateSkipsInstallWhenSDKIsCurrent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
-	if err := os.MkdirAll(packageDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"version":"1.2.3"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	bin := t.TempDir()
-	marker := filepath.Join(bin, "installed")
-	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '1.2.3'; exit 0; fi\ntouch '"+marker+"'\n")
-	t.Setenv("PATH", bin)
-
-	res := Update(context.Background(), "claude-agent-sdk")
-	if !res.OK || res.Error != "" || res.Command != "" || res.Action != "update" {
-		t.Fatalf("update result = %+v", res)
-	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("npm install should not have run, marker err = %v", err)
-	}
-}
-
-func TestUpdateInstallsLatestSDKVersion(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
-	}
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	packageDir := filepath.Join(home, ".agentmux", "sidecar", "node_modules", "@anthropic-ai", "claude-agent-sdk")
-	if err := os.MkdirAll(packageDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	packageJSON := filepath.Join(packageDir, "package.json")
-	if err := os.WriteFile(packageJSON, []byte(`{"version":"1.2.3"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	bin := t.TempDir()
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = \"view\" ]; then echo '1.2.4'; exit 0; fi\n" +
-		"case \" $* \" in *' @anthropic-ai/claude-agent-sdk@latest '*) ;; *) exit 2 ;; esac\n" +
-		"echo '{\"version\":\"1.2.4\"}' > '" + packageJSON + "'\n"
-	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), script)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	res := Update(context.Background(), "claude-agent-sdk")
-	if !res.OK || res.Error != "" || res.Version != "1.2.4" || !strings.Contains(res.Command, "@anthropic-ai/claude-agent-sdk@latest") {
-		t.Fatalf("update result = %+v", res)
-	}
-}
-
 func TestSDKVersionGreaterHandlesPrerelease(t *testing.T) {
 	if !sdkVersionGreater("1.2.3", "1.2.3-beta.1") {
 		t.Fatal("stable release should be newer than matching prerelease")
@@ -631,30 +618,6 @@ func TestSDKVersionGreaterHandlesPrerelease(t *testing.T) {
 	}
 	if sdkVersionGreater("1.2.3-beta.1", "1.2.3") {
 		t.Fatal("prerelease should not be newer than stable release")
-	}
-}
-
-func TestEnsureSidecarPreservesInstalledDependencies(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	manifestPath := filepath.Join(home, ".agentmux", "sidecar", "package.json")
-	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	want := []byte(`{"dependencies":{"@anthropic-ai/claude-agent-sdk":"^1.2.3"}}`)
-	if err := os.WriteFile(manifestPath, want, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := EnsureSidecar(); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Fatalf("package.json was overwritten: got %s", got)
 	}
 }
 

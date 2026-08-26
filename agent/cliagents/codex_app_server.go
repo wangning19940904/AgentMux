@@ -25,6 +25,14 @@ func registerCodex() {
 	core.RegisterAgent("codex", func(cfg map[string]any) (core.Agent, error) {
 		return newCodexAgent(cfg), nil
 	})
+	core.RegisterAgent("codex-app", func(cfg map[string]any) (core.Agent, error) {
+		desktopConfig := make(map[string]any, len(cfg)+1)
+		for key, value := range cfg {
+			desktopConfig[key] = value
+		}
+		desktopConfig["desktop_mode"] = true
+		return newCodexAgent(desktopConfig), nil
+	})
 }
 
 type codexAgent struct {
@@ -37,6 +45,8 @@ type codexAgent struct {
 	supportedServiceTiers     []string
 	supportedApprovalModes    []string
 	env                       map[string]string
+	desktopMode               bool
+	desktopThreadID           string
 	clientMu                  sync.Mutex
 	client                    *codexAppClient
 	capabilityState           string
@@ -45,6 +55,10 @@ type codexAgent struct {
 
 func newCodexAgent(cfg map[string]any) *codexAgent {
 	a := &codexAgent{capabilityState: "not_probed"}
+	a.desktopMode, _ = cfg["desktop_mode"].(bool)
+	if value, ok := cfg["desktop_thread_id"].(string); ok {
+		a.desktopThreadID = strings.TrimSpace(value)
+	}
 	if value, ok := cfg["system_prompt"].(string); ok {
 		a.systemPrompt = value
 	}
@@ -80,11 +94,29 @@ func newCodexAgent(cfg map[string]any) *codexAgent {
 func (a *codexAgent) Name() string { return "codex" }
 
 func (a *codexAgent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
-	return newCodexSession(ctx, a, workDir, "")
+	threadID, err := a.resumeThreadID("")
+	if err != nil {
+		return nil, err
+	}
+	return newCodexSession(ctx, a, workDir, threadID)
 }
 
 func (a *codexAgent) StartSessionResume(ctx context.Context, workDir, resumeID string) (core.AgentSession, error) {
-	return newCodexSession(ctx, a, workDir, resumeID)
+	threadID, err := a.resumeThreadID(resumeID)
+	if err != nil {
+		return nil, err
+	}
+	return newCodexSession(ctx, a, workDir, threadID)
+}
+
+func (a *codexAgent) resumeThreadID(conversationThreadID string) (string, error) {
+	if !a.desktopMode {
+		return strings.TrimSpace(conversationThreadID), nil
+	}
+	if a.desktopThreadID == "" {
+		return "", fmt.Errorf("Codex Desktop runtime requires a bound Desktop thread")
+	}
+	return a.desktopThreadID, nil
 }
 
 func (a *codexAgent) ListSessions(ctx context.Context) ([]string, error) {
@@ -94,7 +126,11 @@ func (a *codexAgent) ListSessions(ctx context.Context) ([]string, error) {
 	if client == nil || client.isClosed() {
 		return nil, nil
 	}
-	result, err := client.call(ctx, "thread/list", map[string]any{"limit": 100, "archived": false})
+	params := map[string]any{"limit": 100, "archived": false}
+	if a.desktopMode {
+		params["sourceKinds"] = []string{"vscode"}
+	}
+	result, err := client.call(ctx, "thread/list", params)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +139,9 @@ func (a *codexAgent) ListSessions(ctx context.Context) ([]string, error) {
 	for _, raw := range rows {
 		thread, _ := raw.(map[string]any)
 		if id := firstString(thread, "id", "threadId"); id != "" {
+			if a.desktopMode && id != a.desktopThreadID {
+				continue
+			}
 			ids = append(ids, id)
 		}
 	}
@@ -114,10 +153,14 @@ func (a *codexAgent) ListNativeThreads(ctx context.Context, workDir string) ([]c
 	if err != nil {
 		return nil, err
 	}
-	result, err := client.call(ctx, "thread/list", map[string]any{
+	params := map[string]any{
 		"limit": 100, "archived": false, "cwd": workDir,
 		"sortKey": "recency_at", "sortDirection": "desc",
-	})
+	}
+	if a.desktopMode {
+		params["sourceKinds"] = []string{"vscode"}
+	}
+	result, err := client.call(ctx, "thread/list", params)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +170,9 @@ func (a *codexAgent) ListNativeThreads(ctx context.Context, workDir string) ([]c
 		thread, _ := raw.(map[string]any)
 		id := firstString(thread, "id", "threadId")
 		if id == "" {
+			continue
+		}
+		if a.desktopMode && id != a.desktopThreadID {
 			continue
 		}
 		threadWorkDir := firstString(thread, "cwd")

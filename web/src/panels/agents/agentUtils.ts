@@ -6,6 +6,7 @@ export const EMPTY_AGENT: AgentInstance = {
   id: "",
   name: "",
   runtime_id: "",
+  desktop_thread_id: "",
   work_dir: "",
   workspace_mode: "shared",
   worktree_base_ref: "",
@@ -105,6 +106,7 @@ export function newAgent(runtimeOptions: string[]): AgentInstance {
 }
 
 export function routeToolForRuntime(runtime: string): string {
+  if (runtime.trim() === "codex-app") return "codex-app";
   return normalizeTool(runtime);
 }
 
@@ -131,6 +133,8 @@ export function runtimeLabel(runtime: string): string {
       return "OpenCode CLI";
     case "qoder":
       return "Qoder CLI";
+    case "traecli":
+      return "TRAE CLI";
     case "claude-desktop":
       return "Claude Desktop";
     case "codex-app":
@@ -142,7 +146,7 @@ export function runtimeLabel(runtime: string): string {
 
 export function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRoute | undefined {
   const normalized = normalizeTool(tool);
-  return routes.find((route) => route.tool === tool || normalizeTool(route.tool) === normalized);
+  return routes.find((route) => route.tool === tool) ?? routes.find((route) => normalizeTool(route.tool) === normalized);
 }
 
 export function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
@@ -251,6 +255,8 @@ export function approvalModesForRuntime(runtimeID: string) {
     case "claudecode":
     case "qoder":
     case "codex":
+    case "codex-app":
+    case "traecli":
       return ["manual", "auto_edit", "auto", "plan", "yolo"];
     case "gemini":
     case "opencode":

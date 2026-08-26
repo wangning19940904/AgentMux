@@ -40,6 +40,9 @@ func TestAgentsEndpointOnlyReturnsInstalledRuntimes(t *testing.T) {
 	if !containsString(runtimes, "codex") {
 		t.Fatalf("runtimes = %v, want installed codex", runtimes)
 	}
+	if !containsString(runtimes, "codex-app") {
+		t.Fatalf("runtimes = %v, want Codex Desktop runtime when codex is installed", runtimes)
+	}
 	if containsString(runtimes, "claudecode") {
 		t.Fatalf("runtimes = %v, missing claudecode must be filtered", runtimes)
 	}
@@ -58,6 +61,64 @@ func TestAgentCreationRejectsUninstalledRuntime(t *testing.T) {
 	})
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "not installed") {
 		t.Fatalf("code = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCodexDesktopAgentBindsVerifiedDesktopThread(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	home := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions", "2026", "08", "20")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"type":"session_meta","payload":{"id":"desktop-thread","cwd":"/repo","source":"vscode","originator":"Codex Desktop"}}`
+	if err := os.WriteFile(filepath.Join(sessionsDir, "rollout-desktop-thread.jsonl"), []byte(meta+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	command := filepath.Join(bin, "codex")
+	initResponse := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	listResponse := `{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"desktop-thread","name":"Desktop run","cwd":"/repo"}]}}`
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.0.0'; exit 0; fi\n" +
+		"IFS= read -r initialize\n" +
+		"printf '%s\\n' '" + initResponse + "'\n" +
+		"IFS= read -r initialized\n" +
+		"IFS= read -r request\n" +
+		"printf '%s\\n' '" + listResponse + "'\n" +
+		"sleep 1\n"
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+
+	s, _ := newTestServer(t)
+	recorder := doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+		Name: "Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	var saved core.AgentInstance
+	if err := json.Unmarshal(recorder.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.RuntimeID != "codex-app" || saved.DesktopThreadID != "desktop-thread" || saved.WorkDir != "/repo" || saved.WorkspaceMode != "shared" || saved.SessionBackend != "structured" {
+		t.Fatalf("saved = %+v", saved)
+	}
+
+	recorder = doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+		Name: "Duplicate Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
+	})
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "already bound") {
+		t.Fatalf("duplicate code = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 

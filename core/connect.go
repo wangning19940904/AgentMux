@@ -466,6 +466,9 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		"system_prompt":    c.composeAgentPrompt(ctx, inst),
 		"terminal_runtime": inst.RuntimeID,
 	}
+	if inst.DesktopThreadID != "" {
+		cfg["desktop_thread_id"] = inst.DesktopThreadID
+	}
 	if runtimeDefaults.Model != "" {
 		cfg["model"] = runtimeDefaults.Model
 	}
@@ -544,7 +547,12 @@ func (c *ConnectService) agentRuntimeProvider(ctx context.Context, inst *AgentIn
 	}
 	want := NormalizeProviderTool(tool)
 	for _, route := range routes {
-		if route.Tool == tool || NormalizeProviderTool(route.Tool) == want {
+		if route.Tool == tool {
+			return c.store.GetProvider(ctx, route.ProviderID)
+		}
+	}
+	for _, route := range routes {
+		if NormalizeProviderTool(route.Tool) == want {
 			return c.store.GetProvider(ctx, route.ProviderID)
 		}
 	}
@@ -630,7 +638,17 @@ func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInsta
 	}
 	want := NormalizeProviderTool(tool)
 	for _, route := range routes {
-		if route.Tool == tool || NormalizeProviderTool(route.Tool) == want {
+		if route.Tool == tool {
+			p, err = c.store.GetProvider(ctx, route.ProviderID)
+			if err != nil {
+				c.log.Warn("load active provider", "agent_id", inst.ID, "provider_id", route.ProviderID, "err", err)
+				return nil
+			}
+			return ProviderModelOptions(p)
+		}
+	}
+	for _, route := range routes {
+		if NormalizeProviderTool(route.Tool) == want {
 			p, err = c.store.GetProvider(ctx, route.ProviderID)
 			if err != nil {
 				c.log.Warn("load active provider", "agent_id", inst.ID, "provider_id", route.ProviderID, "err", err)

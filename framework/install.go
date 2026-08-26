@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -27,18 +28,33 @@ type InstallResult struct {
 // consistently by every supported installer.
 type ProgressFunc func(phase, detail string, percent int)
 
-// Install installs a catalogued framework with its catalog-owned command. CLI
-// packages are installed globally while SDK packages live in the sidecar. The
-// caller selects only the framework kind, so this cannot execute arbitrary
-// packages or commands.
+// InstallOptions carries explicit acknowledgement for restricted catalog
+// entries. Callers cannot override catalog-owned commands or packages.
+type InstallOptions struct {
+	AcknowledgeInternal bool
+}
+
+// Install installs a public catalogued framework with its catalog-owned
+// command. Internal-only entries require InstallWithOptions.
 func Install(ctx context.Context, kind string) InstallResult {
-	return InstallWithProgress(ctx, kind, nil)
+	return InstallWithProgressOptions(ctx, kind, InstallOptions{}, nil)
 }
 
 // InstallWithProgress installs a framework while reporting preparation,
 // command execution, and verification stages.
 func InstallWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
-	return install(ctx, kind, "install", progress)
+	return InstallWithProgressOptions(ctx, kind, InstallOptions{}, progress)
+}
+
+// InstallWithOptions installs a framework with explicit restricted-entry
+// acknowledgement.
+func InstallWithOptions(ctx context.Context, kind string, options InstallOptions) InstallResult {
+	return InstallWithProgressOptions(ctx, kind, options, nil)
+}
+
+// InstallWithProgressOptions is the progress-reporting InstallWithOptions.
+func InstallWithProgressOptions(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
+	return install(ctx, kind, options, progress)
 }
 
 // Update updates an installed framework only when its catalog-owned version
@@ -72,10 +88,10 @@ func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc)
 	if !ok {
 		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("unknown framework %q", kind)}
 	}
-	if spec.KindType == KindCLI {
-		return updateCLIWithProgress(ctx, spec, check, progress)
+	if spec.KindType != KindCLI {
+		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("framework %q does not have a runnable adapter", kind)}
 	}
-	return install(ctx, kind, "update", progress)
+	return updateCLIWithProgress(ctx, spec, check, progress)
 }
 
 func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult {
@@ -95,9 +111,8 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, pr
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		// Homebrew may need to refresh its API metadata before upgrading a Cask.
-		// On a stale installation that first refresh can legitimately exceed the
-		// shorter package-install timeout used by SDK frameworks.
+		// Homebrew and native self-updaters may need to refresh metadata before
+		// upgrading, so allow a full CLI-update window.
 		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
 		defer cancel()
 	}
@@ -122,7 +137,7 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, pr
 		return res
 	}
 	advanced := sdkVersionGreater(res.Version, check.CurrentVersion)
-	if spec.LatestURL != "" {
+	if spec.ExactLatest {
 		// Native builds such as Cursor use date+hash identifiers. Hashes are not
 		// ordered, so success means the installer selected the exact build exposed
 		// by the official latest-version endpoint.
@@ -139,8 +154,8 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, pr
 	return res
 }
 
-func install(ctx context.Context, kind, action string, progress ProgressFunc) InstallResult {
-	res := InstallResult{Kind: kind, Action: action}
+func install(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
+	res := InstallResult{Kind: kind, Action: "install"}
 	reportProgress(progress, "preparing", "", 5)
 
 	spec, ok := Lookup(kind)
@@ -156,68 +171,35 @@ func install(ctx context.Context, kind, action string, progress ProgressFunc) In
 		res.Error = fmt.Sprintf("framework %q does not support automatic install", kind)
 		return res
 	}
-	if spec.KindType == KindCLI {
-		return installCLIWithProgress(ctx, spec, progress)
-	}
-	if spec.Language != "node" {
-		res.Error = fmt.Sprintf("framework %q requires a %s runtime (not yet supported)", kind, spec.Language)
+	if spec.InternalOnly && !options.AcknowledgeInternal {
+		res.Error = fmt.Sprintf("framework %q is only available inside ByteDance; explicit acknowledgement is required", kind)
 		return res
 	}
-	if len(spec.Packages) == 0 {
-		res.Error = fmt.Sprintf("framework %q has no packages to install", kind)
+	if !installPlatformSupported(spec, runtime.GOOS) {
+		if runtime.GOOS == "windows" && spec.Kind == "traecli" {
+			res.Error = "TRAE CLI automatic installation is unsupported on native Windows; run AgentMux inside WSL"
+		} else {
+			res.Error = fmt.Sprintf("framework %q cannot be installed automatically on %s", kind, runtime.GOOS)
+		}
 		return res
 	}
+	if spec.KindType != KindCLI {
+		res.Error = fmt.Sprintf("framework %q does not have a runnable adapter", kind)
+		return res
+	}
+	return installCLIWithProgress(ctx, spec, progress)
+}
 
-	pre := DetectPrereqs()
-	if !pre.NPM {
-		res.Error = "npm not found on PATH; install Node.js first"
-		return res
+func installPlatformSupported(spec Spec, goos string) bool {
+	if len(spec.InstallPlatforms) == 0 {
+		return true
 	}
-	reportProgress(progress, "preparing", "sidecar", 18)
-	if err := EnsureSidecar(); err != nil {
-		res.Error = fmt.Sprintf("prepare sidecar: %v", err)
-		return res
-	}
-
-	packages := append([]string(nil), spec.Packages...)
-	if action == "update" {
-		for i, pkg := range packages {
-			packages[i] = pkg + "@latest"
+	for _, candidate := range spec.InstallPlatforms {
+		if candidate == goos {
+			return true
 		}
 	}
-	args := append([]string{"install", "--no-audit", "--no-fund"}, packages...)
-	res.Command = "npm " + strings.Join(args, " ")
-	phase := "installing"
-	if action == "update" {
-		phase = "updating"
-	}
-	reportProgress(progress, phase, res.Command, 32)
-
-	runCtx := ctx
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-	}
-
-	cmd := frameworkCommandContext(runCtx, "npm", args...)
-	cmd.Dir = SidecarDir()
-	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
-	res.Log = string(out)
-	if err != nil {
-		res.Error = fmt.Sprintf("npm install failed: %v", err)
-		return res
-	}
-
-	reportProgress(progress, "verifying", "", 88)
-	installed, version := nodePackageInstalled(spec.Packages)
-	res.OK = installed
-	res.Version = version
-	if !installed {
-		res.Error = "npm reported success but package not found in node_modules"
-	}
-	return res
+	return false
 }
 
 func installCLI(ctx context.Context, spec Spec) InstallResult {

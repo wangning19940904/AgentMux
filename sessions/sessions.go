@@ -25,6 +25,8 @@ type Meta struct {
 	Surface               string    `json:"surface"` // cli, app-server
 	SessionID             string    `json:"session_id"`
 	NativeSessionID       string    `json:"native_session_id,omitempty"`
+	SourceKind            string    `json:"source_kind,omitempty"`
+	Originator            string    `json:"originator,omitempty"`
 	Title                 string    `json:"title,omitempty"`
 	Summary               string    `json:"summary,omitempty"`
 	ProjectDir            string    `json:"project_dir,omitempty"`
@@ -112,14 +114,23 @@ func (s *Service) List(ctx context.Context, providerID, surface string) ([]Meta,
 		out = append(out, items...)
 	}
 	if matches(providerID, "codex", "") && matches(surface, "cli", "") {
-		items, err := (&codexScanner{}).List(ctx)
+		items, err := (&codexScanner{}).List(ctx, surface)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, items...)
 	}
 	if matches(providerID, "codex", "") && matches(surface, "app-server", "desktop", "") {
-		items, err := s.app.List(ctx)
+		var items []Meta
+		var err error
+		if surface == "desktop" || surface == "" {
+			items, err = s.app.ListSourceKinds(ctx, "vscode")
+			if err == nil {
+				items, err = filterCodexDesktopThreads(ctx, items)
+			}
+		} else if surface == "app-server" {
+			items, err = s.app.List(ctx)
+		}
 		if err != nil {
 			appErr = err
 			if surface == "app-server" || surface == "desktop" {
@@ -427,7 +438,7 @@ func claudeTitle(raw map[string]any) string {
 
 type codexScanner struct{}
 
-func (s *codexScanner) List(ctx context.Context) ([]Meta, error) {
+func (s *codexScanner) List(ctx context.Context, surface string) ([]Meta, error) {
 	var out []Meta
 	for _, root := range codexRoots() {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -444,6 +455,18 @@ func (s *codexScanner) List(ctx context.Context) ([]Meta, error) {
 			}
 			meta, err := cachedSessionMeta(path, d, parseCodexFileSummary)
 			if err == nil && meta.SessionID != "" && meta.Available {
+				sourceKind := strings.ToLower(meta.SourceKind)
+				if sourceKind == "vscode" || strings.HasPrefix(sourceKind, "subagent") {
+					return nil
+				}
+				if sourceKind == "appserver" {
+					meta.Surface = "app-server"
+				} else {
+					meta.Surface = "cli"
+				}
+				if surface == "cli" && meta.Surface != "cli" {
+					return nil
+				}
 				out = append(out, meta)
 			}
 			return nil
@@ -521,6 +544,11 @@ func parseCodexFileWithLimit(path string, maxLines int) (Meta, []Message, error)
 			}
 			if cwd := stringField(payload, "cwd", "project_dir", "projectDir"); cwd != "" {
 				meta.ProjectDir = cwd
+			}
+			meta.SourceKind = codexSourceKind(payload["source"])
+			meta.Originator = stringField(payload, "originator")
+			if strings.HasPrefix(strings.ToLower(meta.SourceKind), "subagent") {
+				meta.Available = false
 			}
 			mergeTimes(&meta, parseTimestamp(stringField(payload, "timestamp", "created_at", "createdAt")))
 			continue
@@ -927,9 +955,24 @@ type CodexAppClient struct {
 }
 
 func (c *CodexAppClient) List(ctx context.Context) ([]Meta, error) {
-	raw, err := c.call(ctx, "thread/list", map[string]any{
+	return c.list(ctx, nil)
+}
+
+// ListSourceKinds returns only persisted threads created by the requested
+// Codex clients. Codex Desktop currently records its root threads as vscode;
+// callers should still verify the rollout originator before presenting them.
+func (c *CodexAppClient) ListSourceKinds(ctx context.Context, sourceKinds ...string) ([]Meta, error) {
+	return c.list(ctx, sourceKinds)
+}
+
+func (c *CodexAppClient) list(ctx context.Context, sourceKinds []string) ([]Meta, error) {
+	params := map[string]any{
 		"limit": 100, "archived": false, "sortKey": "recency_at", "sortDirection": "desc",
-	})
+	}
+	if len(sourceKinds) > 0 {
+		params["sourceKinds"] = sourceKinds
+	}
+	raw, err := c.call(ctx, "thread/list", params)
 	if err != nil {
 		return nil, err
 	}
@@ -949,13 +992,20 @@ func (c *CodexAppClient) List(ctx context.Context) ([]Meta, error) {
 		if updated.IsZero() {
 			updated = created
 		}
+		sourceKind := stringField(thread, "source_kind", "sourceKind", "source")
+		if sourceKind == "" && len(sourceKinds) == 1 {
+			sourceKind = sourceKinds[0]
+		}
 		out = append(out, Meta{
 			ProviderID:    "codex",
 			Surface:       "app-server",
 			SessionID:     id,
+			SourceKind:    sourceKind,
+			Originator:    stringField(thread, "originator"),
 			Title:         title,
 			Summary:       stringField(thread, "summary"),
 			ProjectDir:    stringField(thread, "cwd", "project_dir", "projectDir"),
+			SourcePath:    stringField(thread, "path", "source_path", "sourcePath"),
 			CreatedAt:     created,
 			LastActiveAt:  updated,
 			FileBacked:    false,
@@ -966,6 +1016,114 @@ func (c *CodexAppClient) List(ctx context.Context) ([]Meta, error) {
 		})
 	}
 	return out, nil
+}
+
+type codexThreadOrigin struct {
+	ID         string
+	SourceKind string
+	Originator string
+	ProjectDir string
+	SourcePath string
+}
+
+func filterCodexDesktopThreads(ctx context.Context, items []Meta) ([]Meta, error) {
+	var origins map[string]codexThreadOrigin
+	out := make([]Meta, 0, len(items))
+	for _, item := range items {
+		origin, ok := codexThreadOriginFromPath(item.SourcePath)
+		if ok && origin.ID != "" && origin.ID != item.SessionID {
+			ok = false
+		}
+		if !ok {
+			if origins == nil {
+				var err error
+				origins, err = codexThreadOrigins(ctx)
+				if err != nil {
+					return nil, err
+				}
+			}
+			origin, ok = origins[item.SessionID]
+		}
+		if !ok || !strings.Contains(strings.ToLower(origin.Originator), "codex desktop") {
+			continue
+		}
+		item.Surface = "desktop"
+		item.SourceKind = firstNonEmpty(origin.SourceKind, item.SourceKind, "vscode")
+		item.Originator = origin.Originator
+		item.ProjectDir = firstNonEmpty(item.ProjectDir, origin.ProjectDir)
+		item.StatusMessage = "Codex Desktop"
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func codexThreadOrigins(ctx context.Context) (map[string]codexThreadOrigin, error) {
+	out := map[string]codexThreadOrigin{}
+	for _, root := range codexRoots() {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil || d == nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			origin, ok := codexThreadOriginFromPath(path)
+			if ok {
+				id := origin.ID
+				if id == "" {
+					id = strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "rollout-"), ".jsonl")
+				}
+				out[id] = origin
+			}
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func codexThreadOriginFromPath(path string) (codexThreadOrigin, bool) {
+	if strings.TrimSpace(path) == "" || !pathInRoots(path, codexRoots()) {
+		return codexThreadOrigin{}, false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return codexThreadOrigin{}, false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for line := 0; line < 16 && scanner.Scan(); line++ {
+		var raw map[string]any
+		if json.Unmarshal(scanner.Bytes(), &raw) != nil || stringField(raw, "type") != "session_meta" {
+			continue
+		}
+		payload := mapField(raw, "payload")
+		return codexThreadOrigin{
+			ID:         stringField(payload, "id", "session_id", "sessionId"),
+			SourceKind: codexSourceKind(payload["source"]),
+			Originator: stringField(payload, "originator"),
+			ProjectDir: stringField(payload, "cwd", "project_dir", "projectDir"),
+			SourcePath: path,
+		}, true
+	}
+	return codexThreadOrigin{}, false
+}
+
+func codexSourceKind(value any) string {
+	switch source := value.(type) {
+	case string:
+		return strings.TrimSpace(source)
+	case map[string]any:
+		if _, ok := source["subagent"]; ok {
+			return "subAgent"
+		}
+	}
+	return ""
 }
 
 func appServerThreadStatus(thread map[string]any) string {

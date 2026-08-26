@@ -261,6 +261,39 @@ echo installed
 	}
 }
 
+func TestInstallGitHubCLIFindsHomebrewOutsideServicePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	prefix := t.TempDir()
+	brewBin := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(brewBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gh := filepath.Join(brewBin, "gh")
+	writeExecutable(t, filepath.Join(brewBin, "brew"), fmt.Sprintf(`#!/bin/sh
+if [ "$1" != "install" ] || [ "$2" != "gh" ]; then
+  exit 2
+fi
+/bin/cat > %q <<'EOS'
+#!/bin/sh
+echo 'gh version 2.93.0 (test)'
+EOS
+/bin/chmod +x %q
+echo installed
+`, gh, gh))
+	t.Setenv("HOMEBREW_PREFIX", prefix)
+	t.Setenv("PATH", t.TempDir())
+
+	res := InstallCLI(context.Background(), "github-cli", "install")
+	if !res.OK || res.Command != "brew install gh" || !strings.Contains(res.Version, "2.93.0") {
+		t.Fatalf("install result = %+v", res)
+	}
+	if status := DetectCLI(context.Background(), CLISpec{ID: "github-cli", Bin: "gh"}); !status.Installed || status.Path != gh {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestLatestCLIVersionUsesReleaseEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Accept"); got != "application/vnd.github+json" {
@@ -378,6 +411,124 @@ func TestInstallCLIRejectsUnknownID(t *testing.T) {
 	if res.OK || !strings.Contains(res.Error, "unknown CLI") {
 		t.Fatalf("result = %+v", res)
 	}
+}
+
+func TestInternalCLIsRequireAcknowledgement(t *testing.T) {
+	for _, id := range []string{"bytedcli", "cis-cli"} {
+		spec, ok := LookupCLI(id)
+		if !ok || !spec.InternalOnly {
+			t.Fatalf("internal CLI spec %q = %+v", id, spec)
+		}
+		res := InstallCLI(context.Background(), id, "install")
+		if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
+			t.Fatalf("install %s = %+v", id, res)
+		}
+	}
+}
+
+func TestByteDanceBundleInstallsAllMissingComponents(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	prepareInternalBundleInstall(t, false)
+
+	res := InstallBundle(context.Background(), "bytedance-internal", BundleInstallOptions{AcknowledgeInternal: true})
+	if !res.OK || res.Error != "" || len(res.Components) != 3 {
+		t.Fatalf("bundle result = %+v", res)
+	}
+	for _, component := range res.Components {
+		if !component.OK || component.Skipped {
+			t.Fatalf("component = %+v", component)
+		}
+	}
+	status, _ := LookupBundle("bytedance-internal")
+	detected := DetectBundle(context.Background(), status)
+	if !detected.Installed || detected.ReadyComponents != 3 {
+		t.Fatalf("bundle status = %+v", detected)
+	}
+
+	retry := InstallBundle(context.Background(), "bytedance-internal", BundleInstallOptions{AcknowledgeInternal: true})
+	if !retry.OK {
+		t.Fatalf("retry = %+v", retry)
+	}
+	for _, component := range retry.Components {
+		if !component.Skipped {
+			t.Fatalf("ready component was not skipped: %+v", component)
+		}
+	}
+}
+
+func TestByteDanceBundleContinuesAfterComponentFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	prepareInternalBundleInstall(t, true)
+	res := InstallBundle(context.Background(), "bytedance-internal", BundleInstallOptions{AcknowledgeInternal: true})
+	if res.OK || len(res.Components) != 3 || res.Components[0].OK || !res.Components[1].OK || !res.Components[2].OK {
+		t.Fatalf("partial bundle result = %+v", res)
+	}
+}
+
+func TestByteDanceBundleRejectsMissingAcknowledgementAndWindows(t *testing.T) {
+	res := InstallBundle(context.Background(), "bytedance-internal", BundleInstallOptions{})
+	if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
+		t.Fatalf("unacknowledged result = %+v", res)
+	}
+	spec, _ := LookupBundle("bytedance-internal")
+	if bundlePlatformSupported(spec, "windows") || !strings.Contains(bundlePlatformError(spec, "windows"), "WSL") {
+		t.Fatalf("Windows platform policy = %+v", spec)
+	}
+}
+
+func prepareInternalBundleInstall(t *testing.T, failByted bool) {
+	t.Helper()
+	home := t.TempDir()
+	bin := t.TempDir()
+	bytedPath := filepath.Join(bin, "bytedcli")
+	cisPath := filepath.Join(bin, "cis-cli")
+	traePath := filepath.Join(bin, "traecli")
+	failCommand := ""
+	if failByted {
+		failCommand = "echo bytedcli-install-failed >&2; exit 17"
+	}
+	npmScript := fmt.Sprintf(`#!/bin/sh
+case " $* " in
+  *" @bytedance-dev/bytedcli@latest "*)
+    %s
+    /bin/cat > %q <<'EOS'
+#!/bin/sh
+echo 'bytedcli 1.2.3'
+EOS
+    /bin/chmod +x %q
+    ;;
+  *" @byted/cis-cli@latest "*)
+    /bin/cat > %q <<'EOS'
+#!/bin/sh
+if [ "$1" = "install-skills" ] && [ "$2" = "--dir" ]; then
+  /bin/mkdir -p "$3/cis-cli"
+  /usr/bin/printf '%%s\n' '---' 'name: cis-cli' 'version: "0.41.0"' '---' > "$3/cis-cli/SKILL.md"
+  echo skills-synced
+  exit 0
+fi
+echo 'cis-cli 0.41.0'
+EOS
+    /bin/chmod +x %q
+    ;;
+  *) echo '{}';;
+esac
+`, failCommand, bytedPath, bytedPath, cisPath, cisPath)
+	writeExecutable(t, filepath.Join(bin, "npm"), npmScript)
+	bashScript := fmt.Sprintf(`#!/bin/sh
+/bin/cat > %q <<'EOS'
+#!/bin/sh
+echo 'traecli 0.201.6(internal edition)'
+EOS
+/bin/chmod +x %q
+echo trae-installed
+`, traePath, traePath)
+	writeExecutable(t, filepath.Join(bin, "bash"), bashScript)
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
 }
 
 func writeExecutable(t *testing.T, path, body string) {

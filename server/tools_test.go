@@ -51,8 +51,25 @@ func TestToolsEndpointAggregatesModules(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.CLI) == 0 || len(body.Frameworks) == 0 {
+	if len(body.CLI) == 0 || len(body.Frameworks) == 0 || len(body.Bundles) == 0 {
 		t.Fatalf("tools response = %+v", body)
+	}
+}
+
+func TestInternalInstallEndpointsRequireAcknowledgement(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	rec := doJSON(t, s, http.MethodPost, "/api/v1/tools/bundles/install", bundleInstallRequest{ID: "bytedance-internal"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "explicit acknowledgement") {
+		t.Fatalf("bundle response = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/tools/cli/install", cliInstallRequest{ID: "bytedcli", Action: "install"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "explicit acknowledgement") {
+		t.Fatalf("CLI response = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/frameworks/install", frameworkInstallRequest{Kind: "traecli", Action: "install"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "explicit acknowledgement") {
+		t.Fatalf("framework response = %d %s", rec.Code, rec.Body.String())
 	}
 }
 
