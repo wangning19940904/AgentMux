@@ -68,6 +68,9 @@ var frameworkAuthConfigs = map[string]frameworkAuthConfig{
 		statusArgs: []string{"status"}, loginArgs: []string{"login"},
 		loginEnv: map[string]string{"NO_OPEN_BROWSER": "1"}, extraEnvKeys: []string{"CURSOR_API_KEY"},
 	},
+	"traecli": {
+		statusArgs: []string{"login", "status"}, loginArgs: []string{"login", "--sso-device"},
+	},
 }
 
 const (

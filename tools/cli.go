@@ -45,6 +45,7 @@ type CLISpec struct {
 	LatestVersionURL   string               `json:"-"`
 	LinkedSkills       []CLILinkedSkillSpec `json:"linked_skills,omitempty"`
 	LoginSupported     bool                 `json:"login_supported,omitempty"`
+	InternalOnly       bool                 `json:"internal_only,omitempty"`
 	Note               string               `json:"note,omitempty"`
 }
 
@@ -108,6 +109,12 @@ type CLIUpdateCheck struct {
 // expose consistently).
 type ProgressFunc func(phase, detail string, percent int)
 
+// CLIInstallOptions carries explicit acknowledgement for restricted catalog
+// entries.
+type CLIInstallOptions struct {
+	AcknowledgeInternal bool
+}
+
 var cliCatalog = []CLISpec{
 	{
 		ID: "lark-cli", Name: "Lark CLI", Bin: "lark-cli", Package: "@larksuite/cli",
@@ -121,6 +128,7 @@ var cliCatalog = []CLISpec{
 		Registry:       "https://bnpm.byted.org/",
 		InstallCommand: []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
 		UpdateCommand:  []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
+		InternalOnly:   true,
 		Note:           "ByteDance internal developer CLI.",
 	},
 	{
@@ -150,7 +158,8 @@ var cliCatalog = []CLISpec{
 				Note:               "Bundled enterprise-service instructions distributed from the installed CLI into AgentMux.",
 			},
 		},
-		Note: "ByteDance enterprise services CLI with a version-matched companion Skill managed as one unit.",
+		InternalOnly: true,
+		Note:         "ByteDance enterprise services CLI with a version-matched companion Skill managed as one unit.",
 	},
 	{
 		ID: "github-cli", Name: "GitHub CLI", Bin: "gh", Package: "gh",
@@ -174,7 +183,7 @@ func DetectCLIs(ctx context.Context) []CLIStatus {
 // DetectCLI detects one CLI.
 func DetectCLI(ctx context.Context, spec CLISpec) CLIStatus {
 	st := CLIStatus{Spec: spec}
-	path, err := exec.LookPath(spec.Bin)
+	path, err := resolveCLIExecutable(spec.Bin)
 	if err != nil {
 		st.Detail = "not found on PATH"
 		st.LinkedSkills = detectLinkedSkills(spec, "")
@@ -230,12 +239,23 @@ func CheckCLIUpdate(ctx context.Context, id string) CLIUpdateCheck {
 
 // InstallCLI installs or updates a whitelisted CLI.
 func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
-	return InstallCLIWithProgress(ctx, id, action, nil)
+	return InstallCLIWithProgressOptions(ctx, id, action, CLIInstallOptions{}, nil)
 }
 
 // InstallCLIWithProgress installs or updates a whitelisted CLI and reports
 // coarse, truthful stages while the catalog-owned commands are running.
 func InstallCLIWithProgress(ctx context.Context, id, action string, progress ProgressFunc) CLIInstallResult {
+	return InstallCLIWithProgressOptions(ctx, id, action, CLIInstallOptions{}, progress)
+}
+
+// InstallCLIWithOptions installs or updates a whitelisted CLI with explicit
+// restricted-entry acknowledgement.
+func InstallCLIWithOptions(ctx context.Context, id, action string, options CLIInstallOptions) CLIInstallResult {
+	return InstallCLIWithProgressOptions(ctx, id, action, options, nil)
+}
+
+// InstallCLIWithProgressOptions is the progress-reporting InstallCLIWithOptions.
+func InstallCLIWithProgressOptions(ctx context.Context, id, action string, options CLIInstallOptions, progress ProgressFunc) CLIInstallResult {
 	id = strings.TrimSpace(id)
 	action = strings.TrimSpace(action)
 	if action == "" {
@@ -249,6 +269,10 @@ func InstallCLIWithProgress(ctx context.Context, id, action string, progress Pro
 	}
 	if action != "install" && action != "update" {
 		res.Error = "action must be install or update"
+		return res
+	}
+	if action == "install" && spec.InternalOnly && !options.AcknowledgeInternal {
+		res.Error = fmt.Sprintf("CLI %q is only available inside ByteDance; explicit acknowledgement is required", id)
 		return res
 	}
 
@@ -428,12 +452,16 @@ func runCLICommandsWithProgress(
 		if len(args) == 0 {
 			return logOutput, fmt.Errorf("empty command")
 		}
+		executable, err := resolveCLIExecutable(args[0])
+		if err != nil {
+			return logOutput, missingCLIExecutableError(args[0])
+		}
 		percent := startPercent
 		if len(commands) > 1 {
 			percent += (endPercent - startPercent) * i / len(commands)
 		}
 		reportProgress(progress, phase, strings.Join(args, " "), percent)
-		cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd := exec.CommandContext(ctx, executable, args[1:]...)
 		cmd.Env = cliEnv(spec)
 		out, err := cmd.CombinedOutput()
 		logOutput = appendLog(logOutput, string(out))
@@ -643,7 +671,11 @@ func commandOutputWithEnv(ctx context.Context, env []string, name string, args .
 		runCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, name, args...)
+	executable, err := resolveCLIExecutable(name)
+	if err != nil {
+		return "", missingCLIExecutableError(name)
+	}
+	cmd := exec.CommandContext(runCtx, executable, args...)
 	if env != nil {
 		cmd.Env = env
 	}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestNewValidatesTerminalRuntime(t *testing.T) {
-	if _, err := New(map[string]any{"terminal_runtime": "openai-agents"}); err == nil {
+	if _, err := New(map[string]any{"terminal_runtime": "not-a-runtime"}); err == nil {
 		t.Fatal("SDK runtime was accepted by terminal backend")
 	}
 	if _, err := New(map[string]any{"terminal_runtime": "codex", "env": map[string]string{"-u": "HOME"}}); err == nil {

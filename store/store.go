@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
 	runtime_id TEXT NOT NULL,
+	desktop_thread_id TEXT,
 	work_dir TEXT,
 	workspace_mode TEXT,
 	worktree_base_ref TEXT,
@@ -436,6 +437,9 @@ func (s *Store) migrateSQLite() error {
 		}
 	}
 	if err := s.ensureColumn("agent_instances", "default_model", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("agent_instances", "desktop_thread_id", "TEXT"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("agent_instances", "workspace_mode", "TEXT"); err != nil {

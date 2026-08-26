@@ -12,6 +12,7 @@ import { selectSystemDirectory } from "./desktop";
 import type {
   AgentInstance,
   AgentSession,
+  BundleInstallResult,
   CLIAuthSession,
   CLIAuthStatus,
   CLIInstallResult,
@@ -151,10 +152,14 @@ export const api = {
 		postProgress<TTSModel>("/api/v1/tts/models/download/stream", { id }, onProgress),
 	deleteTTSModel: (id: string) =>
 		del<TTSCatalogStatus>(`/api/v1/tts/models?id=${encodeURIComponent(id)}`),
-  installCLI: (id: string, action: "install" | "update", onProgress?: (progress: OperationProgress) => void) =>
+  installCLI: (id: string, action: "install" | "update", onProgress?: (progress: OperationProgress) => void, acknowledgeInternal = false) =>
     onProgress
-      ? postProgress<CLIInstallResult>("/api/v1/tools/cli/install/stream", { id, action }, onProgress)
-      : postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action }),
+      ? postProgress<CLIInstallResult>("/api/v1/tools/cli/install/stream", { id, action, acknowledge_internal: acknowledgeInternal }, onProgress)
+      : postChecked<CLIInstallResult>("/api/v1/tools/cli/install", { id, action, acknowledge_internal: acknowledgeInternal }),
+  installBundle: (id: string, onProgress?: (progress: OperationProgress) => void, acknowledgeInternal = false) =>
+    onProgress
+      ? postProgress<BundleInstallResult>("/api/v1/tools/bundles/install/stream", { id, acknowledge_internal: acknowledgeInternal }, onProgress)
+      : postChecked<BundleInstallResult>("/api/v1/tools/bundles/install", { id, acknowledge_internal: acknowledgeInternal }),
   checkCLIUpdate: (id: string) => post<CLIUpdateCheck>("/api/v1/tools/cli/check", { id }),
   cliAuth: (id: string) =>
     getChecked<CLIAuthStatus>(`/api/v1/tools/cli/auth?id=${encodeURIComponent(id)}`),
@@ -239,9 +244,10 @@ export const api = {
     kind: string,
     action: "install" | "update" = "install",
     onProgress?: (progress: OperationProgress) => void,
+    acknowledgeInternal = false,
   ) => onProgress
-    ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", { kind, action }, onProgress)
-    : postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action }),
+    ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", { kind, action, acknowledge_internal: acknowledgeInternal }, onProgress)
+    : postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action, acknowledge_internal: acknowledgeInternal }),
   checkFrameworkUpdate: (kind: string) =>
     post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
   usage: (period: string, from = "", to = "") => {
@@ -439,6 +445,7 @@ export const api = {
     get<AgentSession[] | null>(
       `/api/v1/sessions?provider=${encodeURIComponent(provider)}&surface=${encodeURIComponent(surface)}`
     ),
+  codexDesktopThreads: () => getChecked<AgentSession[] | null>("/api/v1/codex/desktop-threads"),
   sessionMessages: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path" | "project_dir" | "conversation_id">) =>
     get<SessionMessage[] | null>(
       `/api/v1/sessions/messages?provider=${encodeURIComponent(session.provider_id)}&surface=${encodeURIComponent(

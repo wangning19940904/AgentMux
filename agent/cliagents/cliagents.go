@@ -53,6 +53,9 @@ func init() {
 		return []string{"run", "--format", "json", p}
 	}, opencodeApprovalEnv, jsonTextMapper, true)
 
+	// ByteDance internal TRAE CLI.
+	registerTrae()
+
 	// iFlow CLI.
 	register("iflow", "iflow", false, core.ApprovalModeManual, iflowArgs, iflowApprovalEnv, partialPlainTextMapper, true)
 
@@ -60,6 +63,72 @@ func init() {
 	register("kimi", "kimi", false, core.ApprovalModeAuto, func(p, _, _, _ string) []string {
 		return []string{"-p", p, "--output-format", "stream-json"}
 	}, nil, partialPlainTextMapper, true)
+}
+
+func registerTrae() {
+	core.RegisterAgent("traecli", func(cfg map[string]any) (core.Agent, error) {
+		return cliagent.New(cliagent.Spec{
+			Name: "traecli", Binary: "traecli",
+			Args: traeArgs, ResumeArgs: traeResumeArgs,
+			SessionIDFromLine: traeSessionID,
+			EventMapper:       traeStreamEvents, FinalFromLast: true, SupportsModel: true,
+			ApprovalModes: core.ApprovalModeValuesForRuntime("traecli"), DefaultApprovalMode: core.ApprovalModeManual,
+			ModelCatalogArgs: []string{"models", "--json"}, ParseModelCatalog: parseTraeModelCatalog,
+		}, cfg), nil
+	})
+}
+
+func traeArgs(prompt, systemPrompt, model, approvalMode string) []string {
+	args := append([]string{"exec"}, traeCommonArgs(systemPrompt, model, approvalMode)...)
+	return append(args, prompt)
+}
+
+func traeResumeArgs(sessionID, prompt, systemPrompt, model, approvalMode string) []string {
+	args := append([]string{"exec", "resume"}, traeCommonArgs(systemPrompt, model, approvalMode)...)
+	return append(args, sessionID, prompt)
+}
+
+func traeCommonArgs(systemPrompt, model, approvalMode string) []string {
+	args := []string{"--json", "--skip-git-repo-check"}
+	if systemPrompt != "" {
+		encoded, _ := json.Marshal(systemPrompt)
+		args = append(args, "-c", "developer_instructions="+string(encoded))
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	switch approvalMode {
+	case core.ApprovalModeAutoEdit:
+		args = append(args, "-c", `approval_policy="on-request"`, "-c", `sandbox_mode="workspace-write"`)
+	case core.ApprovalModeAuto:
+		args = append(args, "--permission-mode", "auto")
+	case core.ApprovalModePlan:
+		args = append(args, "-c", `approval_policy="never"`, "-c", `sandbox_mode="read-only"`)
+	case core.ApprovalModeYolo:
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	default:
+		args = append(args, "-c", `approval_policy="on-request"`, "-c", `sandbox_mode="read-only"`)
+	}
+	return args
+}
+
+func parseTraeModelCatalog(output []byte) (cliagent.ModelCatalog, error) {
+	var items []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(output, &items); err != nil {
+		return cliagent.ModelCatalog{}, fmt.Errorf("parse TRAE model catalog: %w", err)
+	}
+	catalog := cliagent.ModelCatalog{}
+	for _, item := range items {
+		if name := strings.TrimSpace(item.Name); name != "" {
+			catalog.Models = append(catalog.Models, name)
+		}
+	}
+	if len(catalog.Models) == 0 {
+		return cliagent.ModelCatalog{}, fmt.Errorf("TRAE model catalog contained no models")
+	}
+	return catalog, nil
 }
 
 func registerCursor() {

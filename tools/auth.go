@@ -132,7 +132,7 @@ func CheckCLIAuth(ctx context.Context, id string) CLIAuthStatus {
 	}
 	config, supported := cliAuthConfigs[id]
 	status.LoginSupported = supported && spec.LoginSupported && len(config.loginArgs) > 0
-	if _, err := exec.LookPath(spec.Bin); err != nil {
+	if _, err := resolveCLIExecutable(spec.Bin); err != nil {
 		status.Detail = "CLI is not installed"
 		return status
 	}
@@ -172,7 +172,7 @@ func StartCLIAuth(id string, force bool) (CLIAuthSession, error) {
 	if !ok || !spec.LoginSupported || len(config.loginArgs) == 0 {
 		return CLIAuthSession{}, fmt.Errorf("CLI %q does not support in-app login", id)
 	}
-	if _, err := exec.LookPath(spec.Bin); err != nil {
+	if _, err := resolveCLIExecutable(spec.Bin); err != nil {
 		return CLIAuthSession{}, fmt.Errorf("CLI %q is not installed", id)
 	}
 
@@ -397,7 +397,11 @@ func (s *cliAuthRuntimeSession) get() CLIAuthSession {
 }
 
 func cliAuthCommand(ctx context.Context, spec CLISpec, args []string, overrides map[string]string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, spec.Bin, args...)
+	executable := spec.Bin
+	if resolved, err := resolveCLIExecutable(spec.Bin); err == nil {
+		executable = resolved
+	}
+	cmd := exec.CommandContext(ctx, executable, args...)
 	procutil.Prepare(cmd)
 	cmd.Env = cliAuthEnvironment(cliEnv(spec), overrides)
 	cmd.Dir = durableCLICommandDir()

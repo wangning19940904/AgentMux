@@ -37,7 +37,8 @@ const SOURCES = [
   { id: "channel", labelKey: "sessions.channelSessions" },
   { id: "local", labelKey: "sessions.localSessions" },
   { id: "cli", labelKey: "sessions.cli" },
-  { id: "app-server", labelKey: "sessions.desktopApp" },
+  { id: "desktop", labelKey: "sessions.desktopApp" },
+  { id: "app-server", labelKey: "sessions.appServer" },
 ];
 
 export function SessionsPanel() {
@@ -91,7 +92,7 @@ export function SessionsPanel() {
       if (provider && normalizeProvider(session.provider_id) !== normalizeProvider(provider)) return false;
       if (source === "channel" && session.origin !== "channel") return false;
       if (source === "local" && session.origin === "channel") return false;
-      if ((source === "cli" || source === "app-server") && session.surface !== source) return false;
+      if ((source === "cli" || source === "desktop" || source === "app-server") && session.surface !== source) return false;
       if (agentID && session.agent_id !== agentID) return false;
       if (channelID && session.channel_id !== channelID) return false;
       if (!q) return true;
@@ -641,7 +642,7 @@ export function SessionsPanel() {
                 {(selected.provider_id === "codex" || traceTool || pendingInteractions.data?.length) && (
                   <details className="session-advanced">
                     <summary>{t("sessions.advanced")}</summary>
-                    {selected.provider_id === "codex" && selected.surface === "app-server" && selected.origin !== "channel" && (
+                    {selected.provider_id === "codex" && selected.surface === "desktop" && selected.origin !== "channel" && (
                       <div className="session-channel-control">
                         <div className="control-row session-channel-bind">
                           <Link2 size={15} />
@@ -843,7 +844,8 @@ function channelTypeLabel(channelType: string) {
 
 function surfaceLabel(surface: string, t: (key: string) => string) {
   if (surface === "cli") return t("sessions.cli");
-  if (surface === "app-server") return t("sessions.desktopApp");
+  if (surface === "desktop") return t("sessions.desktopApp");
+  if (surface === "app-server") return t("sessions.appServer");
   if (surface === "channel") return t("sessions.channelSession");
   return surface;
 }

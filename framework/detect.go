@@ -2,7 +2,6 @@ package framework
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,19 +11,17 @@ import (
 	"time"
 )
 
-// Status is the runtime state of a framework: whether it is installed and, for
-// SDK frameworks, the installed package version.
+// Status is the runtime state of a framework.
 type Status struct {
 	Spec      Spec   `json:"spec"`
 	Installed bool   `json:"installed"`
 	Version   string `json:"version,omitempty"`
-	// Detail carries a human-readable hint when detection is inconclusive
-	// (e.g. missing node/npm for SDK frameworks).
+	// Detail carries a human-readable hint when detection is inconclusive.
 	Detail string `json:"detail,omitempty"`
 }
 
-// Prereqs reports whether the host tools needed to install/run SDK frameworks
-// are present.
+// Prereqs reports whether Node/npm prerequisites used by CLI installers are
+// present.
 type Prereqs struct {
 	Node    bool   `json:"node"`
 	NodePth string `json:"node_path,omitempty"`
@@ -36,7 +33,6 @@ var processPathMu sync.Mutex
 
 // DetectPrereqs probes for node and npm on PATH.
 func DetectPrereqs() Prereqs {
-	// SDK registration invokes prerequisite detection during daemon startup.
 	// Refresh all existing user executable directories here so CLI adapters are
 	// routable even before the frameworks page performs per-binary detection.
 	refreshUserExecutablePath()
@@ -99,14 +95,7 @@ func Detect(s Spec, pre Prereqs) Status {
 			st.Detail = "version command returned no recognizable version"
 		}
 	case KindSDK:
-		if s.Language == "node" {
-			if !pre.Node || !pre.NPM {
-				st.Detail = "requires node and npm on PATH"
-			}
-			st.Installed, st.Version = nodePackageInstalled(s.Packages)
-		} else {
-			st.Detail = "requires a Python runtime (not yet supported)"
-		}
+		st.Detail = "requires a " + s.Language + " runtime (not yet supported)"
 	}
 	return st
 }
@@ -127,14 +116,7 @@ func IsInstalled(kind string) bool {
 		_, err := resolveCLIExecutable(s.Bin)
 		return err == nil
 	case KindSDK:
-		if s.Language != "node" {
-			return false
-		}
-		if _, err := resolveCLIExecutable("node"); err != nil {
-			return false
-		}
-		installed, _ := nodePackageInstalled(s.Packages)
-		return installed
+		return false
 	default:
 		return false
 	}
@@ -264,35 +246,10 @@ func nvmNodeBinDirs(nvmDir string) []string {
 // DetectAll returns the status of every framework in the catalog.
 func DetectAll() []Status {
 	pre := DetectPrereqs()
-	out := make([]Status, 0, len(catalog))
-	for _, s := range catalog {
+	specs := Catalog()
+	out := make([]Status, 0, len(specs))
+	for _, s := range specs {
 		out = append(out, Detect(s, pre))
 	}
 	return out
-}
-
-// nodePackageInstalled reports whether all packages are present in the
-// sidecar's node_modules, returning the primary package's version if readable.
-func nodePackageInstalled(packages []string) (bool, string) {
-	if len(packages) == 0 {
-		return false, ""
-	}
-	dir := SidecarDir()
-	version := ""
-	for i, pkg := range packages {
-		pkgJSON := filepath.Join(dir, "node_modules", filepath.FromSlash(pkg), "package.json")
-		data, err := os.ReadFile(pkgJSON)
-		if err != nil {
-			return false, ""
-		}
-		if i == 0 {
-			var meta struct {
-				Version string `json:"version"`
-			}
-			if json.Unmarshal(data, &meta) == nil {
-				version = meta.Version
-			}
-		}
-	}
-	return true, version
 }

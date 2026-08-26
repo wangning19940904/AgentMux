@@ -598,7 +598,7 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 		if err != nil {
 			return err
 		}
-		if agent == nil || agent.RuntimeID != "codex" {
+		if agent == nil || (agent.RuntimeID != "codex" && agent.RuntimeID != "codex-app") {
 			return fmt.Errorf("Codex remote control requires a Codex Agent")
 		}
 		allowed := cleanIDList(ch.Config[core.ChannelConfigAllowedUserIDs])

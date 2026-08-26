@@ -6,6 +6,7 @@ import {
   isDesktopApp,
   openExternalURL,
   type AgentInstance,
+  type AgentSession,
   type Channel,
   type FrameworkAuthStatus,
   type FrameworkLoginResult,
@@ -91,6 +92,9 @@ export function AgentForm({
   const [loginBusy, setLoginBusy] = useState("");
   const [loginResult, setLoginResult] = useState<FrameworkLoginResult | null>(null);
   const [loginCode, setLoginCode] = useState("");
+  const [desktopThreads, setDesktopThreads] = useState<AgentSession[]>([]);
+  const [desktopThreadsBusy, setDesktopThreadsBusy] = useState(false);
+  const [desktopThreadsError, setDesktopThreadsError] = useState("");
   const injectedPrompt = useMemo(() => {
     const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
     const channelPrompts = selectedChannelIDs
@@ -113,6 +117,8 @@ export function AgentForm({
     );
   }, [draft.system_prompt, draft.clis, selectedChannelIDs, channelOptions, cliOptions, t]);
   const selectedRouteTool = draft.provider_tool || routeToolForRuntime(draft.runtime_id);
+  const desktopRuntime = draft.runtime_id === "codex-app";
+  const frameworkRuntimeID = desktopRuntime ? "codex" : draft.runtime_id;
   const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
@@ -153,19 +159,44 @@ export function AgentForm({
   }, [draft.default_model, modelOptions.join("\u0000"), onUpdate, readOnly]);
 
   useEffect(() => {
+    if (!desktopRuntime) {
+      setDesktopThreads([]);
+      setDesktopThreadsError("");
+      setDesktopThreadsBusy(false);
+      return;
+    }
+    let active = true;
+    setDesktopThreadsBusy(true);
+    setDesktopThreadsError("");
+    void api.codexDesktopThreads()
+      .then((items) => {
+        if (active) setDesktopThreads(items ?? []);
+      })
+      .catch((err) => {
+        if (active) setDesktopThreadsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (active) setDesktopThreadsBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [desktopRuntime]);
+
+  useEffect(() => {
     let active = true;
     setAuthStatus(null);
     setAuthNotice("");
     setLoginResult(null);
     setLoginCode("");
-    if (!usingLocalLogin || !draft.runtime_id) {
+    if (!usingLocalLogin || !frameworkRuntimeID) {
       setAuthBusy(false);
       return () => {
         active = false;
       };
     }
     setAuthBusy(true);
-    void api.frameworkAuth(draft.runtime_id)
+    void api.frameworkAuth(frameworkRuntimeID)
       .then((status) => {
         if (active) setAuthStatus(status);
       })
@@ -178,13 +209,13 @@ export function AgentForm({
     return () => {
       active = false;
     };
-  }, [draft.runtime_id, usingLocalLogin]);
+  }, [frameworkRuntimeID, usingLocalLogin]);
 
   useEffect(() => {
-    if (!loginResult || !usingLocalLogin || !draft.runtime_id) return;
+    if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
     let active = true;
     const interval = window.setInterval(() => {
-      void api.frameworkAuth(draft.runtime_id).then((status) => {
+      void api.frameworkAuth(frameworkRuntimeID).then((status) => {
         if (!active) return;
         setAuthStatus(status);
         if (status.state === "authenticated") {
@@ -197,14 +228,14 @@ export function AgentForm({
       active = false;
       window.clearInterval(interval);
     };
-  }, [draft.runtime_id, loginResult?.session_id, usingLocalLogin, t]);
+  }, [frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
 
   async function refreshFrameworkAuth() {
-    if (!draft.runtime_id) return;
+    if (!frameworkRuntimeID) return;
     setAuthBusy(true);
     setAuthNotice("");
     try {
-      const status = await api.frameworkAuth(draft.runtime_id);
+      const status = await api.frameworkAuth(frameworkRuntimeID);
       setAuthStatus(status);
       if (status.state === "authenticated") setAuthNotice(t("agents.loginComplete"));
     } catch (err) {
@@ -214,14 +245,32 @@ export function AgentForm({
     }
   }
 
+  async function refreshDesktopThreads() {
+    setDesktopThreadsBusy(true);
+    setDesktopThreadsError("");
+    try {
+      setDesktopThreads((await api.codexDesktopThreads()) ?? []);
+    } catch (err) {
+      setDesktopThreadsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDesktopThreadsBusy(false);
+    }
+  }
+
+  function selectDesktopThread(threadID: string) {
+    onUpdate("desktop_thread_id", threadID);
+    const thread = desktopThreads.find((item) => item.session_id === threadID);
+    if (thread?.project_dir) onUpdate("work_dir", thread.project_dir);
+  }
+
   async function startFrameworkLogin() {
-    if (!draft.runtime_id) return;
+    if (!frameworkRuntimeID) return;
     setLoginBusy("start");
     setAuthNotice("");
     setLoginResult(null);
     setLoginCode("");
     try {
-      setLoginResult(await api.startFrameworkLogin(draft.runtime_id));
+      setLoginResult(await api.startFrameworkLogin(frameworkRuntimeID));
     } catch (err) {
       setAuthNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -307,13 +356,62 @@ export function AgentForm({
               ))}
             </select>
           </label>
+          {desktopRuntime && (
+            <label className="field wide">
+              <span>{t("agents.desktopThread")}</span>
+              <div className="directory-input-row">
+                <select
+                  disabled={readOnly || desktopThreadsBusy}
+                  value={draft.desktop_thread_id ?? ""}
+                  onChange={(event) => selectDesktopThread(event.target.value)}
+                >
+                  <option value="">
+                    {desktopThreadsBusy ? t("agents.desktopThreadsLoading") : t("agents.desktopThreadPlaceholder")}
+                  </option>
+                  {draft.desktop_thread_id && !desktopThreads.some((thread) => thread.session_id === draft.desktop_thread_id) && (
+                    <option value={draft.desktop_thread_id} disabled>
+                      {draft.desktop_thread_id} · {t("agents.desktopThreadUnavailable")}
+                    </option>
+                  )}
+                  {desktopThreads.map((thread) => (
+                    <option key={thread.session_id} value={thread.session_id}>
+                      {desktopThreadLabel(thread)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="ghost-action icon-action"
+                  disabled={readOnly || desktopThreadsBusy}
+                  onClick={() => void refreshDesktopThreads()}
+                  title={t("agents.desktopThreadsRefresh")}
+                  type="button"
+                  aria-label={t("agents.desktopThreadsRefresh")}
+                >
+                  <RefreshCw className={desktopThreadsBusy ? "spin" : ""} size={15} />
+                </button>
+              </div>
+              {desktopThreadsError ? (
+                <small className="directory-notice error">{desktopThreadsError}</small>
+              ) : (
+                <small>
+                  {desktopThreads.length === 0 && !desktopThreadsBusy
+                    ? t("agents.desktopThreadsEmpty")
+                    : t("agents.desktopThreadHelp")}
+                </small>
+              )}
+            </label>
+          )}
           <label className="field">
             <span>{t("agents.workDir")}</span>
             <div className="directory-input-row">
-              <input disabled={readOnly} value={draft.work_dir ?? ""} onChange={(event) => onUpdate("work_dir", event.target.value)} />
+              <input
+                disabled={readOnly || desktopRuntime}
+                value={draft.work_dir ?? ""}
+                onChange={(event) => onUpdate("work_dir", event.target.value)}
+              />
               <button
                 className="ghost-action icon-action"
-                disabled={readOnly || directoryBusy === "select"}
+                disabled={readOnly || desktopRuntime || directoryBusy === "select"}
                 onClick={selectWorkDir}
                 title={t("agents.selectWorkDir")}
                 type="button"
@@ -327,7 +425,7 @@ export function AgentForm({
           <label className="field">
             <span>{t("agents.workspaceMode")}</span>
             <select
-              disabled={readOnly}
+              disabled={readOnly || desktopRuntime}
               value={draft.workspace_mode || "shared"}
               onChange={(event) => onUpdate("workspace_mode", event.target.value as AgentInstance["workspace_mode"])}
             >
@@ -336,7 +434,7 @@ export function AgentForm({
             </select>
             <small>{draft.workspace_mode === "worktree" ? t("agents.workspaceModeWorktreeHelp") : t("agents.workspaceModeSharedHelp")}</small>
           </label>
-          {draft.workspace_mode === "worktree" && (
+          {draft.workspace_mode === "worktree" && !desktopRuntime && (
             <label className="field">
               <span>{t("agents.worktreeBaseRef")}</span>
               <input
@@ -351,7 +449,7 @@ export function AgentForm({
           <label className="field">
             <span>{t("agents.sessionBackend")}</span>
             <select
-              disabled={readOnly}
+              disabled={readOnly || desktopRuntime}
               value={draft.session_backend || "structured"}
               onChange={(event) => onUpdate("session_backend", event.target.value as AgentInstance["session_backend"])}
             >
@@ -692,4 +790,13 @@ export function AgentForm({
       </div>
     </>
   );
+}
+
+function desktopThreadLabel(thread: AgentSession): string {
+  const parts = [thread.title || thread.session_id, thread.project_dir || ""];
+  if (thread.last_active_at) {
+    const timestamp = new Date(thread.last_active_at);
+    if (!Number.isNaN(timestamp.getTime())) parts.push(timestamp.toLocaleString());
+  }
+  return parts.filter(Boolean).join(" · ");
 }

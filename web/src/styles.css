@@ -5730,6 +5730,99 @@ textarea:focus {
   align-items: flex-start;
 }
 
+.tool-bundle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.tool-bundle-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.tool-bundle-card.installed {
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+}
+
+.tool-bundle-card > header,
+.tool-bundle-card > footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tool-bundle-card > header p {
+  max-width: 700px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tool-bundle-card > footer {
+  justify-content: flex-end;
+}
+
+.bundle-component-list,
+.bundle-result-list {
+  display: grid;
+  gap: 8px;
+}
+
+.bundle-component-list {
+  grid-template-columns: repeat(auto-fit, minmax(160px, max-content));
+}
+
+.bundle-result-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.bundle-result-item.error { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); }
+.bundle-result-item.success { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
+.bundle-result-item .framework-log { grid-column: 1 / -1; }
+
+.internal-only-badge {
+  width: max-content;
+  color: var(--amber, #a16207);
+}
+
+.internal-dialog-backdrop {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.internal-only-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.internal-component-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 12px 12px 12px 32px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
 .tools-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));

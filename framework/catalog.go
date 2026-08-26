@@ -1,18 +1,16 @@
 // Package framework defines the catalog of agent frameworks AgentMux can run,
-// plus detection and installation of the SDK-based ones.
+// plus their detection, installation, update, and authentication metadata.
 //
 // A framework is either:
 //
 //   - a "cli" framework: an external coding CLI (claude, codex, gemini, ...)
 //     driven as a subprocess. Detection is exec.LookPath on its binary; these
 //     are always compiled into the binary as agent adapters.
-//   - a "sdk" framework: a library (claude-agent-sdk, openai-agents) hosted by
-//     the Node sidecar worker. Detection reads the sidecar's node_modules;
-//     installation runs `npm install <pkg>` into the sidecar dir.
+//   - an "sdk" framework: a catalogued SDK integration. SDK entries can remain
+//     visible as coming-soon items without shipping a runtime host.
 //
-// The catalog is the single source of truth shared by the HTTP layer
-// (server/frameworks.go) and the dynamic SDK agent registration
-// (agent/sdkagent).
+// The catalog is the single source of truth shared by the HTTP layer and the
+// compiled CLI adapters.
 package framework
 
 // KindType classifies how a framework is hosted.
@@ -22,14 +20,14 @@ const (
 	// KindCLI is a subprocess CLI framework (always available if its binary is
 	// on PATH).
 	KindCLI KindType = "cli"
-	// KindSDK is a library framework hosted by the Node sidecar worker.
+	// KindSDK is an SDK framework. Current SDK entries are catalog-only.
 	KindSDK KindType = "sdk"
 )
 
 // Spec is one catalog entry describing a framework.
 type Spec struct {
 	// Kind is the stable framework identifier, also the agent registry name
-	// (e.g. "claudecode", "claude-agent-sdk").
+	// (e.g. "claudecode", "traecli").
 	Kind string `json:"kind"`
 	// Display is the human-facing label.
 	Display string `json:"display"`
@@ -57,6 +55,9 @@ type Spec struct {
 	// LatestURL is an official text endpoint whose response contains the latest
 	// CLI version. It is used for CLIs that are not distributed through npm.
 	LatestURL string `json:"-"`
+	// ExactLatest selects exact latest-version equality instead of ordered
+	// semantic comparison. Native date+hash builds such as Cursor need this.
+	ExactLatest bool `json:"-"`
 	// UpdateCommand is the catalog-owned command used to update an installed CLI.
 	UpdateCommand []string `json:"-"`
 	// UpdateSupported reports whether this framework can be checked and updated
@@ -69,6 +70,15 @@ type Spec struct {
 	Supported bool `json:"supported"`
 	// Note is an optional short description shown in the UI.
 	Note string `json:"note,omitempty"`
+	// InternalOnly marks frameworks that depend on ByteDance accounts, network,
+	// or distribution endpoints. Installation requires explicit acknowledgement.
+	InternalOnly bool `json:"internal_only,omitempty"`
+	// InstallPlatforms limits automatic installation by GOOS. An installed CLI
+	// remains detectable and routable on other platforms.
+	InstallPlatforms []string `json:"install_platforms,omitempty"`
+	// Hidden keeps compatibility for persisted framework references while
+	// excluding the framework from user-facing catalogs and runtime selectors.
+	Hidden bool `json:"-"`
 }
 
 // catalog is the built-in framework registry.
@@ -99,7 +109,7 @@ var catalog = []Spec{
 		// downloadable. Re-running the installer performs the same atomic version
 		// switch without depending on an interactive Cursor login.
 		LatestURL: "https://cursor.com/install", UpdateCommand: []string{"bash", "-c", "curl https://cursor.com/install -fsS | bash"},
-		UpdateSupported: true, Supported: true, Note: "Cursor Agent CLI",
+		ExactLatest: true, UpdateSupported: true, Supported: true, Note: "Cursor Agent CLI",
 	},
 	{
 		Kind: "gemini", Display: "Gemini CLI", KindType: KindCLI,
@@ -124,32 +134,31 @@ var catalog = []Spec{
 		UpdateSupported: true, Supported: true, Note: "OpenCode CLI",
 	},
 	{
+		Kind: "traecli", Display: "TRAE CLI", KindType: KindCLI,
+		Bin: "traecli", VersionArgs: []string{"--version"},
+		InstallCommand: []string{
+			"bash", "-c",
+			"curl -fsSL https://code.byted.org/api/tos-proxy/download/traex_install.sh | TRAEX_INSTALL_ASSUME_YES=1 sh",
+		},
+		LatestURL:        "https://code.byted.org/api/tos-proxy/download/traex_latest__stable.json",
+		UpdateCommand:    []string{"traecli", "update"},
+		InstallSupported: true, UpdateSupported: true, Supported: true,
+		InternalOnly: true, InstallPlatforms: []string{"darwin", "linux"},
+		Note: "ByteDance internal TRAE coding-agent CLI",
+	},
+	{
 		Kind: "iflow", Display: "iFlow", KindType: KindCLI,
 		Bin: "iflow", VersionArgs: []string{"--version"},
 		NPMPackage: "@iflow-ai/iflow-cli", UpdateCommand: []string{"npm", "install", "-g", "@iflow-ai/iflow-cli@latest"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "iFlow CLI",
+		UpdateSupported: true, Supported: true, Note: "iFlow CLI", Hidden: true,
 	},
 	{
 		Kind: "kimi", Display: "Kimi", KindType: KindCLI,
 		Bin: "kimi", VersionArgs: []string{"--version"},
 		NPMPackage: "@moonshot-ai/kimi-code", UpdateCommand: []string{"npm", "install", "-g", "@moonshot-ai/kimi-code@latest"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "Kimi Code CLI",
-	},
-	{
-		Kind: "claude-agent-sdk", Display: "Claude Agent SDK", KindType: KindSDK,
-		Language: "node", Packages: []string{"@anthropic-ai/claude-agent-sdk"},
-		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
-		EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
-		Note: "Anthropic Agent SDK (Node) hosted by the sidecar worker",
-	},
-	{
-		Kind: "openai-agents", Display: "OpenAI Agents SDK", KindType: KindSDK,
-		Language: "node", Packages: []string{"@openai/agents", "zod"},
-		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
-		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
-		Note: "OpenAI Agents SDK (Node) hosted by the sidecar worker",
+		UpdateSupported: true, Supported: true, Note: "Kimi Code CLI", Hidden: true,
 	},
 	{
 		Kind: "deepagents", Display: "DeepAgents", KindType: KindSDK,
@@ -159,10 +168,14 @@ var catalog = []Spec{
 	},
 }
 
-// Catalog returns a copy of the framework catalog.
+// Catalog returns a copy of the user-visible framework catalog.
 func Catalog() []Spec {
-	out := make([]Spec, len(catalog))
-	copy(out, catalog)
+	out := make([]Spec, 0, len(catalog))
+	for _, spec := range catalog {
+		if !spec.Hidden {
+			out = append(out, spec)
+		}
+	}
 	return out
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/framework"
+	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 )
 
 func (s *Server) handleAgentInstancesList(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +184,7 @@ func (s *Server) findAgentInstance(ctx context.Context, id string) (core.AgentIn
 func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstance) error {
 	a.Name = strings.TrimSpace(a.Name)
 	a.RuntimeID = strings.TrimSpace(a.RuntimeID)
+	a.DesktopThreadID = strings.TrimSpace(a.DesktopThreadID)
 	a.WorkDir = strings.TrimSpace(a.WorkDir)
 	a.WorkspaceMode = strings.ToLower(strings.TrimSpace(a.WorkspaceMode))
 	a.WorktreeBaseRef = strings.TrimSpace(a.WorktreeBaseRef)
@@ -202,6 +204,9 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	}
 	if !knownAgentRuntime(a.RuntimeID) {
 		return fmt.Errorf("unknown agent runtime %q", a.RuntimeID)
+	}
+	if err := s.normalizeCodexDesktopAgent(ctx, a); err != nil {
+		return err
 	}
 	if a.WorkspaceMode == "" {
 		a.WorkspaceMode = "shared"
@@ -276,6 +281,56 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	}
 	if newRecord && len(a.ChannelBindings) == 0 {
 		a.ChannelBindings = []core.AgentChannelBinding{}
+	}
+	return nil
+}
+
+func (s *Server) normalizeCodexDesktopAgent(ctx context.Context, a *core.AgentInstance) error {
+	if a.RuntimeID != "codex-app" {
+		a.DesktopThreadID = ""
+		return nil
+	}
+	if a.DesktopThreadID == "" {
+		return fmt.Errorf("Codex Desktop thread is required")
+	}
+	if s.sessions == nil {
+		return fmt.Errorf("Codex Desktop session service is unavailable")
+	}
+	threads, err := s.sessions.List(ctx, "codex", "desktop")
+	if err != nil {
+		return fmt.Errorf("list Codex Desktop threads: %w", err)
+	}
+	var selected *sessionstore.Meta
+	for i := range threads {
+		if threads[i].SessionID == a.DesktopThreadID {
+			selected = &threads[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("Codex Desktop thread %q was not found", a.DesktopThreadID)
+	}
+	if strings.TrimSpace(selected.ProjectDir) == "" {
+		return fmt.Errorf("Codex Desktop thread %q has no working directory", a.DesktopThreadID)
+	}
+	if a.WorkDir != "" && !sameCanonicalPath(a.WorkDir, selected.ProjectDir) {
+		return fmt.Errorf("Codex Desktop thread belongs to %q, agent uses %q", selected.ProjectDir, a.WorkDir)
+	}
+	a.WorkDir = selected.ProjectDir
+	a.WorkspaceMode = "shared"
+	a.WorktreeBaseRef = ""
+	a.SessionBackend = "structured"
+	if s.st == nil {
+		return nil
+	}
+	existing, err := s.st.ListAgentInstances(ctx)
+	if err != nil {
+		return fmt.Errorf("check Codex Desktop thread binding: %w", err)
+	}
+	for _, item := range existing {
+		if item.ID != a.ID && item.RuntimeID == "codex-app" && item.DesktopThreadID == a.DesktopThreadID {
+			return fmt.Errorf("Codex Desktop thread is already bound to agent %q", item.Name)
+		}
 	}
 	return nil
 }
@@ -400,7 +455,12 @@ func (s *Server) agentProvider(ctx context.Context, a *core.AgentInstance) (*cor
 	}
 	want := core.NormalizeProviderTool(tool)
 	for _, route := range routes {
-		if route.Tool == tool || core.NormalizeProviderTool(route.Tool) == want {
+		if route.Tool == tool {
+			return s.provider.Get(ctx, route.ProviderID)
+		}
+	}
+	for _, route := range routes {
+		if core.NormalizeProviderTool(route.Tool) == want {
 			return s.provider.Get(ctx, route.ProviderID)
 		}
 	}
@@ -447,7 +507,13 @@ func availableAgentRuntimes() []string {
 }
 
 func agentRuntimeAvailable(id string) bool {
-	if _, catalogued := framework.Lookup(id); catalogued {
+	if id == "codex-app" {
+		return framework.IsInstalled("codex")
+	}
+	if spec, catalogued := framework.Lookup(id); catalogued {
+		if spec.Hidden {
+			return false
+		}
 		return framework.IsInstalled(id)
 	}
 	// Third-party adapters do not have a built-in framework specification. A

@@ -42,6 +42,27 @@ func TestUnavailableCodexThreadError(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopRuntimePinsConfiguredThread(t *testing.T) {
+	if !core.HasAgent("codex-app") {
+		t.Fatal("codex-app runtime is not registered")
+	}
+	agent := newCodexAgent(map[string]any{
+		"desktop_mode":      true,
+		"desktop_thread_id": "desktop-thread",
+	})
+	threadID, err := agent.resumeThreadID("conversation-thread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threadID != "desktop-thread" {
+		t.Fatalf("thread id = %q", threadID)
+	}
+	missing := newCodexAgent(map[string]any{"desktop_mode": true})
+	if _, err := missing.resumeThreadID(""); err == nil {
+		t.Fatal("missing Desktop thread must fail")
+	}
+}
+
 func TestModelArgsForVerifiedCLIs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -620,5 +641,75 @@ func TestGenericCLIEventsDeclarePartialCoverage(t *testing.T) {
 		if event == nil || event.Metadata["coverage"] != "partial" {
 			t.Fatalf("%s event = %#v", name, event)
 		}
+	}
+}
+
+func TestTraeArgsAndResumePreserveRuntimeSettings(t *testing.T) {
+	initial := traeArgs("hello", "system rules", "Seed-2.1-Pro", core.ApprovalModeAutoEdit)
+	resume := traeResumeArgs("thread-1", "follow up", "system rules", "Seed-2.1-Pro", core.ApprovalModeAutoEdit)
+	for name, args := range map[string][]string{"initial": initial, "resume": resume} {
+		joined := strings.Join(args, " ")
+		for _, want := range []string{"--json", "--skip-git-repo-check", "--model Seed-2.1-Pro", `developer_instructions="system rules"`, `approval_policy="on-request"`, `sandbox_mode="workspace-write"`} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("%s args missing %q: %v", name, want, args)
+			}
+		}
+	}
+	if got := strings.Join(initial[:1], " "); got != "exec" {
+		t.Fatalf("initial prefix = %q", got)
+	}
+	if got := strings.Join(resume[:2], " "); got != "exec resume" || resume[len(resume)-2] != "thread-1" {
+		t.Fatalf("resume args = %v", resume)
+	}
+
+	modes := map[string][]string{
+		core.ApprovalModeManual: {`approval_policy="on-request"`, `sandbox_mode="read-only"`},
+		core.ApprovalModeAuto:   {"--permission-mode", "auto"},
+		core.ApprovalModePlan:   {`approval_policy="never"`, `sandbox_mode="read-only"`},
+		core.ApprovalModeYolo:   {"--dangerously-bypass-approvals-and-sandbox"},
+	}
+	for mode, wants := range modes {
+		joined := strings.Join(traeArgs("x", "", "", mode), " ")
+		for _, want := range wants {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("mode %s missing %q: %s", mode, want, joined)
+			}
+		}
+	}
+}
+
+func TestTraeModelCatalogAndSessionID(t *testing.T) {
+	catalog, err := parseTraeModelCatalog([]byte(`[{"name":"Seed-2.1-Pro"},{"name":"GPT-5.6-Sol"}]`))
+	if err != nil || !reflect.DeepEqual(catalog.Models, []string{"Seed-2.1-Pro", "GPT-5.6-Sol"}) {
+		t.Fatalf("catalog = %+v, err = %v", catalog, err)
+	}
+	if got := traeSessionID([]byte(`{"type":"thread.started","thread_id":"thread-1"}`)); got != "thread-1" {
+		t.Fatalf("thread id = %q", got)
+	}
+}
+
+func TestTraeStreamMapsPublicEventsAndUsage(t *testing.T) {
+	assistant := traeStreamEvents([]byte(`{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"PONG"}}`))
+	if len(assistant) != 1 || assistant[0].Type != core.EventOutput || assistant[0].Text != "PONG" || assistant[0].Metadata["transport"] != "trae-jsonl" {
+		t.Fatalf("assistant events = %#v", assistant)
+	}
+	tool := traeStreamEvents([]byte(`{"type":"item.completed","item":{"id":"item-2","type":"command_execution","command":"pwd","aggregated_output":"/tmp","exit_code":0}}`))
+	if len(tool) != 1 || tool[0].Type != core.EventToolUse || tool[0].ToolName != "Shell" || tool[0].ToolResult != "/tmp" || tool[0].Status != "completed" {
+		t.Fatalf("tool events = %#v", tool)
+	}
+	usage := traeStreamEvents([]byte(`{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_creation_input_tokens":5,"output_tokens":20,"reasoning_output_tokens":7}}`))
+	if len(usage) != 1 || usage[0].Usage == nil || usage[0].Usage.TotalTokens != 120 || usage[0].Usage.CacheReadTokens != 40 || usage[0].Usage.ReasoningTokens != 7 {
+		t.Fatalf("usage events = %#v", usage)
+	}
+	if reasoning := traeStreamEvents([]byte(`{"type":"item.completed","item":{"type":"reasoning","text":"private"}}`)); len(reasoning) != 0 {
+		t.Fatalf("reasoning must be suppressed: %#v", reasoning)
+	}
+	warning := traeStreamEvents([]byte(`{"type":"item.completed","item":{"type":"error","message":"configuration moved"}}`))
+	if len(warning) != 1 || warning[0].Type != core.EventThinking || warning[0].Status != "warning" {
+		t.Fatalf("warning = %#v", warning)
+	}
+	failure := traeStreamEvents([]byte(`{"type":"turn.failed","error":{"message":"model unavailable"}}`))
+	if len(failure) != 1 || failure[0].Type != core.EventError || failure[0].Err == nil || !strings.Contains(failure[0].Err.Error(), "model unavailable") {
+		t.Fatalf("failure = %#v", failure)
 	}
 }

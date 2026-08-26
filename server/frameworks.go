@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/wangning19940904/AgentMux/agent/sdkagent"
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/framework"
 )
@@ -39,8 +38,9 @@ func (s *Server) handleFrameworksList(w http.ResponseWriter, r *http.Request) {
 }
 
 type frameworkInstallRequest struct {
-	Kind   string `json:"kind"`
-	Action string `json:"action"`
+	Kind                string `json:"kind"`
+	Action              string `json:"action"`
+	AcknowledgeInternal bool   `json:"acknowledge_internal"`
 }
 
 func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +58,7 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 	if action == "" {
 		action = "install"
 	}
-	res := s.runFrameworkInstall(r.Context(), kind, action, nil)
+	res := s.runFrameworkInstall(r.Context(), kind, action, req.AcknowledgeInternal, nil)
 	if !res.OK {
 		// Surface the install log/error but keep a 200 envelope so the client
 		// can render the log; the ok flag conveys success.
@@ -84,24 +84,19 @@ func (s *Server) handleFrameworkInstallStream(w http.ResponseWriter, r *http.Req
 		action = "install"
 	}
 	streamInstall(w, r, func(report func(string, string, int)) any {
-		return s.runFrameworkInstall(r.Context(), kind, action, framework.ProgressFunc(report))
+		return s.runFrameworkInstall(r.Context(), kind, action, req.AcknowledgeInternal, framework.ProgressFunc(report))
 	})
 }
 
-func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, progress framework.ProgressFunc) framework.InstallResult {
+func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, acknowledgeInternal bool, progress framework.ProgressFunc) framework.InstallResult {
 	var res framework.InstallResult
 	switch action {
 	case "install":
-		res = framework.InstallWithProgress(ctx, kind, progress)
+		res = framework.InstallWithProgressOptions(ctx, kind, framework.InstallOptions{AcknowledgeInternal: acknowledgeInternal}, progress)
 	case "update":
 		res = framework.UpdateWithProgress(ctx, kind, progress)
 	default:
 		return framework.InstallResult{Kind: kind, Action: action, Error: "action must be install or update"}
-	}
-	if res.OK {
-		// Register the freshly-installed SDK framework so it becomes routable in
-		// the current process without requiring a daemon restart.
-		sdkagent.Register()
 	}
 	return res
 }

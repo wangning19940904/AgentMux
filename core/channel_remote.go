@@ -153,7 +153,7 @@ func (rt *channelRuntime) remoteControlEnabled() bool {
 	if rt == nil || !CodexRemoteControlEnabled(rt.channel) {
 		return false
 	}
-	if rt.workspace.RuntimeID == "codex" {
+	if rt.workspace.RuntimeID == "codex" || rt.workspace.RuntimeID == "codex-app" {
 		return true
 	}
 	return rt.agent != nil && rt.agent.Name() == "codex"

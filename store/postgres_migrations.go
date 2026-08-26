@@ -240,6 +240,13 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
 	ON orchestration_tasks(orchestration_id,status);
 `,
 		},
+		{
+			version: 10,
+			name:    "agent_desktop_thread",
+			sql: `
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS desktop_thread_id TEXT;
+`,
+		},
 	}
 }
 

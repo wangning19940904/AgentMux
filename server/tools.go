@@ -10,16 +10,18 @@ import (
 )
 
 type toolsResponse struct {
-	CLI         []toolpkg.CLIStatus `json:"cli"`
-	Frameworks  []frameworkView     `json:"frameworks"`
-	Skills      []core.Skill        `json:"skills"`
-	MCP         []core.MCPServer    `json:"mcp"`
-	Marketplace any                 `json:"marketplace"`
+	CLI         []toolpkg.CLIStatus    `json:"cli"`
+	Bundles     []toolpkg.BundleStatus `json:"bundles"`
+	Frameworks  []frameworkView        `json:"frameworks"`
+	Skills      []core.Skill           `json:"skills"`
+	MCP         []core.MCPServer       `json:"mcp"`
+	Marketplace any                    `json:"marketplace"`
 }
 
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	var resp toolsResponse
 	resp.CLI = toolpkg.DetectCLIs(r.Context())
+	resp.Bundles = toolpkg.DetectBundles(r.Context())
 	statuses := framework.DetectAll()
 	resp.Frameworks = make([]frameworkView, 0, len(statuses))
 	for _, st := range statuses {
@@ -50,8 +52,9 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 type cliInstallRequest struct {
-	ID     string `json:"id"`
-	Action string `json:"action"`
+	ID                  string `json:"id"`
+	Action              string `json:"action"`
+	AcknowledgeInternal bool   `json:"acknowledge_internal"`
 }
 
 func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +67,7 @@ func (s *Server) handleCLIInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "cli id is required")
 		return
 	}
-	res := toolpkg.InstallCLI(r.Context(), id, strings.TrimSpace(req.Action))
+	res := toolpkg.InstallCLIWithOptions(r.Context(), id, strings.TrimSpace(req.Action), toolpkg.CLIInstallOptions{AcknowledgeInternal: req.AcknowledgeInternal})
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -79,7 +82,43 @@ func (s *Server) handleCLIInstallStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	streamInstall(w, r, func(report func(string, string, int)) any {
-		return toolpkg.InstallCLIWithProgress(r.Context(), id, strings.TrimSpace(req.Action), toolpkg.ProgressFunc(report))
+		return toolpkg.InstallCLIWithProgressOptions(r.Context(), id, strings.TrimSpace(req.Action), toolpkg.CLIInstallOptions{AcknowledgeInternal: req.AcknowledgeInternal}, toolpkg.ProgressFunc(report))
+	})
+}
+
+type bundleInstallRequest struct {
+	ID                  string `json:"id"`
+	AcknowledgeInternal bool   `json:"acknowledge_internal"`
+}
+
+func (s *Server) handleBundleInstall(w http.ResponseWriter, r *http.Request) {
+	var req bundleInstallRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		writeErr(w, http.StatusBadRequest, "bundle id is required")
+		return
+	}
+	res := toolpkg.InstallBundle(r.Context(), req.ID, toolpkg.BundleInstallOptions{AcknowledgeInternal: req.AcknowledgeInternal})
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleBundleInstallStream(w http.ResponseWriter, r *http.Request) {
+	var req bundleInstallRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		writeErr(w, http.StatusBadRequest, "bundle id is required")
+		return
+	}
+	streamInstall(w, r, func(report func(string, string, int)) any {
+		return toolpkg.InstallBundleWithProgress(
+			r.Context(), req.ID,
+			toolpkg.BundleInstallOptions{AcknowledgeInternal: req.AcknowledgeInternal},
+			toolpkg.ProgressFunc(report),
+		)
 	})
 }
 

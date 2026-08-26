@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composeInjectedPrompt, newAgent, routeToolForRuntime, toggleID } from "./agentUtils";
+import { approvalModesForRuntime, composeInjectedPrompt, newAgent, routeToolForRuntime, runtimeLabel, toggleID } from "./agentUtils";
 
 describe("agent form model", () => {
   it("creates Agents with safe workspace defaults", () => {
@@ -29,6 +29,9 @@ describe("agent form model", () => {
 
   it("keeps route and id toggles deterministic", () => {
     expect(routeToolForRuntime("claude-code")).toBe("claudecode");
+	expect(routeToolForRuntime("codex-app")).toBe("codex-app");
+	expect(runtimeLabel("codex-app")).toBe("Codex Desktop");
+	expect(approvalModesForRuntime("codex-app")).toContain("manual");
     expect(toggleID(["a"], "b")).toEqual(["a", "b"]);
     expect(toggleID(["a", "b"], "a")).toEqual(["b"]);
   });

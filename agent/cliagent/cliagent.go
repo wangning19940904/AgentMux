@@ -1,6 +1,6 @@
 // Package cliagent provides a reusable subprocess-based agent adapter for
 // coding CLIs that support a non-interactive "print one turn as JSON/stream"
-// mode (Codex, Cursor, Gemini, Qoder, OpenCode, iFlow, Kimi). Each concrete
+// mode (Cursor, Gemini, Qoder, OpenCode, TRAE, iFlow, Kimi). Each concrete
 // agent registers itself by supplying a Spec describing its binary, args and
 // output parsing.
 package cliagent
@@ -44,6 +44,12 @@ type Spec struct {
 	Binary string
 	// Args returns the argv (excluding the binary) for a turn carrying prompt.
 	Args func(prompt, systemPrompt, model, approvalMode string) []string
+	// ResumeArgs builds a follow-up turn against a native session discovered
+	// from an earlier output frame. When nil, every Send uses Args.
+	ResumeArgs func(sessionID, prompt, systemPrompt, model, approvalMode string) []string
+	// SessionIDFromLine extracts a durable native session id from one output
+	// frame. It is called before EventMapper while the frame is still valid.
+	SessionIDFromLine func(line []byte) string
 	// Mapper turns a streamed output line into an event.
 	Mapper LineMapper
 	// EventMapper is the multi-event counterpart to Mapper. When both are set,

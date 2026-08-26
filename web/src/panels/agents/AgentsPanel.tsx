@@ -114,15 +114,20 @@ export function AgentsPanel() {
       if (!current) return current;
       const routeChanged = key === "runtime_id" || key === "provider_tool" || key === "provider_id";
       const nextRuntimeRouteTool = key === "runtime_id" ? routeToolForRuntime(String(value)) : current.provider_tool;
+      const desktopRuntime = key === "runtime_id" ? String(value) === "codex-app" : current.runtime_id === "codex-app";
       return {
         ...current,
-        [key]: value,
         provider_tool: nextRuntimeRouteTool,
         provider_id: key === "runtime_id" ? "" : current.provider_id,
+        desktop_thread_id: key === "runtime_id" ? "" : current.desktop_thread_id,
+        workspace_mode: desktopRuntime ? "shared" : current.workspace_mode,
+        worktree_base_ref: desktopRuntime ? "" : current.worktree_base_ref,
+        session_backend: desktopRuntime ? "structured" : current.session_backend,
         default_model: routeChanged ? "" : current.default_model,
         default_reasoning_effort: routeChanged ? "" : current.default_reasoning_effort,
         default_service_tier: routeChanged ? "" : current.default_service_tier,
         default_approval_mode: key === "runtime_id" ? "" : current.default_approval_mode,
+        [key]: value,
       };
     });
   }
@@ -184,6 +189,7 @@ export function AgentsPanel() {
       drawerDraft.name.trim() &&
       drawerDraft.runtime_id &&
       (drawerMode === "edit" || runtimeOptions.includes(drawerDraft.runtime_id)) &&
+      (drawerDraft.runtime_id !== "codex-app" || Boolean(drawerDraft.desktop_thread_id)) &&
       !readOnly
   );
   const noticeClass = notice.toLowerCase().includes("failed") || notice.toLowerCase().includes("error") ? " error" : "";

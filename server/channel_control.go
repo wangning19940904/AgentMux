@@ -43,7 +43,7 @@ func (s *Server) handleChannelConversations(w http.ResponseWriter, r *http.Reque
 	queuedControllerByConversation := map[string]string{}
 	threadTitles := map[string]string{}
 	if s.sessions != nil {
-		if threads, listErr := s.sessions.List(r.Context(), "codex", "app-server"); listErr == nil {
+		if threads, listErr := s.sessions.List(r.Context(), "codex", ""); listErr == nil {
 			for _, thread := range threads {
 				threadTitles[thread.SessionID] = thread.Title
 			}
@@ -158,9 +158,9 @@ func (s *Server) handleChannelConversationBind(w http.ResponseWriter, r *http.Re
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	items, err := s.sessions.List(r.Context(), "codex", "app-server")
+	items, err := s.sessions.List(r.Context(), "codex", "desktop")
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "list Codex threads: " + err.Error())
+		writeErr(w, http.StatusBadGateway, "list Codex threads: "+err.Error())
 		return
 	}
 	var found bool

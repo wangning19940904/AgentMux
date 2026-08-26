@@ -21,9 +21,11 @@ const (
 
 type session struct {
 	runner.Settings
-	agent   *Agent
-	workDir string
-	id      string
+	agent           *Agent
+	workDir         string
+	id              string
+	nativeSessionMu sync.Mutex
+	nativeSessionID string
 }
 
 func (s *session) ID() string { return s.id }
@@ -113,6 +115,9 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		model = s.agent.spec.ModelForSettings(settings)
 	}
 	args := s.agent.spec.Args(text, s.agent.systemPrompt, model, settings.ApprovalMode)
+	if nativeSessionID := s.currentNativeSessionID(); nativeSessionID != "" && s.agent.spec.ResumeArgs != nil {
+		args = s.agent.spec.ResumeArgs(nativeSessionID, text, s.agent.systemPrompt, model, settings.ApprovalMode)
+	}
 
 	bin := s.agent.spec.Binary
 	if p, err := exec.LookPath(bin); err == nil {
@@ -170,7 +175,11 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 1024*1024), stdoutScanLimit)
 		for sc.Scan() {
-			for _, ev := range s.mapOutputLine(sc.Bytes()) {
+			line := sc.Bytes()
+			if s.agent.spec.SessionIDFromLine != nil {
+				s.rememberNativeSessionID(s.agent.spec.SessionIDFromLine(line))
+			}
+			for _, ev := range s.mapOutputLine(line) {
 				emit(ev)
 			}
 		}
@@ -218,6 +227,22 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		}
 	}()
 	return out, nil
+}
+
+func (s *session) currentNativeSessionID() string {
+	s.nativeSessionMu.Lock()
+	defer s.nativeSessionMu.Unlock()
+	return s.nativeSessionID
+}
+
+func (s *session) rememberNativeSessionID(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.nativeSessionMu.Lock()
+	s.nativeSessionID = sessionID
+	s.nativeSessionMu.Unlock()
 }
 
 // processMetadata keeps events synthesized by the subprocess runner
