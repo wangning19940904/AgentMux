@@ -169,6 +169,9 @@ func (s *Server) handleOpenAIResponse(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "model", "invalid_target")
 		return
 	}
+	if !s.authorizeOpenAIInvocationTarget(w, r, invocation) {
+		return
+	}
 	if req.Background {
 		if req.Stream {
 			s.handleOpenAIBackgroundResponseStream(w, r, req, identity, invocation, fallback, -1)

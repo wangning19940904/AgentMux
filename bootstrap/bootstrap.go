@@ -13,6 +13,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework"
 	"github.com/wangning19940904/AgentMux/guard"
 	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
 	"github.com/wangning19940904/AgentMux/mcp"
@@ -57,6 +58,10 @@ func NewServer(log *slog.Logger, cfg *config.Config, st *store.Store, version st
 // desktop shell must stay useful when e.g. the keychain is unavailable at
 // login).
 func AttachRuntime(ctx context.Context, log *slog.Logger, cfg *config.Config, st *store.Store, srv *server.Server, providerService *provider.Service, usageEngine *usage.Engine, strictObservability bool) (*core.Engine, *core.ConnectService, error) {
+	// Background services start with a minimal PATH and do not load the user's
+	// shell profile. Discover user-installed CLIs before any channel can launch
+	// an Agent runtime.
+	framework.PrepareRuntimeEnvironment()
 	initializer := workspace.New()
 	eng, err := server.BuildEngine(log, cfg, initializer)
 	if err != nil {

@@ -1,0 +1,29 @@
+{
+  "fields": {
+    "agent_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "attachments": {
+      "omitempty": true,
+      "type": "array\u003cobject:core.AgentAttachment\u003e"
+    },
+    "conversation_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "input": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "output_schema": {
+      "omitempty": true,
+      "type": "map\u003cstring,any\u003e"
+    },
+    "project": {
+      "omitempty": true,
+      "type": "string"
+    }
+  },
+  "go_type": "core.InvocationRequest"
+}

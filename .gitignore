@@ -11,6 +11,15 @@ desktop/frontend
 web/node_modules/
 web/dist/
 
+# SDKs
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+sdk/typescript/*.tgz
+sdk/python/.venv/
+sdk/python/dist/
+sdk/python/**/__pycache__/
+sdk/python/.pytest_cache/
+
 # Local third-party reference checkouts
 /external/cc-connect/
 /external/cc-switch/

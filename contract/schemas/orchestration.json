@@ -1,0 +1,49 @@
+{
+  "fields": {
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "finished_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "max_concurrency": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "owner_tenant_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "started_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "status": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "tasks": {
+      "omitempty": true,
+      "type": "array\u003cobject:core.OrchestrationTask\u003e"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.Orchestration"
+}

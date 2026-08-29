@@ -409,12 +409,6 @@ if ! command -v psql >/dev/null 2>&1 || ! command -v pg_isready >/dev/null 2>&1;
     exit 1
   fi
 fi
-if ! sudo -n true >/dev/null 2>&1; then
-  echo "passwordless sudo is required to provision the AgentMux PostgreSQL role" >&2
-  exit 1
-fi
-sudo -n systemctl enable --now postgresql.service >/dev/null 2>&1 || \
-  sudo -n systemctl start postgresql.service >/dev/null 2>&1
 port=5432
 if command -v pg_lsclusters >/dev/null 2>&1; then
   detected_port=$(pg_lsclusters --no-header 2>/dev/null | awk '$4 == "online" { print $3; exit }')
@@ -425,6 +419,14 @@ fi
 case "$port" in
   ''|*[!0-9]*) echo "invalid PostgreSQL port: $port" >&2; exit 1 ;;
 esac
+if ! sudo -n true >/dev/null 2>&1; then
+  echo "passwordless sudo is required to provision the AgentMux PostgreSQL role" >&2
+  exit 1
+fi
+if ! pg_isready -q -h /var/run/postgresql -p "$port"; then
+  sudo -n systemctl enable --now postgresql.service >/dev/null 2>&1 || \
+    sudo -n systemctl start postgresql.service >/dev/null 2>&1 || true
+fi
 attempts=0
 until pg_isready -q -h /var/run/postgresql -p "$port"; do
   attempts=$((attempts + 1))

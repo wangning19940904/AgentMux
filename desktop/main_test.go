@@ -23,6 +23,9 @@ func TestDesktopAssetMiddlewareProxiesAPIOnSameOrigin(t *testing.T) {
 		if request.URL.Path != "/api/v1/status" {
 			t.Fatalf("upstream path = %q", request.URL.Path)
 		}
+		if got := request.Header.Get("Authorization"); got != "Bearer admin-secret" {
+			t.Fatalf("upstream authorization = %q", got)
+		}
 		_, _ = io.WriteString(response, `{"ok":true}`)
 	}))
 	defer upstream.Close()
@@ -33,6 +36,7 @@ func TestDesktopAssetMiddlewareProxiesAPIOnSameOrigin(t *testing.T) {
 
 	app := newApp()
 	app.apiTarget.Store(target)
+	app.setAPIToken("admin-secret")
 	handler := app.assetServerMiddleware(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusTeapot)
 	}))

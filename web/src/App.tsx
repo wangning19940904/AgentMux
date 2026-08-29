@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import {
   Activity,
@@ -52,6 +52,7 @@ const SessionsPanel = lazy(() => import("./panels/SessionsPanel").then((m) => ({
 const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ default: m.MenuBarPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
 const MeetingsPanel = lazy(() => import("./panels/MeetingsPanel").then((m) => ({ default: m.MeetingsPanel })));
+const TenantsPanel = lazy(() => import("./panels/TenantsPanel").then((m) => ({ default: m.TenantsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
   api,
@@ -61,7 +62,9 @@ import {
   LaunchAtLoginStatus,
   openLocalWebUI,
   setLaunchAtLogin,
+  type TenancySelf,
 } from "./api";
+import { resolveTenancyGateWithRetry, type TenancyGateState } from "./tenancyGate";
 
 type Tab =
   | "overview"
@@ -81,7 +84,8 @@ type Tab =
   | "mcp"
   | "guard"
   | "feedback"
-  | "orchestrations";
+  | "orchestrations"
+  | "tenants";
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
@@ -131,6 +135,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: PanelTop,
     items: [
       { id: "machines", labelKey: "nav.machines", icon: ServerCog },
+      { id: "tenants", labelKey: "nav.tenants", icon: ShieldCheck },
       { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
     ],
   },
@@ -247,10 +252,30 @@ function Shell({
   setThemeMode: (mode: ThemeMode) => void;
 }) {
   const { t } = useI18n();
-  const active = useMemo(() => TABS.find((item) => item.id === tab) ?? TABS[0], [tab]);
+  const tenantGate = useTenancyGate();
+  const tenantIdentity = tenantGate.identity;
+  const nativeDesktopAdmin = window.location.protocol === "wails:";
+  const identityIsAdmin = tenantIdentity?.admin === true || (!tenantIdentity && nativeDesktopAdmin);
+  const identityName = identityIsAdmin ? t("app.admin") : t("app.tenant");
+  const identityDetail = tenantIdentity?.admin
+    ? t("app.adminScope")
+    : tenantIdentity
+      ? tenantIdentity.tenant || t("app.tenant")
+      : nativeDesktopAdmin
+        ? t("app.adminScope")
+        : t("app.identityLoading");
+  const identityAvatarSource = identityIsAdmin
+    ? identityName
+    : tenantIdentity?.tenant || identityName;
+  const navigationLocked = tenantGate.state !== "ready";
+  const visibleTab = tenantGate.state === "required" ? "tenants" : tab;
+  const active = useMemo(
+    () => TABS.find((item) => item.id === visibleTab) ?? TABS[0],
+    [visibleTab],
+  );
   const groupOfActive = useMemo(
-    () => NAV_GROUPS.find((group) => group.items.some((item) => item.id === tab))?.id ?? null,
-    [tab],
+    () => NAV_GROUPS.find((group) => group.items.some((item) => item.id === visibleTab))?.id ?? null,
+    [visibleTab],
   );
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(NAV_GROUPS.map((group) => [group.id, true])),
@@ -261,6 +286,12 @@ function Shell({
       setOpenGroups((current) => (current[groupOfActive] ? current : { ...current, [groupOfActive]: true }));
     }
   }, [groupOfActive]);
+
+  useEffect(() => {
+    if (tenantGate.state === "required" && tab !== "tenants") {
+      setTab("tenants");
+    }
+  }, [setTab, tab, tenantGate.state]);
 
   function toggleGroup(id: string) {
     setOpenGroups((current) => ({ ...current, [id]: !current[id] }));
@@ -279,9 +310,10 @@ function Shell({
 
         <nav className="nav" aria-label="Primary">
           <button
-            className={`nav-item${tab === OVERVIEW_ITEM.id ? " active" : ""}`}
+            className={`nav-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
             onClick={() => setTab(OVERVIEW_ITEM.id)}
             title={t(OVERVIEW_ITEM.labelKey)}
+            disabled={navigationLocked}
           >
             <LayoutGrid size={18} />
             <span>{t(OVERVIEW_ITEM.labelKey)}</span>
@@ -309,9 +341,10 @@ function Shell({
                       return (
                         <button
                           key={item.id}
-                          className={`nav-item nav-subitem${tab === item.id ? " active" : ""}`}
+                          className={`nav-item nav-subitem${visibleTab === item.id ? " active" : ""}`}
                           onClick={() => setTab(item.id)}
                           title={t(item.labelKey)}
+                          disabled={navigationLocked && item.id !== "tenants"}
                         >
                           <Icon size={17} />
                           <span>{t(item.labelKey)}</span>
@@ -326,10 +359,10 @@ function Shell({
         </nav>
 
         <div className="account">
-          <div className="avatar">AN</div>
+          <div className="avatar">{identityInitials(identityAvatarSource)}</div>
           <div>
-            <strong>{t("app.admin")}</strong>
-            <span>admin@agentmux.ai</span>
+            <strong>{identityName}</strong>
+            <span>{identityDetail}</span>
           </div>
           <ChevronDown size={16} />
         </div>
@@ -370,36 +403,86 @@ function Shell({
 
         <main className="main">
           <PanelErrorBoundary
-            resetKey={tab}
+            resetKey={visibleTab}
             title={t("app.panelError")}
             description={t("app.panelErrorHint")}
             retryLabel={t("common.retry")}
           >
             <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
-              {tab === "overview" && <OverviewPanel />}
-              {tab === "agents" && <AgentsPanel />}
-              {tab === "orchestrations" && <OrchestrationsPanel />}
-              {tab === "connect" && <ConnectPanel />}
-              {tab === "frameworks" && <FrameworksPanel />}
-              {tab === "observability" && <ObservabilityPanel />}
-              {tab === "usage" && <UsagePanel />}
-              {tab === "menubar" && <MenuBarPanel />}
-              {tab === "machines" && <RemoteHostsPanel />}
-              {tab === "sessions" && <SessionsPanel />}
-              {tab === "meetings" && <MeetingsPanel />}
-              {tab === "providers" && <ProvidersPanel />}
-              {tab === "gateway" && <GatewayPanel />}
-              {tab === "memory" && <MemoryPanel />}
-              {tab === "skills" && <SkillsPanel />}
-              {tab === "mcp" && <MCPPanel />}
-              {tab === "feedback" && <FeedbackPanel />}
-              {tab === "guard" && <GuardPanel />}
+              {tenantGate.state === "loading" ? (
+                <div className="empty-state">{t("tenants.checking")}</div>
+              ) : (
+                <>
+                  {visibleTab === "overview" && <OverviewPanel />}
+                  {visibleTab === "agents" && <AgentsPanel />}
+                  {visibleTab === "orchestrations" && <OrchestrationsPanel />}
+                  {visibleTab === "connect" && <ConnectPanel />}
+                  {visibleTab === "frameworks" && <FrameworksPanel />}
+                  {visibleTab === "observability" && <ObservabilityPanel />}
+                  {visibleTab === "usage" && <UsagePanel />}
+                  {visibleTab === "menubar" && <MenuBarPanel />}
+                  {visibleTab === "machines" && <RemoteHostsPanel />}
+                  {visibleTab === "tenants" && (
+                    <TenantsPanel
+                      onContinue={() => setTab("agents")}
+                      onTenantChanged={() => void tenantGate.refresh()}
+                    />
+                  )}
+                  {visibleTab === "sessions" && <SessionsPanel />}
+                  {visibleTab === "meetings" && <MeetingsPanel />}
+                  {visibleTab === "providers" && <ProvidersPanel />}
+                  {visibleTab === "gateway" && <GatewayPanel />}
+                  {visibleTab === "memory" && <MemoryPanel />}
+                  {visibleTab === "skills" && <SkillsPanel />}
+                  {visibleTab === "mcp" && <MCPPanel />}
+                  {visibleTab === "feedback" && <FeedbackPanel />}
+                  {visibleTab === "guard" && <GuardPanel />}
+                </>
+              )}
             </Suspense>
           </PanelErrorBoundary>
         </main>
       </div>
     </div>
   );
+}
+
+function useTenancyGate(): {
+  state: TenancyGateState;
+  identity: TenancySelf | null;
+  refresh: () => Promise<void>;
+} {
+  const [state, setState] = useState<TenancyGateState>("loading");
+  const [identity, setIdentity] = useState<TenancySelf | null>(null);
+
+  const refresh = useCallback(async () => {
+    setState("loading");
+    try {
+      const resolved = await resolveTenancyGateWithRetry(
+        () => api.tenancySelf(),
+        () => api.tenants(),
+      );
+      setIdentity(resolved.identity);
+      setState(resolved.state);
+    } catch {
+      // Fail closed: configuration stays unavailable until AgentMux can prove
+      // that the Console has an active tenant.
+      setState("required");
+      setIdentity(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { state, identity, refresh };
+}
+
+function identityInitials(value: string): string {
+  const parts = value.trim().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return Array.from(parts[0] || "?").slice(0, 2).join("").toUpperCase();
 }
 
 type PanelErrorBoundaryProps = {

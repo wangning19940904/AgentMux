@@ -19,6 +19,7 @@ type Orchestration struct {
 	MaxConcurrency int                 `json:"max_concurrency"`
 	Error          string              `json:"error,omitempty"`
 	Tasks          []OrchestrationTask `json:"tasks,omitempty"`
+	OwnerTenantID  string              `json:"owner_tenant_id,omitempty"`
 	CreatedAt      time.Time           `json:"created_at"`
 	StartedAt      time.Time           `json:"started_at,omitempty"`
 	FinishedAt     time.Time           `json:"finished_at,omitempty"`

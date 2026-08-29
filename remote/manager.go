@@ -50,6 +50,17 @@ type ImportResult struct {
 	TestResult
 }
 
+// SSHConfigSyncResult summarizes a refresh of persisted machines from the
+// current user's OpenSSH config. Unmatched and ambiguous machines are left
+// untouched so refreshing never guesses between aliases that share a target.
+type SSHConfigSyncResult struct {
+	Hosts     []HostView `json:"hosts"`
+	Updated   int        `json:"updated"`
+	Unchanged int        `json:"unchanged"`
+	Unmatched int        `json:"unmatched"`
+	Ambiguous int        `json:"ambiguous"`
+}
+
 type UpdateResult struct {
 	OK                 bool           `json:"ok"`
 	Name               string         `json:"name"`
@@ -96,6 +107,44 @@ func (m *Manager) List() []HostView {
 		out = append(out, host.View())
 	}
 	return out
+}
+
+// SyncSSHConfig refreshes configured machines from freshly discovered SSH
+// aliases. A machine is identified by its resolved host, port and user; when
+// several aliases resolve to that endpoint, the existing alias/name or a
+// unique identity-file match is required before any fields are changed.
+func (m *Manager) SyncSSHConfig(candidates []DiscoveredHost) (SSHConfigSyncResult, error) {
+	result := SSHConfigSyncResult{}
+	for _, host := range m.store.List() {
+		candidate, match := sshConfigCandidate(host, candidates)
+		switch match {
+		case sshConfigUnmatched:
+			result.Unmatched++
+			continue
+		case sshConfigAmbiguous:
+			result.Ambiguous++
+			continue
+		}
+
+		updated := host
+		updated.Name = candidate.Name
+		updated.Host = candidate.Host
+		updated.Port = candidate.Port
+		updated.User = candidate.User
+		updated.KeyPath = candidate.KeyPath
+		updated.SSHAlias = candidate.SSHAlias
+		if sameSSHConfigFields(host, updated) {
+			result.Unchanged++
+			continue
+		}
+		if _, err := m.store.Upsert(updated, false); err != nil {
+			return SSHConfigSyncResult{}, err
+		}
+		m.invalidate(host.ID)
+		result.Updated++
+	}
+	result.Hosts = m.List()
+	return result, nil
 }
 
 func (m *Manager) Get(id string) (Host, bool) { return m.store.Get(id) }
@@ -409,6 +458,67 @@ func (m *Manager) find(candidate Host) (Host, bool) {
 		}
 	}
 	return Host{}, false
+}
+
+type sshConfigMatch int
+
+const (
+	sshConfigMatched sshConfigMatch = iota
+	sshConfigUnmatched
+	sshConfigAmbiguous
+)
+
+func sshConfigCandidate(host Host, candidates []DiscoveredHost) (DiscoveredHost, sshConfigMatch) {
+	matches := make([]DiscoveredHost, 0, 1)
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(host.Host), strings.TrimSpace(candidate.Host)) &&
+			host.Port == candidate.Port &&
+			strings.TrimSpace(host.User) == strings.TrimSpace(candidate.User) {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 0 {
+		return DiscoveredHost{}, sshConfigUnmatched
+	}
+	if len(matches) == 1 {
+		return matches[0], sshConfigMatched
+	}
+
+	for _, selector := range []func(DiscoveredHost) bool{
+		func(candidate DiscoveredHost) bool {
+			return host.SSHAlias != "" && strings.EqualFold(host.SSHAlias, candidate.SSHAlias)
+		},
+		func(candidate DiscoveredHost) bool {
+			return host.Name != "" && strings.EqualFold(host.Name, candidate.Name)
+		},
+		func(candidate DiscoveredHost) bool {
+			return host.KeyPath != "" && cleanSSHPath(host.KeyPath) == cleanSSHPath(candidate.KeyPath)
+		},
+	} {
+		var selected []DiscoveredHost
+		for _, candidate := range matches {
+			if selector(candidate) {
+				selected = append(selected, candidate)
+			}
+		}
+		if len(selected) == 1 {
+			return selected[0], sshConfigMatched
+		}
+	}
+	return DiscoveredHost{}, sshConfigAmbiguous
+}
+
+func cleanSSHPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+func sameSSHConfigFields(left, right Host) bool {
+	return left.Name == right.Name && left.Host == right.Host && left.Port == right.Port &&
+		left.User == right.User && left.KeyPath == right.KeyPath && left.SSHAlias == right.SSHAlias
 }
 
 func (m *Manager) cache(host Host, client remoteClient) {

@@ -29,11 +29,12 @@ func (a *App) startup(ctx context.Context) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	a.ensureLaunchAtLoginDefault(log)
 
-	cfg, err := config.Load("config.toml")
+	cfg, _, err := config.LoadResolved("")
 	if err != nil {
 		cfg = config.Default()
 	}
 	a.setAPITarget(cfg.Server.Addr)
+	a.setAPIToken(cfg.Bridge.Token)
 	a.startMenuBar(log, cfg.Server.Addr)
 	go a.runDesktopBackend(log, cfg)
 }
@@ -113,7 +114,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 // SwitchProvider is bound to the frontend/tray for quick switching.
 func (a *App) SwitchProvider(id, tool string) error {
-	cfg, cfgErr := config.Load("config.toml")
+	cfg, _, cfgErr := config.LoadResolved("")
 	if cfgErr != nil {
 		cfg = config.Default()
 	}

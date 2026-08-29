@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/wangning19940904/AgentMux/config"
+	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	"github.com/wangning19940904/AgentMux/store"
 )
 
@@ -158,5 +159,50 @@ func TestRemoteDiscoveredHostsReadsUserSSHConfig(t *testing.T) {
 	if len(hosts) != 1 || hosts[0]["name"] != "build-box" ||
 		hosts[0]["host"] != "10.0.0.8" || hosts[0]["user"] != "deploy" {
 		t.Fatalf("hosts = %+v", hosts)
+	}
+}
+
+func TestRemoteHostsSyncSSHConfigRefreshesConfiguredAliases(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configBody := "Host aliyun-ecs-bj\n  HostName 101.200.234.220\n  User root\n  IdentityFile ~/.ssh/ecs\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "config"), []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server := newRemoteTestServer(t)
+	saved, err := server.remote.Upsert(remotepkg.Host{
+		Name: "aliyun-ecs", Host: "101.200.234.220", Port: 22, User: "root",
+		KeyPath: filepath.Join(sshDir, "ecs"), RemoteAddr: "127.0.0.1:8765",
+		APIToken: "secret", HostKeyFingerprint: "SHA256:trusted",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/remote/hosts/sync-ssh-config", nil)
+	recorder := httptest.NewRecorder()
+	server.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+	var result remotepkg.SSHConfigSyncResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated != 1 || result.Unmatched != 0 || len(result.Hosts) != 1 {
+		t.Fatalf("sync result = %+v", result)
+	}
+	host, ok := server.remote.Get(saved.ID)
+	if !ok || host.Name != "aliyun-ecs-bj" || host.SSHAlias != "aliyun-ecs-bj" ||
+		host.APIToken != "secret" || host.HostKeyFingerprint != "SHA256:trusted" {
+		t.Fatalf("updated host = %+v, ok = %v", host, ok)
 	}
 }

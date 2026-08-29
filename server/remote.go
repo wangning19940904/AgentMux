@@ -30,6 +30,7 @@ func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("POST /api/v1/remote/directories", s.handleRemoteDirectoryEnsure)
 	s.mux.HandleFunc("GET /api/v1/remote/discovered-hosts", s.handleRemoteDiscoveredHosts)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts", s.handleRemoteHostUpsert)
+	s.mux.HandleFunc("POST /api/v1/remote/hosts/sync-ssh-config", s.handleRemoteHostsSyncSSHConfig)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/import", s.handleRemoteHostImport)
 	s.mux.HandleFunc("DELETE /api/v1/remote/hosts", s.handleRemoteHostDelete)
 	s.mux.HandleFunc("POST /api/v1/remote/hosts/test", s.handleRemoteHostTest)
@@ -136,6 +137,25 @@ func (s *Server) handleRemoteDiscoveredHosts(w http.ResponseWriter, _ *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, hosts)
+}
+
+func (s *Server) handleRemoteHostsSyncSSHConfig(w http.ResponseWriter, _ *http.Request) {
+	if s.remote == nil {
+		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
+		return
+	}
+	hosts, err := remotepkg.DiscoverSSHHosts("")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	result, err := s.remote.SyncSSHConfig(hosts)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleRemoteHostUpsert(w http.ResponseWriter, r *http.Request) {

@@ -36,6 +36,10 @@ export function notifyRemoteHostsChanged(hosts?: RemoteHost[]) {
   }));
 }
 
+// Marks same-origin Console requests so console-session cookie auth can
+// reject cross-site requests (CSRF defense in depth alongside SameSite=Lax).
+const CONSOLE_HEADER = { "X-AgentMux-Console": "1" } as const;
+
 export function apiPath(path: string) {
   // All clients use same-origin API requests. Vite proxies them in development,
   // the Go web server handles them in a browser, and the Wails asset middleware
@@ -55,13 +59,13 @@ export function apiPath(path: string) {
 }
 
 export async function get<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { cache: "no-store" });
+  const res = await fetch(apiPath(path), { cache: "no-store", headers: CONSOLE_HEADER });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
 
 export async function getChecked<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { cache: "no-store" });
+  const res = await fetch(apiPath(path), { cache: "no-store", headers: CONSOLE_HEADER });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
@@ -73,7 +77,7 @@ export async function getChecked<T>(path: string): Promise<T> {
 export async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -83,7 +87,7 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
 export async function put<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -93,7 +97,7 @@ export async function put<T>(path: string, body: unknown): Promise<T> {
 export async function postChecked<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -111,7 +115,7 @@ export async function postProgress<T>(
 ): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -166,7 +170,7 @@ export async function streamMeetingEvents(
   const path = "/api/v1/remote/meetings/events";
   const res = await fetch(apiPath(path), {
     cache: "no-store",
-    headers: { Accept: "text/event-stream" },
+    headers: { Accept: "text/event-stream", ...CONSOLE_HEADER },
     signal,
   });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -199,7 +203,7 @@ export async function streamMeetingEvents(
 }
 
 export async function del<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { method: "DELETE" });
+  const res = await fetch(apiPath(path), { method: "DELETE", headers: CONSOLE_HEADER });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }

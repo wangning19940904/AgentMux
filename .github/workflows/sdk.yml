@@ -1,0 +1,72 @@
+name: SDK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contract/**"
+      - "sdk/**"
+      - "core/**"
+      - ".github/workflows/sdk.yml"
+  pull_request:
+    paths:
+      - "contract/**"
+      - "sdk/**"
+      - "core/**"
+      - ".github/workflows/sdk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-drift:
+    name: Contract golden drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Golden schema drift check
+        run: go test ./contract/
+
+  python-sdk:
+    name: Python SDK tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Test
+        working-directory: sdk/python
+        run: |
+          uv sync
+          uv run pytest -q
+      - name: Build
+        working-directory: sdk/python
+        run: uv build
+
+  typescript-sdk:
+    name: TypeScript SDK tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Test and build
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build

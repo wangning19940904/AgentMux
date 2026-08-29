@@ -1,0 +1,61 @@
+{
+  "fields": {
+    "Attempt": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "CacheReadTokens": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "CacheWriteTokens": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "Cumulative": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "DurationMs": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "InputTokens": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "Model": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "OutputTokens": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "ReasoningTokens": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "RequestID": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "RequestedModel": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "ResolvedModel": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "TTFTMs": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "TotalTokens": {
+      "omitempty": false,
+      "type": "integer"
+    }
+  },
+  "go_type": "core.TurnUsage"
+}

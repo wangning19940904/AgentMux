@@ -33,9 +33,7 @@ var processPathMu sync.Mutex
 
 // DetectPrereqs probes for node and npm on PATH.
 func DetectPrereqs() Prereqs {
-	// Refresh all existing user executable directories here so CLI adapters are
-	// routable even before the frameworks page performs per-binary detection.
-	refreshUserExecutablePath()
+	PrepareRuntimeEnvironment()
 	var p Prereqs
 	if path, err := resolveCLIExecutable("node"); err == nil {
 		p.Node = true
@@ -48,7 +46,11 @@ func DetectPrereqs() Prereqs {
 	return p
 }
 
-func refreshUserExecutablePath() {
+// PrepareRuntimeEnvironment makes CLIs installed in common user-level
+// locations visible to subprocess-based Agent runtimes. Service managers do
+// not source interactive shell profiles, so a daemon may otherwise miss a CLI
+// that works in the same user's terminal.
+func PrepareRuntimeEnvironment() {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return

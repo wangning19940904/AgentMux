@@ -1,0 +1,37 @@
+{
+  "fields": {
+    "agent_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "answer": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "conversation_id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "duration_ms": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "project": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "session_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "usage": {
+      "omitempty": true,
+      "type": "object:core.TurnUsage"
+    }
+  },
+  "go_type": "core.InvocationResult"
+}

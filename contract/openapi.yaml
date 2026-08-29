@@ -1,0 +1,1028 @@
+openapi: 3.1.0
+info:
+  title: AgentMux Public Integration API
+  description: >
+    Public integration contract for AgentMux. Stability tiers (stable / beta /
+    internal) are defined in CONTRACT.md; only stable and beta endpoints are
+    described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
+    follows the upstream OpenAI Responses specification and is intentionally
+    not duplicated in this document.
+  version: "1.3"
+  x-contract-version: "1.3"
+servers:
+  - url: http://127.0.0.1:8765
+    description: Local AgentMux daemon (default listen address)
+
+security:
+  - bridgeToken: []
+
+tags:
+  - name: discovery
+    description: Handshake, health and capability discovery (stable)
+  - name: invocations
+    description: Direct Agent execution (stable)
+  - name: agents
+    description: Agent instance management (stable)
+  - name: channels
+    description: IM channel management (stable)
+  - name: messaging
+    description: Outbound messaging without running an Agent (stable)
+  - name: console
+    description: Console session embedding (stable)
+  - name: tenancy
+    description: Open tenant registration and caller identity (stable)
+  - name: orchestrations
+    description: Multi-agent DAG orchestration (beta)
+  - name: triggers
+    description: Cron / webhook / lifecycle triggers (beta)
+  - name: usage
+    description: Token usage reporting (beta)
+
+paths:
+  /api/v1/capabilities:
+    get:
+      tags: [discovery]
+      operationId: getCapabilities
+      summary: Capability discovery and handshake
+      description: >
+        The single recommended probe endpoint. Replaces the legacy pattern of
+        probing /api/v1/status + /api/v1/agent-instances + /api/v1/channels.
+        Returns the binary version, contract version, feature flags, module
+        registration state and non-sensitive inventory summaries.
+      responses:
+        "200":
+          description: Capability report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/status:
+    get:
+      tags: [discovery]
+      operationId: getStatus
+      summary: Lightweight liveness check
+      responses:
+        "200":
+          description: Status report
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, version]
+                properties:
+                  ok:
+                    type: boolean
+                  projects:
+                    type: integer
+                  version:
+                    type: string
+                  contract_version:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/tenancy/register:
+    post:
+      tags: [tenancy]
+      operationId: registerTenant
+      summary: Create a tenant and its first token in one call
+      description: >
+        Self-service creation with no approval step and no existing credential.
+        Tenant names are unique: registering an existing name returns 409
+        rather than rotating that tenant's credentials, so this path can only
+        mint fresh identities. A new tenant starts with no accessible private
+        resources; the administrator can grant or assign Agents, channels,
+        triggers and Providers later.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Tenant name to register. Must be unused.
+                kind:
+                  type: string
+                  enum: [app, web, service]
+      responses:
+        "200":
+          description: The tenant and its first token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantRegistration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A tenant with this name already exists
+
+  /api/v1/tenancy/self:
+    get:
+      tags: [tenancy]
+      operationId: getTenancySelf
+      summary: Read back the calling credential's identity and scope
+      responses:
+        "200":
+          description: Caller identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantSelf"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/invocations:
+    post:
+      tags: [invocations]
+      operationId: invoke
+      summary: Run an Agent synchronously
+      description: >
+        Runs a configured Agent and returns its final answer. Exactly one of
+        agent_id and project must be set. Request body limit is 1 MiB. A
+        concurrent call with the same target and conversation_id returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvocationRequest"
+      responses:
+        "200":
+          description: Completed invocation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvocationResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Target disabled or conversation already has an active invocation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Invocation runtime unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/invocations/stream:
+    post:
+      tags: [invocations]
+      operationId: invokeStream
+      summary: Run an Agent with Server-Sent Events
+      description: >
+        Same request body as /api/v1/invocations. The response is an SSE
+        stream of InvocationStreamEvent payloads. Event types include started,
+        thinking, tool_use, output, final, permission, model_request,
+        model_response, compaction, completed and error. The text field of
+        output/thinking events is a full snapshot: clients must replace the
+        previously displayed value instead of appending. The server emits a
+        ": keepalive" comment every 15 seconds; clients must ignore lines
+        starting with ":".
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvocationRequest"
+      responses:
+        "200":
+          description: SSE stream (text/event-stream) of InvocationStreamEvent
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  Each event is "event: <type>\ndata: <InvocationStreamEvent JSON>\n\n".
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/send:
+    post:
+      tags: [messaging]
+      operationId: send
+      summary: Send an outbound message without running an Agent
+      description: >
+        Delivers text to a config.toml project conversation, or (loopback
+        only) to a channel conversation with optional image/file attachments
+        referenced by absolute local paths.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                project:
+                  type: string
+                channel_id:
+                  type: string
+                conversation_key:
+                  type: string
+                text:
+                  type: string
+                images:
+                  type: array
+                  items: { type: string }
+                  description: Absolute local file paths (loopback only)
+                files:
+                  type: array
+                  items: { type: string }
+                  description: Absolute local file paths (loopback only)
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Channel delivery requested from a non-loopback address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/agent-instances:
+    get:
+      tags: [agents]
+      operationId: listAgentInstances
+      summary: List Agent instances
+      responses:
+        "200":
+          description: Agent instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentInstance"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [agents]
+      operationId: upsertAgentInstance
+      summary: Create or update an Agent instance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentInstance"
+      responses:
+        "200":
+          description: Stored Agent instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInstance"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [agents]
+      operationId: deleteAgentInstance
+      summary: Delete an Agent instance
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/channels:
+    get:
+      tags: [channels]
+      operationId: listChannels
+      summary: List channels with runtime status
+      responses:
+        "200":
+          description: Channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Channel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [channels]
+      operationId: upsertChannel
+      summary: Create or update a channel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Channel"
+      responses:
+        "200":
+          description: Stored channel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Channel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [channels]
+      operationId: deleteChannel
+      summary: Delete a channel
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/console/sessions:
+    post:
+      tags: [console]
+      operationId: createConsoleSession
+      summary: Mint a one-time Console entry URL
+      description: >
+        Server-to-server endpoint. The host application backend (holding the
+        bridge token) calls this to obtain a single-use nonce URL. Redirecting
+        a browser to enter_url exchanges the nonce for a short-lived HttpOnly
+        session cookie that authorizes the embedded Console.
+      responses:
+        "200":
+          description: One-time entry URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Bridge is disabled; console sessions require bridge auth
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /console/enter:
+    get:
+      tags: [console]
+      operationId: enterConsole
+      summary: Exchange a nonce for a Console session cookie
+      security: []
+      parameters:
+        - name: nonce
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: >
+            Sets the agentmux_console HttpOnly cookie and redirects to the
+            Console root.
+        "401":
+          description: Unknown, expired or already-consumed nonce
+
+  /api/v1/orchestrations:
+    get:
+      tags: [orchestrations]
+      operationId: getOrchestrations
+      summary: List orchestrations or fetch one by id
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: active
+          in: query
+          required: false
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Orchestration or orchestration list
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Orchestration"
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/Orchestration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [orchestrations]
+      operationId: createOrchestration
+      summary: Create and start a multi-agent DAG
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tasks]
+              properties:
+                name:
+                  type: string
+                max_concurrency:
+                  type: integer
+                  description: 1..12, default 4
+                tasks:
+                  type: array
+                  maxItems: 32
+                  items:
+                    $ref: "#/components/schemas/OrchestrationTask"
+      responses:
+        "202":
+          description: Accepted orchestration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Orchestration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/orchestrations/cancel:
+    post:
+      tags: [orchestrations]
+      operationId: cancelOrchestration
+      summary: Cancel an active orchestration (loopback only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Cancellation is loopback-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Orchestration already terminal or recovering
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/triggers:
+    get:
+      tags: [triggers]
+      operationId: listTriggers
+      summary: List triggers
+      responses:
+        "200":
+          description: Triggers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trigger"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [triggers]
+      operationId: upsertTrigger
+      summary: Create or update a trigger
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Trigger"
+      responses:
+        "200":
+          description: Stored trigger
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [triggers]
+      operationId: deleteTrigger
+      summary: Delete a trigger
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/triggers/run:
+    post:
+      tags: [triggers]
+      operationId: runTrigger
+      summary: Run a trigger immediately
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/usage:
+    get:
+      tags: [usage]
+      operationId: getUsage
+      summary: Aggregated token usage report
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, session, blocks]
+            default: daily
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Usage report (shape depends on period)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bridgeToken:
+      type: http
+      scheme: bearer
+      description: >
+        The [bridge] token from config.toml. Required on /api/* and /v1/*
+        whenever bridge.enabled = true. A valid agentmux_console session
+        cookie is an equivalent credential for browser-embedded Console use.
+
+  responses:
+    OK:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok]
+            properties:
+              ok: { type: boolean, const: true }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid bridge token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Capabilities:
+      type: object
+      required: [ok, product, version, contract_version, features]
+      properties:
+        ok: { type: boolean }
+        product: { type: string, const: agentmux }
+        version: { type: string }
+        contract_version: { type: string }
+        features:
+          type: array
+          items: { type: string }
+          description: >
+            Feature flags, e.g. invocations, invocations.stream,
+            openai.responses, orchestrations, triggers, usage, send,
+            console.session, tenancy. SDKs must feature-detect instead of
+            guessing from version numbers.
+        modules:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              registered: { type: boolean }
+              active: { type: boolean }
+        agents:
+          type: object
+          properties:
+            count: { type: integer }
+            runtimes:
+              type: array
+              items: { type: string }
+        channels:
+          type: object
+          properties:
+            count: { type: integer }
+        projects: { type: integer }
+        auth:
+          type: object
+          properties:
+            bridge_enabled: { type: boolean }
+            scope:
+              type: string
+              enum: [admin, tenant]
+              description: >
+                Whether the credential sees the whole instance or one tenant.
+                The agents and channels counts follow this scope.
+            tenant: { type: string }
+            tenant_id: { type: string }
+
+    InvocationRequest:
+      type: object
+      required: [input]
+      description: Exactly one of agent_id and project must be set.
+      properties:
+        agent_id: { type: string }
+        project: { type: string }
+        conversation_id:
+          type: string
+          maxLength: 200
+          description: >
+            Opaque caller-controlled key. Omit for a new conversation; reuse
+            the returned value to continue the same native Agent session.
+        input: { type: string }
+        attachments:
+          type: array
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/AgentAttachment"
+        output_schema:
+          type: object
+          additionalProperties: true
+          description: JSON Schema applied to this turn when supported natively.
+
+    AgentAttachment:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [image, file]
+        name: { type: string }
+        mime_type: { type: string }
+        path: { type: string }
+        url: { type: string }
+
+    InvocationResult:
+      type: object
+      required: [id, conversation_id, answer, duration_ms]
+      properties:
+        id: { type: string }
+        agent_id: { type: string }
+        project: { type: string }
+        conversation_id: { type: string }
+        session_id: { type: string }
+        answer: { type: string }
+        duration_ms: { type: integer }
+        usage:
+          $ref: "#/components/schemas/TurnUsage"
+
+    InvocationStreamEvent:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [started, thinking, tool_use, output, final, permission,
+                 model_request, model_response, compaction, completed, error, event]
+        invocation_id: { type: string }
+        conversation_id: { type: string }
+        session_id: { type: string }
+        event_id: { type: string }
+        turn_id: { type: string }
+        item_id: { type: string }
+        text:
+          type: string
+          description: Full snapshot for output/thinking; replace, do not append.
+        status: { type: string }
+        final: { type: boolean }
+        duration_ms: { type: integer }
+        tool_name: { type: string }
+        tool_call_id: { type: string }
+        tool_input: { type: string }
+        tool_result: { type: string }
+        interaction:
+          type: object
+          additionalProperties: true
+        usage:
+          $ref: "#/components/schemas/TurnUsage"
+        metadata:
+          type: object
+          additionalProperties: { type: string }
+        error: { type: string }
+        result:
+          $ref: "#/components/schemas/InvocationResult"
+
+    TurnUsage:
+      type: object
+      description: Field names are Go-exported (no json tags on core.TurnUsage).
+      properties:
+        Model: { type: string }
+        RequestID: { type: string }
+        RequestedModel: { type: string }
+        ResolvedModel: { type: string }
+        InputTokens: { type: integer }
+        OutputTokens: { type: integer }
+        CacheReadTokens: { type: integer }
+        CacheWriteTokens: { type: integer }
+        ReasoningTokens: { type: integer }
+        TotalTokens: { type: integer }
+        Cumulative: { type: boolean }
+        Attempt: { type: integer }
+        TTFTMs: { type: integer }
+        DurationMs: { type: integer }
+
+    AgentInstance:
+      type: object
+      required: [id, name, runtime_id, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        runtime_id: { type: string }
+        desktop_thread_id: { type: string }
+        work_dir: { type: string }
+        workspace_mode: { type: string }
+        worktree_base_ref: { type: string }
+        session_backend: { type: string }
+        system_prompt: { type: string }
+        provider_tool: { type: string }
+        provider_id: { type: string }
+        provider_name: { type: string }
+        default_model: { type: string }
+        default_reasoning_effort: { type: string }
+        default_service_tier: { type: string }
+        default_approval_mode: { type: string }
+        memory_scope: { type: string }
+        env:
+          type: object
+          additionalProperties: { type: string }
+        channel_bindings:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        schedules:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        mcp_servers:
+          type: array
+          items: { type: string }
+        skills:
+          type: array
+          items: { type: string }
+        clis:
+          type: array
+          items: { type: string }
+        enabled: { type: boolean }
+        source: { type: string }
+        owner_tenant_id:
+          type: string
+          description: >
+            Owning tenant, empty when the resource is unassigned. A tenant
+            credential cannot set this: it is always stamped with the caller.
+        owner_tenant_name:
+          type: string
+          description: Owner display name, filled on admin reads only.
+        visibility:
+          type: string
+          enum: [private, public]
+          description: >
+            public makes the resource readable and runnable by every tenant;
+            only its owner or the administrator may modify it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Channel:
+      type: object
+      required: [id, name, type, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        agent_id: { type: string }
+        config:
+          type: object
+          additionalProperties: { type: string }
+        enabled: { type: boolean }
+        owner_tenant_id: { type: string }
+        owner_tenant_name: { type: string }
+        visibility:
+          type: string
+          enum: [private, public]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Tenant:
+      type: object
+      required: [id, name, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind:
+          type: string
+          enum: [app, web, service]
+        status:
+          type: string
+          enum: [active, disabled]
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TenantRegistration:
+      type: object
+      required: [tenant, token]
+      properties:
+        tenant: { $ref: '#/components/schemas/Tenant' }
+        token:
+          type: string
+          description: >
+            The tenant's long-lived bearer token. Returned exactly once; it is
+            stored only as a hash and cannot be recovered later.
+        prefix:
+          type: string
+          description: Displayed truncation of the token, for later reference.
+
+    TenantSelf:
+      type: object
+      required: [admin]
+      properties:
+        admin:
+          type: boolean
+          description: True when the caller holds administrator credentials.
+        tenant_id: { type: string }
+        tenant: { type: string }
+        kind: { type: string }
+        status: { type: string }
+
+    Trigger:
+      type: object
+      required: [id, name, kind, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind:
+          type: string
+          enum: [cron, webhook, event]
+        agent_id: { type: string }
+        channel_id: { type: string }
+        chat_id: { type: string }
+        cron_expr: { type: string }
+        prompt: { type: string }
+        event: { type: string }
+        action_type: { type: string }
+        action_target: { type: string }
+        token: { type: string }
+        session_mode: { type: string }
+        enabled: { type: boolean }
+        last_run: { type: string, format: date-time }
+        last_status: { type: string }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Orchestration:
+      type: object
+      required: [id, status, max_concurrency, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status:
+          $ref: "#/components/schemas/OrchestrationStatus"
+        max_concurrency: { type: integer }
+        error: { type: string }
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrchestrationTask"
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    OrchestrationTask:
+      type: object
+      required: [id, input]
+      properties:
+        id: { type: string }
+        orchestration_id: { type: string }
+        agent_id: { type: string }
+        project: { type: string }
+        input: { type: string }
+        depends_on:
+          type: array
+          items: { type: string }
+        status:
+          $ref: "#/components/schemas/OrchestrationStatus"
+        output: { type: string }
+        error: { type: string }
+        invocation_id: { type: string }
+        conversation_id: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    OrchestrationStatus:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+
+    ConsoleSession:
+      type: object
+      required: [enter_url, expires_at, session_ttl_seconds]
+      properties:
+        enter_url:
+          type: string
+          description: One-time URL; redirect the browser here within the TTL.
+        expires_at:
+          type: string
+          format: date-time
+          description: Expiry of the one-time nonce (not the session).
+        session_ttl_seconds:
+          type: integer
+          description: Lifetime of the session cookie minted at enter_url.

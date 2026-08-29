@@ -11,8 +11,25 @@ import (
 
 // ListProviders returns all providers ordered by name.
 func (s *Store) ListProviders(ctx context.Context) ([]*core.Provider, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,preset,category,base_url,api_key_env,
+	return s.queryProviders(ctx, `SELECT id,name,preset,category,base_url,api_key_env,
 		model,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at FROM providers ORDER BY name`)
+}
+
+// ListProvidersForTenant returns only providers explicitly granted to a
+// tenant. Providers are instance-owned credentials, so unlike Agents and
+// channels they are never implicitly visible through ownership or a public
+// flag.
+func (s *Store) ListProvidersForTenant(ctx context.Context, tenantID string) ([]*core.Provider, error) {
+	return s.queryProviders(ctx, `SELECT id,name,preset,category,base_url,api_key_env,
+		model,extra,settings_config,meta,enabled,in_failover_queue,sort_index,created_at,updated_at
+		FROM providers WHERE id IN (
+			SELECT resource_id FROM resource_grants
+			WHERE tenant_id=? AND resource_type='`+core.ResourceTypeProvider+`'
+		) ORDER BY name`, tenantID)
+}
+
+func (s *Store) queryProviders(ctx context.Context, query string, args ...any) ([]*core.Provider, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +136,11 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM providers WHERE id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM resource_grants WHERE resource_type=? AND resource_id=?`,
+		core.ResourceTypeProvider, id); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM active_provider WHERE provider_id=?`, id); err != nil {

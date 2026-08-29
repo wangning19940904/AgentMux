@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/contract"
 	"github.com/wangning19940904/AgentMux/core"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -56,6 +57,7 @@ type Server struct {
 	orchestrationCancels map[string]context.CancelFunc
 	feishuAutomationMu   sync.Mutex
 	feishuAutomations    map[string]*feishuAutomationSession
+	consoleSessions      *consoleSessionManager
 	mux                  *http.ServeMux
 	httpSrv              *http.Server
 }
@@ -80,6 +82,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		openAIFiles:          newOpenAIFileRegistry(),
 		orchestrationCancels: map[string]context.CancelFunc{},
 		feishuAutomations:    map[string]*feishuAutomationSession{},
+		consoleSessions:      newConsoleSessionManager(),
 		mux:                  http.NewServeMux(),
 	}
 	s.providerMonitor = newProviderMonitor(log, st, pm)
@@ -152,7 +155,9 @@ func (s *Server) SetProviderService(svc *providerpkg.Service) {
 }
 
 func (s *Server) routes() {
+	s.registerTenancyRoutes()
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+	s.mux.HandleFunc("GET /api/v1/capabilities", s.handleCapabilities)
 	s.mux.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
 	s.mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
 	s.mux.HandleFunc("GET /api/v1/agent-instances", s.handleAgentInstancesList)
@@ -266,6 +271,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/triggers/run", s.handleTriggerRun)
 	s.mux.HandleFunc("GET /channel-avatar", s.handleChannelAvatar)
 	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
+	s.mux.HandleFunc("POST "+consoleSessionEndpoint, s.handleConsoleSessionCreate)
+	s.mux.HandleFunc("GET "+consoleEnterPath, s.handleConsoleEnter)
 	s.registerModuleRoutes()
 	s.registerObservabilityRoutes()
 	s.registerWeb(s.mux)
@@ -307,6 +314,13 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
+			// Observability carries agent transcripts and runs on its own
+			// credential model. It is Console-only, so a tenant credential is
+			// rejected outright rather than falling through to that model.
+			if principal := s.resolvePrincipal(r); principal.IsTenant() {
+				denyTenantRoute(w, r, principal)
+				return
+			}
 			if !s.authorizeObservabilityRequest(w, r) {
 				return
 			}
@@ -316,15 +330,15 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		if isBridgeAPIPath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Project, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Project, X-AgentMux-Console, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 		}
-		if s.cfg.Bridge.Enabled && isBridgeAPIPath(r.URL.Path) {
-			tok := r.Header.Get("Authorization")
-			if tok != "Bearer "+s.cfg.Bridge.Token {
+		if s.cfg.Bridge.Enabled && isBridgeAPIPath(r.URL.Path) && !isSelfAuthenticatingPath(r.URL.Path) {
+			principal := s.resolvePrincipal(r)
+			if principal == nil {
 				if strings.HasPrefix(r.URL.Path, "/v1/") {
 					writeOpenAIError(w, http.StatusUnauthorized, "invalid or missing API key", "authentication_error", nil, "invalid_api_key")
 				} else {
@@ -332,6 +346,13 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				}
 				return
 			}
+			// Tenants reach only the endpoints AgentMux publishes to third
+			// parties; the Console-only management surface stays admin-owned.
+			if principal.IsTenant() && !tenantRouteAllowed(r.Method, r.URL.Path) {
+				denyTenantRoute(w, r, principal)
+				return
+			}
+			r = r.WithContext(withPrincipal(r.Context(), principal))
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -341,11 +362,20 @@ func isBridgeAPIPath(path string) bool {
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/")
 }
 
+// isSelfAuthenticatingPath lists endpoints that create their own credential
+// and therefore cannot require a bearer token. A newly registered tenant
+// starts with an empty private namespace; an administrator grants access
+// separately, so open registration does not expose existing resources.
+func isSelfAuthenticatingPath(path string) bool {
+	return path == "/api/v1/tenancy/register"
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"projects": len(s.cfg.Projects),
-		"version":  s.version,
+		"ok":               true,
+		"projects":         len(s.cfg.Projects),
+		"version":          s.version,
+		"contract_version": contract.Version,
 	})
 }
 
@@ -362,7 +392,14 @@ func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	ps, err := s.provider.List(r.Context())
+	principal := requestPrincipal(r)
+	var ps []*core.Provider
+	var err error
+	if principal.IsTenant() && s.st != nil {
+		ps, err = s.st.ListProvidersForTenant(r.Context(), principal.TenantID)
+	} else {
+		ps, err = s.provider.List(r.Context())
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -419,6 +456,25 @@ func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	principal := requestPrincipal(r)
+	if principal.IsTenant() && s.st != nil {
+		providers, listErr := s.st.ListProvidersForTenant(r.Context(), principal.TenantID)
+		if listErr != nil {
+			writeErr(w, http.StatusInternalServerError, listErr.Error())
+			return
+		}
+		visible := make(map[string]bool, len(providers))
+		for _, provider := range providers {
+			visible[provider.ID] = true
+		}
+		filtered := routes[:0]
+		for _, route := range routes {
+			if visible[route.ProviderID] {
+				filtered = append(filtered, route)
+			}
+		}
+		routes = filtered
 	}
 	for i := range routes {
 		annotateProviderRouteAPIKey(&routes[i])
@@ -506,6 +562,11 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "channel_id and conversation_key are required")
 			return
 		}
+		if s.st != nil {
+			if _, authorized := s.authorizeChannel(w, r, req.ChannelID, core.GrantLevelUse); !authorized {
+				return
+			}
+		}
 		deliverySender, ok := s.sender.(core.ChannelDeliverySender)
 		if !ok {
 			writeErr(w, http.StatusServiceUnavailable, "channel delivery is unavailable")
@@ -533,6 +594,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeOK(w)
+		return
+	}
+	// Project fan-out reaches every channel a config.toml project owns, so it
+	// stays with the administrator.
+	if requestPrincipal(r).IsTenant() {
+		writeErr(w, http.StatusForbidden,
+			"project fan-out is managed by the AgentMux administrator; send with a channel_id instead")
 		return
 	}
 	if err := s.sender.SendToProject(r.Context(), req.Project, req.Text); err != nil {
@@ -595,6 +663,11 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep, err := s.usageFn(r.Context(), period, since, until)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	rep, err = s.scopeUsageReport(r, rep)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

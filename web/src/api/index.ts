@@ -67,10 +67,17 @@ import type {
   ProxyToolConfig,
   ProxyTrace,
   RemoteHost,
+  RemoteSSHConfigSyncResult,
   SessionMessage,
   Skill,
+  GrantableResourceType,
+  ResourceGrant,
   Status,
   SystemDirectoryListing,
+  TenancySelf,
+  Tenant,
+  TenantKind,
+  TenantToken,
   TerminalSessionView,
   ToolsResponse,
 	TTSCatalogStatus,
@@ -126,6 +133,8 @@ export const api = {
     get<DiscoveredRemoteHost[]>("/api/v1/remote/discovered-hosts"),
   upsertRemoteHost: (host: Partial<RemoteHost>) =>
     postChecked<RemoteHost>("/api/v1/remote/hosts", host),
+  syncRemoteHostsFromSSHConfig: () =>
+    postChecked<RemoteSSHConfigSyncResult>("/api/v1/remote/hosts/sync-ssh-config", {}),
   importRemoteHost,
   deleteRemoteHost: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
@@ -146,6 +155,46 @@ export const api = {
     postChecked<WorkspaceInitResult>("/api/v1/agent-instances/initialize", payload),
   deleteAgentInstance: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/agent-instances?id=${encodeURIComponent(id)}`),
+
+  // Tenancy. Everything except tenancySelf is administrator-only and returns
+  // 403 when the Console runs inside a tenant-scoped session.
+  tenancySelf: () => get<TenancySelf>("/api/v1/tenancy/self"),
+  registerTenant: (payload: { name: string; kind?: TenantKind }) =>
+    postChecked<{ tenant: Tenant; token: string; prefix: string }>(
+      "/api/v1/tenancy/register",
+      payload,
+    ),
+  tenants: () => get<Tenant[] | null>("/api/v1/tenancy/tenants"),
+  upsertTenant: (tenant: Partial<Tenant>) =>
+    postChecked<Tenant>("/api/v1/tenancy/tenants", tenant),
+  deleteTenant: (id: string) =>
+    del<{ ok: boolean }>(`/api/v1/tenancy/tenants?id=${encodeURIComponent(id)}`),
+  tenantTokens: (tenantID: string) =>
+    get<TenantToken[] | null>(`/api/v1/tenancy/tokens?tenant_id=${encodeURIComponent(tenantID)}`),
+  createTenantToken: (payload: { tenant_id: string; name?: string; expires_in_hours?: number }) =>
+    postChecked<TenantToken>("/api/v1/tenancy/tokens", payload),
+  revokeTenantToken: (id: string) =>
+    del<{ ok: boolean }>(`/api/v1/tenancy/tokens?id=${encodeURIComponent(id)}`),
+  resourceGrants: (tenantID?: string) =>
+    get<ResourceGrant[] | null>(
+      tenantID
+        ? `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(tenantID)}`
+        : "/api/v1/tenancy/grants",
+    ),
+  upsertResourceGrant: (grant: ResourceGrant) =>
+    postChecked<ResourceGrant>("/api/v1/tenancy/grants", grant),
+  deleteResourceGrant: (grant: Pick<ResourceGrant, "tenant_id" | "resource_type" | "resource_id">) =>
+    del<{ ok: boolean }>(
+      `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(grant.tenant_id)}` +
+        `&resource_type=${encodeURIComponent(grant.resource_type)}` +
+        `&resource_id=${encodeURIComponent(grant.resource_id)}`,
+    ),
+  assignResourceOwner: (payload: {
+    resource_type: GrantableResourceType;
+    resource_id: string;
+    tenant_id: string;
+  }) => postChecked<{ ok: boolean }>("/api/v1/tenancy/ownership", payload),
+
   tools: () => get<ToolsResponse>("/api/v1/tools"),
 	ttsModels: () => getChecked<TTSCatalogStatus>("/api/v1/tts/models"),
 	downloadTTSModel: (id: string, onProgress: (progress: OperationProgress) => void) =>

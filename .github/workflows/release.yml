@@ -49,3 +49,92 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  publish-python-sdk:
+    name: Publish Python SDK to PyPI
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Trusted Publishing: the `pypi` environment plus id-token permission is
+    # all PyPI needs; no API token secret is involved.
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set SDK version from tag
+        working-directory: sdk/python
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/agentmux_sdk/__init__.py
+          grep '^__version__' src/agentmux_sdk/__init__.py
+
+      - name: Test
+        working-directory: sdk/python
+        run: |
+          uv sync
+          uv run pytest -q
+
+      - name: Build sdist and wheel
+        working-directory: sdk/python
+        run: uv build
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdk/python/dist
+
+  publish-typescript-sdk:
+    name: Publish TypeScript SDK to npm
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Trusted Publishing: npm exchanges the OIDC id-token for short-lived
+    # publish credentials; no NPM_TOKEN secret is involved.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing requires npm >= 11.5.1; Node 20 bundles npm 10.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Set SDK version from tag
+        working-directory: sdk/typescript
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+
+      - name: Test and build
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          npm pack
+
+      - name: Upload package tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentmux-sdk-npm
+          path: sdk/typescript/agentmux-sdk-*.tgz
+
+      - name: Publish to npm (Trusted Publishing)
+        working-directory: sdk/typescript
+        run: npm publish --access public

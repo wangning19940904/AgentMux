@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentmux-sdk"
+description = "Official Python SDK for the AgentMux control plane (health, invocations, management, bootstrap)."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "AgentMux" }]
+keywords = ["agentmux", "agents", "sdk"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = ["httpx>=0.27"]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/wangning19940904/AgentMux"
+Documentation = "https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md"
+
+[project.scripts]
+agentmux-bootstrap = "agentmux_sdk.bootstrap:main"
+
+[tool.hatch.version]
+path = "src/agentmux_sdk/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentmux_sdk"]
+
+[dependency-groups]
+dev = ["pytest>=8"]

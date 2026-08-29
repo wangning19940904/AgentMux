@@ -1,0 +1,85 @@
+{
+  "fields": {
+    "conversation_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "duration_ms": {
+      "omitempty": true,
+      "type": "integer"
+    },
+    "error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "event_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "final": {
+      "omitempty": true,
+      "type": "boolean"
+    },
+    "interaction": {
+      "omitempty": true,
+      "type": "object:core.AgentInteraction"
+    },
+    "invocation_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "item_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "metadata": {
+      "omitempty": true,
+      "type": "map\u003cstring,string\u003e"
+    },
+    "result": {
+      "omitempty": true,
+      "type": "object:core.InvocationResult"
+    },
+    "session_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "status": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "text": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "tool_call_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "tool_input": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "tool_name": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "tool_result": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "turn_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "type": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "usage": {
+      "omitempty": true,
+      "type": "object:core.TurnUsage"
+    }
+  },
+  "go_type": "core.InvocationStreamEvent"
+}

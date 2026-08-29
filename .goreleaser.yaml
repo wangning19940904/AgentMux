@@ -69,6 +69,8 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: scripts/ensure-agentmux.sh
 
 changelog:
   sort: asc
@@ -84,6 +86,10 @@ release:
   draft: false
   prerelease: auto
   mode: replace
+  # The generic bootstrap script ships with every release so non-Python
+  # consumers can `curl | bash` it (Python consumers use agentmux_sdk.bootstrap).
+  extra_files:
+    - glob: scripts/ensure-agentmux.sh
 
 # GoReleaser v2.10+ recommends Casks for pre-built CLI archives. When the
 # HOMEBREW_TAP_GITHUB_TOKEN secret is absent, the Cask is generated in dist/

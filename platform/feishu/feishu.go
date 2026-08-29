@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -43,6 +44,9 @@ type Platform struct {
 	meetingWakeWords []string
 
 	client clientAPI
+
+	cardMu      sync.Mutex
+	activeCards map[string]cardImageStream
 }
 
 func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
@@ -231,6 +235,12 @@ func (p *Platform) Send(ctx context.Context, chatID, text string) error {
 
 // ReplyImage uploads an image and delivers it to the originating conversation.
 func (p *Platform) ReplyImage(ctx context.Context, msg *core.Message, fileName string, data []byte) error {
+	if stream := p.activeCard(msg); stream != nil {
+		handled, err := stream.AddImage(ctx, fileName, data)
+		if handled || err != nil {
+			return err
+		}
+	}
 	client, ok := p.client.(attachmentClient)
 	if !ok {
 		return fmt.Errorf("%s: image delivery is unavailable", p.name)
@@ -273,7 +283,7 @@ func (p *Platform) BeginReply(ctx context.Context, msg *core.Message) (core.Repl
 	if p.client == nil {
 		return nil, fmt.Errorf("%s: client not started", p.name)
 	}
-	return &cardStream{client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg)}, nil
+	return p.newCardStream(msg, nil), nil
 }
 
 // BeginTaskReply opens a task-scoped streaming card. While the turn is active
@@ -283,9 +293,7 @@ func (p *Platform) BeginTaskReply(ctx context.Context, msg *core.Message, taskID
 		return nil, fmt.Errorf("%s: client not started", p.name)
 	}
 	control := newStreamCardControl(msg, taskID, "")
-	return &cardStream{
-		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
-	}, nil
+	return p.newCardStream(msg, control), nil
 }
 
 func (p *Platform) BeginFeedbackTaskReply(ctx context.Context, msg *core.Message, task core.ChannelTask) (core.ReplyStream, error) {
@@ -293,9 +301,45 @@ func (p *Platform) BeginFeedbackTaskReply(ctx context.Context, msg *core.Message
 		return nil, fmt.Errorf("%s: client not started", p.name)
 	}
 	control := newStreamCardControl(msg, task.ID, task.FeedbackNonce)
-	return &cardStream{
+	return p.newCardStream(msg, control), nil
+}
+
+type cardImageStream interface {
+	AddImage(ctx context.Context, fileName string, data []byte) (handled bool, err error)
+}
+
+func (p *Platform) newCardStream(msg *core.Message, control *streamCardControl) *cardStream {
+	stream := &cardStream{
 		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
-	}, nil
+	}
+	key := core.ResolveConversationKey(msg)
+	if key == "" {
+		return stream
+	}
+	p.cardMu.Lock()
+	if p.activeCards == nil {
+		p.activeCards = make(map[string]cardImageStream)
+	}
+	p.activeCards[key] = stream
+	p.cardMu.Unlock()
+	stream.onClose = func() {
+		p.cardMu.Lock()
+		if p.activeCards[key] == stream {
+			delete(p.activeCards, key)
+		}
+		p.cardMu.Unlock()
+	}
+	return stream
+}
+
+func (p *Platform) activeCard(msg *core.Message) cardImageStream {
+	key := core.ResolveConversationKey(msg)
+	if key == "" {
+		return nil
+	}
+	p.cardMu.Lock()
+	defer p.cardMu.Unlock()
+	return p.activeCards[key]
 }
 
 // BeginSpeechReply mirrors the assistant answer to the active meeting joined
@@ -453,6 +497,8 @@ func (s *textStream) Close(ctx context.Context) error { return nil }
 // permission) it degrades to the legacy path of posting a card message and
 // patching it in place.
 type cardStream struct {
+	mu sync.Mutex
+
 	client         clientAPI
 	chatID         string
 	replyMessageID string
@@ -465,6 +511,13 @@ type cardStream struct {
 	// legacy patch path state
 	messageID string
 	control   *streamCardControl
+
+	images       []streamCardImage
+	syncedImages int
+	lastText     string
+	finished     bool
+	onClose      func()
+	close        sync.Once
 }
 
 type streamCardControl struct {
@@ -486,6 +539,12 @@ func newStreamCardControl(msg *core.Message, taskID, feedbackNonce string) *stre
 }
 
 func (s *cardStream) Update(ctx context.Context, text string, done, failed bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return nil
+	}
+	s.lastText = text
 	if !s.fellBack && s.cardID == "" {
 		// First update: try to open a native streaming card.
 		var id string
@@ -506,18 +565,43 @@ func (s *cardStream) Update(ctx context.Context, text string, done, failed bool)
 		}
 	}
 
+	var err error
 	if s.cardID != "" {
-		return s.updateNative(ctx, text, done, failed)
+		err = s.updateNative(ctx, text, done, failed)
+	} else {
+		err = s.updateLegacy(ctx, text, done, failed)
 	}
-	return s.updateLegacy(ctx, text, done, failed)
+	if err == nil && done {
+		s.finished = true
+	}
+	return err
 }
 
 func (s *cardStream) updateNative(ctx context.Context, text string, done, failed bool) error {
-	s.sequence++
 	if done {
-		return s.client.FinishStreamCard(ctx, s.cardID, text, s.sequence, failed, s.control)
+		s.sequence++
+		return s.client.FinishStreamCard(ctx, s.cardID, text, s.sequence, failed, s.images, s.control)
 	}
+	if err := s.syncNativeImages(ctx); err != nil {
+		return err
+	}
+	s.sequence++
 	return s.client.StreamCardText(ctx, s.cardID, text, s.sequence)
+}
+
+func (s *cardStream) syncNativeImages(ctx context.Context) error {
+	for s.syncedImages < len(s.images) {
+		targetElementID := streamCardElementID
+		if s.syncedImages > 0 {
+			targetElementID = s.images[s.syncedImages-1].ElementID
+		}
+		s.sequence++
+		if err := s.client.InsertStreamCardImage(ctx, s.cardID, targetElementID, s.sequence, s.images[s.syncedImages]); err != nil {
+			return err
+		}
+		s.syncedImages++
+	}
+	return nil
 }
 
 func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed bool) error {
@@ -526,12 +610,12 @@ func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed
 		var err error
 		if s.replyMessageID != "" {
 			if client, ok := s.client.(threadReplyClient); ok {
-				id, err = client.ReplyCard(ctx, s.replyMessageID, text, done, failed, s.control)
+				id, err = client.ReplyCard(ctx, s.replyMessageID, text, done, failed, s.images, s.control)
 			} else {
-				id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.control)
+				id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.images, s.control)
 			}
 		} else {
-			id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.control)
+			id, err = s.client.SendCard(ctx, s.chatID, text, done, failed, s.images, s.control)
 		}
 		if err != nil {
 			return err
@@ -539,10 +623,45 @@ func (s *cardStream) updateLegacy(ctx context.Context, text string, done, failed
 		s.messageID = id
 		return nil
 	}
-	return s.client.UpdateCard(ctx, s.messageID, text, done, failed, s.control)
+	return s.client.UpdateCard(ctx, s.messageID, text, done, failed, s.images, s.control)
 }
 
-func (s *cardStream) Close(ctx context.Context) error { return nil }
+func (s *cardStream) AddImage(ctx context.Context, fileName string, data []byte) (bool, error) {
+	uploader, ok := s.client.(cardImageUploader)
+	if !ok {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return false, nil
+	}
+	imageKey, err := uploader.uploadImage(ctx, fileName, data)
+	if err != nil {
+		return true, err
+	}
+	s.images = append(s.images, streamCardImage{
+		Key: imageKey, Name: fileName, ElementID: fmt.Sprintf("agentmux_image_%d", len(s.images)+1),
+	})
+	// Before the first rendered update there is no card to patch. The queued
+	// image is included when that update creates the card.
+	if s.cardID == "" && s.messageID == "" {
+		return true, nil
+	}
+	if s.cardID != "" {
+		return true, s.syncNativeImages(ctx)
+	}
+	return true, s.client.UpdateCard(ctx, s.messageID, s.lastText, false, false, s.images, s.control)
+}
+
+func (s *cardStream) Close(ctx context.Context) error {
+	s.close.Do(func() {
+		if s.onClose != nil {
+			s.onClose()
+		}
+	})
+	return nil
+}
 
 func shouldReplyInThread(msg *core.Message) bool {
 	if msg == nil || msg.ID == "" {

@@ -27,6 +27,7 @@ import {
   platformLabel,
   sleep,
 } from "./connectShared";
+import { shouldAutoStartChannelSetup } from "./channelSetupModel";
 
 export function ChannelEditor({
   draft,
@@ -53,6 +54,7 @@ export function ChannelEditor({
   const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
 	const isCodexAgent = selectedAgent?.runtime_id === "codex" || selectedAgent?.runtime_id === "codex-app";
   const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
+  const autoSetupPlatformRef = useRef("");
   const automationRef = useRef({ sessionID: "", cancelled: false, polling: false });
   const draftRef = useRef<Partial<Channel>>(draft);
   const [setup, setSetup] = useState<{ phase: FeishuSetupPhase; qrUrl: string; error: string }>({
@@ -213,6 +215,16 @@ export function ChannelEditor({
     setSetup({ phase: "idle", qrUrl: "", error: "" });
     resetFeishuAutomation();
   }
+
+  useEffect(() => {
+    if (!isFeishuLike) {
+      autoSetupPlatformRef.current = "";
+      return;
+    }
+    if (!shouldAutoStartChannelSetup(draft, autoSetupPlatformRef.current)) return;
+    autoSetupPlatformRef.current = draft.type ?? "feishu";
+    void startFeishuSetup();
+  }, [draft.id, draft.type, isFeishuLike]);
 
   return (
     <div className="route-card editor-card">

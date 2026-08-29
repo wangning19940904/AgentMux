@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) handleAgentInstancesList(w http.ResponseWriter, r *http.Request) {
-	items, err := s.agentInstances(r.Context())
+	items, err := s.scopedAgentInstances(r.Context(), requestPrincipal(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -36,15 +36,38 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	principal := requestPrincipal(r)
+	if providerID := strings.TrimSpace(a.ProviderID); principal.IsTenant() && providerID != "" {
+		if _, authorized := s.authorizeProvider(w, r, providerID, core.GrantLevelUse); !authorized {
+			return
+		}
+	}
+	// Editing an existing agent requires manage access on it. An unknown ID is
+	// a create with a caller-chosen ID, which needs no prior authorization.
+	var existing *core.AgentInstance
+	if id := strings.TrimSpace(a.ID); id != "" {
+		found, err := s.st.GetAgentInstance(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if found != nil {
+			if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
+				return
+			}
+			existing = found
+		}
+	}
 	if err := s.normalizeAgentInstance(r.Context(), &a); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.stampAgentOwnership(r.Context(), principal, &a, existing)
 	if err := s.st.UpsertAgentInstance(r.Context(), &a); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
+	if !principal.IsTenant() && a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
 		if err := s.provider.Switch(r.Context(), a.ProviderID, a.ProviderTool); err != nil {
 			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: "+err.Error())
 			return
@@ -57,7 +80,8 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	items := []core.AgentInstance{a}
-	s.enrichAgentProviders(r.Context(), items)
+	s.enrichAgentProviders(r.Context(), items, principal)
+	s.labelAgentOwners(r.Context(), items)
 	writeJSON(w, http.StatusOK, &items[0])
 }
 
@@ -127,6 +151,9 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadRequest, "config-managed agents must be edited in config.toml")
 		return
 	}
+	if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
+		return
+	}
 	if err := s.st.DeleteAgentInstance(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -141,24 +168,40 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, error) {
+	return s.scopedAgentInstances(ctx, core.AdminPrincipal())
+}
+
+// scopedAgentInstances lists the Agent instances a principal may see. The
+// admin additionally gets the synthetic config.toml agents, which are host
+// infrastructure without an owner and therefore not shared with tenants.
+func (s *Server) scopedAgentInstances(ctx context.Context, principal *core.Principal) ([]core.AgentInstance, error) {
 	items := make([]core.AgentInstance, 0)
 	if s.st != nil {
-		stored, err := s.st.ListAgentInstances(ctx)
+		var stored []core.AgentInstance
+		var err error
+		if principal.IsTenant() {
+			stored, err = s.st.ListAgentInstancesForTenant(ctx, principal.TenantID)
+		} else {
+			stored, err = s.st.ListAgentInstances(ctx)
+		}
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, stored...)
 	}
-	seen := map[string]bool{}
-	for _, item := range items {
-		seen[item.ID] = true
-	}
-	for _, item := range s.configAgentInstances() {
-		if !seen[item.ID] {
-			items = append(items, item)
+	if !principal.IsTenant() {
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[item.ID] = true
+		}
+		for _, item := range s.configAgentInstances() {
+			if !seen[item.ID] {
+				items = append(items, item)
+			}
 		}
 	}
-	s.enrichAgentProviders(ctx, items)
+	s.enrichAgentProviders(ctx, items, principal)
+	s.labelAgentOwners(ctx, items)
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Enabled != items[j].Enabled {
 			return items[i].Enabled
@@ -467,11 +510,17 @@ func (s *Server) agentProvider(ctx context.Context, a *core.AgentInstance) (*cor
 	return nil, nil
 }
 
-func (s *Server) enrichAgentProviders(ctx context.Context, items []core.AgentInstance) {
+func (s *Server) enrichAgentProviders(ctx context.Context, items []core.AgentInstance, principal *core.Principal) {
 	if s.provider == nil {
 		return
 	}
-	providers, err := s.provider.List(ctx)
+	var providers []*core.Provider
+	var err error
+	if principal.IsTenant() && s.st != nil {
+		providers, err = s.st.ListProvidersForTenant(ctx, principal.TenantID)
+	} else {
+		providers, err = s.provider.List(ctx)
+	}
 	if err != nil {
 		return
 	}

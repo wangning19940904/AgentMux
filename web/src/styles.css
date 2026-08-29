@@ -1328,6 +1328,82 @@ textarea:focus {
   background: color-mix(in srgb, var(--bg-subtle) 78%, var(--bg));
 }
 
+/* Ownership labels: which application a resource belongs to. Only the admin
+   Console renders these, since a tenant sees nothing but its own rows. */
+.owner-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 640;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.owner-badge.owned {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+}
+
+.owner-badge.public {
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 30%, var(--border));
+  border-style: solid;
+  background: color-mix(in srgb, var(--amber-soft) 55%, transparent);
+}
+
+.tenant-register-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.tenant-register-dialog .surface-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tenant-secret {
+  display: inline-block;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.tenant-resource-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.tenant-resource-select-all input,
+.tenant-resource-checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.tenant-resource-select-all input:disabled {
+  cursor: not-allowed;
+}
+
 .agent-workspace {
   display: grid;
   grid-template-columns: minmax(280px, 0.72fr) minmax(520px, 1.4fr);

@@ -238,6 +238,31 @@ export function agentSourceClass(agent: AgentInstance): string {
   return "console";
 }
 
+// Ownership label for the admin Console. A tenant-scoped session only ever
+// sees its own resources, so there is nothing to distinguish and the badge is
+// omitted by returning null.
+export function ownerBadge(resource: {
+  owner_tenant_name?: string;
+  owner_tenant_id?: string;
+  visibility?: string;
+}): { labelKey: string; params?: Record<string, string>; className: string } | null {
+  if (resource.visibility === "public") {
+    return { labelKey: "tenants.badgePublic", className: "public" };
+  }
+  const name = resource.owner_tenant_name?.trim();
+  if (name) {
+    return { labelKey: "tenants.badgeOwner", params: { tenant: name }, className: "owned" };
+  }
+  if (resource.owner_tenant_id?.trim()) {
+    return {
+      labelKey: "tenants.badgeOwner",
+      params: { tenant: resource.owner_tenant_id },
+      className: "owned",
+    };
+  }
+  return { labelKey: "tenants.badgeUnassigned", className: "unassigned" };
+}
+
 export function copyAgent(agent: AgentInstance): AgentInstance {
   return {
     ...agent,

@@ -1,0 +1,33 @@
+{
+  "fields": {
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "kind": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "note": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "status": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.Tenant"
+}

@@ -278,6 +278,14 @@ export interface DiscoveredRemoteHost {
   proxy_command?: boolean;
 }
 
+export interface RemoteSSHConfigSyncResult {
+  hosts: RemoteHost[];
+  updated: number;
+  unchanged: number;
+  unmatched: number;
+  ambiguous: number;
+}
+
 export interface RemoteTestResult {
   ok: boolean;
   name: string;
@@ -357,6 +365,9 @@ export interface AgentInstance {
   clis?: string[];
   enabled: boolean;
   source?: string;
+  owner_tenant_id?: string;
+  owner_tenant_name?: string;
+  visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
 }
@@ -393,8 +404,60 @@ export interface Channel {
     interactions: boolean;
     deep_link: boolean;
   };
+  owner_tenant_id?: string;
+  owner_tenant_name?: string;
+  visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
+}
+
+// Tenancy: one AgentMux instance is shared by several host applications. See
+// contract/CONTRACT.md "多租户".
+export type ResourceVisibility = "private" | "public";
+export type GrantLevel = "read" | "use" | "manage";
+export type TenantKind = "app" | "web" | "service";
+export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider";
+
+export interface Tenant {
+  id: string;
+  name: string;
+  kind?: TenantKind;
+  status: "active" | "disabled";
+  note?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TenantToken {
+  id: string;
+  tenant_id: string;
+  name?: string;
+  prefix: string;
+  created_at?: string;
+  last_used_at?: string;
+  expires_at?: string;
+  revoked_at?: string;
+  // Present only on the create response; the plaintext is never recoverable.
+  secret?: string;
+}
+
+export interface ResourceGrant {
+  tenant_id: string;
+  resource_type: GrantableResourceType;
+  resource_id: string;
+  level: GrantLevel;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// TenancySelf tells the Console whether it is running with administrator
+// rights or confined to a single tenant, which drives what it renders.
+export interface TenancySelf {
+  admin: boolean;
+  tenant_id?: string;
+  tenant?: string;
+  kind?: string;
+  status?: string;
 }
 
 export interface ChannelTask {
@@ -653,6 +716,8 @@ export interface Trigger {
   last_run?: string;
   last_status?: string;
   last_error?: string;
+  owner_tenant_id?: string;
+  owner_tenant_name?: string;
   created_at?: string;
   updated_at?: string;
 }
