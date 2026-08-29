@@ -71,7 +71,7 @@ fi`)
 	if err != nil {
 		return err
 	}
-	databaseURL, err := prepareRemotePostgres(ctx, client, remoteOS)
+	databaseURL, err := prepareRemotePostgres(ctx, client, remoteOS, host.APIToken)
 	if err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func updateRemoteAgentMux(ctx context.Context, client remoteClient, host Host) (
 	if err := activateRemoteBinary(ctx, client); err != nil {
 		return artifact, updateFailureWithBackup(err, backupPath)
 	}
-	databaseURL, err := prepareRemotePostgres(ctx, client, remoteOS)
+	databaseURL, err := prepareRemotePostgres(ctx, client, remoteOS, host.APIToken)
 	if err != nil {
 		return artifact, updateFailureWithBackup(err, backupPath)
 	}
@@ -386,8 +386,9 @@ printf '%s\n' "$backup"`
 	return strings.TrimSpace(backupPath), nil
 }
 
-func prepareRemotePostgres(ctx context.Context, client remoteClient, remoteOS string) (string, error) {
+func prepareRemotePostgres(ctx context.Context, client remoteClient, remoteOS, bridgeToken string) (string, error) {
 	var command, databaseURL string
+	bridgeEnvironment := remoteBridgeEnvironment(bridgeToken)
 	switch remoteOS {
 	case "linux":
 		command = `set -eu
@@ -448,12 +449,12 @@ if [ "$(sudo -n -u postgres psql -h /var/run/postgresql -p "$port" -d postgres -
 fi
 sudo -n -u postgres psql -h /var/run/postgresql -p "$port" -d postgres -v ON_ERROR_STOP=1 -qc "ALTER DATABASE agentmux OWNER TO \"$role\""
 database_url="postgresql:///agentmux?host=/var/run/postgresql&port=$port&sslmode=disable"
-"$HOME/.agentmux/bin/amux" --database-url "$database_url" database setup
+` + bridgeEnvironment + `"$HOME/.agentmux/bin/amux" --database-url "$database_url" database setup
 printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
 	case "darwin":
 		databaseURL = remoteDarwinPostgresURL
 		command = `set -eu
-"$HOME/.agentmux/bin/amux" --database-url ` + shellQuote(databaseURL) + ` database setup`
+` + bridgeEnvironment + `"$HOME/.agentmux/bin/amux" --database-url ` + shellQuote(databaseURL) + ` database setup`
 	default:
 		return "", fmt.Errorf("unsupported remote platform %q", remoteOS)
 	}
@@ -474,6 +475,13 @@ printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
 		}
 	}
 	return databaseURL, nil
+}
+
+func remoteBridgeEnvironment(token string) string {
+	if token = strings.TrimSpace(token); token == "" {
+		return ""
+	}
+	return "AGENTMUX_BRIDGE_TOKEN=" + shellQuote(token) + " "
 }
 
 func migrateRemoteSQLite(ctx context.Context, client remoteClient, source, databaseURL string) error {
