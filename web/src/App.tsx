@@ -460,7 +460,6 @@ function useTenancyGate(): {
     try {
       const resolved = await resolveTenancyGateWithRetry(
         () => api.tenancySelf(),
-        () => api.tenants(),
       );
       setIdentity(resolved.identity);
       setState(resolved.state);

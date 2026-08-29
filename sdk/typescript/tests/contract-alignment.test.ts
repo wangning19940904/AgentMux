@@ -49,8 +49,8 @@ const TYPE_FIELDS: Record<string, string[]> = {
 };
 
 describe.skipIf(!existsSync(SCHEMAS_DIR))("contract golden alignment", () => {
-  for (const [schemaName, fields] of Object.entries(TYPE_FIELDS)) {
-    it(`covers ${schemaName}`, () => {
+  it("covers every published schema", () => {
+    for (const [schemaName, fields] of Object.entries(TYPE_FIELDS)) {
       const golden = JSON.parse(readFileSync(join(SCHEMAS_DIR, schemaName), "utf-8")) as {
         fields: Record<string, unknown>;
       };
@@ -58,6 +58,6 @@ describe.skipIf(!existsSync(SCHEMAS_DIR))("contract golden alignment", () => {
       for (const field of fields) {
         expect(goldenFields, `${schemaName} lost wire field ${field}`).toContain(field);
       }
-    });
-  }
+    }
+  });
 });

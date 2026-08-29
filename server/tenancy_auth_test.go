@@ -40,94 +40,68 @@ func newTenantServer(t *testing.T) (*Server, *store.Store, *core.Tenant, string)
 	return srv, st, tenant, token.Secret
 }
 
-func TestTenantTokenIsConfinedToPublishedRoutes(t *testing.T) {
-	srv, _, _, secret := newTenantServer(t)
-	handler := srv.withAuth(srv.mux)
-
-	allowed := []struct {
-		method string
-		path   string
+func TestTenantRoutePolicyAndMiddleware(t *testing.T) {
+	tests := []struct {
+		method  string
+		path    string
+		allowed bool
 	}{
-		{http.MethodGet, "/api/v1/status"},
-		{http.MethodGet, "/api/v1/capabilities"},
-		{http.MethodGet, "/api/v1/agent-instances"},
-		{http.MethodGet, "/api/v1/channels"},
-		{http.MethodGet, "/api/v1/triggers"},
-		{http.MethodGet, "/api/v1/usage"},
+		{http.MethodGet, "/api/v1/status", true},
+		{http.MethodGet, "/api/v1/capabilities", true},
+		{http.MethodGet, "/api/v1/agent-instances", true},
+		{http.MethodGet, "/api/v1/channels", true},
+		{http.MethodGet, "/api/v1/triggers", true},
+		{http.MethodGet, "/api/v1/usage", true},
+		{http.MethodPost, "/api/v1/invocations", true},
+		{http.MethodPost, "/v1/responses", true},
+		{http.MethodPost, "/api/v1/setup/feishu/begin", true},
+		{http.MethodPost, "/api/v1/setup/feishu/poll", true},
+		{http.MethodPost, "/api/v1/setup/feishu/automation/begin", true},
+		{http.MethodPost, "/api/v1/setup/feishu/automation/poll", true},
+		{http.MethodPost, "/api/v1/setup/feishu/automation/configure", true},
+		{http.MethodDelete, "/api/v1/usage", false},
+		{http.MethodGet, "/api/v1/setup/feishu/begin", false},
+		{http.MethodGet, "/api/v1/remote/hosts", false},
+		{http.MethodGet, "/api/v1/sessions", false},
+		{http.MethodGet, "/api/v1/observability/traces", false},
+		{http.MethodPost, "/api/v1/providers", false},
+		{http.MethodGet, "/api/v1/system/directories", false},
+		{http.MethodGet, "/api/v1/meetings", false},
+		{http.MethodGet, "/api/v1/tenancy/tenants", false},
+		{http.MethodDelete, "/api/v1/providers", false},
+		{http.MethodGet, "/api/v1/unknown-future-endpoint", false},
 	}
-	for _, route := range allowed {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(route.method, route.path, nil)
-		request.Header.Set("Authorization", "Bearer "+secret)
-		handler.ServeHTTP(recorder, request)
-		if recorder.Code == http.StatusForbidden || recorder.Code == http.StatusUnauthorized {
-			t.Errorf("%s %s must be available to a tenant, got %d", route.method, route.path, recorder.Code)
+	for _, test := range tests {
+		if got := tenantRouteAllowed(test.method, test.path); got != test.allowed {
+			t.Errorf("tenantRouteAllowed(%s, %s) = %t, want %t", test.method, test.path, got, test.allowed)
 		}
 	}
 
-	// The Console-only management surface is closed to tenants. These are the
-	// "internal" tier in contract/CONTRACT.md.
-	denied := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodGet, "/api/v1/remote/hosts"},
-		{http.MethodGet, "/api/v1/sessions"},
-		{http.MethodGet, "/api/v1/observability/traces"},
-		{http.MethodPost, "/api/v1/providers"},
-		{http.MethodGet, "/api/v1/system/directories"},
-		{http.MethodGet, "/api/v1/meetings"},
-		{http.MethodGet, "/api/v1/tenancy/tenants"},
-		{http.MethodDelete, "/api/v1/providers"},
+	srv, _ := newTestServer(t)
+	nonce, _ := srv.consoleSessions.issueNonce(&core.Principal{TenantID: "ten_homebook", TenantName: "homebook"})
+	sessionToken, ok := srv.consoleSessions.consumeNonce(nonce)
+	if !ok {
+		t.Fatal("could not create tenant console fixture")
 	}
-	for _, route := range denied {
+	handler := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	request := func(path string, tenant bool) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if tenant {
+			req.AddCookie(&http.Cookie{Name: consoleSessionCookie, Value: sessionToken})
+			req.Header.Set(consoleCSRFHeader, "1")
+		}
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(route.method, route.path, nil)
-		request.Header.Set("Authorization", "Bearer "+secret)
-		handler.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusForbidden {
-			t.Errorf("%s %s must be forbidden for a tenant, got %d", route.method, route.path, recorder.Code)
-		}
+		handler.ServeHTTP(recorder, req)
+		return recorder.Code
 	}
-
-	// The same routes stay open to the admin token.
-	for _, route := range denied {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(route.method, route.path, nil)
-		request.Header.Set("Authorization", "Bearer admin-secret")
-		handler.ServeHTTP(recorder, request)
-		if recorder.Code == http.StatusForbidden {
-			t.Errorf("%s %s must remain available to the admin", route.method, route.path)
-		}
+	if code := request("/api/v1/status", true); code != http.StatusNoContent {
+		t.Fatalf("allowed tenant route = %d", code)
 	}
-}
-
-func TestTenantRoutePolicyDeniesUnlistedMethods(t *testing.T) {
-	if tenantRouteAllowed(http.MethodDelete, "/api/v1/usage") {
-		t.Error("DELETE on a GET-only route must be denied")
+	if code := request("/api/v1/sessions", true); code != http.StatusForbidden {
+		t.Fatalf("denied tenant route = %d", code)
 	}
-	if !tenantRouteAllowed(http.MethodPost, "/api/v1/invocations") {
-		t.Error("POST /api/v1/invocations must be allowed")
-	}
-	for _, path := range []string{
-		"/api/v1/setup/feishu/begin",
-		"/api/v1/setup/feishu/poll",
-		"/api/v1/setup/feishu/automation/begin",
-		"/api/v1/setup/feishu/automation/poll",
-		"/api/v1/setup/feishu/automation/configure",
-	} {
-		if !tenantRouteAllowed(http.MethodPost, path) {
-			t.Errorf("POST %s must be available to a tenant configuring its channel", path)
-		}
-	}
-	if tenantRouteAllowed(http.MethodGet, "/api/v1/setup/feishu/begin") {
-		t.Error("GET on the Feishu setup route must remain denied")
-	}
-	if tenantRouteAllowed(http.MethodGet, "/api/v1/unknown-future-endpoint") {
-		t.Error("an unlisted route must default to denied")
-	}
-	if !tenantRouteAllowed(http.MethodPost, "/v1/responses") {
-		t.Error("the OpenAI-compatible surface must be allowed")
+	if code := request("/api/v1/sessions", false); code != http.StatusNoContent {
+		t.Fatalf("bridge-disabled admin route = %d", code)
 	}
 }
 
@@ -154,7 +128,20 @@ func TestRevokedTenantTokenStopsAuthenticating(t *testing.T) {
 
 func TestConsoleSessionInheritsTenantScope(t *testing.T) {
 	srv, _, tenant, secret := newTenantServer(t)
+	// Self-registered applications can embed their tenant Console even when
+	// the instance keeps legacy bridge authentication disabled.
+	srv.cfg.Bridge.Enabled = false
 	handler := srv.withAuth(srv.mux)
+
+	// Explicit bearer credentials remain tenant-scoped even though anonymous
+	// requests retain the bridge-disabled legacy administrator behaviour.
+	bearerSelf := httptest.NewRecorder()
+	bearerSelfReq := httptest.NewRequest(http.MethodGet, "/api/v1/tenancy/self", nil)
+	bearerSelfReq.Header.Set("Authorization", "Bearer "+secret)
+	handler.ServeHTTP(bearerSelf, bearerSelfReq)
+	if bearerSelf.Code != http.StatusOK || !contains(bearerSelf.Body.String(), tenant.Name) {
+		t.Fatalf("bridge-disabled tenant bearer identity = %d %s", bearerSelf.Code, bearerSelf.Body.String())
+	}
 
 	// A tenant token mints a Console session bound to itself.
 	mint := httptest.NewRequest(http.MethodPost, consoleSessionEndpoint, nil)
@@ -212,6 +199,19 @@ func TestConsoleSessionInheritsTenantScope(t *testing.T) {
 	}
 	if !contains(self.Body.String(), tenant.Name) {
 		t.Fatalf("self response must name the tenant, got %s", self.Body.String())
+	}
+}
+
+func TestBridgeDisabledRejectsInvalidExplicitCredential(t *testing.T) {
+	srv, _ := newTestServer(t)
+	handler := srv.withAuth(srv.mux)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	request.Header.Set("Authorization", "Bearer invalid")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid explicit credential code = %d body = %s", recorder.Code, recorder.Body.String())
 	}
 }
 

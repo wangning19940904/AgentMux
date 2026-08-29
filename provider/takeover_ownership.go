@@ -76,51 +76,6 @@ func makeLiveOwnershipSnapshot(files []string) (string, error) {
 	return string(raw), err
 }
 
-func finalizeLiveOwnershipSnapshot(blobRaw string) (string, error) {
-	var blob liveBackupBlob
-	if err := json.Unmarshal([]byte(blobRaw), &blob); err != nil {
-		return "", fmt.Errorf("corrupt live backup: %w", err)
-	}
-	if blob.Ownership == nil {
-		blob.Ownership = map[string]ownedLiveFile{}
-	}
-	blob.Version = takeoverOwnershipVersion
-	if blob.InstallID == "" {
-		blob.InstallID = randomProxyID("takeover-")
-	}
-	for path, before := range blob.Files {
-		current, exists, err := readOptionalFile(path)
-		if err != nil {
-			return "", err
-		}
-		entry := blob.Ownership[path]
-		entry.Format = liveFileFormat(path)
-		entry.BeforeExists = before != nil
-		entry.AfterHash = hashLiveContent(current, exists)
-		entry.Finalized = true
-		beforeRaw, beforeExists := []byte(nil), before != nil
-		if before != nil {
-			beforeRaw = []byte(*before)
-		}
-		beforeDoc, err := decodeLiveDocument(entry.Format, beforeRaw, beforeExists)
-		if err != nil {
-			return "", fmt.Errorf("decode before %s: %w", path, err)
-		}
-		afterDoc, err := decodeLiveDocument(entry.Format, current, exists)
-		if err != nil {
-			return "", fmt.Errorf("decode after %s: %w", path, err)
-		}
-		entry.Values = diffLiveValues("", beforeDoc, beforeExists, afterDoc, exists)
-		blob.Ownership[path] = entry
-	}
-	// Full file images are needed only during the before-write crash window.
-	// Once pointer fingerprints are finalized, discard them permanently so the
-	// durable journal contains only values AgentMux actually owns.
-	blob.Files = nil
-	raw, err := json.Marshal(blob)
-	return string(raw), err
-}
-
 // extendLiveOwnershipSnapshot adds files which were not part of the original
 // takeover target (for example when a Claude Desktop provider uses a different
 // profile root). Their current bytes become the before image before any write.

@@ -153,15 +153,3 @@ func providerAPIKeyFromEnvOrSecret(apiKeyEnv string) (string, error) {
 	}
 	return strings.TrimSpace(os.Getenv(apiKeyEnv)), nil
 }
-
-func setProviderSecretBackendForTest(backend providerSecretBackend) func() {
-	providerSecretsMu.Lock()
-	previous := providerSecrets
-	providerSecrets = backend
-	providerSecretsMu.Unlock()
-	return func() {
-		providerSecretsMu.Lock()
-		providerSecrets = previous
-		providerSecretsMu.Unlock()
-	}
-}

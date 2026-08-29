@@ -32,7 +32,7 @@ func TestParseApprovalModeCommands(t *testing.T) {
 func TestApprovalSlashCommandSwitchesCurrentConversation(t *testing.T) {
 	sess := &runtimeCommandSession{RuntimeSettingsSelection: NewRuntimeSettingsSelection(
 		RuntimeSettings{ApprovalMode: ApprovalModeManual},
-		RuntimeSettingsCapabilities{ApprovalModes: ApprovalModeOptionsForRuntime("cursor")},
+		RuntimeSettingsCapabilities{ApprovalModes: RuntimeOptions(ApprovalModeValuesForRuntime("cursor"))},
 	)}
 	eng := NewEngine(nil, NewHookRunner(nil, nil))
 	var reply string

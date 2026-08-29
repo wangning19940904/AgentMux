@@ -29,10 +29,32 @@ type EventMapper func(line []byte) []*core.Event
 
 // ModelCatalog is the account-scoped model directory returned by a CLI.
 // DefaultModel is optional; Models should contain the exact values accepted by
-// the CLI's per-turn model flag.
+// the CLI's per-turn model flag. ModelCapabilities may narrow effort and speed
+// controls for one model when the live catalog exposes parameterized variants.
 type ModelCatalog struct {
-	Models       []string
-	DefaultModel string
+	Models                 []string
+	DefaultModel           string
+	DefaultReasoningEffort string
+	DefaultServiceTier     string
+	ModelCapabilities      map[string]ModelRuntimeCapabilities
+}
+
+// ModelRuntimeCapabilities contains only the controls a concrete model can
+// narrow. Model selection and approval remain properties of the adapter.
+type ModelRuntimeCapabilities struct {
+	ReasoningEfforts []core.RuntimeOption
+	ServiceTiers     []core.RuntimeOption
+	Variants         []ModelVariant
+}
+
+// ModelVariant keeps the exact CLI model ID behind one collapsed picker
+// option. Some CLIs advertise effort/speed as expanded slugs and reject the
+// equivalent bracket-parameter syntax, so delivery must resolve back to this
+// authoritative ID.
+type ModelVariant struct {
+	ID              string
+	ReasoningEffort string
+	ServiceTier     string
 }
 
 // ModelCatalogParser converts a CLI model-list response into a catalog.
@@ -164,17 +186,38 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 	if defaultModel == "" {
 		defaultModel = catalog.DefaultModel
 	}
+	defaultReasoningEffort := a.defaultReasoningEffort
+	if defaultReasoningEffort == "" {
+		defaultReasoningEffort = catalog.DefaultReasoningEffort
+	}
+	defaultServiceTier := a.defaultServiceTier
+	if defaultServiceTier == "" {
+		defaultServiceTier = catalog.DefaultServiceTier
+	}
 	models := mergeValues([]string{defaultModel}, a.supportedModels, catalog.Models)
+	reasoningEfforts := append([]string(nil), a.supportedReasoningEfforts...)
+	serviceTiers := append([]string(nil), a.supportedServiceTiers...)
+	for _, model := range catalog.Models {
+		capabilities, ok := catalog.ModelCapabilities[model]
+		if !ok {
+			continue
+		}
+		reasoningEfforts = mergeValues(reasoningEfforts, runtimeOptionValues(capabilities.ReasoningEfforts))
+		serviceTiers = mergeValues(serviceTiers, runtimeOptionValues(capabilities.ServiceTiers))
+	}
 	settings := runner.NewSettings(core.RuntimeSettings{
-		Model: defaultModel, ReasoningEffort: a.defaultReasoningEffort,
-		ServiceTier: a.defaultServiceTier, ApprovalMode: a.defaultApprovalMode,
+		Model: defaultModel, ReasoningEffort: defaultReasoningEffort,
+		ServiceTier: defaultServiceTier, ApprovalMode: a.defaultApprovalMode,
 	}, core.RuntimeSettingsCapabilities{
 		Models:           core.RuntimeOptions(models),
-		ReasoningEfforts: core.RuntimeOptions(a.supportedReasoningEfforts),
-		ServiceTiers:     core.RuntimeOptions(a.supportedServiceTiers),
+		ReasoningEfforts: core.RuntimeOptions(reasoningEfforts),
+		ServiceTiers:     core.RuntimeOptions(serviceTiers),
 		ApprovalModes:    core.RuntimeOptions(a.supportedApprovalModes),
 	})
-	return &session{Settings: settings, agent: a, workDir: workDir, id: a.spec.Name + "-" + runner.RandID()}, nil
+	return &session{
+		Settings: settings, agent: a, workDir: workDir, id: a.spec.Name + "-" + runner.RandID(),
+		modelCapabilities: copyModelCapabilities(catalog.ModelCapabilities),
+	}, nil
 }
 
 func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelCatalog {
@@ -213,12 +256,40 @@ func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelC
 
 func normalizeModelCatalog(catalog ModelCatalog) ModelCatalog {
 	catalog.DefaultModel = strings.TrimSpace(catalog.DefaultModel)
+	catalog.DefaultReasoningEffort = strings.TrimSpace(catalog.DefaultReasoningEffort)
+	catalog.DefaultServiceTier = strings.TrimSpace(catalog.DefaultServiceTier)
 	catalog.Models = mergeValues([]string{catalog.DefaultModel}, catalog.Models)
+	catalog.ModelCapabilities = copyModelCapabilities(catalog.ModelCapabilities)
 	return catalog
 }
 
 func copyModelCatalog(catalog ModelCatalog) ModelCatalog {
-	return ModelCatalog{Models: append([]string(nil), catalog.Models...), DefaultModel: catalog.DefaultModel}
+	return ModelCatalog{
+		Models:                 append([]string(nil), catalog.Models...),
+		DefaultModel:           catalog.DefaultModel,
+		DefaultReasoningEffort: catalog.DefaultReasoningEffort,
+		DefaultServiceTier:     catalog.DefaultServiceTier,
+		ModelCapabilities:      copyModelCapabilities(catalog.ModelCapabilities),
+	}
+}
+
+func copyModelCapabilities(source map[string]ModelRuntimeCapabilities) map[string]ModelRuntimeCapabilities {
+	if source == nil {
+		return nil
+	}
+	out := make(map[string]ModelRuntimeCapabilities, len(source))
+	for model, capabilities := range source {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		out[model] = ModelRuntimeCapabilities{
+			ReasoningEfforts: append([]core.RuntimeOption(nil), capabilities.ReasoningEfforts...),
+			ServiceTiers:     append([]core.RuntimeOption(nil), capabilities.ServiceTiers...),
+			Variants:         append([]ModelVariant(nil), capabilities.Variants...),
+		}
+	}
+	return out
 }
 
 func runtimeOptionValues(options []core.RuntimeOption) []string {

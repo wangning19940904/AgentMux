@@ -160,6 +160,25 @@ func TestFrameworkAuthEndpointReturnsConfigurationStatus(t *testing.T) {
 	}
 }
 
+func TestFrameworkLoginLifecycleEndpointsHandleMissingSession(t *testing.T) {
+	s := &Server{}
+
+	statusRecorder := httptest.NewRecorder()
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/v1/frameworks/login?session_id=missing", nil)
+	s.handleFrameworkLoginStatus(statusRecorder, statusRequest)
+	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), `"active":false`) {
+		t.Fatalf("missing login status = %d %s", statusRecorder.Code, statusRecorder.Body.String())
+	}
+
+	cancelRecorder := httptest.NewRecorder()
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/api/v1/frameworks/login/cancel",
+		strings.NewReader(`{"session_id":"missing"}`))
+	s.handleFrameworkLoginCancel(cancelRecorder, cancelRequest)
+	if cancelRecorder.Code != http.StatusNotFound {
+		t.Fatalf("missing login cancel = %d %s", cancelRecorder.Code, cancelRecorder.Body.String())
+	}
+}
+
 func addTestRuntimeToPath(t *testing.T, name string) {
 	t.Helper()
 	bin := t.TempDir()

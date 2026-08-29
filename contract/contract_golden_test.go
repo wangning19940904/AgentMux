@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -163,5 +164,21 @@ func TestContractTypeInventory(t *testing.T) {
 	sort.Strings(got)
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("contract type inventory changed.\nwant: %v\ngot:  %v", want, got)
+	}
+}
+
+func TestOpenAPIVersionMatchesContract(t *testing.T) {
+	data, err := os.ReadFile("openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pattern := range []string{
+		`(?m)^  version: "([^"]+)"$`,
+		`(?m)^  x-contract-version: "([^"]+)"$`,
+	} {
+		match := regexp.MustCompile(pattern).FindSubmatch(data)
+		if len(match) != 2 || string(match[1]) != Version {
+			t.Fatalf("openapi contract version %q does not match contract.Version %q", match, Version)
+		}
 	}
 }

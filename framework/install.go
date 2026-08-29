@@ -34,34 +34,10 @@ type InstallOptions struct {
 	AcknowledgeInternal bool
 }
 
-// Install installs a public catalogued framework with its catalog-owned
-// command. Internal-only entries require InstallWithOptions.
-func Install(ctx context.Context, kind string) InstallResult {
-	return InstallWithProgressOptions(ctx, kind, InstallOptions{}, nil)
-}
-
-// InstallWithProgress installs a framework while reporting preparation,
-// command execution, and verification stages.
-func InstallWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
-	return InstallWithProgressOptions(ctx, kind, InstallOptions{}, progress)
-}
-
-// InstallWithOptions installs a framework with explicit restricted-entry
-// acknowledgement.
-func InstallWithOptions(ctx context.Context, kind string, options InstallOptions) InstallResult {
-	return InstallWithProgressOptions(ctx, kind, options, nil)
-}
-
-// InstallWithProgressOptions is the progress-reporting InstallWithOptions.
+// InstallWithProgressOptions installs a framework with explicit restricted-
+// entry acknowledgement and optional progress reporting.
 func InstallWithProgressOptions(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
 	return install(ctx, kind, options, progress)
-}
-
-// Update updates an installed framework only when its catalog-owned version
-// source reports a newer release. The update is checked again server-side so a
-// stale UI cannot trigger an unnecessary command.
-func Update(ctx context.Context, kind string) InstallResult {
-	return UpdateWithProgress(ctx, kind, nil)
 }
 
 // UpdateWithProgress updates a framework while reporting the update check,
@@ -92,10 +68,6 @@ func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc)
 		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("framework %q does not have a runnable adapter", kind)}
 	}
 	return updateCLIWithProgress(ctx, spec, check, progress)
-}
-
-func updateCLI(ctx context.Context, spec Spec, check UpdateCheck) InstallResult {
-	return updateCLIWithProgress(ctx, spec, check, nil)
 }
 
 func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, progress ProgressFunc) InstallResult {
@@ -200,10 +172,6 @@ func installPlatformSupported(spec Spec, goos string) bool {
 		}
 	}
 	return false
-}
-
-func installCLI(ctx context.Context, spec Spec) InstallResult {
-	return installCLIWithProgress(ctx, spec, nil)
 }
 
 func installCLIWithProgress(ctx context.Context, spec Spec, progress ProgressFunc) InstallResult {

@@ -341,7 +341,7 @@ func (r legacyUsageRow) envelope(c legacyCorrelationIndex) core.ObservationEnvel
 	setLegacyAttribute(attributes, "project", r.Project)
 	setLegacyAttribute(attributes, "host", r.Host)
 	setLegacyAttribute(attributes, "legacy_tool", r.Tool)
-	if parseLegacyObservationTimeOK(r.TimestampRaw) == false {
+	if !parseLegacyObservationTimeOK(r.TimestampRaw) {
 		setLegacyAttribute(attributes, "legacy_timestamp", r.TimestampRaw)
 	}
 	return core.ObservationEnvelope{

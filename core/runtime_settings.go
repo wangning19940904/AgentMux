@@ -398,10 +398,6 @@ func ApprovalModeValuesForRuntime(runtimeID string) []string {
 	}
 }
 
-func ApprovalModeOptionsForRuntime(runtimeID string) []RuntimeOption {
-	return RuntimeOptions(ApprovalModeValuesForRuntime(runtimeID))
-}
-
 func ApprovalModeSupported(runtimeID, mode string) bool {
 	for _, candidate := range ApprovalModeValuesForRuntime(runtimeID) {
 		if candidate == strings.TrimSpace(mode) {

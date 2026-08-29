@@ -147,15 +147,15 @@ MODEL_FIELD_MAP: dict[str, tuple[type, dict[str, str]]] = {
 }
 
 
-@pytest.mark.parametrize("schema_name", sorted(MODEL_FIELD_MAP))
-def test_model_fields_exist_in_golden(schema_name: str) -> None:
-    model, field_map = MODEL_FIELD_MAP[schema_name]
-    golden = json.loads((SCHEMAS_DIR / schema_name).read_text())
-    golden_fields = set(golden["fields"])
-    model_attrs = set(model.__dataclass_fields__)
-    for attribute, wire_name in field_map.items():
-        assert attribute in model_attrs, f"{model.__name__} lost attribute {attribute}"
-        assert wire_name in golden_fields, (
-            f"{model.__name__}.{attribute} maps to {wire_name!r} which no longer exists in "
-            f"{schema_name}; the contract drifted"
-        )
+def test_model_fields_exist_in_goldens() -> None:
+    for schema_name in sorted(MODEL_FIELD_MAP):
+        model, field_map = MODEL_FIELD_MAP[schema_name]
+        golden = json.loads((SCHEMAS_DIR / schema_name).read_text())
+        golden_fields = set(golden["fields"])
+        model_attrs = set(model.__dataclass_fields__)
+        for attribute, wire_name in field_map.items():
+            assert attribute in model_attrs, f"{model.__name__} lost attribute {attribute}"
+            assert wire_name in golden_fields, (
+                f"{model.__name__}.{attribute} maps to {wire_name!r} which no longer exists in "
+                f"{schema_name}; the contract drifted"
+            )

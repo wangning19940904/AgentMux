@@ -154,10 +154,10 @@ func TestMeetingStreamReplyIsThrottledAndCoherent(t *testing.T) {
 	sent := make(chan string, 2)
 	done := make(chan error, 1)
 	go func() {
-		done <- deliverMeetingAnswer(context.Background(), events, MeetingReplyModeStream, func(text string) error {
+		done <- deliverMeetingAnswerObserved(context.Background(), events, MeetingReplyModeStream, func(text string) error {
 			sent <- text
 			return nil
-		})
+		}, nil)
 	}()
 	paragraph := strings.Repeat("这是一个用于验证节流发送的完整句子。", 8)
 	events <- &Event{Type: EventOutput, Text: paragraph}
@@ -185,10 +185,10 @@ func TestMeetingFinalReplyWaitsForTaskCompletionAndSendsOnce(t *testing.T) {
 	sent := make(chan string, 2)
 	done := make(chan error, 1)
 	go func() {
-		done <- deliverMeetingAnswer(context.Background(), events, MeetingReplyModeFinal, func(text string) error {
+		done <- deliverMeetingAnswerObserved(context.Background(), events, MeetingReplyModeFinal, func(text string) error {
 			sent <- text
 			return nil
-		})
+		}, nil)
 	}()
 	events <- &Event{Type: EventOutput, Text: "第一段。"}
 	events <- &Event{Type: EventFinal, Text: "第一段。最终答案。", Final: true}
@@ -239,11 +239,11 @@ func TestMeetingAnswerMirrorsAccumulatedTextToSpeechObserver(t *testing.T) {
 	}
 }
 
-func TestChannelMeetingReplyMode(t *testing.T) {
-	if got := ChannelMeetingReplyMode(Channel{}); got != MeetingReplyModeStream {
+func TestChannelMeetingResponseMode(t *testing.T) {
+	if got := ChannelMeetingResponseMode(Channel{}); got != MeetingResponseModeStreamText {
 		t.Fatalf("default mode = %q", got)
 	}
-	if got := ChannelMeetingReplyMode(Channel{Config: map[string]string{ChannelConfigMeetingReplyMode: MeetingReplyModeFinal}}); got != MeetingReplyModeFinal {
+	if got := ChannelMeetingResponseMode(Channel{Config: map[string]string{ChannelConfigMeetingReplyMode: MeetingReplyModeFinal}}); got != MeetingResponseModeFinalText {
 		t.Fatalf("configured mode = %q", got)
 	}
 	tests := []struct {
@@ -263,7 +263,7 @@ func TestChannelMeetingReplyMode(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := ChannelMeetingResponseMode(channel); got != test.mode ||
-			ChannelMeetingReplyMode(channel) != test.reply ||
+			channel.Config[ChannelConfigMeetingReplyMode] != test.reply ||
 			MeetingResponseModeUsesText(got) != test.usesText ||
 			MeetingResponseModeUsesVoice(got) != test.usesVoice {
 			t.Fatalf("mode %s mapped incorrectly: channel=%+v got=%s", test.mode, channel.Config, got)

@@ -222,9 +222,7 @@ func providerProtocolURL(baseURL, protocol string) (string, error) {
 		return "", fmt.Errorf("invalid request URL")
 	}
 	trimmedPath := strings.TrimRight(parsed.EscapedPath(), "/")
-	if strings.HasSuffix(trimmedPath, "/models") {
-		trimmedPath = strings.TrimSuffix(trimmedPath, "/models")
-	}
+	trimmedPath = strings.TrimSuffix(trimmedPath, "/models")
 	if !strings.HasSuffix(trimmedPath, "/v1") {
 		trimmedPath += "/v1"
 	}

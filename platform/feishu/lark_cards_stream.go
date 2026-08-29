@@ -151,13 +151,6 @@ func (c *larkClient) updateStreamCard(ctx context.Context, cardID, text string, 
 	return nil
 }
 
-// buildCard renders text into a Feishu interactive card JSON payload. While a
-// turn is streaming (done=false) a subtle "typing" note is appended; the final
-// update drops it, and failures switch the header to a red error style.
-func buildCard(text string, done, failed bool, control *streamCardControl) string {
-	return buildCardWithImages(text, done, failed, nil, control)
-}
-
 func buildCardWithImages(text string, done, failed bool, images []streamCardImage, control *streamCardControl) string {
 	if text == "" {
 		text = " "

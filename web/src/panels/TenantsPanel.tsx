@@ -97,7 +97,7 @@ export function TenantsPanel({
               <h2>{t("tenants.registeredTitle")}</h2>
               <p>{t("tenants.registeredHint", { tenant: self.data?.tenant ?? "" })}</p>
             </div>
-            <button className="primary-action" disabled={!hasActiveTenant} onClick={onContinue}>
+            <button className="primary-action" onClick={onContinue}>
               <ShieldCheck size={15} /> {t("tenants.enterConfig")}
             </button>
           </div>
@@ -134,7 +134,7 @@ export function TenantsPanel({
             <p>{t("tenants.subtitle")}</p>
           </div>
           <div className="table-actions">
-            <button className="primary-action" disabled={!hasActiveTenant} onClick={onContinue}>
+            <button className="primary-action" onClick={onContinue}>
               <ShieldCheck size={15} /> {t("tenants.enterConfig")}
             </button>
             <button className="ghost-action" onClick={() => void tenants.reload()}>

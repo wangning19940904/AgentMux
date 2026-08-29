@@ -21,48 +21,9 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	svc := NewServiceWithProxy(st, NewProxyServer(nil, st, "127.0.0.1:0"))
+	svc := &Service{Manager: NewManager(st), st: st, proxy: NewProxyServer(nil, st, "127.0.0.1:0")}
 	t.Cleanup(func() { _ = svc.Proxy().Stop() })
 	return svc, st
-}
-
-func TestFinalizedTakeoverJournalDropsWholeFileSnapshot(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "shared.json")
-	if err := os.WriteFile(path, []byte(`{"managed":"before","unowned":"do-not-copy-whole-file"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	journal, err := snapshotLiveFiles([]string{path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"managed":"after","unowned":"do-not-copy-whole-file"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	journal, err = finalizeLiveOwnershipSnapshot(journal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(journal, "do-not-copy-whole-file") {
-		t.Fatalf("finalized journal retained an unowned full-file value: %s", journal)
-	}
-	var decoded liveBackupBlob
-	if err := json.Unmarshal([]byte(journal), &decoded); err != nil {
-		t.Fatal(err)
-	}
-	entry := decoded.Ownership[path]
-	if len(decoded.Files) != 0 || !entry.Finalized || !entry.BeforeExists || len(entry.Values) != 1 || entry.Values[0].Pointer != "/managed" {
-		t.Fatalf("pointer journal = %+v", decoded)
-	}
-	if err := os.WriteFile(path, []byte(`{"managed":"after","unowned":"do-not-copy-whole-file","flux":"preserve"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoreLiveFiles(journal); err != nil {
-		t.Fatal(err)
-	}
-	restored := readJSON(t, path)
-	if restored["managed"] != "before" || restored["flux"] != "preserve" || restored["unowned"] != "do-not-copy-whole-file" {
-		t.Fatalf("pointer restore = %+v", restored)
-	}
 }
 
 func TestTakeoverClaudeCodeRoundtrip(t *testing.T) {

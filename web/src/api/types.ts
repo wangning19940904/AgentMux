@@ -812,6 +812,13 @@ export interface FrameworkLoginResult {
   input_required?: boolean;
 }
 
+export interface FrameworkLoginSessionStatus {
+  session_id: string;
+  active: boolean;
+  state: "starting" | "waiting" | "succeeded" | "failed" | "cancelled" | "unknown";
+  error?: string;
+}
+
 export interface FrameworkInstallResult {
   kind: string;
   action: "install" | "update";

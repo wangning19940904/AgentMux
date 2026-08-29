@@ -94,7 +94,7 @@ later:
 ```python
 client = AgentMuxClient(base_url="http://127.0.0.1:8765")
 result = client.tenancy.register("homebook", kind="web")
-save_secret("AGENTMUX_BRIDGE_TOKEN", result.token)   # shown once, never again
+save_secret("AGENTMUX_TENANT_TOKEN", result.token)   # shown once, never again
 ```
 
 From then on the token is used like any bridge token. To check what a
@@ -115,8 +115,8 @@ so writes never need to set it.
 ## Install / upgrade AgentMux (bootstrap)
 
 ```bash
-python -m agentmux_sdk.bootstrap --mode local --version v0.1.4
-sudo AGENTMUX_BRIDGE_TOKEN=... python -m agentmux_sdk.bootstrap --mode production --version v0.1.4
+python -m agentmux_sdk.bootstrap --mode local --version vX.Y.Z
+sudo AGENTMUX_BRIDGE_TOKEN=... python -m agentmux_sdk.bootstrap --mode production --version vX.Y.Z
 ```
 
 Downloads are verified against the GoReleaser `checksums.txt`; installs use

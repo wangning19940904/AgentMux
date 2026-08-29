@@ -95,9 +95,12 @@ mcp、guard、`/api/v1/tenancy/*` 的管理端点等）是 Console 专用管理�
 
 - `[bridge].enabled = true` 时，`/api/*` 与 `/v1/*` 要求
   `Authorization: Bearer <token>`；对外提供服务时必须开启。
+- `[bridge].enabled = false` 时继续兼容无凭证的本机管理员访问；但请求一旦显式携带
+  tenant token 或 Console cookie，仍会按该主体做权限隔离，不会回退成管理员。
 - Console 会话 cookie（`agentmux_console`）是 Bearer 的等价凭证，通过
   `POST /api/v1/console/sessions`（服务端间调用）签发，**并继承签发者的主体**：
-  用租户 token 签发的会话，其 Console 只能看到该租户的资源。
+  用租户 token 签发的会话，其 Console 只能看到该租户的资源；租户签发不要求
+  全局 `[bridge]` 鉴权已开启。
 - `POST /hook/{id}` 使用触发器自带 token，不走 bridge。
 
 ## 多租户

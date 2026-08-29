@@ -824,10 +824,6 @@ func (s *codexSession) nameFreshThread(ctx context.Context, text string) {
 	cancel()
 }
 
-func (s *codexSession) turnStartParams(threadID, text string) map[string]any {
-	return s.turnStartParamsInput(threadID, core.AgentTurnInput{Text: text})
-}
-
 func (s *codexSession) turnStartParamsInput(threadID string, input core.AgentTurnInput) map[string]any {
 	turnItems := []map[string]string{{"type": "text", "text": input.Text}}
 	for _, attachment := range input.Attachments {

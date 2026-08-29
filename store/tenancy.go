@@ -22,6 +22,7 @@ const (
 	tenantTokenColumns    = `id,tenant_id,name,token_hash,prefix,created_at,last_used_at,expires_at,revoked_at`
 	resourceGrantColumns  = `tenant_id,resource_type,resource_id,level,created_at,updated_at`
 	tenantDisplayedPrefix = 12
+	tenantLastUsedWindow  = 5 * time.Minute
 )
 
 // HashSecret is the one-way transform applied to tenant tokens before they
@@ -254,9 +255,15 @@ func (s *Store) AuthenticateTenantToken(ctx context.Context, secret string) (*co
 	if !tenant.Active() {
 		return nil, nil
 	}
-	// Last-used tracking is advisory; a failure here must not deny access.
-	_, _ = s.writer.ExecContext(ctx, `UPDATE tenant_tokens SET last_used_at=? WHERE id=?`,
-		now.Format(time.RFC3339Nano), token.ID)
+	// Last-used tracking is advisory. Avoid turning every authenticated request
+	// into a writer transaction; one durable update per five-minute window is
+	// enough for operator-facing activity metadata.
+	if token.LastUsedAt == nil || now.Sub(*token.LastUsedAt) >= tenantLastUsedWindow {
+		cutoff := now.Add(-tenantLastUsedWindow).Format(time.RFC3339Nano)
+		_, _ = s.writer.ExecContext(ctx, `UPDATE tenant_tokens SET last_used_at=?
+			WHERE id=? AND (last_used_at IS NULL OR last_used_at<?)`,
+			now.Format(time.RFC3339Nano), token.ID, cutoff)
+	}
 	return tenant, nil
 }
 

@@ -303,11 +303,6 @@ func (c *larkClient) loadBotOpenID(ctx context.Context) string {
 
 type botIdentity struct{ OpenID, Name string }
 
-func fetchBotOpenID(ctx context.Context, domain, appID, appSecret string) (string, error) {
-	identity, err := fetchBotIdentity(ctx, domain, appID, appSecret)
-	return identity.OpenID, err
-}
-
 func fetchBotIdentity(ctx context.Context, domain, appID, appSecret string) (botIdentity, error) {
 	base := strings.TrimRight(domain, "/")
 	payload, _ := json.Marshal(map[string]string{

@@ -163,6 +163,75 @@ func TestParseCursorModelCatalog(t *testing.T) {
 	}
 }
 
+func TestParseCursorModelCatalogCollapsesEffortAndFastVariants(t *testing.T) {
+	output := "Available models\n\n" +
+		"auto - Auto (default)\n" +
+		"gpt-5.6-sol-low - GPT-5.6 Sol Low\n" +
+		"gpt-5.6-sol-low-fast - GPT-5.6 Sol Low Fast\n" +
+		"gpt-5.6-sol-high - GPT-5.6 Sol High\n" +
+		"gpt-5.6-sol-high-fast - GPT-5.6 Sol High Fast\n" +
+		"gpt-5.6-sol-extra-high-fast - GPT-5.6 Sol Extra High Fast\n" +
+		"claude-opus-5-thinking-high - Claude Opus 5 Thinking\n" +
+		"claude-opus-5-thinking-max - Claude Opus 5 Max Thinking\n" +
+		"composer-2.5 - Composer 2.5\n" +
+		"composer-2.5-fast - Composer 2.5 Fast\n" +
+		"gemini-3.1-pro - Gemini 3.1 Pro\n\n" +
+		"Tip: use --model <id> to switch.\n"
+	catalog, err := parseCursorModelCatalog([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantModels := []string{"auto", "gpt-5.6-sol", "claude-opus-5-thinking", "composer-2.5", "gemini-3.1-pro"}
+	if !reflect.DeepEqual(catalog.Models, wantModels) || catalog.DefaultModel != "auto" {
+		t.Fatalf("catalog = %#v, want models %#v with default auto", catalog, wantModels)
+	}
+	values := func(options []core.RuntimeOption) []string {
+		out := make([]string, 0, len(options))
+		for _, option := range options {
+			out = append(out, option.Value)
+		}
+		return out
+	}
+	if got := values(catalog.ModelCapabilities["gpt-5.6-sol"].ReasoningEfforts); !reflect.DeepEqual(got, []string{"low", "high", "xhigh"}) {
+		t.Fatalf("gpt efforts = %v", got)
+	}
+	if got := values(catalog.ModelCapabilities["gpt-5.6-sol"].ServiceTiers); !reflect.DeepEqual(got, []string{"default", "priority"}) {
+		t.Fatalf("gpt speed tiers = %v", got)
+	}
+	var resolved string
+	for _, variant := range catalog.ModelCapabilities["gpt-5.6-sol"].Variants {
+		if variant.ReasoningEffort == "high" && variant.ServiceTier == "priority" {
+			resolved = variant.ID
+		}
+	}
+	if resolved != "gpt-5.6-sol-high-fast" {
+		t.Fatalf("high fast variant = %q", resolved)
+	}
+	if got := values(catalog.ModelCapabilities["claude-opus-5-thinking"].ReasoningEfforts); !reflect.DeepEqual(got, []string{"high", "max"}) {
+		t.Fatalf("claude thinking efforts = %v", got)
+	}
+	if got := values(catalog.ModelCapabilities["composer-2.5"].ServiceTiers); !reflect.DeepEqual(got, []string{"default", "priority"}) {
+		t.Fatalf("composer speed tiers = %v", got)
+	}
+	if caps := catalog.ModelCapabilities["gemini-3.1-pro"]; len(caps.ReasoningEfforts) != 0 || len(caps.ServiceTiers) != 0 {
+		t.Fatalf("plain model unexpectedly gained parameter controls: %#v", caps)
+	}
+}
+
+func TestParseCursorModelCatalogPreservesExpandedDefaultSettings(t *testing.T) {
+	output := "Available models\n\n" +
+		"gpt-5.6-terra-high-fast - GPT-5.6 Terra High Fast (current, default)\n" +
+		"gpt-5.6-terra-xhigh - GPT-5.6 Terra Extra High\n\n" +
+		"Tip: use --model <id> to switch.\n"
+	catalog, err := parseCursorModelCatalog([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog.DefaultModel != "gpt-5.6-terra" || catalog.DefaultReasoningEffort != "high" || catalog.DefaultServiceTier != "priority" {
+		t.Fatalf("default settings = %#v", catalog)
+	}
+}
+
 func TestParseCursorModelCatalogRejectsUnexpectedOutput(t *testing.T) {
 	if _, err := parseCursorModelCatalog([]byte("authentication required")); err == nil {
 		t.Fatal("unexpected model-list output must not replace a cached/static catalog")
@@ -332,7 +401,7 @@ func TestCodexTurnStartCarriesModelEffortAndServiceTier(t *testing.T) {
 	if err := s.SetRuntimeSetting(core.RuntimeSettingServiceTier, "priority"); err != nil {
 		t.Fatal(err)
 	}
-	params := s.turnStartParams("thread-1", "hello")
+	params := s.turnStartParamsInput("thread-1", core.AgentTurnInput{Text: "hello"})
 	if params["model"] != "gpt-5" || params["effort"] != "xhigh" || params["serviceTier"] != "priority" {
 		t.Fatalf("turn params = %#v", params)
 	}
@@ -367,21 +436,21 @@ func TestCodexApprovalModesMapToTurnPolicy(t *testing.T) {
 		defaultApprovalMode:    core.ApprovalModeManual,
 		supportedApprovalModes: core.ApprovalModeValuesForRuntime("codex"),
 	}
-	params := s.turnStartParams("thread-1", "hello")
+	params := s.turnStartParamsInput("thread-1", core.AgentTurnInput{Text: "hello"})
 	if params["approvalPolicy"] != "on-request" || params["sandbox"] != "readOnly" {
 		t.Fatalf("manual policy = %#v", params)
 	}
 	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeYolo); err != nil {
 		t.Fatal(err)
 	}
-	params = s.turnStartParams("thread-1", "hello")
+	params = s.turnStartParamsInput("thread-1", core.AgentTurnInput{Text: "hello"})
 	if params["approvalPolicy"] != "never" || params["sandbox"] != "dangerFullAccess" {
 		t.Fatalf("YOLO policy = %#v", params)
 	}
 	if err := s.SetRuntimeSetting(core.RuntimeSettingApprovalMode, core.ApprovalModeAuto); err != nil {
 		t.Fatal(err)
 	}
-	params = s.turnStartParams("thread-1", "hello")
+	params = s.turnStartParamsInput("thread-1", core.AgentTurnInput{Text: "hello"})
 	if params["approvalPolicy"] != "on-request" || params["sandbox"] != "workspaceWrite" || params["approvalsReviewer"] != "auto_review" {
 		t.Fatalf("auto-review policy = %#v", params)
 	}

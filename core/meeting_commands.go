@@ -443,15 +443,6 @@ func meetingTurnPrompt(localContext string, meeting ActiveMeeting, question stri
 	return strings.Join(sections, "\n\n")
 }
 
-// deliverMeetingAnswer consumes the entire Agent event stream. Final mode
-// deliberately waits for channel closure—not merely EventFinal—because some
-// runtimes can still emit terminal bookkeeping after their final output.
-// Stream mode releases at most one coherent chunk per interval while the turn
-// is running, then flushes the final remainder when the stream closes.
-func deliverMeetingAnswer(ctx context.Context, events <-chan *Event, mode string, send func(string) error) error {
-	return deliverMeetingAnswerObserved(ctx, events, mode, send, nil)
-}
-
 // deliverMeetingAnswerObserved mirrors the accumulated final-answer text to
 // observe without coupling meeting chat delivery to an optional speech sink.
 // Speech failures are handled by the caller and never suppress the text path.

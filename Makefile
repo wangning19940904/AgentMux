@@ -23,8 +23,10 @@ HOOK_LDFLAGS := -s -w
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 WAILS       ?= $(HOME)/go/bin/wails
 GORELEASER  ?= goreleaser
+STATICCHECK ?= staticcheck
+WEB_DEPS_STAMP := web/node_modules/.package-lock.json
 
-.PHONY: all build web release cross remote-assets desktop menubar test vet clean tidy release-check snapshot
+.PHONY: all build web web-deps web-test release cross remote-assets desktop menubar test vet staticcheck tidy-check check clean tidy release-check snapshot
 
 all: release
 
@@ -33,8 +35,16 @@ build:
 	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@ln -sf $(BINARY) $(ALIAS)
 
-web:
-	cd web && npm install && npm run build
+$(WEB_DEPS_STAMP): web/package.json web/package-lock.json
+	cd web && npm ci
+
+web-deps: $(WEB_DEPS_STAMP)
+
+web: web-deps
+	cd web && npm run build
+
+web-test: web-deps
+	cd web && npm test
 
 # Release build with the WebUI embedded (requires `make web` first).
 release: web
@@ -104,6 +114,14 @@ test:
 
 vet:
 	go vet ./...
+
+staticcheck:
+	$(STATICCHECK) ./...
+
+tidy-check:
+	go mod tidy -diff
+
+check: test vet staticcheck tidy-check web-test web
 
 tidy:
 	go mod tidy

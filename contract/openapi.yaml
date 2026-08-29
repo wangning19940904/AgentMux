@@ -374,10 +374,12 @@ paths:
       operationId: createConsoleSession
       summary: Mint a one-time Console entry URL
       description: >
-        Server-to-server endpoint. The host application backend (holding the
-        bridge token) calls this to obtain a single-use nonce URL. Redirecting
-        a browser to enter_url exchanges the nonce for a short-lived HttpOnly
-        session cookie that authorizes the embedded Console.
+        Server-to-server endpoint. The host application backend (holding a
+        bridge or tenant token) calls this to obtain a single-use nonce URL.
+        Redirecting a browser to enter_url exchanges the nonce for a short-lived
+        HttpOnly session cookie that authorizes the embedded Console and
+        inherits the caller's scope. Tenant sessions remain available when
+        global bridge authentication is disabled.
       responses:
         "200":
           description: One-time entry URL
@@ -387,13 +389,6 @@ paths:
                 $ref: "#/components/schemas/ConsoleSession"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "503":
-          description: Bridge is disabled; console sessions require bridge auth
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
   /console/enter:
     get:
       tags: [console]
@@ -622,9 +617,11 @@ components:
       type: http
       scheme: bearer
       description: >
-        The [bridge] token from config.toml. Required on /api/* and /v1/*
-        whenever bridge.enabled = true. A valid agentmux_console session
-        cookie is an equivalent credential for browser-embedded Console use.
+        An AgentMux bridge or tenant token. When bridge.enabled is true,
+        /api/* and /v1/* require a credential. When it is false, anonymous
+        loopback calls retain legacy administrator access, while any explicit
+        bearer or agentmux_console cookie is still validated and scoped. A
+        Console cookie is accepted only for same-origin browser requests.
 
   responses:
     OK:
@@ -643,7 +640,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     Unauthorized:
-      description: Missing or invalid bridge token
+      description: Missing or invalid AgentMux credential
       content:
         application/json:
           schema:
