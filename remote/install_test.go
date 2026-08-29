@@ -32,7 +32,7 @@ func TestStartRemoteServiceUsesPostgres(t *testing.T) {
 
 func TestPrepareRemotePostgresProvisionsLinuxDatabase(t *testing.T) {
 	client := &recordingRemoteClient{}
-	databaseURL, err := prepareRemotePostgres(context.Background(), client, "linux")
+	databaseURL, err := prepareRemotePostgres(context.Background(), client, "linux", "bridge-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,7 @@ func TestPrepareRemotePostgresProvisionsLinuxDatabase(t *testing.T) {
 		"createuser -h /var/run/postgresql",
 		"createdb -h /var/run/postgresql",
 		`detected_port=$(pg_lsclusters`,
+		`AGENTMUX_BRIDGE_TOKEN='bridge-secret'`,
 		`database setup`,
 	} {
 		if !strings.Contains(command, want) {
