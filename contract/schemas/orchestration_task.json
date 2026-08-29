@@ -1,0 +1,65 @@
+{
+  "fields": {
+    "agent_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "conversation_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "depends_on": {
+      "omitempty": true,
+      "type": "array\u003cstring\u003e"
+    },
+    "error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "finished_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "input": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "invocation_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "orchestration_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "output": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "project": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "started_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "status": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.OrchestrationTask"
+}

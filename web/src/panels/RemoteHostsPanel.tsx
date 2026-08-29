@@ -58,6 +58,7 @@ export function RemoteHostsPanel() {
   const [hostDialogOpen, setHostDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [syncingSSHConfig, setSyncingSSHConfig] = useState(false);
   const [discoveryError, setDiscoveryError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -127,6 +128,26 @@ export function RemoteHostsPanel() {
       setDiscoveryError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setDiscoveryLoading(false);
+    }
+  };
+
+  const syncSSHConfig = async () => {
+    setSyncingSSHConfig(true);
+    setMessage("");
+    setError("");
+    try {
+      const result = await api.syncRemoteHostsFromSSHConfig();
+      const next = await load();
+      if (next) notifyRemoteHostsChanged(next);
+      setMessage(t("remote.syncResult", {
+        updated: result.updated,
+        unchanged: result.unchanged,
+        skipped: result.unmatched + result.ambiguous,
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSyncingSSHConfig(false);
     }
   };
 
@@ -613,7 +634,19 @@ export function RemoteHostsPanel() {
             <h2>{t("remote.hosts")}</h2>
             <p className="subtle-copy">{t("remote.hostsHint")}</p>
           </div>
-          <span className="pill">{hosts.length}</span>
+          <div className="remote-discovery-summary">
+            <span className="pill">{hosts.length}</span>
+            <button
+              className="ghost-action"
+              type="button"
+              disabled={loading || syncingSSHConfig || hosts.length === 0}
+              onClick={() => void syncSSHConfig()}
+              title={t("remote.syncSSHConfigHint")}
+            >
+              <RefreshCw size={14} className={syncingSSHConfig ? "spin" : ""} />
+              {syncingSSHConfig ? t("remote.syncingSSHConfig") : t("remote.syncSSHConfig")}
+            </button>
+          </div>
         </div>
         <div className="remote-host-list">
           {loading && <div className="empty-state">{t("common.loading")}</div>}

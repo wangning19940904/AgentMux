@@ -480,6 +480,41 @@ Invocation API 没有消息渠道可承载交互式审批；如果 Agent 在执�
 
 运行时设置卡里的“当前会话”会立即生效；“Agent 默认”只影响之后创建的新会话，不会反向修改已经存在的会话。Codex app-server 能原生挂起权限请求，启用渠道 Codex 远程控制后会发送带“允许一次 / 本会话允许 / 拒绝”的审批卡片。Cursor、Claude Code 等 print-mode CLI 不能在渠道中暂停后继续接收逐次审批；它们的手动模式会直接拦截工具，请改用运行时支持的自动审批或 `/yolo on`。
 
+## 集成（契约与 SDK）
+
+对外集成契约的唯一事实来源在 [`contract/`](contract/)：OpenAPI 3.1 规范
+（[openapi.yaml](contract/openapi.yaml)）、版本策略与稳定性分级
+（[CONTRACT.md](contract/CONTRACT.md)），以及由 Go 类型自动生成、CI 防漂移的
+golden schema。当前 `contract_version` 为 `1.2`，由
+`GET /api/v1/capabilities`（推荐的唯一握手/探活端点）返回。
+
+四类接入角色，各有一条推荐路径：
+
+| 角色 | 方式 |
+| --- | --- |
+| 后端服务 | Python SDK [`agentmux-sdk`](sdk/python/)（import `agentmux_sdk`），`invoke()` / `invoke_stream()` |
+| Web UI | TypeScript SDK [`agentmux-sdk`](sdk/typescript/)（npm），经自家 BFF 转发或用 Console 会话 cookie |
+| 已有 OpenAI 生态 | 不装 SDK，`base_url` 指向 `http://<host>:8765/v1`，直接用 `/v1/responses` |
+| 宿主 App（装/升/拉起 AgentMux） | `python -m agentmux_sdk.bootstrap`，或 release asset 里的 [`ensure-agentmux.sh`](scripts/ensure-agentmux.sh) |
+
+```python
+from agentmux_sdk import AgentMuxClient
+
+client = AgentMuxClient(token="<bridge token>")
+print(client.health().state)   # ready | unauthorized | incompatible | unreachable | missing
+for event in client.invoke_stream(agent_id="agent-abc", input="分析这份数据"):
+    ...
+```
+
+宿主应用嵌入 Console 时，不要把 bridge token 交给浏览器：由宿主后端调用
+`POST /api/v1/console/sessions` 换取一次性 `enter_url`（约 60 秒有效、单次使用），
+浏览器访问后获得 HttpOnly 会话 cookie 并落在 Console 首页。
+
+宿主页面不应只提供 Console 跳转。统一使用
+[`contract/HOST_INTEGRATION.md`](contract/HOST_INTEGRATION.md) 定义的 BFF + tenant
+token 架构：管理面优先把一次性 Console session 嵌入 sandboxed iframe，场景化动作
+再通过 `client.integration.snapshot()` / `invoke_stream()` 原生实现。
+
 ## 构建
 
 | 目标 | 命令 | 说明 |

@@ -247,6 +247,73 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS desktop_thread_id TEXT;
 `,
 		},
+		{
+			version: 11,
+			name:    "tenancy",
+			sql: `
+CREATE TABLE IF NOT EXISTS tenants (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	kind TEXT,
+	status TEXT NOT NULL,
+	note TEXT,
+	created_at TEXT,
+	updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_name ON tenants(name);
+CREATE TABLE IF NOT EXISTS tenant_tokens (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	name TEXT,
+	token_hash TEXT NOT NULL,
+	prefix TEXT,
+	created_at TEXT,
+	last_used_at TEXT,
+	expires_at TEXT,
+	revoked_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_tokens_hash ON tenant_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
+CREATE TABLE IF NOT EXISTS tenant_enrollments (
+	id TEXT PRIMARY KEY,
+	code_hash TEXT NOT NULL,
+	name_hint TEXT,
+	kind_hint TEXT,
+	tenant_id TEXT,
+	created_at TEXT,
+	expires_at TEXT,
+	consumed_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_enrollments_code ON tenant_enrollments(code_hash);
+CREATE TABLE IF NOT EXISTS resource_grants (
+	tenant_id TEXT NOT NULL,
+	resource_type TEXT NOT NULL,
+	resource_id TEXT NOT NULL,
+	level TEXT NOT NULL,
+	created_at TEXT,
+	updated_at TEXT,
+	PRIMARY KEY (tenant_id, resource_type, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_grants_lookup ON resource_grants(tenant_id, resource_type);
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS owner_tenant_id TEXT;
+ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS visibility TEXT;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS owner_tenant_id TEXT;
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS visibility TEXT;
+ALTER TABLE triggers ADD COLUMN IF NOT EXISTS owner_tenant_id TEXT;
+ALTER TABLE orchestrations ADD COLUMN IF NOT EXISTS owner_tenant_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_instances_owner ON agent_instances(owner_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_triggers_owner ON triggers(owner_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_orchestrations_owner ON orchestrations(owner_tenant_id);
+`,
+		},
+		{
+			version: 12,
+			name:    "remove_tenant_enrollment_codes",
+			sql: `
+DROP TABLE IF EXISTS tenant_enrollments;
+`,
+		},
 	}
 }
 

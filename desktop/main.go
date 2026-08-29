@@ -83,18 +83,23 @@ type App struct {
 	// from Go. Keeping HTTP out of WebKit avoids macOS mixed-content/ATS failures
 	// that otherwise surface in the UI as the opaque "TypeError: Load failed".
 	apiTarget atomic.Value // *url.URL
+	apiToken  atomic.Value // string; injected only by the native Go proxy
 	apiProxy  *httputil.ReverseProxy
 }
 
 func newApp() *App {
 	app := &App{}
 	app.apiTarget.Store(desktopAPITarget("127.0.0.1:8765"))
+	app.apiToken.Store("")
 	app.apiProxy = &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			target := app.apiTarget.Load().(*url.URL)
 			request.URL.Scheme = target.Scheme
 			request.URL.Host = target.Host
 			request.Host = target.Host
+			if token := app.apiToken.Load().(string); token != "" {
+				request.Header.Set("Authorization", "Bearer "+token)
+			}
 		},
 		ErrorHandler: func(response http.ResponseWriter, _ *http.Request, _ error) {
 			http.Error(response, "desktop API is starting", http.StatusServiceUnavailable)
@@ -131,6 +136,10 @@ func isDesktopObservationSessionPath(path string) bool {
 
 func (a *App) setAPITarget(addr string) {
 	a.apiTarget.Store(desktopAPITarget(addr))
+}
+
+func (a *App) setAPIToken(token string) {
+	a.apiToken.Store(strings.TrimSpace(token))
 }
 
 // OpenLocalWebUI opens the in-process daemon's Web UI in the user's default

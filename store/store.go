@@ -236,9 +236,12 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	clis TEXT,
 	enabled INTEGER DEFAULT 1,
 	source TEXT,
+	owner_tenant_id TEXT,
+	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_agent_instances_owner ON agent_instances(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS proxy_config (
 	tool TEXT PRIMARY KEY,
 	enabled INTEGER DEFAULT 0,
@@ -278,9 +281,45 @@ CREATE TABLE IF NOT EXISTS channels (
 	agent_id TEXT,
 	config TEXT,
 	enabled INTEGER DEFAULT 0,
+	owner_tenant_id TEXT,
+	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_tenant_id);
+CREATE TABLE IF NOT EXISTS tenants (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	kind TEXT,
+	status TEXT NOT NULL,
+	note TEXT,
+	created_at TEXT,
+	updated_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_name ON tenants(name);
+CREATE TABLE IF NOT EXISTS tenant_tokens (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	name TEXT,
+	token_hash TEXT NOT NULL,
+	prefix TEXT,
+	created_at TEXT,
+	last_used_at TEXT,
+	expires_at TEXT,
+	revoked_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_tokens_hash ON tenant_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
+CREATE TABLE IF NOT EXISTS resource_grants (
+	tenant_id TEXT NOT NULL,
+	resource_type TEXT NOT NULL,
+	resource_id TEXT NOT NULL,
+	level TEXT NOT NULL,
+	created_at TEXT,
+	updated_at TEXT,
+	PRIMARY KEY (tenant_id, resource_type, resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_grants_lookup ON resource_grants(tenant_id, resource_type);
 CREATE TABLE IF NOT EXISTS triggers (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -299,9 +338,11 @@ CREATE TABLE IF NOT EXISTS triggers (
 	last_run TEXT,
 	last_status TEXT,
 	last_error TEXT,
+	owner_tenant_id TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_triggers_owner ON triggers(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS conversations (
 	id TEXT PRIMARY KEY,
 	scope TEXT NOT NULL,
@@ -390,11 +431,13 @@ CREATE TABLE IF NOT EXISTS orchestrations (
 	status TEXT NOT NULL,
 	max_concurrency INTEGER NOT NULL,
 	error TEXT,
+	owner_tenant_id TEXT,
 	created_at TEXT NOT NULL,
 	started_at TEXT,
 	finished_at TEXT,
 	updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_orchestrations_owner ON orchestrations(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS orchestration_tasks (
 	orchestration_id TEXT NOT NULL,
 	id TEXT NOT NULL,
@@ -420,6 +463,11 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
 
 func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
+		return err
+	}
+	// Registration codes were removed in contract 1.2. Drop the retired table
+	// during legacy SQLite upgrades so stale secrets cannot remain usable.
+	if _, err := s.writer.Exec(`DROP TABLE IF EXISTS tenant_enrollments`); err != nil {
 		return err
 	}
 	for _, col := range []struct {
@@ -462,6 +510,22 @@ func (s *Store) migrateSQLite() error {
 	}
 	if err := s.ensureColumn("agent_instances", "clis", "TEXT"); err != nil {
 		return err
+	}
+	// Tenancy ownership columns (see core/tenancy.go).
+	for _, owned := range []struct {
+		table   string
+		columns []string
+	}{
+		{"agent_instances", []string{"owner_tenant_id", "visibility"}},
+		{"channels", []string{"owner_tenant_id", "visibility"}},
+		{"triggers", []string{"owner_tenant_id"}},
+		{"orchestrations", []string{"owner_tenant_id"}},
+	} {
+		for _, column := range owned.columns {
+			if err := s.ensureColumn(owned.table, column, "TEXT"); err != nil {
+				return err
+			}
+		}
 	}
 	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
 		return err

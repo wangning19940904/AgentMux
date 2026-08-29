@@ -96,15 +96,47 @@ func (c *larkClient) StreamCardText(ctx context.Context, cardID, text string, se
 	return nil
 }
 
+// InsertStreamCardImage adds one uploaded screenshot without replacing the
+// live markdown element, so subsequent text updates keep their typewriter
+// behavior and structural updates do not consume full-card patch capacity.
+func (c *larkClient) InsertStreamCardImage(ctx context.Context, cardID, targetElementID string, sequence int, image streamCardImage) error {
+	elements, err := json.Marshal([]map[string]any{cardImageElement(image, true)})
+	if err != nil {
+		return err
+	}
+	req := larkcardkit.NewCreateCardElementReqBuilder().
+		CardId(cardID).
+		Body(larkcardkit.NewCreateCardElementReqBodyBuilder().
+			Type(larkcardkit.TypeInsertAfter).
+			TargetElementId(targetElementID).
+			Uuid(image.ElementID).
+			Sequence(sequence).
+			Elements(string(elements)).
+			Build()).
+		Build()
+	resp, err := c.api.Cardkit.V1.CardElement.Create(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !resp.Success() {
+		return fmt.Errorf("%s insert stream card image failed: %s", c.platform, resp.Msg)
+	}
+	return nil
+}
+
 // FinishStreamCard writes the terminal text, restyles the header for the final
 // state, and turns streaming mode off with a full card update.
-func (c *larkClient) FinishStreamCard(ctx context.Context, cardID, text string, sequence int, failed bool, control *streamCardControl) error {
+func (c *larkClient) FinishStreamCard(ctx context.Context, cardID, text string, sequence int, failed bool, images []streamCardImage, control *streamCardControl) error {
+	return c.updateStreamCard(ctx, cardID, text, sequence, true, failed, images, control)
+}
+
+func (c *larkClient) updateStreamCard(ctx context.Context, cardID, text string, sequence int, done, failed bool, images []streamCardImage, control *streamCardControl) error {
 	req := larkcardkit.NewUpdateCardReqBuilder().
 		CardId(cardID).
 		Body(larkcardkit.NewUpdateCardReqBodyBuilder().
 			Card(larkcardkit.NewCardBuilder().
 				Type("card_json").
-				Data(buildStreamCardJSON(text, true, failed, control)).
+				Data(buildStreamCardJSONWithImages(text, done, failed, images, control)).
 				Build()).
 			Sequence(sequence).
 			Build()).
@@ -114,7 +146,7 @@ func (c *larkClient) FinishStreamCard(ctx context.Context, cardID, text string, 
 		return err
 	}
 	if !resp.Success() {
-		return fmt.Errorf("%s finish stream card failed: %s", c.platform, resp.Msg)
+		return fmt.Errorf("%s update stream card failed: %s", c.platform, resp.Msg)
 	}
 	return nil
 }
@@ -123,6 +155,10 @@ func (c *larkClient) FinishStreamCard(ctx context.Context, cardID, text string, 
 // turn is streaming (done=false) a subtle "typing" note is appended; the final
 // update drops it, and failures switch the header to a red error style.
 func buildCard(text string, done, failed bool, control *streamCardControl) string {
+	return buildCardWithImages(text, done, failed, nil, control)
+}
+
+func buildCardWithImages(text string, done, failed bool, images []streamCardImage, control *streamCardControl) string {
 	if text == "" {
 		text = " "
 	} else {
@@ -134,6 +170,7 @@ func buildCard(text string, done, failed bool, control *streamCardControl) strin
 			"content": text,
 		},
 	}
+	elements = append(elements, cardImageElements(images, false)...)
 	if !done {
 		elements = append(elements, map[string]any{
 			"tag": "note",
@@ -185,6 +222,10 @@ func buildCard(text string, done, failed bool, control *streamCardControl) strin
 // render with a typewriter effect and bypass card update rate limits; the final
 // update turns streaming_mode off and restyles the header for done/failed.
 func buildStreamCardJSON(text string, done, failed bool, control *streamCardControl) string {
+	return buildStreamCardJSONWithImages(text, done, failed, nil, control)
+}
+
+func buildStreamCardJSONWithImages(text string, done, failed bool, images []streamCardImage, control *streamCardControl) string {
 	if text == "" {
 		text = " "
 	} else {
@@ -206,6 +247,7 @@ func buildStreamCardJSON(text string, done, failed bool, control *streamCardCont
 			"content":    text,
 		},
 	}
+	elements = append(elements, cardImageElements(images, true)...)
 	if !done && control != nil {
 		elements = append(elements, modelPickerButton("停止任务", "danger", streamStopActionValue(control)))
 	} else if done && !failed && control != nil {
@@ -236,6 +278,42 @@ func buildStreamCardJSON(text string, done, failed bool, control *streamCardCont
 		return `{"schema":"2.0","body":{"elements":[{"tag":"markdown","element_id":"answer","content":" "}]}}`
 	}
 	return string(b)
+}
+
+type streamCardImage struct {
+	Key       string
+	Name      string
+	ElementID string
+}
+
+func cardImageElements(images []streamCardImage, includeElementID bool) []map[string]any {
+	elements := make([]map[string]any, 0, len(images))
+	for _, image := range images {
+		if strings.TrimSpace(image.Key) == "" {
+			continue
+		}
+		elements = append(elements, cardImageElement(image, includeElementID))
+	}
+	return elements
+}
+
+func cardImageElement(image streamCardImage, includeElementID bool) map[string]any {
+	alt := strings.TrimSpace(image.Name)
+	if alt == "" {
+		alt = "图片"
+	}
+	element := map[string]any{
+		"tag":     "img",
+		"img_key": image.Key,
+		"alt": map[string]any{
+			"tag":     "plain_text",
+			"content": alt,
+		},
+	}
+	if includeElementID && strings.TrimSpace(image.ElementID) != "" {
+		element["element_id"] = image.ElementID
+	}
+	return element
 }
 
 // linkifyFeishuMarkdown makes bare URLs explicit Markdown links. Feishu card

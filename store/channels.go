@@ -9,10 +9,27 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// ListChannels returns all console-managed channels, enabled first.
+const channelColumns = `id,name,type,agent_id,config,enabled,owner_tenant_id,visibility,
+	created_at,updated_at`
+
+// ListChannels returns all console-managed channels, enabled first. This is
+// the admin and runtime view: the engine needs every channel to run it. Use
+// ListChannelsForTenant for the scoped API view.
 func (s *Store) ListChannels(ctx context.Context) ([]core.Channel, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,agent_id,config,enabled,
-		created_at,updated_at FROM channels ORDER BY enabled DESC, name`)
+	return s.queryChannels(ctx,
+		`SELECT `+channelColumns+` FROM channels ORDER BY enabled DESC, name`)
+}
+
+// ListChannelsForTenant returns the channels one tenant may see.
+func (s *Store) ListChannelsForTenant(ctx context.Context, tenantID string) ([]core.Channel, error) {
+	return s.queryChannels(ctx,
+		`SELECT `+channelColumns+` FROM channels WHERE `+
+			visibleToTenant(core.ResourceTypeChannel)+` ORDER BY enabled DESC, name`,
+		visibleToTenantArgs(tenantID)...)
+}
+
+func (s *Store) queryChannels(ctx context.Context, query string, args ...any) ([]core.Channel, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -30,8 +47,8 @@ func (s *Store) ListChannels(ctx context.Context) ([]core.Channel, error) {
 
 // GetChannel returns one channel or (nil,nil) if absent.
 func (s *Store) GetChannel(ctx context.Context, id string) (*core.Channel, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,name,type,agent_id,config,enabled,
-		created_at,updated_at FROM channels WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+channelColumns+` FROM channels WHERE id=?`, id)
 	ch, err := scanChannel(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -47,12 +64,14 @@ func (s *Store) UpsertChannel(ctx context.Context, ch *core.Channel) error {
 		enabled = 1
 	}
 	_, err := s.writer.ExecContext(ctx, `INSERT INTO channels
-		(id,name,type,agent_id,config,enabled,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?)
+		(id,name,type,agent_id,config,enabled,owner_tenant_id,visibility,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,
 		agent_id=excluded.agent_id,config=excluded.config,enabled=excluded.enabled,
+		owner_tenant_id=excluded.owner_tenant_id,visibility=excluded.visibility,
 		updated_at=excluded.updated_at`,
 		ch.ID, ch.Name, ch.Type, ch.AgentID, string(cfg), enabled,
+		nullableOwner(ch.OwnerTenantID), ch.Visibility,
 		ch.CreatedAt.Format(time.RFC3339Nano), ch.UpdatedAt.Format(time.RFC3339Nano))
 	return err
 }
@@ -63,16 +82,26 @@ func (s *Store) DeleteChannel(ctx context.Context, id string) error {
 	return err
 }
 
+// SetChannelOwner assigns (or with an empty tenantID clears) ownership.
+func (s *Store) SetChannelOwner(ctx context.Context, id, tenantID string) error {
+	_, err := s.writer.ExecContext(ctx,
+		`UPDATE channels SET owner_tenant_id=?, updated_at=? WHERE id=?`,
+		nullableOwner(tenantID), time.Now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
 func scanChannel(sc scanner) (core.Channel, error) {
 	var ch core.Channel
-	var agentID, cfg, created, updated sql.NullString
+	var agentID, cfg, ownerTenantID, visibility, created, updated sql.NullString
 	var enabled int
 	if err := sc.Scan(&ch.ID, &ch.Name, &ch.Type, &agentID, &cfg, &enabled,
-		&created, &updated); err != nil {
+		&ownerTenantID, &visibility, &created, &updated); err != nil {
 		return ch, err
 	}
 	ch.AgentID = agentID.String
 	ch.Enabled = enabled != 0
+	ch.OwnerTenantID = ownerTenantID.String
+	ch.Visibility = visibility.String
 	if cfg.String != "" {
 		_ = json.Unmarshal([]byte(cfg.String), &ch.Config)
 	}

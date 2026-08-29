@@ -1,0 +1,49 @@
+{
+  "fields": {
+    "agent_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "config": {
+      "omitempty": true,
+      "type": "map\u003cstring,string\u003e"
+    },
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "enabled": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "owner_tenant_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "owner_tenant_name": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "type": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "visibility": {
+      "omitempty": true,
+      "type": "string"
+    }
+  },
+  "go_type": "core.Channel"
+}

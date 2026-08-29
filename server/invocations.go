@@ -27,6 +27,9 @@ func (s *Server) handleInvocation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.authorizeInvocationTarget(w, r, req.AgentID, req.Project) {
+		return
+	}
 	result, err := s.invoker.Invoke(r.Context(), req)
 	if err != nil {
 		writeErr(w, invocationErrorStatus(err), err.Error())
@@ -57,6 +60,9 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 	r.Body = http.MaxBytesReader(w, r.Body, maxInvocationRequestBytes)
 	req, decoded := decodeJSON[core.InvocationRequest](w, r)
 	if !decoded {
+		return
+	}
+	if !s.authorizeInvocationTarget(w, r, req.AgentID, req.Project) {
 		return
 	}
 

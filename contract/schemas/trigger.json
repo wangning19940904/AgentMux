@@ -1,0 +1,85 @@
+{
+  "fields": {
+    "action_target": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "action_type": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "agent_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "channel_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "chat_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "cron_expr": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "enabled": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "event": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "kind": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "last_error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "last_run": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "last_status": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "owner_tenant_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "prompt": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "session_mode": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "token": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.Trigger"
+}

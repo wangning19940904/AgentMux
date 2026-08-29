@@ -11,12 +11,28 @@ import (
 
 const triggerColumns = `id,name,kind,agent_id,channel_id,chat_id,cron_expr,prompt,
 	event,action_type,action_target,token,session_mode,enabled,last_run,last_status,
-	last_error,created_at,updated_at`
+	last_error,owner_tenant_id,created_at,updated_at`
 
-// ListTriggers returns all triggers, enabled first then by name.
+// ListTriggers returns all triggers, enabled first then by name. This is the
+// admin and runtime view; the scheduler needs every trigger to fire it. Use
+// ListTriggersForTenant for the scoped API view.
 func (s *Store) ListTriggers(ctx context.Context) ([]core.Trigger, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return s.queryTriggers(ctx,
 		`SELECT `+triggerColumns+` FROM triggers ORDER BY enabled DESC, kind, name`)
+}
+
+// ListTriggersForTenant returns the triggers one tenant may see. Triggers have
+// no public visibility of their own: a tenant reaches them by ownership or by
+// an explicit grant.
+func (s *Store) ListTriggersForTenant(ctx context.Context, tenantID string) ([]core.Trigger, error) {
+	return s.queryTriggers(ctx,
+		`SELECT `+triggerColumns+` FROM triggers WHERE (owner_tenant_id=? OR id IN (
+			SELECT resource_id FROM resource_grants WHERE tenant_id=? AND resource_type='`+core.ResourceTypeTrigger+`'))
+		ORDER BY enabled DESC, kind, name`, tenantID, tenantID)
+}
+
+func (s *Store) queryTriggers(ctx context.Context, query string, args ...any) ([]core.Trigger, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -57,18 +73,26 @@ func (s *Store) UpsertTrigger(ctx context.Context, tr *core.Trigger) error {
 	_, err := s.writer.ExecContext(ctx, `INSERT INTO triggers
 		(id,name,kind,agent_id,channel_id,chat_id,cron_expr,prompt,event,action_type,
 		 action_target,token,session_mode,enabled,last_run,last_status,last_error,
-		 created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 owner_tenant_id,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,
 		agent_id=excluded.agent_id,channel_id=excluded.channel_id,chat_id=excluded.chat_id,
 		cron_expr=excluded.cron_expr,prompt=excluded.prompt,event=excluded.event,
 		action_type=excluded.action_type,action_target=excluded.action_target,
 		token=excluded.token,session_mode=excluded.session_mode,enabled=excluded.enabled,
-		updated_at=excluded.updated_at`,
+		owner_tenant_id=excluded.owner_tenant_id,updated_at=excluded.updated_at`,
 		tr.ID, tr.Name, tr.Kind, tr.AgentID, tr.ChannelID, tr.ChatID, tr.CronExpr,
 		tr.Prompt, tr.Event, tr.ActionType, tr.ActionTarget, tr.Token, tr.SessionMode,
-		enabled, lastRun, tr.LastStatus, tr.LastError,
+		enabled, lastRun, tr.LastStatus, tr.LastError, nullableOwner(tr.OwnerTenantID),
 		tr.CreatedAt.Format(time.RFC3339Nano), tr.UpdatedAt.Format(time.RFC3339Nano))
+	return err
+}
+
+// SetTriggerOwner assigns (or with an empty tenantID clears) ownership.
+func (s *Store) SetTriggerOwner(ctx context.Context, id, tenantID string) error {
+	_, err := s.writer.ExecContext(ctx,
+		`UPDATE triggers SET owner_tenant_id=?, updated_at=? WHERE id=?`,
+		nullableOwner(tenantID), time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }
 
@@ -90,13 +114,14 @@ func scanTrigger(sc scanner) (core.Trigger, error) {
 	var tr core.Trigger
 	var agentID, channelID, chatID, cronExpr, prompt, event sql.NullString
 	var actionType, actionTarget, token, sessionMode sql.NullString
-	var lastRun, lastStatus, lastError, created, updated sql.NullString
+	var lastRun, lastStatus, lastError, ownerTenantID, created, updated sql.NullString
 	var enabled int
 	if err := sc.Scan(&tr.ID, &tr.Name, &tr.Kind, &agentID, &channelID, &chatID,
 		&cronExpr, &prompt, &event, &actionType, &actionTarget, &token, &sessionMode,
-		&enabled, &lastRun, &lastStatus, &lastError, &created, &updated); err != nil {
+		&enabled, &lastRun, &lastStatus, &lastError, &ownerTenantID, &created, &updated); err != nil {
 		return tr, err
 	}
+	tr.OwnerTenantID = ownerTenantID.String
 	tr.AgentID = agentID.String
 	tr.ChannelID = channelID.String
 	tr.ChatID = chatID.String

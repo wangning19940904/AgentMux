@@ -43,6 +43,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(observabilityCmd())
 	root.AddCommand(databaseCmd())
 	root.AddCommand(sendCmd())
+	root.AddCommand(tenantsCmd())
 	root.AddCommand(versionCmd())
 	return root
 }

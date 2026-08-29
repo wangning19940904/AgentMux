@@ -20,6 +20,88 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestManagerSyncSSHConfigRefreshesAliasesAndPreservesSecrets(t *testing.T) {
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+
+	ecs, err := manager.Upsert(Host{
+		Name: "aliyun-ecs", Host: "101.200.234.220", Port: 22, User: "root",
+		KeyPath: "/keys/ecs", RemoteAddr: defaultRemoteAddr, APIToken: "secret-ecs",
+		HostKeyFingerprint: "SHA256:ecs",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sg, err := manager.Upsert(Host{
+		Name: "aliyun-sg", Host: "47.236.247.144", Port: 22, User: "root",
+		SSHAlias: "aliyun-sg", RemoteAddr: defaultRemoteAddr, APIToken: "secret-sg",
+		HostKeyFingerprint: "SHA256:sg",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Upsert(Host{
+		Name: "unmatched", Host: "10.0.0.9", Port: 22, User: "ops", RemoteAddr: defaultRemoteAddr,
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.SyncSSHConfig([]DiscoveredHost{
+		{Name: "aliyun-ecs-bj", SSHAlias: "aliyun-ecs-bj", Host: "101.200.234.220", Port: 22, User: "root", KeyPath: "/keys/ecs-new"},
+		{Name: "aliyun-swas-sg", SSHAlias: "aliyun-swas-sg", Host: "47.236.247.144", Port: 22, User: "root", KeyPath: "/keys/sg"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated != 2 || result.Unchanged != 0 || result.Unmatched != 1 || result.Ambiguous != 0 {
+		t.Fatalf("sync result = %+v", result)
+	}
+
+	updatedECS, ok := manager.Get(ecs.ID)
+	if !ok || updatedECS.Name != "aliyun-ecs-bj" || updatedECS.SSHAlias != "aliyun-ecs-bj" ||
+		updatedECS.KeyPath != "/keys/ecs-new" || updatedECS.APIToken != "secret-ecs" ||
+		updatedECS.HostKeyFingerprint != "SHA256:ecs" {
+		t.Fatalf("updated ECS host = %+v, ok = %v", updatedECS, ok)
+	}
+	updatedSG, ok := manager.Get(sg.ID)
+	if !ok || updatedSG.Name != "aliyun-swas-sg" || updatedSG.SSHAlias != "aliyun-swas-sg" ||
+		updatedSG.APIToken != "secret-sg" || updatedSG.HostKeyFingerprint != "SHA256:sg" {
+		t.Fatalf("updated SG host = %+v, ok = %v", updatedSG, ok)
+	}
+}
+
+func TestManagerSyncSSHConfigSkipsAmbiguousTargets(t *testing.T) {
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	saved, err := manager.Upsert(Host{
+		Name: "custom-name", Host: "10.0.0.8", Port: 22, User: "deploy", RemoteAddr: defaultRemoteAddr,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.SyncSSHConfig([]DiscoveredHost{
+		{Name: "build-a", SSHAlias: "build-a", Host: "10.0.0.8", Port: 22, User: "deploy"},
+		{Name: "build-b", SSHAlias: "build-b", Host: "10.0.0.8", Port: 22, User: "deploy"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Updated != 0 || result.Ambiguous != 1 {
+		t.Fatalf("sync result = %+v", result)
+	}
+	host, ok := manager.Get(saved.ID)
+	if !ok || host.Name != "custom-name" || host.SSHAlias != "" {
+		t.Fatalf("ambiguous host changed: %+v, ok = %v", host, ok)
+	}
+}
+
 func TestManagerTrustsHostKeyAndReachesRemoteAgentMux(t *testing.T) {
 	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

@@ -19,9 +19,9 @@ type clientAPI interface {
 	UpdateText(ctx context.Context, messageID, text string) error
 	// SendCard posts an interactive card and returns its message ID so it can
 	// be updated in place later.
-	SendCard(ctx context.Context, chatID, text string, done, failed bool, control *streamCardControl) (messageID string, err error)
+	SendCard(ctx context.Context, chatID, text string, done, failed bool, images []streamCardImage, control *streamCardControl) (messageID string, err error)
 	// UpdateCard replaces the content of a previously sent card message.
-	UpdateCard(ctx context.Context, messageID, text string, done, failed bool, control *streamCardControl) error
+	UpdateCard(ctx context.Context, messageID, text string, done, failed bool, images []streamCardImage, control *streamCardControl) error
 	// SendModelPickerCard posts an interactive model selector for the
 	// conversation that originated msg.
 	SendModelPickerCard(ctx context.Context, msg *core.Message, state core.ModelPickerState) (messageID string, err error)
@@ -38,9 +38,12 @@ type clientAPI interface {
 	// text element. sequence must strictly increase across calls on the same
 	// card. Feishu computes the delta server-side and renders it as typing.
 	StreamCardText(ctx context.Context, cardID, text string, sequence int) error
+	// InsertStreamCardImage adds an uploaded image after an existing element
+	// without replacing the still-streaming markdown component.
+	InsertStreamCardImage(ctx context.Context, cardID, targetElementID string, sequence int, image streamCardImage) error
 	// FinishStreamCard finalizes a streaming card: it writes the terminal text,
 	// styles the header for done/failed, and closes streaming mode.
-	FinishStreamCard(ctx context.Context, cardID, text string, sequence int, failed bool, control *streamCardControl) error
+	FinishStreamCard(ctx context.Context, cardID, text string, sequence int, failed bool, images []streamCardImage, control *streamCardControl) error
 	// AddReaction marks a message with one emoji and returns the reaction ID.
 	AddReaction(ctx context.Context, messageID, emojiType string) (reactionID string, err error)
 	// DeleteReaction removes a reaction previously added by this client.
@@ -54,7 +57,7 @@ type clientAPI interface {
 // replies and streaming cards to remain inside the originating topic.
 type threadReplyClient interface {
 	ReplyText(ctx context.Context, messageID, text string) (replyMessageID string, err error)
-	ReplyCard(ctx context.Context, messageID, text string, done, failed bool, control *streamCardControl) (replyMessageID string, err error)
+	ReplyCard(ctx context.Context, messageID, text string, done, failed bool, images []streamCardImage, control *streamCardControl) (replyMessageID string, err error)
 	BeginStreamCardReply(ctx context.Context, messageID string, control *streamCardControl) (cardID string, err error)
 }
 
@@ -66,6 +69,12 @@ type attachmentClient interface {
 	ReplyImage(ctx context.Context, messageID, fileName string, data []byte) (replyMessageID string, err error)
 	SendFile(ctx context.Context, chatID, fileName string, data []byte) (messageID string, err error)
 	ReplyFile(ctx context.Context, messageID, fileName string, data []byte) (replyMessageID string, err error)
+}
+
+// cardImageUploader is deliberately narrower than attachmentClient: an image
+// embedded in a card needs the uploaded image key, not a second image message.
+type cardImageUploader interface {
+	uploadImage(ctx context.Context, fileName string, data []byte) (imageKey string, err error)
 }
 
 type interactionCardClient interface {

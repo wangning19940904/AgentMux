@@ -6,6 +6,7 @@ import {
 import { Channel } from "../../api";
 import { ChannelAvatar } from "../../ChannelAvatar";
 import { useI18n } from "../../i18n";
+import { OwnerBadge } from "../agents/AgentsPanel";
 import {
   formatChannelTime,
   stateBadge,
@@ -52,6 +53,7 @@ export function ChannelCard({
           <span className="status-dot" />
           {badge.label}
         </span>
+        <OwnerBadge resource={channel} />
       </div>
       {channel.error && <div className="session-notice error">{channel.error}</div>}
       {healthTimes.length > 0 && <div className="channel-health-meta">{healthTimes.join(" · ")}</div>}

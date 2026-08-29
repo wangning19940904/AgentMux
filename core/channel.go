@@ -11,14 +11,17 @@ import (
 // are attached to the Engine at runtime — the console-managed counterpart of
 // config.toml's [[projects.platforms]].
 type Channel struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Type      string            `json:"type"`
-	AgentID   string            `json:"agent_id,omitempty"`
-	Config    map[string]string `json:"config,omitempty"`
-	Enabled   bool              `json:"enabled"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Type            string            `json:"type"`
+	AgentID         string            `json:"agent_id,omitempty"`
+	Config          map[string]string `json:"config,omitempty"`
+	Enabled         bool              `json:"enabled"`
+	OwnerTenantID   string            `json:"owner_tenant_id,omitempty"`
+	OwnerTenantName string            `json:"owner_tenant_name,omitempty"`
+	Visibility      string            `json:"visibility,omitempty"` // private, public
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 // ChannelStatus reports the live state of a channel attached to the Engine.
@@ -156,12 +159,13 @@ type Trigger struct {
 	ActionTarget string    `json:"action_target,omitempty"`
 	Token        string    `json:"token,omitempty"`
 	SessionMode  string    `json:"session_mode,omitempty"`
-	Enabled      bool      `json:"enabled"`
-	LastRun      time.Time `json:"last_run,omitempty"`
-	LastStatus   string    `json:"last_status,omitempty"` // running, ok, error
-	LastError    string    `json:"last_error,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Enabled       bool      `json:"enabled"`
+	LastRun       time.Time `json:"last_run,omitempty"`
+	LastStatus    string    `json:"last_status,omitempty"` // running, ok, error
+	LastError     string    `json:"last_error,omitempty"`
+	OwnerTenantID string    `json:"owner_tenant_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // ConnectStore is the persistence surface the connect runtime (channels +

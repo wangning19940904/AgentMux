@@ -12,6 +12,7 @@ import {
   copyAgent,
   isConfigManaged,
   newAgent,
+  ownerBadge,
   routeToolForRuntime,
   runtimeLabel,
   syncAgentConnectBindings,
@@ -313,6 +314,7 @@ export function AgentsPanel() {
                     {item.enabled ? t("common.enabled") : t("common.disabled")}
                   </span>
                   <span className={`source-badge ${agentSourceClass(item)}`}>{t(agentSourceLabelKey(item))}</span>
+                <OwnerBadge resource={item} />
                   <span className="pill">{agentProviderSummary(item, activeRouteItems, t)}</span>
                   {item.default_model && <span className="pill">{item.default_model}</span>}
                   <span className="pill">
@@ -347,4 +349,17 @@ export function AgentsPanel() {
       </section>
     </div>
   );
+}
+
+// OwnerBadge is rendered only when ownership is meaningful: a tenant-scoped
+// Console sees just its own resources, so labelling every row would be noise.
+export function OwnerBadge({
+  resource,
+}: {
+  resource: { owner_tenant_name?: string; owner_tenant_id?: string; visibility?: string };
+}) {
+  const { t } = useI18n();
+  const badge = ownerBadge(resource);
+  if (!badge || badge.className === "unassigned") return null;
+  return <span className={`owner-badge ${badge.className}`}>{t(badge.labelKey, badge.params)}</span>;
 }

@@ -42,6 +42,7 @@ func TestPrepareRemotePostgresProvisionsLinuxDatabase(t *testing.T) {
 	command := client.commands[0]
 	for _, want := range []string{
 		"apt-get install -y -qq postgresql postgresql-client",
+		`if ! pg_isready -q -h /var/run/postgresql -p "$port"`,
 		"createuser -h /var/run/postgresql",
 		"createdb -h /var/run/postgresql",
 		`detected_port=$(pg_lsclusters`,
