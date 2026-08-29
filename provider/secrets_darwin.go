@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+const (
+	providerSecretService       = "AgentMux Provider API Keys"
+	legacyProviderSecretService = "AgentNexus Provider API Keys"
+)
+
 type keychainSecretBackend struct {
 	service string
 }

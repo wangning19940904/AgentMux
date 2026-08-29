@@ -8,11 +8,6 @@ import (
 	"sync"
 )
 
-const (
-	providerSecretService       = "AgentMux Provider API Keys"
-	legacyProviderSecretService = "AgentNexus Provider API Keys"
-)
-
 var errProviderSecretNotFound = errors.New("provider API key not found")
 
 type providerSecretBackend interface {
