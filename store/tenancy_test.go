@@ -71,6 +71,17 @@ func TestTenantCRUDAndTokenAuthentication(t *testing.T) {
 	if tokens[0].Secret != "" {
 		t.Fatal("listed tokens must never carry the plaintext secret")
 	}
+	if tokens[0].LastUsedAt == nil {
+		t.Fatal("authentication did not record last_used_at")
+	}
+	firstLastUsed := *tokens[0].LastUsedAt
+	if _, err := st.AuthenticateTenantToken(ctx, token.Secret); err != nil {
+		t.Fatalf("reauthenticate: %v", err)
+	}
+	tokens, err = st.ListTenantTokens(ctx, tenant.ID)
+	if err != nil || tokens[0].LastUsedAt == nil || !tokens[0].LastUsedAt.Equal(firstLastUsed) {
+		t.Fatalf("last_used_at was rewritten inside throttle window: %v (%+v)", err, tokens)
+	}
 
 	if err := st.RevokeTenantToken(ctx, token.ID); err != nil {
 		t.Fatalf("revoke: %v", err)

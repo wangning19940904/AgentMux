@@ -35,7 +35,7 @@ func TestInstallCLIUsesWhitelistAndVerifiesCommand(t *testing.T) {
 	writeExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\ncat > '"+filepath.Join(bin, "lark-cli")+"' <<'EOS'\n#!/bin/sh\nif [ \"$1\" = \"update\" ]; then echo updated; exit 0; fi\necho 'lark-cli version 1.2.3'\nEOS\nchmod +x '"+filepath.Join(bin, "lark-cli")+"'\necho installed\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := InstallCLI(context.Background(), "lark-cli", "install")
+	res := InstallCLIWithProgressOptions(context.Background(), "lark-cli", "install", CLIInstallOptions{}, nil)
 	if !res.OK || !strings.Contains(res.Version, "1.2.3") {
 		t.Fatalf("install result = %+v", res)
 	}
@@ -51,7 +51,7 @@ func TestInstallAgentBrowserRunsBrowserSetup(t *testing.T) {
 	writeExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\ncat > '"+agentBrowser+"' <<'EOS'\n#!/bin/sh\nif [ \"$1\" = \"install\" ]; then touch '"+setupMarker+"'; echo browser-installed; exit 0; fi\necho 'agent-browser 1.2.3'\nEOS\nchmod +x '"+agentBrowser+"'\necho cli-installed\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := InstallCLI(context.Background(), "agent-browser", "install")
+	res := InstallCLIWithProgressOptions(context.Background(), "agent-browser", "install", CLIInstallOptions{}, nil)
 	if !res.OK || !strings.Contains(res.Version, "1.2.3") {
 		t.Fatalf("install result = %+v", res)
 	}
@@ -250,7 +250,7 @@ echo installed
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var phases []string
-	res := InstallCLIWithProgress(context.Background(), "github-cli", "install", func(phase, _ string, _ int) {
+	res := InstallCLIWithProgressOptions(context.Background(), "github-cli", "install", CLIInstallOptions{}, func(phase, _ string, _ int) {
 		phases = append(phases, phase)
 	})
 	if !res.OK || res.Command != "brew install gh" || !strings.Contains(res.Version, "2.93.0") {
@@ -285,7 +285,7 @@ echo installed
 	t.Setenv("HOMEBREW_PREFIX", prefix)
 	t.Setenv("PATH", t.TempDir())
 
-	res := InstallCLI(context.Background(), "github-cli", "install")
+	res := InstallCLIWithProgressOptions(context.Background(), "github-cli", "install", CLIInstallOptions{}, nil)
 	if !res.OK || res.Command != "brew install gh" || !strings.Contains(res.Version, "2.93.0") {
 		t.Fatalf("install result = %+v", res)
 	}
@@ -397,7 +397,7 @@ func TestInstallCLISkipsUpdateWhenLatestMatches(t *testing.T) {
 	writeExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '1.2.3'; exit 0; fi\nexit 1\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := InstallCLI(context.Background(), "lark-cli", "update")
+	res := InstallCLIWithProgressOptions(context.Background(), "lark-cli", "update", CLIInstallOptions{}, nil)
 	if !res.OK || res.Error != "" || res.Command != "" {
 		t.Fatalf("update result = %+v", res)
 	}
@@ -407,7 +407,7 @@ func TestInstallCLISkipsUpdateWhenLatestMatches(t *testing.T) {
 }
 
 func TestInstallCLIRejectsUnknownID(t *testing.T) {
-	res := InstallCLI(context.Background(), "curl", "install")
+	res := InstallCLIWithProgressOptions(context.Background(), "curl", "install", CLIInstallOptions{}, nil)
 	if res.OK || !strings.Contains(res.Error, "unknown CLI") {
 		t.Fatalf("result = %+v", res)
 	}
@@ -419,7 +419,7 @@ func TestInternalCLIsRequireAcknowledgement(t *testing.T) {
 		if !ok || !spec.InternalOnly {
 			t.Fatalf("internal CLI spec %q = %+v", id, spec)
 		}
-		res := InstallCLI(context.Background(), id, "install")
+		res := InstallCLIWithProgressOptions(context.Background(), id, "install", CLIInstallOptions{}, nil)
 		if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
 			t.Fatalf("install %s = %+v", id, res)
 		}

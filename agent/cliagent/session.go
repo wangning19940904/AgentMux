@@ -21,11 +21,12 @@ const (
 
 type session struct {
 	runner.Settings
-	agent           *Agent
-	workDir         string
-	id              string
-	nativeSessionMu sync.Mutex
-	nativeSessionID string
+	agent             *Agent
+	workDir           string
+	id                string
+	modelCapabilities map[string]ModelRuntimeCapabilities
+	nativeSessionMu   sync.Mutex
+	nativeSessionID   string
 }
 
 func (s *session) ID() string { return s.id }
@@ -38,6 +39,16 @@ func (s *session) RuntimeSettingsView(settings core.RuntimeSettings) (core.Runti
 		return settings, core.RuntimeSettingsCapabilities{}
 	}
 	capabilities := s.Settings.RuntimeSettingsCapabilities()
+	if modelCapabilities, ok := s.modelCapabilities[settings.Model]; ok {
+		capabilities.ReasoningEfforts = append([]core.RuntimeOption(nil), modelCapabilities.ReasoningEfforts...)
+		capabilities.ServiceTiers = append([]core.RuntimeOption(nil), modelCapabilities.ServiceTiers...)
+		if !runtimeOptionAvailable(capabilities.ReasoningEfforts, settings.ReasoningEffort) {
+			settings.ReasoningEffort = ""
+		}
+		if !runtimeOptionAvailable(capabilities.ServiceTiers, settings.ServiceTier) {
+			settings.ServiceTier = ""
+		}
+	}
 	if s.agent == nil || s.agent.spec.EmbeddedModelSettings == nil {
 		return settings, capabilities
 	}
@@ -51,6 +62,19 @@ func (s *session) RuntimeSettingsView(settings core.RuntimeSettings) (core.Runti
 		capabilities.ServiceTiers = nil
 	}
 	return settings, capabilities
+}
+
+func runtimeOptionAvailable(options []core.RuntimeOption, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	for _, option := range options {
+		if option.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabilities {
@@ -111,7 +135,12 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 	out := make(chan *core.Event, 16)
 	settings := s.CurrentRuntimeSettings()
 	model := settings.Model
-	if s.agent.spec.ModelForSettings != nil {
+	if catalogModel, managed, err := s.catalogModelForSettings(settings); managed {
+		if err != nil {
+			return nil, err
+		}
+		model = catalogModel
+	} else if s.agent.spec.ModelForSettings != nil {
 		model = s.agent.spec.ModelForSettings(settings)
 	}
 	args := s.agent.spec.Args(text, s.agent.systemPrompt, model, settings.ApprovalMode)
@@ -227,6 +256,57 @@ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, er
 		}
 	}()
 	return out, nil
+}
+
+func (s *session) catalogModelForSettings(settings core.RuntimeSettings) (string, bool, error) {
+	modelCapabilities, managed := s.modelCapabilities[settings.Model]
+	if !managed || len(modelCapabilities.Variants) == 0 {
+		return "", false, nil
+	}
+	effort := strings.TrimSpace(settings.ReasoningEffort)
+	tier := normalizeCatalogServiceTier(settings.ServiceTier)
+
+	bestID := ""
+	bestScore := -1
+	for _, variant := range modelCapabilities.Variants {
+		if effort != "" && variant.ReasoningEffort != effort {
+			continue
+		}
+		if tier != "" && variant.ServiceTier != tier {
+			continue
+		}
+		score := 0
+		if variant.ReasoningEffort == effort {
+			score += 4
+		}
+		if variant.ServiceTier == tier {
+			score += 2
+		}
+		if tier == "" && variant.ServiceTier == "default" {
+			score++
+		}
+		if score > bestScore {
+			bestID, bestScore = variant.ID, score
+		}
+	}
+	if bestID != "" {
+		return bestID, true, nil
+	}
+	return "", true, fmt.Errorf(
+		"model %q has no Cursor variant for effort=%q and speed=%q",
+		settings.Model, effort, tier,
+	)
+}
+
+func normalizeCatalogServiceTier(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "priority", "fast":
+		return "priority"
+	case "default", "normal", "standard", "flex":
+		return "default"
+	default:
+		return strings.TrimSpace(value)
+	}
 }
 
 func (s *session) currentNativeSessionID() string {

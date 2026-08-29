@@ -136,16 +136,16 @@ func TestConsoleSessionRejectsUnsafeLanding(t *testing.T) {
 	}
 }
 
-func TestConsoleSessionRequiresBridge(t *testing.T) {
+func TestConsoleSessionRequiresBearerToken(t *testing.T) {
 	srv, _ := newTestServer(t)
 	recorder := httptest.NewRecorder()
 	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, consoleSessionEndpoint, nil))
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("bridge-disabled mint code = %d", recorder.Code)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated mint code = %d", recorder.Code)
 	}
 	enter := httptest.NewRecorder()
 	srv.mux.ServeHTTP(enter, httptest.NewRequest(http.MethodGet, consoleEnterPath+"?nonce=x", nil))
-	if enter.Code != http.StatusNotFound {
-		t.Fatalf("bridge-disabled enter code = %d", enter.Code)
+	if enter.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid nonce enter code = %d", enter.Code)
 	}
 }

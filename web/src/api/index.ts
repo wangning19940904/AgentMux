@@ -33,6 +33,7 @@ import type {
   FrameworkAuthStatus,
   FrameworkInstallResult,
   FrameworkLoginResult,
+  FrameworkLoginSessionStatus,
   FrameworkUpdateCheck,
   FrameworksResponse,
   GuardPolicy,
@@ -287,6 +288,10 @@ export const api = {
     getChecked<FrameworkAuthStatus>(`/api/v1/frameworks/auth?kind=${encodeURIComponent(kind)}`),
   startFrameworkLogin: (kind: string) =>
     postChecked<FrameworkLoginResult>("/api/v1/frameworks/login", { kind }),
+  frameworkLoginSession: (sessionID: string) =>
+    getChecked<FrameworkLoginSessionStatus>(`/api/v1/frameworks/login?session_id=${encodeURIComponent(sessionID)}`),
+  cancelFrameworkLogin: (sessionID: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/frameworks/login/cancel", { session_id: sessionID }),
   completeFrameworkLogin: (sessionID: string, code: string) =>
     postChecked<{ ok: boolean }>("/api/v1/frameworks/login/complete", { session_id: sessionID, code }),
   installFramework: (

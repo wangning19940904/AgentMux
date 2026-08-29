@@ -29,7 +29,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if s.usageFn != nil {
 		features = append(features, "usage")
 	}
-	if s.cfg.Bridge.Enabled {
+	if s.cfg.Bridge.Enabled || s.cfg.Bridge.Token != "" || s.st != nil {
 		features = append(features, "console.session")
 	}
 	if s.st != nil {

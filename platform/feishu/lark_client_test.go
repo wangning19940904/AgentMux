@@ -107,7 +107,7 @@ func TestStreamingTaskCardsExposeStopOnlyWhileRunning(t *testing.T) {
 	}
 	for name, card := range map[string]string{
 		"native": buildStreamCardJSON("working", false, false, control),
-		"legacy": buildCard("working", false, false, control),
+		"legacy": buildCardWithImages("working", false, false, nil, control),
 	} {
 		if !json.Valid([]byte(card)) {
 			t.Fatalf("%s card is not valid JSON: %s", name, card)
@@ -123,7 +123,7 @@ func TestStreamingTaskCardsExposeStopOnlyWhileRunning(t *testing.T) {
 	}
 	for name, card := range map[string]string{
 		"native": buildStreamCardJSON("done", true, false, control),
-		"legacy": buildCard("done", true, false, control),
+		"legacy": buildCardWithImages("done", true, false, nil, control),
 	} {
 		if strings.Contains(card, "codex_task_control") || strings.Contains(card, "停止任务") {
 			t.Fatalf("%s completed card is still actionable: %s", name, card)
@@ -142,7 +142,7 @@ func TestCompletedTaskCardsExposeScopedFeedback(t *testing.T) {
 	}
 	for name, card := range map[string]string{
 		"native": buildStreamCardJSON("done", true, false, control),
-		"legacy": buildCard("done", true, false, control),
+		"legacy": buildCardWithImages("done", true, false, nil, control),
 	} {
 		for _, want := range []string{"结论可用", "有效推进", "结论有误", `"agentmux_action":"channel_feedback"`, `"nonce":"feedback-secret"`, `"task_id":"task-feedback"`} {
 			if !strings.Contains(card, want) {
@@ -164,7 +164,7 @@ func TestStreamingCardsLinkifyBareURLs(t *testing.T) {
 
 	for name, card := range map[string]string{
 		"native": buildStreamCardJSON(input, false, false, nil),
-		"legacy": buildCard(input, false, false, nil),
+		"legacy": buildCardWithImages(input, false, false, nil, nil),
 	} {
 		if !strings.Contains(card, wantJSON) {
 			t.Fatalf("%s card did not linkify bare URL: %s", name, card)

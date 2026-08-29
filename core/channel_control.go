@@ -200,15 +200,6 @@ func ChannelCodexTurnTimeout(ch Channel) time.Duration {
 	return ChannelTurnTimeout(ch)
 }
 
-func ChannelMeetingReplyMode(ch Channel) string {
-	switch ChannelMeetingResponseMode(ch) {
-	case MeetingResponseModeFinalText, MeetingResponseModeVoice:
-		return MeetingReplyModeFinal
-	default:
-		return MeetingReplyModeStream
-	}
-}
-
 // NormalizeMeetingResponseMode accepts the canonical API values and the
 // compact aliases used by /meeting. It returns an empty string for unknown
 // input so callers can report a useful validation error.

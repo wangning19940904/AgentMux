@@ -196,8 +196,11 @@ func (a *modelAgent) StartSession(ctx context.Context, workDir string) (AgentSes
 		models = []string{"gpt-5", "gpt-5-mini"}
 	}
 	s := &modelSession{
-		id:             fmt.Sprintf("m%d", a.sessions),
-		ModelSelection: NewModelSelection(defaultModel, models),
+		id: fmt.Sprintf("m%d", a.sessions),
+		settings: NewRuntimeSettingsSelection(
+			RuntimeSettings{Model: defaultModel},
+			RuntimeSettingsCapabilities{Models: RuntimeOptions(models)},
+		),
 	}
 	a.last = s
 	return s, nil
@@ -206,10 +209,28 @@ func (a *modelAgent) ListSessions(ctx context.Context) ([]string, error) { retur
 func (a *modelAgent) Stop(ctx context.Context) error                     { return nil }
 
 type modelSession struct {
-	*ModelSelection
-	id    string
-	mu    sync.Mutex
-	turns []string
+	settings *RuntimeSettingsSelection
+	id       string
+	mu       sync.Mutex
+	turns    []string
+}
+
+func (s *modelSession) ModelSwitchingSupported() bool { return len(s.SupportedModels()) > 0 }
+func (s *modelSession) CurrentModel() string          { return s.settings.CurrentRuntimeSettings().Model }
+func (s *modelSession) DefaultModel() string          { return s.settings.DefaultRuntimeSettings().Model }
+func (s *modelSession) SupportedModels() []string {
+	options := s.settings.RuntimeSettingsCapabilities().Models
+	models := make([]string, 0, len(options))
+	for _, option := range options {
+		models = append(models, option.Value)
+	}
+	return models
+}
+func (s *modelSession) SetModel(model string) error {
+	return s.settings.SetRuntimeSetting(RuntimeSettingModel, model)
+}
+func (s *modelSession) ResetModel() error {
+	return s.settings.ResetRuntimeSetting(RuntimeSettingModel)
 }
 
 type approvalAgent struct {
@@ -221,7 +242,7 @@ func (a *approvalAgent) Name() string { return "approval-agent" }
 func (a *approvalAgent) StartSession(context.Context, string) (AgentSession, error) {
 	s := &approvalSession{settings: NewRuntimeSettingsSelection(
 		RuntimeSettings{ApprovalMode: ApprovalModeManual},
-		RuntimeSettingsCapabilities{ApprovalModes: ApprovalModeOptionsForRuntime("codex")},
+		RuntimeSettingsCapabilities{ApprovalModes: RuntimeOptions(ApprovalModeValuesForRuntime("codex"))},
 	)}
 	a.mu.Lock()
 	a.last = s
@@ -272,8 +293,7 @@ func (s *approvalSession) turnCount() int {
 	return len(s.turns)
 }
 
-func (s *modelSession) ID() string                    { return s.id }
-func (s *modelSession) ModelSwitchingSupported() bool { return true }
+func (s *modelSession) ID() string { return s.id }
 func (s *modelSession) Send(ctx context.Context, text string) (<-chan *Event, error) {
 	s.mu.Lock()
 	s.turns = append(s.turns, text)

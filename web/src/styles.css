@@ -6325,6 +6325,9 @@ textarea:focus {
 }
 
 .cli-auth-prompt-copy strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text);
   font-size: 12px;
 }
@@ -6361,6 +6364,56 @@ textarea:focus {
   letter-spacing: 0.04em;
 }
 
+.framework-auth-prompt {
+  padding: 13px 14px;
+}
+
+.framework-auth-actions {
+  max-width: min(720px, 68%);
+}
+
+.framework-verification-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px 4px 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.framework-verification-code code {
+  margin-left: 0;
+}
+
+.framework-verification-code .ghost-action {
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 7px;
+}
+
+.framework-auth-input {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: min(420px, 100%);
+}
+
+.framework-auth-input input {
+  min-width: 190px;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+
+.framework-auth-input input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  outline-offset: 1px;
+}
+
 .catalog-progress-row,
 .catalog-progress-row:hover {
   background: color-mix(in srgb, var(--accent-soft) 20%, transparent);
@@ -6370,11 +6423,15 @@ textarea:focus {
   padding: 0 14px 12px;
 }
 
-.framework-table th:nth-child(1) { width: 29%; }
-.framework-table th:nth-child(2) { width: 9%; }
+.framework-table th:nth-child(1) { width: 27%; }
+.framework-table th:nth-child(2) { width: 8%; }
 .framework-table th:nth-child(3) { width: 22%; }
 .framework-table th:nth-child(4) { width: 25%; }
-.framework-table th:nth-child(5) { width: 15%; }
+.framework-table th:nth-child(5) { width: 18%; }
+
+.framework-table {
+  min-width: 760px;
+}
 
 .cli-catalog-table th:nth-child(1) { width: 18%; }
 .cli-catalog-table th:nth-child(2) { width: 25%; }
@@ -6541,6 +6598,23 @@ textarea:focus {
 
   .cli-auth-prompt-actions {
     justify-content: flex-start;
+  }
+
+  .framework-auth-actions {
+    width: 100%;
+    max-width: none;
+  }
+
+  .framework-auth-input {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .framework-auth-input input {
+    width: 100%;
+    min-width: 0;
   }
 
   .catalog-progress-row {

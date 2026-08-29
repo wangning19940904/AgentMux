@@ -1,4 +1,4 @@
-import type { Tenant, TenancySelf } from "./api";
+import type { TenancySelf } from "./api";
 
 export type TenancyGateState = "loading" | "ready" | "required";
 
@@ -7,19 +7,13 @@ export interface TenancyGateResolution {
   state: TenancyGateState;
 }
 
-// Configuration is available only after AgentMux can prove that at least one
-// active tenant exists. A tenant-scoped session proves this through /self;
-// an administrator session proves it through the tenant registry.
-export function resolveTenancyGate(
-  self: TenancySelf | null,
-  tenants: Tenant[] | null,
-): TenancyGateState {
+// Administrators manage the whole selected AgentMux instance and do not need a
+// tenant namespace of their own. Tenant-scoped sessions still have to prove
+// through /self that their tenant exists and is enabled.
+export function resolveTenancyGate(self: TenancySelf | null): TenancyGateState {
   if (!self) return "loading";
-  if (!self.admin) {
-    return self.tenant_id && self.status !== "disabled" ? "ready" : "required";
-  }
-  if (!tenants) return "loading";
-  return tenants.some((tenant) => tenant.status === "active") ? "ready" : "required";
+  if (self.admin) return "ready";
+  return self.tenant_id && self.status !== "disabled" ? "ready" : "required";
 }
 
 function retryableIdentityError(error: unknown): boolean {
@@ -33,7 +27,6 @@ function retryableIdentityError(error: unknown): boolean {
 // transient gateway/network failures are retried.
 export async function resolveTenancyGateWithRetry(
   loadIdentity: () => Promise<TenancySelf>,
-  loadTenants: () => Promise<Tenant[] | null>,
   options: { attempts?: number; delayMs?: number; wait?: (ms: number) => Promise<void> } = {},
 ): Promise<TenancyGateResolution> {
   const attempts = Math.max(1, options.attempts ?? 30);
@@ -44,8 +37,7 @@ export async function resolveTenancyGateWithRetry(
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const identity = await loadIdentity();
-      const tenants = identity.admin ? await loadTenants() : null;
-      return { identity, state: resolveTenancyGate(identity, tenants ?? []) };
+      return { identity, state: resolveTenancyGate(identity) };
     } catch (error) {
       lastError = error;
       if (!retryableIdentityError(error) || attempt === attempts - 1) throw error;

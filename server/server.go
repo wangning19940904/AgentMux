@@ -207,7 +207,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
 	s.mux.HandleFunc("POST /api/v1/frameworks/install/stream", s.handleFrameworkInstallStream)
 	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
+	s.mux.HandleFunc("GET /api/v1/frameworks/login", s.handleFrameworkLoginStatus)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login", s.handleFrameworkLogin)
+	s.mux.HandleFunc("POST /api/v1/frameworks/login/cancel", s.handleFrameworkLoginCancel)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login/complete", s.handleFrameworkLoginComplete)
 	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)
 	s.mux.HandleFunc("GET /api/v1/codex/desktop-threads", s.handleCodexDesktopThreads)
@@ -304,8 +306,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return nil
 }
 
-// withAuth enforces the bridge token on management and OpenAI-compatible API
-// routes when the bridge is on.
+// withAuth enforces credentials on management and OpenAI-compatible API
+// routes when the bridge is on. When the bridge is off, legacy unauthenticated
+// local access remains available, but an explicitly supplied credential is
+// still resolved and scoped. This lets a self-registered tenant use the SDK
+// and an embedded Console without silently inheriting administrator access.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isObservabilityPath(r.URL.Path) {
@@ -336,7 +341,8 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if s.cfg.Bridge.Enabled && isBridgeAPIPath(r.URL.Path) && !isSelfAuthenticatingPath(r.URL.Path) {
+		if isBridgeAPIPath(r.URL.Path) && !isSelfAuthenticatingPath(r.URL.Path) &&
+			(s.cfg.Bridge.Enabled || hasExplicitCredential(r)) {
 			principal := s.resolvePrincipal(r)
 			if principal == nil {
 				if strings.HasPrefix(r.URL.Path, "/v1/") {
@@ -356,6 +362,18 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hasExplicitCredential distinguishes the bridge-disabled legacy mode from a
+// caller that is deliberately asking to run under a bearer or Console-session
+// identity. Invalid explicit credentials must fail instead of falling back to
+// the open administrator scope.
+func hasExplicitCredential(r *http.Request) bool {
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+		return true
+	}
+	_, err := r.Cookie(consoleSessionCookie)
+	return err == nil
 }
 
 func isBridgeAPIPath(path string) bool {

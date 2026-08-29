@@ -11,6 +11,18 @@ type memorySecretBackend struct {
 	values map[string]string
 }
 
+func setProviderSecretBackendForTest(backend providerSecretBackend) func() {
+	providerSecretsMu.Lock()
+	previous := providerSecrets
+	providerSecrets = backend
+	providerSecretsMu.Unlock()
+	return func() {
+		providerSecretsMu.Lock()
+		providerSecrets = previous
+		providerSecretsMu.Unlock()
+	}
+}
+
 func (m *memorySecretBackend) Save(account, secret string) error {
 	m.values[account] = secret
 	return nil

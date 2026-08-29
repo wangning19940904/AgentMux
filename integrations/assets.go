@@ -52,7 +52,7 @@ func MaterializeMarketplaces(home, version string) (string, error) {
 		}
 		temporaryPath := temporary.Name()
 		defer os.Remove(temporaryPath)
-		if err := temporary.Chmod(0o600); err == nil {
+		if err = temporary.Chmod(0o600); err == nil {
 			_, err = temporary.Write(data)
 		}
 		if closeErr := temporary.Close(); err == nil {

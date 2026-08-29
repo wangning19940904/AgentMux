@@ -8,11 +8,6 @@ import (
 	"sync"
 )
 
-const (
-	providerSecretService       = "AgentMux Provider API Keys"
-	legacyProviderSecretService = "AgentNexus Provider API Keys"
-)
-
 var errProviderSecretNotFound = errors.New("provider API key not found")
 
 type providerSecretBackend interface {
@@ -152,16 +147,4 @@ func providerAPIKeyFromEnvOrSecret(apiKeyEnv string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(os.Getenv(apiKeyEnv)), nil
-}
-
-func setProviderSecretBackendForTest(backend providerSecretBackend) func() {
-	providerSecretsMu.Lock()
-	previous := providerSecrets
-	providerSecrets = backend
-	providerSecretsMu.Unlock()
-	return func() {
-		providerSecretsMu.Lock()
-		providerSecrets = previous
-		providerSecretsMu.Unlock()
-	}
 }

@@ -140,6 +140,30 @@ func (s *Server) handleFrameworkLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleFrameworkLoginStatus(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		writeErr(w, http.StatusBadRequest, "login session id is required")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, framework.GetLoginSession(sessionID))
+}
+
+func (s *Server) handleFrameworkLoginCancel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	if err := framework.CancelLogin(req.SessionID); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeOK(w)
+}
+
 func (s *Server) handleFrameworkLoginComplete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID string `json:"session_id"`

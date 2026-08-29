@@ -237,17 +237,6 @@ func CheckCLIUpdate(ctx context.Context, id string) CLIUpdateCheck {
 	return res
 }
 
-// InstallCLI installs or updates a whitelisted CLI.
-func InstallCLI(ctx context.Context, id, action string) CLIInstallResult {
-	return InstallCLIWithProgressOptions(ctx, id, action, CLIInstallOptions{}, nil)
-}
-
-// InstallCLIWithProgress installs or updates a whitelisted CLI and reports
-// coarse, truthful stages while the catalog-owned commands are running.
-func InstallCLIWithProgress(ctx context.Context, id, action string, progress ProgressFunc) CLIInstallResult {
-	return InstallCLIWithProgressOptions(ctx, id, action, CLIInstallOptions{}, progress)
-}
-
 // InstallCLIWithOptions installs or updates a whitelisted CLI with explicit
 // restricted-entry acknowledgement.
 func InstallCLIWithOptions(ctx context.Context, id, action string, options CLIInstallOptions) CLIInstallResult {
@@ -432,10 +421,6 @@ func syncLinkedSkill(ctx context.Context, cli CLISpec, linked CLILinkedSkillSpec
 		}
 	}
 	return res
-}
-
-func runCLICommands(ctx context.Context, spec CLISpec, commands [][]string) (string, error) {
-	return runCLICommandsWithProgress(ctx, spec, commands, nil, "installing", 30, 78)
 }
 
 func runCLICommandsWithProgress(

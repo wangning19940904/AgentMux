@@ -3,17 +3,15 @@ package framework
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/wangning19940904/AgentMux/internal/authflow"
 )
 
 // AuthState describes whether a locally installed framework can use its own
@@ -47,6 +45,15 @@ type LoginResult struct {
 	InputRequired    bool   `json:"input_required,omitempty"`
 }
 
+// LoginSessionStatus is the prompt-safe lifecycle view used by the Console
+// while the framework-owned CLI waits for browser/device authorization.
+type LoginSessionStatus struct {
+	SessionID string `json:"session_id"`
+	Active    bool   `json:"active"`
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+}
+
 type frameworkAuthConfig struct {
 	statusArgs    []string
 	loginArgs     []string
@@ -77,16 +84,10 @@ const (
 	frameworkAuthCheckTimeout = 5 * time.Second
 	frameworkLoginTimeout     = 15 * time.Minute
 	frameworkLoginLinkTimeout = 15 * time.Second
+	frameworkLoginSessionTTL  = 10 * time.Minute
 )
 
-var (
-	frameworkANSISequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
-	frameworkLoginURL     = regexp.MustCompile(`https?://[^\s\x00-\x1f<>"']+`)
-	frameworkLoginCode    = regexp.MustCompile(
-		`\b[A-Z0-9]{4}[- ][A-Z0-9]{4}\b`,
-	)
-	frameworkLoginSessions sync.Map // map[string]*frameworkLoginSession
-)
+var frameworkLoginSessions = authflow.NewRegistry(frameworkLoginSessionTTL)
 
 // CheckAuth performs a bounded, read-only credential check for a framework.
 // Unknown is distinct from unauthenticated: callers should offer Provider
@@ -166,7 +167,7 @@ func classifyFrameworkAuth(kind string, output []byte, commandErr error) AuthSta
 			return AuthStateUnauthenticated
 		}
 	}
-	text := strings.ToLower(stripTerminalControls(string(output)))
+	text := strings.ToLower(authflow.StripControls(string(output)))
 	for _, marker := range []string{
 		"not logged in", "not authenticated", "authentication required", "login required", "log in required",
 	} {
@@ -183,20 +184,6 @@ func classifyFrameworkAuth(kind string, output []byte, commandErr error) AuthSta
 		return AuthStateUnknown
 	}
 	return AuthStateUnknown
-}
-
-type frameworkLoginSession struct {
-	kind          string
-	inputRequired bool
-	stdin         io.WriteCloser
-	cancel        context.CancelFunc
-	done          chan error
-	updates       chan loginOutputUpdate
-}
-
-type loginOutputUpdate struct {
-	url  string
-	code string
 }
 
 // StartLogin starts a framework-owned browser/device login and waits only for
@@ -218,49 +205,64 @@ func StartLogin(kind string) (LoginResult, error) {
 	}
 
 	loginCtx, cancel := context.WithTimeout(context.Background(), frameworkLoginTimeout)
+	session, created := frameworkLoginSessions.Create(kind, config.inputRequired, cancel)
+	if !created {
+		return waitForFrameworkLoginLink(kind, session, nil)
+	}
 	cmd := frameworkCommandContext(loginCtx, binary, config.loginArgs...)
-	cmd.Env = frameworkLoginEnvironment(config.loginEnv)
+	cmd.Env = authflow.MergeEnvironment(os.Environ(), config.loginEnv)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		cancel()
+		session.Finish(authflow.StateFailed, "framework login could not prepare input")
+		frameworkLoginSessions.Release(session)
+		return LoginResult{}, fmt.Errorf("prepare %s login input: %w", kind, err)
+	}
+	if err := session.AttachInput(stdin); err != nil {
+		session.Finish(authflow.StateFailed, "framework login could not prepare input")
+		frameworkLoginSessions.Release(session)
+		_ = stdin.Close()
 		return LoginResult{}, fmt.Errorf("prepare %s login input: %w", kind, err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		cancel()
-		_ = stdin.Close()
+		session.Finish(authflow.StateFailed, "framework login could not prepare output")
+		frameworkLoginSessions.Release(session)
+		_ = session.CloseInput()
 		return LoginResult{}, fmt.Errorf("prepare %s login output: %w", kind, err)
 	}
 	cmd.Stderr = cmd.Stdout
 	if err := cmd.Start(); err != nil {
-		cancel()
-		_ = stdin.Close()
+		session.Finish(authflow.StateFailed, "framework login could not start")
+		frameworkLoginSessions.Release(session)
+		_ = session.CloseInput()
 		_ = stdout.Close()
 		return LoginResult{}, fmt.Errorf("start %s login: %w", kind, err)
 	}
 
-	sessionID := frameworkLoginSessionID()
-	session := &frameworkLoginSession{
-		kind: kind, inputRequired: config.inputRequired, stdin: stdin, cancel: cancel,
-		done: make(chan error, 1), updates: make(chan loginOutputUpdate, 8),
-	}
-	frameworkLoginSessions.Store(sessionID, session)
-	go collectFrameworkLoginOutput(sessionID, session, cmd, stdout)
+	processDone := make(chan error, 1)
+	go collectFrameworkLoginOutput(loginCtx, session, cmd, stdout, processDone)
+	return waitForFrameworkLoginLink(kind, session, processDone)
+}
 
-	result := LoginResult{Kind: kind, SessionID: sessionID, InputRequired: config.inputRequired}
+func waitForFrameworkLoginLink(kind string, session *authflow.Session, processDone <-chan error) (LoginResult, error) {
+	snapshot := session.Snapshot()
+	result := LoginResult{
+		Kind: kind, SessionID: snapshot.SessionID, LoginURL: snapshot.LoginURL,
+		VerificationCode: snapshot.VerificationCode, InputRequired: snapshot.InputRequired,
+	}
+	if result.LoginURL != "" {
+		return result, nil
+	}
 	timeout := time.NewTimer(frameworkLoginLinkTimeout)
 	defer timeout.Stop()
 	var settle *time.Timer
 	var settleC <-chan time.Time
 	for {
 		select {
-		case update := <-session.updates:
-			if update.url != "" {
-				result.LoginURL = update.url
-			}
-			if update.code != "" {
-				result.VerificationCode = update.code
-			}
+		case <-session.Updates():
+			snapshot = session.Snapshot()
+			result.LoginURL = snapshot.LoginURL
+			result.VerificationCode = snapshot.VerificationCode
 			if result.LoginURL != "" {
 				if settle == nil {
 					settle = time.NewTimer(200 * time.Millisecond)
@@ -277,26 +279,10 @@ func StartLogin(kind string) (LoginResult, error) {
 			}
 		case <-settleC:
 			return result, nil
-		case waitErr := <-session.done:
-			// A short-lived login command can exit immediately after printing its
-			// URL and verification code on separate lines. In that case both the
-			// completion signal and one or more buffered updates may be ready, and
-			// select is allowed to choose completion first. Drain the buffered
-			// output before returning so callers never observe a partial result.
-		drainUpdates:
-			for {
-				select {
-				case update := <-session.updates:
-					if update.url != "" {
-						result.LoginURL = update.url
-					}
-					if update.code != "" {
-						result.VerificationCode = update.code
-					}
-				default:
-					break drainUpdates
-				}
-			}
+		case waitErr := <-processDone:
+			snapshot = session.Snapshot()
+			result.LoginURL = snapshot.LoginURL
+			result.VerificationCode = snapshot.VerificationCode
 			if result.LoginURL != "" {
 				return result, nil
 			}
@@ -304,35 +290,52 @@ func StartLogin(kind string) (LoginResult, error) {
 				waitErr = errors.New("login command exited before returning a URL")
 			}
 			return LoginResult{}, fmt.Errorf("start %s login: %w", kind, waitErr)
+		case <-session.Done():
+			snapshot = session.Snapshot()
+			result.LoginURL = snapshot.LoginURL
+			result.VerificationCode = snapshot.VerificationCode
+			if result.LoginURL != "" {
+				return result, nil
+			}
+			message := snapshot.Error
+			if message == "" {
+				message = "login command exited before returning a URL"
+			}
+			return LoginResult{}, fmt.Errorf("start %s login: %s", kind, message)
 		case <-timeout.C:
-			session.cancel()
+			session.Finish(authflow.StateFailed, kind+" login did not return an authorization link")
+			_ = session.CloseInput()
 			return LoginResult{}, fmt.Errorf("%s login did not return a URL", kind)
 		}
 	}
 }
 
-func collectFrameworkLoginOutput(sessionID string, session *frameworkLoginSession, cmd interface{ Wait() error }, output io.ReadCloser) {
+func collectFrameworkLoginOutput(loginCtx context.Context, session *authflow.Session, cmd interface{ Wait() error }, output io.ReadCloser, processDone chan<- error) {
+	defer frameworkLoginSessions.Release(session)
 	scanner := bufio.NewScanner(output)
 	scanner.Buffer(make([]byte, 0, 4096), 256*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		update := loginOutputUpdate{url: actionableLoginURL(line), code: actionableLoginCode(line)}
-		if update.url == "" && update.code == "" {
-			continue
-		}
-		select {
-		case session.updates <- update:
-		default:
-		}
+		session.Actionable(authflow.ActionableURL(line), authflow.ActionableCode(line))
 	}
 	waitErr := cmd.Wait()
 	if scanErr := scanner.Err(); scanErr != nil && waitErr == nil {
 		waitErr = scanErr
 	}
-	_ = session.stdin.Close()
-	session.cancel()
-	frameworkLoginSessions.Delete(sessionID)
-	session.done <- waitErr
+	_ = session.CloseInput()
+	state := session.Snapshot().State
+	switch {
+	case state.Terminal():
+	case errors.Is(loginCtx.Err(), context.DeadlineExceeded):
+		session.Finish(authflow.StateFailed, "framework login timed out")
+	case waitErr != nil:
+		session.Finish(authflow.StateFailed, "framework login failed")
+	case CheckAuth(context.Background(), session.Snapshot().Subject).State == AuthStateAuthenticated:
+		session.Finish(authflow.StateSucceeded, "")
+	default:
+		session.Finish(authflow.StateFailed, "login command ended before authentication was confirmed")
+	}
+	processDone <- waitErr
 }
 
 // CompleteLogin supplies the browser-returned code for frameworks whose CLI
@@ -346,64 +349,44 @@ func CompleteLogin(sessionID, code string) error {
 	if len(code) > 8192 {
 		return errors.New("login code is too long")
 	}
-	raw, ok := frameworkLoginSessions.Load(sessionID)
+	session, ok := frameworkLoginSessions.Get(sessionID)
 	if !ok {
 		return errors.New("login session is no longer active")
 	}
-	session := raw.(*frameworkLoginSession)
-	if !session.inputRequired {
-		return fmt.Errorf("framework %q does not accept a pasted login code", session.kind)
-	}
-	if _, err := io.WriteString(session.stdin, code+"\n"); err != nil {
-		return fmt.Errorf("submit %s login code: %w", session.kind, err)
+	if err := session.WriteInput(code, 8192); err != nil {
+		return fmt.Errorf("submit %s login code: %w", session.Snapshot().Subject, err)
 	}
 	return nil
 }
 
-func frameworkLoginEnvironment(overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return os.Environ()
+// GetLoginSession reports whether the daemon still owns the login subprocess.
+// Authentication readiness remains authoritative through CheckAuth; this
+// lifecycle bit lets the UI distinguish "still waiting" from "ended without
+// authenticating" without exposing CLI output or account identifiers.
+func GetLoginSession(sessionID string) LoginSessionStatus {
+	sessionID = strings.TrimSpace(sessionID)
+	session, ok := frameworkLoginSessions.Get(sessionID)
+	if !ok {
+		return LoginSessionStatus{SessionID: sessionID, Active: false, State: "unknown"}
 	}
-	env := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range os.Environ() {
-		key, _, ok := strings.Cut(entry, "=")
-		if ok {
-			if _, replaced := overrides[key]; replaced {
-				continue
-			}
-		}
-		env = append(env, entry)
+	snapshot := session.Snapshot()
+	return LoginSessionStatus{
+		SessionID: sessionID,
+		Active:    snapshot.State.Active(),
+		State:     string(snapshot.State),
+		Error:     snapshot.Error,
 	}
-	for key, value := range overrides {
-		env = append(env, key+"="+value)
-	}
-	return env
 }
 
-func actionableLoginURL(line string) string {
-	match := frameworkLoginURL.FindString(line)
-	return strings.TrimRight(match, ".,;:!?)]}")
-}
-
-func actionableLoginCode(line string) string {
-	return strings.ReplaceAll(frameworkLoginCode.FindString(stripTerminalControls(line)), " ", "-")
-}
-
-func stripTerminalControls(value string) string {
-	value = frameworkANSISequence.ReplaceAllString(value, "")
-	var b strings.Builder
-	for _, r := range value {
-		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
-			b.WriteRune(r)
-		}
+// CancelLogin stops an active framework login subprocess. Recently completed
+// sessions are retained briefly so polling clients can observe the outcome.
+func CancelLogin(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	session, ok := frameworkLoginSessions.Get(sessionID)
+	if !ok {
+		return errors.New("framework login session was not found")
 	}
-	return b.String()
-}
-
-func frameworkLoginSessionID() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err == nil {
-		return hex.EncodeToString(b)
-	}
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	session.Cancel("")
+	_ = session.CloseInput()
+	return nil
 }

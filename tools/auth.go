@@ -3,8 +3,6 @@ package tools
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/wangning19940904/AgentMux/internal/authflow"
 	"github.com/wangning19940904/AgentMux/internal/procutil"
 )
 
@@ -42,14 +39,14 @@ type CLIAuthStatus struct {
 	Detail         string       `json:"detail,omitempty"`
 }
 
-type CLIAuthSessionState string
+type CLIAuthSessionState = authflow.State
 
 const (
-	CLIAuthSessionStarting  CLIAuthSessionState = "starting"
-	CLIAuthSessionWaiting   CLIAuthSessionState = "waiting"
-	CLIAuthSessionSucceeded CLIAuthSessionState = "succeeded"
-	CLIAuthSessionFailed    CLIAuthSessionState = "failed"
-	CLIAuthSessionCancelled CLIAuthSessionState = "cancelled"
+	CLIAuthSessionStarting  = authflow.StateStarting
+	CLIAuthSessionWaiting   = authflow.StateWaiting
+	CLIAuthSessionSucceeded = authflow.StateSucceeded
+	CLIAuthSessionFailed    = authflow.StateFailed
+	CLIAuthSessionCancelled = authflow.StateCancelled
 )
 
 // CLIAuthSession is a prompt-safe snapshot of a background setup/login flow.
@@ -104,22 +101,8 @@ const (
 )
 
 var (
-	cliAuthANSISequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
-	cliAuthURL          = regexp.MustCompile(`https?://[^\s\x00-\x1f<>"']+`)
-	cliAuthCode         = regexp.MustCompile(`\b[A-Z0-9]{4}[- ][A-Z0-9]{4}\b`)
-
-	cliAuthSessions sync.Map // map[string]*cliAuthRuntimeSession
-	cliAuthActiveMu sync.Mutex
-	cliAuthActive   = map[string]string{} // cli id -> session id
+	cliAuthSessions = authflow.NewRegistry(cliAuthSessionTTL)
 )
-
-type cliAuthRuntimeSession struct {
-	mu        sync.RWMutex
-	snapshot  CLIAuthSession
-	cancel    context.CancelFunc
-	ready     chan struct{}
-	readyOnce sync.Once
-}
 
 // CheckCLIAuth performs a bounded, read-only status check for a managed CLI.
 func CheckCLIAuth(ctx context.Context, id string) CLIAuthStatus {
@@ -176,64 +159,39 @@ func StartCLIAuth(id string, force bool) (CLIAuthSession, error) {
 		return CLIAuthSession{}, fmt.Errorf("CLI %q is not installed", id)
 	}
 
-	cliAuthActiveMu.Lock()
-	if sessionID := cliAuthActive[id]; sessionID != "" {
-		if raw, exists := cliAuthSessions.Load(sessionID); exists {
-			session := raw.(*cliAuthRuntimeSession)
-			cliAuthActiveMu.Unlock()
-			return waitForCLIAuthLink(session)
-		}
-		delete(cliAuthActive, id)
-	}
-
-	now := time.Now().UTC()
 	ctx, cancel := context.WithTimeout(context.Background(), cliAuthWorkflowTimeout)
-	runtimeSession := &cliAuthRuntimeSession{
-		snapshot: CLIAuthSession{
-			ID: id, SessionID: cliAuthSessionID(), Phase: "checking", State: CLIAuthSessionStarting,
-			StartedAt: now, UpdatedAt: now,
-		},
-		cancel: cancel,
-		ready:  make(chan struct{}),
+	session, created := cliAuthSessions.Create(id, false, cancel)
+	if created {
+		go runCLIAuthWorkflow(ctx, session, spec, config, force)
 	}
-	cliAuthSessions.Store(runtimeSession.snapshot.SessionID, runtimeSession)
-	cliAuthActive[id] = runtimeSession.snapshot.SessionID
-	cliAuthActiveMu.Unlock()
-
-	go runCLIAuthWorkflow(ctx, runtimeSession, spec, config, force)
-	return waitForCLIAuthLink(runtimeSession)
+	return waitForCLIAuthLink(session)
 }
 
 // GetCLIAuthSession returns a live or recently-finished workflow snapshot.
 func GetCLIAuthSession(sessionID string) (CLIAuthSession, bool) {
-	raw, ok := cliAuthSessions.Load(strings.TrimSpace(sessionID))
+	session, ok := cliAuthSessions.Get(sessionID)
 	if !ok {
 		return CLIAuthSession{}, false
 	}
-	return raw.(*cliAuthRuntimeSession).get(), true
+	return cliAuthSnapshot(session.Snapshot()), true
 }
 
 // CancelCLIAuthSession stops an active setup/login subprocess.
 func CancelCLIAuthSession(sessionID string) error {
-	raw, ok := cliAuthSessions.Load(strings.TrimSpace(sessionID))
+	session, ok := cliAuthSessions.Get(sessionID)
 	if !ok {
 		return errors.New("CLI login session was not found")
 	}
-	session := raw.(*cliAuthRuntimeSession)
-	snapshot := session.get()
-	if cliAuthSessionTerminal(snapshot.State) {
-		return nil
-	}
-	session.finish(CLIAuthSessionCancelled, "CLI login was cancelled")
+	session.Cancel("CLI login was cancelled")
 	return nil
 }
 
-func waitForCLIAuthLink(session *cliAuthRuntimeSession) (CLIAuthSession, error) {
+func waitForCLIAuthLink(session *authflow.Session) (CLIAuthSession, error) {
 	timer := time.NewTimer(cliAuthLinkTimeout)
 	defer timer.Stop()
 	select {
-	case <-session.ready:
-		snapshot := session.get()
+	case <-session.Ready():
+		snapshot := cliAuthSnapshot(session.Snapshot())
 		if snapshot.State == CLIAuthSessionFailed {
 			return snapshot, errors.New(snapshot.Error)
 		}
@@ -242,30 +200,25 @@ func waitForCLIAuthLink(session *cliAuthRuntimeSession) (CLIAuthSession, error) 
 		}
 		return snapshot, nil
 	case <-timer.C:
-		session.cancel()
-		return CLIAuthSession{}, fmt.Errorf("CLI %q login did not return an authorization link", session.get().ID)
+		snapshot := session.Snapshot()
+		session.Finish(CLIAuthSessionFailed, fmt.Sprintf("CLI %q login did not return an authorization link", snapshot.Subject))
+		return CLIAuthSession{}, fmt.Errorf("CLI %q login did not return an authorization link", snapshot.Subject)
 	}
 }
 
-func runCLIAuthWorkflow(ctx context.Context, session *cliAuthRuntimeSession, spec CLISpec, config cliAuthConfig, force bool) {
+func runCLIAuthWorkflow(ctx context.Context, session *authflow.Session, spec CLISpec, config cliAuthConfig, force bool) {
 	defer func() {
-		snapshot := session.get()
-		cliAuthActiveMu.Lock()
-		if cliAuthActive[snapshot.ID] == snapshot.SessionID {
-			delete(cliAuthActive, snapshot.ID)
-		}
-		cliAuthActiveMu.Unlock()
-		time.AfterFunc(cliAuthSessionTTL, func() { cliAuthSessions.Delete(snapshot.SessionID) })
+		cliAuthSessions.Release(session)
 	}()
 
 	status := CheckCLIAuth(ctx, spec.ID)
 	if status.State == CLIAuthAuthenticated && !force {
-		session.finish(CLIAuthSessionSucceeded, "")
+		session.Finish(CLIAuthSessionSucceeded, "")
 		return
 	}
 	if status.State == CLIAuthSetupRequired {
 		if len(config.setupArgs) == 0 {
-			session.finish(CLIAuthSessionFailed, "CLI application setup is required but no setup flow is available")
+			session.Finish(CLIAuthSessionFailed, "CLI application setup is required but no setup flow is available")
 			return
 		}
 		if err := runCLIAuthCommand(ctx, session, spec, config, "setup", config.setupArgs); err != nil {
@@ -274,39 +227,41 @@ func runCLIAuthWorkflow(ctx context.Context, session *cliAuthRuntimeSession, spe
 		}
 		status = CheckCLIAuth(ctx, spec.ID)
 		if status.State == CLIAuthSetupRequired {
-			session.finish(CLIAuthSessionFailed, "CLI application setup did not complete")
+			session.Finish(CLIAuthSessionFailed, "CLI application setup did not complete")
 			return
 		}
 		if status.State == CLIAuthAuthenticated {
-			session.finish(CLIAuthSessionSucceeded, "")
+			session.Finish(CLIAuthSessionSucceeded, "")
 			return
 		}
 	}
 
 	if err := runCLIAuthCommand(ctx, session, spec, config, "login", config.loginArgs); err != nil {
 		if CheckCLIAuth(context.Background(), spec.ID).State == CLIAuthAuthenticated {
-			session.finish(CLIAuthSessionSucceeded, "")
+			session.Finish(CLIAuthSessionSucceeded, "")
 			return
 		}
 		finishCLIAuthCommandError(ctx, session, spec.ID, err)
 		return
 	}
 	if CheckCLIAuth(context.Background(), spec.ID).State != CLIAuthAuthenticated {
-		session.finish(CLIAuthSessionFailed, "CLI login command finished but authentication is not ready")
+		session.Finish(CLIAuthSessionFailed, "CLI login command finished but authentication is not ready")
 		return
 	}
-	session.finish(CLIAuthSessionSucceeded, "")
+	session.Finish(CLIAuthSessionSucceeded, "")
 }
 
 func runCLIAuthCommand(
 	ctx context.Context,
-	session *cliAuthRuntimeSession,
+	session *authflow.Session,
 	spec CLISpec,
 	config cliAuthConfig,
 	phase string,
 	args []string,
 ) error {
-	session.beginPhase(phase)
+	if !session.BeginPhase(phase) {
+		return errors.New("CLI login session is no longer active")
+	}
 	cmd := cliAuthCommand(ctx, spec, args, config.loginEnv)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -326,22 +281,22 @@ func runCLIAuthCommand(
 	return waitErr
 }
 
-func collectCLIAuthOutput(session *cliAuthRuntimeSession, output io.ReadCloser) error {
+func collectCLIAuthOutput(session *authflow.Session, output io.ReadCloser) error {
 	defer output.Close()
 	scanner := bufio.NewScanner(output)
 	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
 	for scanner.Scan() {
-		line := stripCLIAuthControls(scanner.Text())
+		line := authflow.StripControls(scanner.Text())
 		url := actionableCLIAuthURL(line)
 		code := actionableCLIAuthCode(line)
 		if url != "" || code != "" {
-			session.actionable(url, code)
+			session.Actionable(url, code)
 		}
 	}
 	return scanner.Err()
 }
 
-func finishCLIAuthCommandError(ctx context.Context, session *cliAuthRuntimeSession, id string, err error) {
+func finishCLIAuthCommandError(ctx context.Context, session *authflow.Session, id string, err error) {
 	if ctx.Err() != nil {
 		state := CLIAuthSessionCancelled
 		message := "CLI login was cancelled"
@@ -349,51 +304,19 @@ func finishCLIAuthCommandError(ctx context.Context, session *cliAuthRuntimeSessi
 			state = CLIAuthSessionFailed
 			message = "CLI login timed out"
 		}
-		session.finish(state, message)
+		session.Finish(state, message)
 		return
 	}
-	session.finish(CLIAuthSessionFailed, fmt.Sprintf("%s login failed: %v", id, err))
+	session.Finish(CLIAuthSessionFailed, fmt.Sprintf("%s login failed: %v", id, err))
 }
 
-func (s *cliAuthRuntimeSession) beginPhase(phase string) {
-	s.mu.Lock()
-	s.snapshot.Phase = phase
-	s.snapshot.State = CLIAuthSessionStarting
-	s.snapshot.LoginURL = ""
-	s.snapshot.VerificationCode = ""
-	s.snapshot.Error = ""
-	s.snapshot.UpdatedAt = time.Now().UTC()
-	s.mu.Unlock()
-}
-
-func (s *cliAuthRuntimeSession) actionable(url, code string) {
-	s.mu.Lock()
-	if url != "" {
-		s.snapshot.LoginURL = url
+func cliAuthSnapshot(snapshot authflow.Snapshot) CLIAuthSession {
+	return CLIAuthSession{
+		ID: snapshot.Subject, SessionID: snapshot.SessionID, Phase: snapshot.Phase,
+		State: snapshot.State, LoginURL: snapshot.LoginURL,
+		VerificationCode: snapshot.VerificationCode, Error: snapshot.Error,
+		StartedAt: snapshot.StartedAt, UpdatedAt: snapshot.UpdatedAt,
 	}
-	if code != "" {
-		s.snapshot.VerificationCode = code
-	}
-	s.snapshot.State = CLIAuthSessionWaiting
-	s.snapshot.UpdatedAt = time.Now().UTC()
-	s.mu.Unlock()
-	s.readyOnce.Do(func() { close(s.ready) })
-}
-
-func (s *cliAuthRuntimeSession) finish(state CLIAuthSessionState, message string) {
-	s.mu.Lock()
-	s.snapshot.State = state
-	s.snapshot.Error = message
-	s.snapshot.UpdatedAt = time.Now().UTC()
-	s.mu.Unlock()
-	s.readyOnce.Do(func() { close(s.ready) })
-	s.cancel()
-}
-
-func (s *cliAuthRuntimeSession) get() CLIAuthSession {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.snapshot
 }
 
 func cliAuthCommand(ctx context.Context, spec CLISpec, args []string, overrides map[string]string) *exec.Cmd {
@@ -403,29 +326,9 @@ func cliAuthCommand(ctx context.Context, spec CLISpec, args []string, overrides 
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	procutil.Prepare(cmd)
-	cmd.Env = cliAuthEnvironment(cliEnv(spec), overrides)
+	cmd.Env = authflow.MergeEnvironment(cliEnv(spec), overrides)
 	cmd.Dir = durableCLICommandDir()
 	return cmd
-}
-
-func cliAuthEnvironment(base []string, overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return base
-	}
-	out := make([]string, 0, len(base)+len(overrides))
-	for _, entry := range base {
-		key, _, ok := strings.Cut(entry, "=")
-		if ok {
-			if _, replaced := overrides[key]; replaced {
-				continue
-			}
-		}
-		out = append(out, entry)
-	}
-	for key, value := range overrides {
-		out = append(out, key+"="+value)
-	}
-	return out
 }
 
 func durableCLICommandDir() string {
@@ -466,7 +369,7 @@ func classifyLarkCLIAuth(output []byte, commandErr error) CLIAuthState {
 			return CLIAuthUnauthenticated
 		}
 	}
-	text := strings.ToLower(stripCLIAuthControls(string(output)))
+	text := strings.ToLower(authflow.StripControls(string(output)))
 	if strings.Contains(text, "not_configured") || strings.Contains(text, "not configured") {
 		return CLIAuthSetupRequired
 	}
@@ -480,7 +383,7 @@ func classifyLarkCLIAuth(output []byte, commandErr error) CLIAuthState {
 }
 
 func classifyGitHubCLIAuth(output []byte, commandErr error) CLIAuthState {
-	text := strings.ToLower(stripCLIAuthControls(string(output)))
+	text := strings.ToLower(authflow.StripControls(string(output)))
 	if commandErr == nil && (strings.Contains(text, "logged in to") || strings.Contains(text, "active account: true")) {
 		return CLIAuthAuthenticated
 	}
@@ -491,33 +394,9 @@ func classifyGitHubCLIAuth(output []byte, commandErr error) CLIAuthState {
 }
 
 func actionableCLIAuthURL(line string) string {
-	match := cliAuthURL.FindString(line)
-	return strings.TrimRight(match, ".,;:!?)]}")
+	return authflow.ActionableURL(line)
 }
 
 func actionableCLIAuthCode(line string) string {
-	return strings.ReplaceAll(cliAuthCode.FindString(stripCLIAuthControls(line)), " ", "-")
-}
-
-func stripCLIAuthControls(value string) string {
-	value = cliAuthANSISequence.ReplaceAllString(value, "")
-	var builder strings.Builder
-	for _, r := range value {
-		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
-			builder.WriteRune(r)
-		}
-	}
-	return builder.String()
-}
-
-func cliAuthSessionTerminal(state CLIAuthSessionState) bool {
-	return state == CLIAuthSessionSucceeded || state == CLIAuthSessionFailed || state == CLIAuthSessionCancelled
-}
-
-func cliAuthSessionID() string {
-	value := make([]byte, 12)
-	if _, err := rand.Read(value); err == nil {
-		return hex.EncodeToString(value)
-	}
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return authflow.ActionableCode(line)
 }

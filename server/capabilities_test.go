@@ -64,7 +64,7 @@ func TestCapabilitiesHandshake(t *testing.T) {
 	if body.Auth["scope"] != "admin" {
 		t.Fatalf("auth scope = %v", body.Auth["scope"])
 	}
-	if !features["tenancy"] {
+	if !features["tenancy"] || !features["console.session"] {
 		t.Fatalf("tenancy should be advertised with a store: %v", body.Features)
 	}
 	if _, ok := body.Agents["count"]; !ok {

@@ -13,11 +13,11 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// Console session embedding lets a host application (holding the bridge
-// token) hand its users an authenticated browser session for the embedded
-// Console without ever exposing the bridge token to the browser:
+// Console session embedding lets a host application (holding a bridge or
+// tenant token) hand its users an authenticated browser session for the embedded
+// Console without ever exposing the bearer token to the browser:
 //
-//  1. Host backend: POST /api/v1/console/sessions (bridge Bearer) -> enter_url
+//  1. Host backend: POST /api/v1/console/sessions (Bearer) -> enter_url
 //  2. Browser: GET /console/enter?nonce=... consumes the single-use nonce and
 //     receives an HttpOnly session cookie, then is redirected to the Console.
 //  3. The cookie is accepted by withAuth as an equivalent credential for
@@ -135,10 +135,6 @@ func randomToken() string {
 // caller's scope: an admin token yields the full Console, a tenant token
 // yields a Console confined to that tenant.
 func (s *Server) handleConsoleSessionCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.Bridge.Enabled {
-		writeErr(w, http.StatusServiceUnavailable, "console sessions require [bridge] auth to be enabled")
-		return
-	}
 	token, ok := bearerToken(strings.TrimSpace(r.Header.Get("Authorization")))
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "console sessions require a bearer token")
@@ -146,6 +142,10 @@ func (s *Server) handleConsoleSessionCreate(w http.ResponseWriter, r *http.Reque
 	}
 	principal := core.AdminPrincipal()
 	if s.cfg.Bridge.Token == "" || token != s.cfg.Bridge.Token {
+		if s.st == nil {
+			writeErr(w, http.StatusUnauthorized, "console sessions require the bridge or a tenant bearer token")
+			return
+		}
 		tenant, err := s.st.AuthenticateTenantToken(r.Context(), token)
 		if err != nil || tenant == nil {
 			writeErr(w, http.StatusUnauthorized, "console sessions require the bridge or a tenant bearer token")
@@ -173,10 +173,6 @@ func (s *Server) handleConsoleSessionCreate(w http.ResponseWriter, r *http.Reque
 // handleConsoleEnter exchanges a single-use nonce for the HttpOnly session
 // cookie and lands the browser on the Console.
 func (s *Server) handleConsoleEnter(w http.ResponseWriter, r *http.Request) {
-	if !s.cfg.Bridge.Enabled {
-		http.Error(w, "console sessions are disabled", http.StatusNotFound)
-		return
-	}
 	landing, validLanding := normalizeConsoleLanding(r.URL.Query().Get("landing"))
 	if !validLanding {
 		http.Error(w, "invalid console landing page", http.StatusBadRequest)
@@ -241,12 +237,6 @@ func (s *Server) consoleSessionPrincipal(r *http.Request) *core.Principal {
 		return nil
 	}
 	return principal
-}
-
-// authorizeConsoleSession reports whether the request carries a usable console
-// session cookie.
-func (s *Server) authorizeConsoleSession(r *http.Request) bool {
-	return s.consoleSessionPrincipal(r) != nil
 }
 
 func requestBaseURL(r *http.Request) string {

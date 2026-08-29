@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -180,6 +181,69 @@ func TestStartSessionDiscoversAndCachesRuntimeModels(t *testing.T) {
 	}
 	if got := parses.Load(); got != 1 {
 		t.Fatalf("catalog parser calls = %d, want one cached discovery", got)
+	}
+}
+
+func TestSessionUsesLivePerModelCapabilities(t *testing.T) {
+	agent := New(Spec{
+		Name:             "catalog-capabilities-helper",
+		Binary:           os.Args[0],
+		SupportsModel:    true,
+		Args:             func(_, _, _, _ string) []string { return nil },
+		ModelCatalogArgs: []string{"-test.run=TestCLIHelperProcess", "--", "models"},
+		ParseModelCatalog: func(output []byte) (ModelCatalog, error) {
+			return ModelCatalog{
+				Models:       []string{"auto", "flexible"},
+				DefaultModel: "auto",
+				ModelCapabilities: map[string]ModelRuntimeCapabilities{
+					"auto": {},
+					"flexible": {
+						ReasoningEfforts: []core.RuntimeOption{{Value: "low"}, {Value: "max"}},
+						ServiceTiers:     []core.RuntimeOption{{Value: "default"}, {Value: "priority"}},
+						Variants: []ModelVariant{
+							{ID: "flexible-low", ReasoningEffort: "low", ServiceTier: "default"},
+							{ID: "flexible-low-fast", ReasoningEffort: "low", ServiceTier: "priority"},
+							{ID: "flexible-max", ReasoningEffort: "max", ServiceTier: "default"},
+						},
+					},
+				},
+			}, nil
+		},
+		ReasoningEfforts: []string{"low", "medium", "high"},
+		ServiceTiers:     []string{"default", "priority"},
+	}, map[string]any{"env": map[string]string{"GO_WANT_CLIAGENT_HELPER": "1"}})
+	sess, err := agent.StartSession(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, ok := core.RuntimeSettingsForSession(sess)
+	if !ok {
+		t.Fatal("session does not expose runtime settings")
+	}
+	if caps := settings.RuntimeSettingsCapabilities(); len(caps.ReasoningEfforts) != 0 || len(caps.ServiceTiers) != 0 || len(caps.ApprovalModes) != 0 {
+		t.Fatalf("auto capabilities = %#v", caps)
+	}
+	if err := settings.SetRuntimeSetting(core.RuntimeSettingModel, "flexible"); err != nil {
+		t.Fatal(err)
+	}
+	caps := settings.RuntimeSettingsCapabilities()
+	if got := runtimeOptionValues(caps.ReasoningEfforts); !reflect.DeepEqual(got, []string{"low", "max"}) {
+		t.Fatalf("model efforts = %v", got)
+	}
+	if got := runtimeOptionValues(caps.ServiceTiers); !reflect.DeepEqual(got, []string{"default", "priority"}) {
+		t.Fatalf("model tiers = %v", got)
+	}
+	cliSession := sess.(*session)
+	resolved, managed, err := cliSession.catalogModelForSettings(core.RuntimeSettings{
+		Model: "flexible", ReasoningEffort: "low", ServiceTier: "priority",
+	})
+	if err != nil || !managed || resolved != "flexible-low-fast" {
+		t.Fatalf("resolved variant = %q, managed=%t, err=%v", resolved, managed, err)
+	}
+	if _, _, err := cliSession.catalogModelForSettings(core.RuntimeSettings{
+		Model: "flexible", ReasoningEffort: "max", ServiceTier: "priority",
+	}); err == nil {
+		t.Fatal("unsupported model combination must fail before invoking the CLI")
 	}
 }
 

@@ -6,8 +6,8 @@ reuse, port-occupancy protection, pinned release download, checksum
 verification, atomic symlink switch with rollback, systemd management, health
 wait) behind one entry point::
 
-    python -m agentmux_sdk.bootstrap --mode local --version v0.1.4
-    python -m agentmux_sdk.bootstrap --mode production --version v0.1.4
+    python -m agentmux_sdk.bootstrap --mode local --version vX.Y.Z
+    python -m agentmux_sdk.bootstrap --mode production --version vX.Y.Z
 
 Modes:
 

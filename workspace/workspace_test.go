@@ -110,54 +110,9 @@ func TestCopyDirFallbackHelperCopiesSkillTree(t *testing.T) {
 	assertFile(t, filepath.Join(dst, "references.md"))
 }
 
-func TestInitializeConversationWorktreeCreatesAndReusesStableWorkspace(t *testing.T) {
+func TestInitializeWorktreeModes(t *testing.T) {
 	repo := initGitRepository(t)
 	init := New(filepath.Join(t.TempDir(), "skills"))
-	opts := core.WorkspaceInitOptions{
-		AgentID:           "agent-one",
-		RuntimeID:         "codex",
-		WorkDir:           repo,
-		WorkspaceMode:     "worktree",
-		ConversationScope: "channel:one",
-		ConversationKey:   "root:message-one",
-	}
-
-	first, err := init.InitializeWorkspace(context.Background(), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.WorkDir == repo || first.WorkspaceMode != "worktree" {
-		t.Fatalf("worktree result = %+v", first)
-	}
-	if first.WorktreeBranch == "" || !strings.HasPrefix(first.WorktreeBranch, "agentmux/") {
-		t.Fatalf("worktree branch = %q", first.WorktreeBranch)
-	}
-	assertFile(t, filepath.Join(first.WorkDir, "AGENTS.md"))
-	if got := gitRun(t, first.WorkDir, "branch", "--show-current"); got != first.WorktreeBranch {
-		t.Fatalf("worktree current branch = %q, want %q", got, first.WorktreeBranch)
-	}
-
-	second, err := init.InitializeWorkspace(context.Background(), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.WorkDir != first.WorkDir || second.WorktreeBranch != first.WorktreeBranch {
-		t.Fatalf("worktree was not reused: first=%+v second=%+v", first, second)
-	}
-
-	other := opts
-	other.ConversationKey = "root:message-two"
-	third, err := init.InitializeWorkspace(context.Background(), other)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if third.WorkDir == first.WorkDir || third.WorktreeBranch == first.WorktreeBranch {
-		t.Fatalf("different conversations shared a worktree: first=%+v third=%+v", first, third)
-	}
-}
-
-func TestInitializeConversationWorktreePreservesConfiguredSubdirectory(t *testing.T) {
-	repo := initGitRepository(t)
 	subdir := filepath.Join(repo, "services", "api")
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
@@ -168,38 +123,67 @@ func TestInitializeConversationWorktreePreservesConfiguredSubdirectory(t *testin
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "add subdir")
 
-	res, err := New(filepath.Join(t.TempDir(), "skills")).InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
-		AgentID:           "agent-subdir",
-		RuntimeID:         "claudecode",
-		WorkDir:           subdir,
-		WorkspaceMode:     "worktree",
-		ConversationScope: "api-agent:agent-subdir",
-		ConversationKey:   "conversation:one",
+	t.Run("creates reuses and separates conversations", func(t *testing.T) {
+		opts := core.WorkspaceInitOptions{
+			AgentID: "agent-one", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
+			ConversationScope: "channel:one", ConversationKey: "root:message-one",
+		}
+		first, err := init.InitializeWorkspace(context.Background(), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.WorkDir == repo || first.WorkspaceMode != "worktree" || first.WorktreeBranch == "" || !strings.HasPrefix(first.WorktreeBranch, "agentmux/") {
+			t.Fatalf("worktree result = %+v", first)
+		}
+		assertFile(t, filepath.Join(first.WorkDir, "AGENTS.md"))
+		if got := gitRun(t, first.WorkDir, "branch", "--show-current"); got != first.WorktreeBranch {
+			t.Fatalf("worktree current branch = %q, want %q", got, first.WorktreeBranch)
+		}
+		second, err := init.InitializeWorkspace(context.Background(), opts)
+		if err != nil || second.WorkDir != first.WorkDir || second.WorktreeBranch != first.WorktreeBranch {
+			t.Fatalf("worktree was not reused: err=%v first=%+v second=%+v", err, first, second)
+		}
+		other := opts
+		other.ConversationKey = "root:message-two"
+		third, err := init.InitializeWorkspace(context.Background(), other)
+		if err != nil || third.WorkDir == first.WorkDir || third.WorktreeBranch == first.WorktreeBranch {
+			t.Fatalf("different conversations shared a worktree: err=%v first=%+v third=%+v", err, first, third)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filepath.Base(res.WorkDir) != "api" || filepath.Base(filepath.Dir(res.WorkDir)) != "services" {
-		t.Fatalf("worktree subdirectory = %q", res.WorkDir)
-	}
-	assertFile(t, filepath.Join(res.WorkDir, "README.md"))
-	assertFile(t, filepath.Join(res.WorkDir, "CLAUDE.md"))
-}
 
-func TestInitializeWorktreeModeWithoutConversationDefersCreation(t *testing.T) {
-	repo := initGitRepository(t)
-	res, err := New(filepath.Join(t.TempDir(), "skills")).InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
-		AgentID:       "agent-deferred",
-		RuntimeID:     "codex",
-		WorkDir:       repo,
-		WorkspaceMode: "worktree",
+	t.Run("preserves configured subdirectory", func(t *testing.T) {
+		res, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+			AgentID: "agent-subdir", RuntimeID: "claudecode", WorkDir: subdir, WorkspaceMode: "worktree",
+			ConversationScope: "api-agent:agent-subdir", ConversationKey: "conversation:one",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.Base(res.WorkDir) != "api" || filepath.Base(filepath.Dir(res.WorkDir)) != "services" {
+			t.Fatalf("worktree subdirectory = %q", res.WorkDir)
+		}
+		assertFile(t, filepath.Join(res.WorkDir, "README.md"))
+		assertFile(t, filepath.Join(res.WorkDir, "CLAUDE.md"))
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.WorkDir != repo || res.WorktreeBranch != "" || len(res.Warnings) == 0 {
-		t.Fatalf("deferred worktree result = %+v", res)
-	}
+
+	t.Run("defers creation without conversation", func(t *testing.T) {
+		res, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+			AgentID: "agent-deferred", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
+		})
+		if err != nil || res.WorkDir != repo || res.WorktreeBranch != "" || len(res.Warnings) == 0 {
+			t.Fatalf("deferred worktree result = %+v err=%v", res, err)
+		}
+	})
+
+	t.Run("rejects option-like base ref", func(t *testing.T) {
+		_, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+			AgentID: "agent-invalid-ref", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
+			ConversationScope: "channel:one", ConversationKey: "chat:one", WorktreeBaseRef: "--detach",
+		})
+		if err == nil || !strings.Contains(err.Error(), "base ref") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 }
 
 func TestInitializeWorktreeModeRejectsNonRepository(t *testing.T) {
@@ -212,17 +196,6 @@ func TestInitializeWorktreeModeRejectsNonRepository(t *testing.T) {
 		ConversationKey:   "chat:one",
 	})
 	if err == nil || !strings.Contains(err.Error(), "not inside a git repository") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestInitializeWorktreeModeRejectsOptionLikeBaseRef(t *testing.T) {
-	repo := initGitRepository(t)
-	_, err := New(filepath.Join(t.TempDir(), "skills")).InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
-		AgentID: "agent-invalid-ref", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
-		ConversationScope: "channel:one", ConversationKey: "chat:one", WorktreeBaseRef: "--detach",
-	})
-	if err == nil || !strings.Contains(err.Error(), "base ref") {
 		t.Fatalf("error = %v", err)
 	}
 }

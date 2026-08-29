@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCatalogHasKnownFrameworks(t *testing.T) {
@@ -62,7 +63,7 @@ func TestTraeCatalogIsInternalAndPlatformLimited(t *testing.T) {
 }
 
 func TestTraeInstallRequiresInternalAcknowledgement(t *testing.T) {
-	res := Install(context.Background(), "traecli")
+	res := InstallWithProgressOptions(context.Background(), "traecli", InstallOptions{}, nil)
 	if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
 		t.Fatalf("install result = %+v", res)
 	}
@@ -125,41 +126,23 @@ func TestDetectCLIReadsNormalizedVersion(t *testing.T) {
 	}
 }
 
-func TestCheckAuthDistinguishesLoggedInAndLoggedOutCLIs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
+func TestClassifyFrameworkAuth(t *testing.T) {
+	tests := []struct {
+		kind   string
+		output string
+		err    error
+		want   AuthState
+	}{
+		{"claudecode", `{"loggedIn":true,"email":"must-not-leak@example.test"}`, nil, AuthStateAuthenticated},
+		{"claudecode", `{"loggedIn":false}`, nil, AuthStateUnauthenticated},
+		{"codex", "Not logged in", os.ErrNotExist, AuthStateUnauthenticated},
+		{"cursor", "Authenticated", nil, AuthStateAuthenticated},
+		{"cursor", "unrecognized output", nil, AuthStateUnknown},
 	}
-	home := t.TempDir()
-	bin := t.TempDir()
-	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), `#!/bin/sh
-if [ "$1 $2 $3" = "auth status --json" ]; then
-  printf '%s\n' '{"loggedIn":true,"email":"must-not-leak@example.test"}'
-  exit 0
-fi
-exit 2
-`)
-	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), `#!/bin/sh
-if [ "$1 $2" = "login status" ]; then
-  echo 'Not logged in'
-  exit 1
-fi
-exit 2
-`)
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", bin)
-	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
-	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("OPENAI_API_KEY", "")
-	t.Setenv("CODEX_API_KEY", "")
-
-	claude := CheckAuth(context.Background(), "claudecode")
-	if claude.State != AuthStateAuthenticated || !claude.LoginSupported || strings.Contains(claude.Detail, "example.test") {
-		t.Fatalf("Claude auth status = %+v", claude)
-	}
-	codex := CheckAuth(context.Background(), "codex")
-	if codex.State != AuthStateUnauthenticated || !codex.LoginSupported {
-		t.Fatalf("Codex auth status = %+v", codex)
+	for _, test := range tests {
+		if got := classifyFrameworkAuth(test.kind, []byte(test.output), test.err); got != test.want {
+			t.Errorf("classifyFrameworkAuth(%s, %q) = %q, want %q", test.kind, test.output, got, test.want)
+		}
 	}
 }
 
@@ -182,16 +165,24 @@ exit 2
 	}
 }
 
-func TestStartLoginReturnsBrowserURLAndVerificationCode(t *testing.T) {
+func TestFrameworkLoginProcessLifecycle(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
 	home := t.TempDir()
 	bin := t.TempDir()
-	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), `#!/bin/sh
-if [ "$1 $2" = "login --device-auth" ]; then
-  echo 'Open https://auth.example.test/device'
+	state := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), `#!/bin/sh
+if [ "$1 $2 $3" = "auth status --json" ]; then
+  if [ -f "`+filepath.Join(state, "authenticated")+`" ]; then echo '{"loggedIn":true}'; else echo '{"loggedIn":false}'; fi
+  exit 0
+fi
+if [ "$1 $2" = "auth login" ]; then
+  echo 'Visit https://claude.example.test/oauth'
   printf 'Code: \033[94mABCD-EFGH\033[0m\n'
+  read code
+  [ "$code" = "returned-code" ] || exit 3
+  : > "`+filepath.Join(state, "authenticated")+`"
   exit 0
 fi
 exit 2
@@ -200,45 +191,29 @@ exit 2
 	t.Setenv("PATH", bin)
 	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
 	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
-
-	result, err := StartLogin("codex")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.LoginURL != "https://auth.example.test/device" || result.VerificationCode != "ABCD-EFGH" || result.SessionID == "" {
-		t.Fatalf("login result = %+v", result)
-	}
-}
-
-func TestCompleteLoginWritesPastedCodeToWaitingCLI(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
-	}
-	home := t.TempDir()
-	bin := t.TempDir()
-	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), `#!/bin/sh
-if [ "$1 $2" = "auth login" ]; then
-  echo 'Visit https://claude.example.test/oauth'
-  read code
-  [ "$code" = "returned-code" ]
-  exit $?
-fi
-exit 2
-`)
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", bin)
-	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
-	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	result, err := StartLogin("claudecode")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.InputRequired || result.LoginURL != "https://claude.example.test/oauth" {
+	if !result.InputRequired || result.LoginURL != "https://claude.example.test/oauth" || result.VerificationCode != "ABCD-EFGH" {
 		t.Fatalf("login result = %+v", result)
 	}
 	if err := CompleteLogin(result.SessionID, "returned-code"); err != nil {
 		t.Fatal(err)
+	}
+	session, ok := frameworkLoginSessions.Get(result.SessionID)
+	if !ok {
+		t.Fatal("login session disappeared before completion")
+	}
+	select {
+	case <-session.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("login session did not reach a terminal state")
+	}
+	if status := GetLoginSession(result.SessionID); status.State != "succeeded" || status.Error != "" {
+		t.Fatalf("completed login session = %+v", status)
 	}
 }
 
@@ -297,7 +272,7 @@ func TestFrameworkCommandsSurviveDeletedDaemonWorkingDirectory(t *testing.T) {
 }
 
 func TestInstallRejectsUnknown(t *testing.T) {
-	res := Install(context.Background(), "not-a-framework")
+	res := InstallWithProgressOptions(context.Background(), "not-a-framework", InstallOptions{}, nil)
 	if res.OK || !strings.Contains(res.Error, "unknown framework") {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -319,7 +294,7 @@ func TestInstallCLIUsesCatalogNPMCommandAndVerifiesBinary(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var phases []string
-	res := InstallWithProgress(context.Background(), "gemini", func(phase, _ string, _ int) {
+	res := InstallWithProgressOptions(context.Background(), "gemini", InstallOptions{}, func(phase, _ string, _ int) {
 		phases = append(phases, phase)
 	})
 	if !res.OK || res.Error != "" || res.Version != "1.2.3" || res.Command != "npm install -g @google/gemini-cli@latest" {
@@ -427,7 +402,7 @@ func TestUpdateCodexConfiguresPNPMHomeForBackgroundService(t *testing.T) {
 	t.Setenv("PNPM_HOME", "")
 	t.Setenv("PATH", t.TempDir())
 
-	res := Update(context.Background(), "codex")
+	res := UpdateWithProgress(context.Background(), "codex", nil)
 	if !res.OK || res.Error != "" || res.Version != "0.146.0" || res.Command != "codex update" {
 		t.Fatalf("update result = %+v", res)
 	}
@@ -438,7 +413,7 @@ func TestUpdateCodexConfiguresPNPMHomeForBackgroundService(t *testing.T) {
 
 func TestInstallRejectsUnsupportedFramework(t *testing.T) {
 	// deepagents is catalogued but not supported for automatic install.
-	res := Install(context.Background(), "deepagents")
+	res := InstallWithProgressOptions(context.Background(), "deepagents", InstallOptions{}, nil)
 	if res.OK {
 		t.Fatalf("expected deepagents install to be refused, got: %+v", res)
 	}
@@ -478,7 +453,7 @@ func TestUpdateRunsCataloguedCLICommandAndVerifiesVersion(t *testing.T) {
 	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '2.1.211'; exit 0; fi\nexit 1\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	res := Update(context.Background(), "claudecode")
+	res := UpdateWithProgress(context.Background(), "claudecode", nil)
 	if !res.OK || res.Error != "" || res.Action != "update" || res.Command != "claude update" || res.Version != "2.1.211" {
 		t.Fatalf("update result = %+v", res)
 	}
@@ -525,7 +500,7 @@ func TestUpdateCodexUsesHomebrewCommandThroughSymlink(t *testing.T) {
 	}
 	t.Setenv("PATH", frontBin+string(os.PathListSeparator)+"/usr/bin:/bin")
 
-	res := Update(context.Background(), "codex")
+	res := UpdateWithProgress(context.Background(), "codex", nil)
 	resolvedBrewPath, err := filepath.EvalSymlinks(brewPath)
 	if err != nil {
 		t.Fatal(err)
@@ -599,10 +574,10 @@ func TestCursorUpdateUsesOfficialInstallerAndExactNativeBuild(t *testing.T) {
 	if !ok {
 		t.Fatal("cursor missing from catalog")
 	}
-	res := updateCLI(context.Background(), spec, UpdateCheck{
+	res := updateCLIWithProgress(context.Background(), spec, UpdateCheck{
 		CurrentVersion: "2026.07.23-fffffff",
 		LatestVersion:  "2026.07.23-0000000",
-	})
+	}, nil)
 	if !res.OK || res.Error != "" || res.Version != "2026.07.23-0000000" ||
 		res.Command != "bash -c curl https://cursor.com/install -fsS | bash" {
 		t.Fatalf("update result = %+v", res)

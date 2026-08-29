@@ -88,7 +88,7 @@ start empty; an administrator grants resources later:
 ```ts
 const registrationClient = new AgentMuxClient({ baseUrl: "http://127.0.0.1:8765" });
 const result = await registrationClient.tenancy.register("homebook", "web");
-await saveSecret("AGENTMUX_BRIDGE_TOKEN", result.token); // shown once
+await saveSecret("AGENTMUX_TENANT_TOKEN", result.token); // shown once
 ```
 
 To check what a credential can see:

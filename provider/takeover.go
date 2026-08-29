@@ -154,11 +154,6 @@ func NewService(log *slog.Logger, st *store.Store, addr string) *Service {
 	}
 }
 
-// NewServiceWithProxy wires an explicit proxy (used by tests).
-func NewServiceWithProxy(st *store.Store, proxy *ProxyServer) *Service {
-	return &Service{Manager: NewManager(st), st: st, proxy: proxy}
-}
-
 var _ core.ProviderManager = (*Service)(nil)
 
 // Proxy exposes the local routing server.

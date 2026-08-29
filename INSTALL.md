@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/inst
 
 # Optional custom location or pinned version:
 curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh \
-  | AMUX_INSTALL_DIR=/usr/local/bin sh -s -- v0.1.0
+  | AMUX_INSTALL_DIR=/usr/local/bin sh -s -- vX.Y.Z
 ```
 
 Windows users can download the amd64 zip and `checksums.txt` from
@@ -58,9 +58,9 @@ make cross          # dist/ binaries for Linux/macOS/Windows (amd64+arm64)
 `make cross` produces, e.g.:
 
 ```
-dist/amux-0.1.0-linux-amd64
-dist/amux-0.1.0-darwin-arm64
-dist/amux-0.1.0-windows-amd64.exe
+dist/amux-X.Y.Z-linux-amd64
+dist/amux-X.Y.Z-darwin-arm64
+dist/amux-X.Y.Z-windows-amd64.exe
 ```
 
 The CLI binary is statically linked (CGO disabled) and self-contained.
@@ -97,7 +97,7 @@ AgentMux does not require a desktop shell on Linux. Use the same `amux`
 binary as a foreground client, a server daemon, or a CLI toolbox:
 
 ```bash
-sudo install -m 0755 dist/amux-0.1.0-linux-amd64 /usr/local/bin/amux
+sudo install -m 0755 dist/amux-X.Y.Z-linux-amd64 /usr/local/bin/amux
 amux config init
 amux client --web
 ```

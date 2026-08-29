@@ -170,7 +170,11 @@ var cursorANSISequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 func parseCursorModelCatalog(output []byte) (cliagent.ModelCatalog, error) {
 	text := cursorANSISequence.ReplaceAllString(string(output), "")
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	catalog := cliagent.ModelCatalog{}
+	type catalogEntry struct {
+		model     string
+		isDefault bool
+	}
+	var entries []catalogEntry
 	inModels := false
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -204,18 +208,147 @@ func parseCursorModelCatalog(output []byte) (cliagent.ModelCatalog, error) {
 		if line == "" {
 			continue
 		}
-		catalog.Models = append(catalog.Models, line)
-		if isDefault {
-			catalog.DefaultModel = line
-		}
+		entries = append(entries, catalogEntry{model: line, isDefault: isDefault})
 	}
 	if !inModels {
 		return cliagent.ModelCatalog{}, fmt.Errorf("Cursor model list did not contain an Available models section")
 	}
-	if len(catalog.Models) == 0 {
+	if len(entries) == 0 {
 		return cliagent.ModelCatalog{}, fmt.Errorf("Cursor model list did not contain any model IDs")
 	}
+
+	// Cursor's live catalog expands one base model into concrete effort/speed
+	// slugs (for example gpt-5.6-sol-high-fast). Keep one model option and move
+	// those axes into the shared effort and speed controls. Besides fitting IM
+	// picker limits, this mirrors Cursor's documented parameterized --model
+	// syntax instead of presenting hundreds of near-duplicate models.
+	catalog := cliagent.ModelCatalog{ModelCapabilities: map[string]cliagent.ModelRuntimeCapabilities{}}
+	seenModels := map[string]bool{}
+	for _, entry := range entries {
+		model, effort, tier, parameterized := cursorCatalogModel(entry.model)
+		if !seenModels[model] {
+			seenModels[model] = true
+			catalog.Models = append(catalog.Models, model)
+		}
+		capabilities := catalog.ModelCapabilities[model]
+		capabilities.Variants = append(capabilities.Variants, cliagent.ModelVariant{
+			ID: entry.model, ReasoningEffort: effort, ServiceTier: tier,
+		})
+		if parameterized {
+			if effort != "" {
+				capabilities.ReasoningEfforts = appendRuntimeOption(capabilities.ReasoningEfforts, effort)
+			}
+			if tier != "" {
+				capabilities.ServiceTiers = appendRuntimeOption(capabilities.ServiceTiers, tier)
+			}
+		}
+		catalog.ModelCapabilities[model] = capabilities
+		if entry.isDefault {
+			catalog.DefaultModel = model
+			catalog.DefaultReasoningEffort = effort
+			catalog.DefaultServiceTier = tier
+		}
+	}
+	for model, capabilities := range catalog.ModelCapabilities {
+		// A speed selector is useful only when Cursor advertised a Fast variant.
+		// The unsuffixed/normal form is the other side of that switch.
+		if runtimeOptionValueExists(capabilities.ServiceTiers, "priority") {
+			capabilities.ServiceTiers = prependRuntimeOption(capabilities.ServiceTiers, "default")
+		} else {
+			capabilities.ServiceTiers = nil
+		}
+		catalog.ModelCapabilities[model] = capabilities
+	}
 	return catalog, nil
+}
+
+// cursorCatalogModel folds the effort and Fast dimensions of one catalog ID.
+// The returned base remains an exact Cursor parameterized-model base; semantic
+// names such as "thinking" remain part of it.
+func cursorCatalogModel(model string) (base, effort, tier string, parameterized bool) {
+	base, parameters := splitCursorModelParameters(model)
+	remaining := make([]string, 0, len(parameters))
+	for _, parameter := range parameters {
+		key, value, ok := strings.Cut(parameter, "=")
+		if !ok {
+			remaining = append(remaining, parameter)
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "effort", "reasoning":
+			if normalized := normalizeCursorEffort(value); normalized != "" {
+				effort = normalized
+				parameterized = true
+				continue
+			}
+		case "fast":
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "true", "1", "yes", "on":
+				tier = "priority"
+				parameterized = true
+				continue
+			case "false", "0", "no", "off":
+				tier = "default"
+				parameterized = true
+				continue
+			}
+		}
+		remaining = append(remaining, parameter)
+	}
+	if len(parameters) > 0 {
+		if len(remaining) > 0 {
+			base += "[" + strings.Join(remaining, ",") + "]"
+		}
+		return base, effort, tier, parameterized
+	}
+
+	tokens := strings.Split(strings.TrimSpace(base), "-")
+	end := len(tokens)
+	if end > 0 && strings.EqualFold(tokens[end-1], "fast") {
+		tier = "priority"
+		parameterized = true
+		end--
+	} else {
+		tier = "default"
+	}
+	if end > 1 && strings.EqualFold(tokens[end-2], "extra") && strings.EqualFold(tokens[end-1], "high") {
+		effort = "xhigh"
+		parameterized = true
+		end -= 2
+	} else if end > 0 {
+		if normalized := normalizeCursorEffort(tokens[end-1]); normalized != "" {
+			effort = normalized
+			parameterized = true
+			end--
+		}
+	}
+	if !parameterized || end == 0 {
+		return strings.TrimSpace(model), "", "", false
+	}
+	return strings.Join(tokens[:end], "-"), effort, tier, true
+}
+
+func appendRuntimeOption(options []core.RuntimeOption, value string) []core.RuntimeOption {
+	if value == "" || runtimeOptionValueExists(options, value) {
+		return options
+	}
+	return append(options, core.RuntimeOption{Value: value, Label: value})
+}
+
+func prependRuntimeOption(options []core.RuntimeOption, value string) []core.RuntimeOption {
+	if value == "" || runtimeOptionValueExists(options, value) {
+		return options
+	}
+	return append([]core.RuntimeOption{{Value: value, Label: value}}, options...)
+}
+
+func runtimeOptionValueExists(options []core.RuntimeOption, value string) bool {
+	for _, option := range options {
+		if option.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func cursorModelForSettings(settings core.RuntimeSettings) string {
@@ -291,7 +424,7 @@ func cursorEmbeddedModelSettings(model string) core.RuntimeSettings {
 
 func normalizeCursorEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "medium", "high", "xhigh":
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max":
 		return strings.ToLower(strings.TrimSpace(value))
 	case "extra-high", "extra_high":
 		return "xhigh"

@@ -55,6 +55,7 @@ clients (CLI / WebUI / Wails / menubar)
    ├── usage/       Ledger:parsers + pricing + aggregation + SSH collector
    ├── observability/ encrypted recorder + OTLP + transcript + insights
    ├── integrations/ Claude/Codex native observer plugins + ownership doctor
+   ├── internal/     shared process/auth lifecycle and platform helpers
    ├── memory/      Memory:统一记忆 store 与检索
    ├── skills/      Skills:Agent Skills 发现与管理
    ├── mcp/         MCP Registry:MCP server 注册与下发
@@ -86,7 +87,7 @@ curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/inst
 
 # 安装指定版本
 curl -fsSL https://raw.githubusercontent.com/wangning19940904/AgentMux/main/install.sh \
-  | sh -s -- v0.1.0
+  | sh -s -- vX.Y.Z
 ```
 
 已经安装 Go 1.25+ 的开发者也可以安装精简 CLI。该方式不包含 React
@@ -485,7 +486,7 @@ Invocation API 没有消息渠道可承载交互式审批；如果 Agent 在执�
 对外集成契约的唯一事实来源在 [`contract/`](contract/)：OpenAPI 3.1 规范
 （[openapi.yaml](contract/openapi.yaml)）、版本策略与稳定性分级
 （[CONTRACT.md](contract/CONTRACT.md)），以及由 Go 类型自动生成、CI 防漂移的
-golden schema。当前 `contract_version` 为 `1.2`，由
+golden schema。当前 `contract_version` 为 `1.3`，由
 `GET /api/v1/capabilities`（推荐的唯一握手/探活端点）返回。
 
 四类接入角色，各有一条推荐路径：
@@ -506,9 +507,9 @@ for event in client.invoke_stream(agent_id="agent-abc", input="分析这份数�
     ...
 ```
 
-宿主应用嵌入 Console 时，不要把 bridge token 交给浏览器：由宿主后端调用
+宿主应用嵌入 Console 时，不要把 bridge 或 tenant token 交给浏览器：由宿主后端调用
 `POST /api/v1/console/sessions` 换取一次性 `enter_url`（约 60 秒有效、单次使用），
-浏览器访问后获得 HttpOnly 会话 cookie 并落在 Console 首页。
+浏览器访问后获得继承调用者权限范围的 HttpOnly 会话 cookie，并落在 Console 首页。
 
 宿主页面不应只提供 Console 跳转。统一使用
 [`contract/HOST_INTEGRATION.md`](contract/HOST_INTEGRATION.md) 定义的 BFF + tenant

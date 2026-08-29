@@ -1,3 +1,5 @@
+// Package sessions discovers and normalizes resumable conversations from
+// local CLI logs and Codex app-server threads.
 package sessions
 
 import (
@@ -906,10 +908,10 @@ func anyToString(value any) string {
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
 	case json.Number:
 		return v.String()
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
 	case float64:
 		if v == float64(int64(v)) {
 			return strconv.FormatInt(int64(v), 10)

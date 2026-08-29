@@ -77,8 +77,8 @@ semantic version tag:
 go test ./...
 (cd sdk/python && uv run pytest -q)
 (cd sdk/typescript && npm test)
-git tag -a v0.1.0 -m "AgentMux v0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "AgentMux vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
 The Release workflow builds macOS and Linux archives for amd64/arm64, plus a

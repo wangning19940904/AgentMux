@@ -1,5 +1,6 @@
-// Package store provides the SQLite single-source-of-truth for AgentMux:
-// providers, sessions, cached usage records and settings.
+// Package store provides AgentMux persistence. PostgreSQL is the production
+// runtime store; SQLite remains available for migration and isolated
+// compatibility tests.
 package store
 
 import (
