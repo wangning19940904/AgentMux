@@ -2448,18 +2448,14 @@ textarea:focus {
   min-width: 0;
 }
 
-.provider-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(140px, 1fr));
-  gap: 12px;
-  border-bottom: 1px solid var(--border);
-}
-
 .provider-health-strip {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto auto;
+  grid-template-areas:
+    "copy actions"
+    "time actions";
+  grid-template-columns: minmax(260px, 1fr) max-content;
   align-items: center;
-  gap: 12px 18px;
+  gap: 5px 24px;
   background: color-mix(in srgb, var(--accent-soft) 26%, var(--surface));
   border-bottom: 1px solid var(--border);
 }
@@ -2475,6 +2471,7 @@ textarea:focus {
 }
 
 .provider-health-strip-copy {
+  grid-area: copy;
   gap: 10px;
   min-width: 0;
 }
@@ -2516,7 +2513,21 @@ textarea:focus {
 }
 
 .provider-health-strip-time {
+  grid-area: time;
   min-width: 0;
+  white-space: nowrap;
+}
+
+.provider-health-strip-actions {
+  grid-area: actions;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  min-width: max-content;
+}
+
+.provider-health-strip-actions .ghost-action,
+.provider-health-strip-actions .provider-health-toggle {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -2775,4 +2786,3 @@ textarea:focus {
   color: var(--muted);
   background: color-mix(in srgb, var(--bg-subtle) 78%, var(--bg));
 }
-

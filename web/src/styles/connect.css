@@ -186,10 +186,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .provider-summary {
-    grid-template-columns: repeat(2, minmax(140px, 1fr));
-  }
-
   .agent-metrics,
   .agent-picker-grid {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
@@ -577,6 +573,10 @@
   }
 
   .provider-health-strip {
+    grid-template-areas:
+      "copy"
+      "time"
+      "actions";
     grid-template-columns: 1fr;
     align-items: flex-start;
   }
@@ -587,6 +587,8 @@
 
   .provider-health-strip-actions {
     flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
   }
 
   .provider-card-badges {
@@ -642,7 +644,6 @@
     min-width: 0;
   }
 
-  .provider-summary,
   .provider-facts,
   .provider-transfer-grid,
   .agent-metrics,
@@ -2073,4 +2074,3 @@
     display: none;
   }
 }
-
