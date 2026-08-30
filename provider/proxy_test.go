@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/store"
@@ -70,14 +71,20 @@ func getJSON(t *testing.T, url string, headers map[string]string) (*http.Respons
 
 func latestTrace(t *testing.T, st *store.Store, tool string) core.ProxyTrace {
 	t.Helper()
-	traces, err := st.QueryProxyTraces(context.Background(), tool, "", 1)
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		traces, err := st.QueryProxyTraces(context.Background(), tool, "", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(traces) == 1 {
+			return traces[0]
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("trace count = %d, want 1", len(traces))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if len(traces) != 1 {
-		t.Fatalf("trace count = %d, want 1", len(traces))
-	}
-	return traces[0]
 }
 
 func TestProxyTraceStoresGenericErrorAndForwardsDetailToEncryptedObserver(t *testing.T) {
