@@ -26,26 +26,26 @@ import (
 
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := config.Default()
 	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
-	return New(cfg, nil, st, nil, nil), st
+	return New(Dependencies{Config: cfg, Store: st}), st
 }
 
 func newTestServerWithProvider(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := config.Default()
 	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
-	return New(cfg, nil, st, provider.NewManager(st), nil), st
+	return New(Dependencies{Config: cfg, Store: st, Provider: provider.NewManager(st)}), st
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any) *httptest.ResponseRecorder {

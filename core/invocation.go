@@ -12,12 +12,11 @@ import (
 )
 
 // InvocationRequest is a transport-neutral request to run an Agent directly.
-// Exactly one of AgentID and Project must be set. ConversationID is an opaque,
+// AgentID selects one PostgreSQL-backed Agent. ConversationID is an opaque,
 // caller-controlled key; omit it for a new conversation and reuse the returned
 // value on later calls to continue the same native Agent session.
 type InvocationRequest struct {
 	AgentID        string            `json:"agent_id,omitempty"`
-	Project        string            `json:"project,omitempty"`
 	ConversationID string            `json:"conversation_id,omitempty"`
 	Input          string            `json:"input"`
 	Attachments    []AgentAttachment `json:"attachments,omitempty"`
@@ -28,7 +27,6 @@ type InvocationRequest struct {
 type InvocationResult struct {
 	ID             string     `json:"id"`
 	AgentID        string     `json:"agent_id,omitempty"`
-	Project        string     `json:"project,omitempty"`
 	ConversationID string     `json:"conversation_id"`
 	SessionID      string     `json:"session_id,omitempty"`
 	Answer         string     `json:"answer"`
@@ -85,10 +83,9 @@ var (
 	ErrInvocationRuntime  = errors.New("invocation runtime unavailable")
 )
 
-// Invoke implements Invoker for config.toml projects and console-managed
-// Agent instances. Project runtimes are long-lived and reuse their in-memory
-// sessions. Managed Agent runtimes are created per request and resume through
-// the durable conversation's native session id.
+// Invoke implements Invoker for PostgreSQL-backed Agent instances. Runtimes
+// are created per request and resume through the durable conversation's native
+// session id.
 func (c *ConnectService) Invoke(ctx context.Context, req InvocationRequest) (InvocationResult, error) {
 	return c.invoke(ctx, req, nil)
 }
@@ -104,18 +101,11 @@ func (c *ConnectService) invoke(ctx context.Context, req InvocationRequest, sink
 		return InvocationResult{}, fmt.Errorf("%w: engine is unavailable", ErrInvocationRuntime)
 	}
 	req.AgentID = strings.TrimSpace(req.AgentID)
-	req.Project = strings.TrimSpace(req.Project)
-	if (req.AgentID == "") == (req.Project == "") {
-		return InvocationResult{}, fmt.Errorf("%w: exactly one of agent_id and project is required", ErrInvalidInvocation)
+	if req.AgentID == "" {
+		return InvocationResult{}, fmt.Errorf("%w: agent_id is required", ErrInvalidInvocation)
 	}
 	if err := validateInvocationInput(&req); err != nil {
 		return InvocationResult{}, err
-	}
-	if req.Project != "" {
-		return c.eng.invokeProject(ctx, req, sink)
-	}
-	if result, found, err := c.eng.invokeProjectAgent(ctx, req, sink); found {
-		return result, err
 	}
 	if c.store == nil {
 		return InvocationResult{}, fmt.Errorf("%w: agent store is unavailable", ErrInvocationRuntime)
@@ -165,29 +155,6 @@ func validateInvocationInput(req *InvocationRequest) error {
 	return nil
 }
 
-func (e *Engine) invokeProject(ctx context.Context, req InvocationRequest, sink InvocationEventSink) (InvocationResult, error) {
-	e.mu.RLock()
-	runtime := e.projects[req.Project]
-	e.mu.RUnlock()
-	if runtime == nil {
-		return InvocationResult{}, fmt.Errorf("%w: project %q", ErrInvocationNotFound, req.Project)
-	}
-	return e.invokeRuntime(ctx, runtime, req, "project:"+req.Project, sink)
-}
-
-func (e *Engine) invokeProjectAgent(ctx context.Context, req InvocationRequest, sink InvocationEventSink) (InvocationResult, bool, error) {
-	e.mu.RLock()
-	project := e.projectByAgentID[req.AgentID]
-	runtime := e.projects[project]
-	e.mu.RUnlock()
-	if runtime == nil {
-		return InvocationResult{}, false, nil
-	}
-	req.Project = project
-	result, err := e.invokeRuntime(ctx, runtime, req, "project:"+project, sink)
-	return result, true, err
-}
-
 func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req InvocationRequest, targetKey string, sink InvocationEventSink) (InvocationResult, error) {
 	if runtime == nil || runtime.agent == nil {
 		return InvocationResult{}, fmt.Errorf("%w: target has no agent", ErrInvocationRuntime)
@@ -208,7 +175,6 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 	result := InvocationResult{
 		ID:             invocationID,
 		AgentID:        req.AgentID,
-		Project:        req.Project,
 		ConversationID: req.ConversationID,
 	}
 	emitStream := func(event InvocationStreamEvent) error {
@@ -237,7 +203,7 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 		Text:            req.Input,
 		Timestamp:       startedAt.UTC(),
 		Platform:        "api",
-		Project:         req.Project,
+		Project:         "agent:" + req.AgentID,
 		Origin:          OriginAPI,
 	}
 	data := eventData(msg)
@@ -256,6 +222,7 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 	result.SessionID = sessionObservationID(sess)
 	data["agent_id"] = runtime.workspace.AgentID
 	data["runtime_id"] = runtime.workspace.RuntimeID
+	data["memory_scope"] = runtime.workspace.MemoryScope
 	data["agent_name"] = runtime.agent.Name()
 	data["session_id"] = result.SessionID
 	if conversation != nil {
@@ -293,7 +260,8 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 			}
 			e.updateRemoteTaskFromEvent(data, event)
 			if event.Type == EventPermission {
-				if !e.dispatchAgentInteraction(turnCtx, event, data) {
+				resolved := e.resolveGuardInteraction(turnCtx, sess, event, data)
+				if !resolved && !e.dispatchAgentInteraction(turnCtx, event, data) {
 					e.declineAgentInteraction(turnCtx, sess, event)
 				}
 			}

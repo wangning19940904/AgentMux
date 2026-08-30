@@ -3,6 +3,7 @@ import { AlertTriangle, Bell, CheckCircle2, Clock, Power, PowerOff, RefreshCw, S
 import { api, Provider, ProviderMonitorAlert, ProviderMonitorConfig } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 import { usePolling } from "../hooks/usePolling";
 
 function claudeDesktopModelList(provider?: Provider) {
@@ -29,7 +30,7 @@ function parseClaudeDesktopModelList(value: string) {
 }
 
 const defaultMonitorConfig: ProviderMonitorConfig = {
-  enabled: false,
+  enabled: true,
   interval_minutes: 360,
   probe_models: true,
   max_models_per_provider: 20,
@@ -70,20 +71,22 @@ export function ProvidersPanel() {
   // Any provider can back Claude Desktop now that the proxy converts protocols.
   const claudeProviders = useMemo(() => providers.data ?? [], [providers.data]);
   const selectedClaudeProviderData = useMemo(
-    () => claudeProviders.find((provider) => provider.id === selectedClaudeProvider),
+    () => claudeProviders.find((provider) => targetKey(provider.target_id, provider.id) === selectedClaudeProvider),
     [claudeProviders, selectedClaudeProvider]
   );
 
   useEffect(() => {
     const statusProvider = claude3p.data?.provider_id;
-    const statusProviderValid = Boolean(statusProvider && claudeProviders.some((provider) => provider.id === statusProvider));
+    const statusProviderKey = statusProvider ? targetKey(claudeProviders.some((provider) => provider.target_id === "local") ? "local" : undefined, statusProvider) : "";
+    const statusProviderValid = Boolean(statusProvider && claudeProviders.some((provider) => targetKey(provider.target_id, provider.id) === statusProviderKey));
     const selectedValid = Boolean(
-      selectedClaudeProvider && claudeProviders.some((provider) => provider.id === selectedClaudeProvider)
+      selectedClaudeProvider && claudeProviders.some((provider) => targetKey(provider.target_id, provider.id) === selectedClaudeProvider)
     );
-    if (statusProvider && statusProviderValid && selectedClaudeProvider !== statusProvider) {
-      setSelectedClaudeProvider(statusProvider);
+    if (statusProvider && statusProviderValid && selectedClaudeProvider !== statusProviderKey) {
+      setSelectedClaudeProvider(statusProviderKey);
     } else if (!selectedValid) {
-      setSelectedClaudeProvider(claudeProviders[0]?.id ?? "");
+      const first = claudeProviders[0];
+      setSelectedClaudeProvider(first ? targetKey(first.target_id, first.id) : "");
     }
   }, [claude3p.data?.provider_id, claudeProviders, selectedClaudeProvider]);
 
@@ -111,8 +114,8 @@ export function ProvidersPanel() {
         delete meta.claude_desktop_models;
       }
       await api.upsertProvider({ ...selectedClaudeProviderData, meta });
-      if (claude3p.data?.enabled && claude3p.data.provider_id === selectedClaudeProviderData.id) {
-        await api.setClaude3p(true, selectedClaudeProviderData.id);
+      if (selectedClaudeProviderData.target_id === "local" && claude3p.data?.enabled && claude3p.data.provider_id === selectedClaudeProviderData.id) {
+        await api.setClaude3p(true, selectedClaudeProviderData.id, selectedClaudeProviderData.target_id);
       }
       setNotice(t("providers.modelMappingSaved"));
       claude3p.reload();
@@ -128,7 +131,7 @@ export function ProvidersPanel() {
     setBusy("claude3p");
     setNotice("");
     try {
-      const status = await api.setClaude3p(enabled, enabled ? selectedClaudeProvider : "");
+      const status = await api.setClaude3p(enabled, enabled ? selectedClaudeProviderData?.id ?? "" : "", selectedClaudeProviderData?.target_id);
       setNotice(
         status.backup_path
           ? `${status.message ?? ""} ${t("providers.backupPath")}: ${status.backup_path}`.trim()
@@ -172,10 +175,10 @@ export function ProvidersPanel() {
     }
   }
 
-  async function dismissMonitorAlert(id = "") {
+  async function dismissMonitorAlert(id = "", targetID?: string) {
     setBusy(id ? `provider-monitor-dismiss:${id}` : "provider-monitor-dismiss-all");
     try {
-      await api.dismissProviderMonitorAlert(id);
+      await api.dismissProviderMonitorAlert(id, targetID);
       await monitor.reload();
     } finally {
       setBusy(null);
@@ -249,17 +252,18 @@ export function ProvidersPanel() {
                 </button>
               </div>
               {(monitor.data?.alerts ?? []).map((alert) => (
-                <div className={`provider-monitor-alert ${alert.severity === "error" ? "error" : "warning"}`} key={alert.id}>
+                <div className={`provider-monitor-alert ${alert.severity === "error" ? "error" : "warning"}`} key={targetKey(alert.target_id, alert.id)}>
                   {alert.severity === "error" ? <AlertTriangle size={16} /> : <Bell size={16} />}
                   <span>
                     <strong>{monitorAlertText(alert)}</strong>
                     <small>{formatMonitorTime(alert.created_at)}</small>
+                    <TargetBadge target_id={alert.target_id} target_name={alert.target_name} />
                   </span>
                   <button
                     className="ghost-action icon-only"
                     disabled={busy === `provider-monitor-dismiss:${alert.id}`}
                     title={t("providers.monitorDismiss")}
-                    onClick={() => dismissMonitorAlert(alert.id)}
+                    onClick={() => dismissMonitorAlert(alert.id, alert.target_id)}
                   >
                     <X size={14} />
                   </button>
@@ -364,7 +368,7 @@ export function ProvidersPanel() {
           {(monitor.data?.providers ?? []).length > 0 && (
             <div className="provider-monitor-status-grid">
               {(monitor.data?.providers ?? []).map((status) => (
-                <div className="provider-monitor-status" key={status.provider_id}>
+                <div className="provider-monitor-status" key={targetKey(status.target_id, status.provider_id)}>
                   <span className="provider-monitor-status-icon">
                     {status.state === "healthy" ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
                   </span>
@@ -380,6 +384,7 @@ export function ProvidersPanel() {
                         : ""}
                     </small>
                     {status.message && <small title={status.message}>{status.message}</small>}
+                    <TargetBadge target_id={status.target_id} target_name={status.target_name} />
                   </span>
                   <span className={monitorBadgeClass(status.state)}>{monitorStateLabel(status.state)}</span>
                 </div>
@@ -429,8 +434,8 @@ export function ProvidersPanel() {
                 disabled={busy === "claude3p" || claudeProviders.length === 0}
               >
                 {claudeProviders.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
+                  <option key={targetKey(provider.target_id, provider.id)} value={targetKey(provider.target_id, provider.id)}>
+                    {provider.name}{provider.target_name ? ` · ${provider.target_name}` : ""}
                   </option>
                 ))}
                 {claudeProviders.length === 0 && <option value="">{t("providers.noClaude3pProvider")}</option>}

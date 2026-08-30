@@ -291,8 +291,9 @@ func (s *Server) handleMeetingJoin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMeetingAggregate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	selectedTarget := strings.TrimSpace(r.URL.Query().Get("target_id"))
 	aggregate := meetingAggregate{Channels: []meetingChannelView{}, Invitations: []meetingInvitationView{}, Meetings: []activeMeetingView{}}
-	if s.connect != nil {
+	if s.connect != nil && (selectedTarget == "" || selectedTarget == fleetAllTargetID || selectedTarget == fleetLocalTargetID) {
 		appendMeetingSnapshot(&aggregate, "", "", s.enrichMeetingSnapshot(r.Context(), s.connect.MeetingSnapshot()))
 	}
 	if s.meetingPeers != nil {
@@ -300,6 +301,9 @@ func (s *Server) handleMeetingAggregate(w http.ResponseWriter, r *http.Request) 
 		var wg sync.WaitGroup
 		for _, target := range s.meetingPeers.Targets() {
 			target := target
+			if selectedTarget != "" && selectedTarget != fleetAllTargetID && selectedTarget != target.ID {
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -384,7 +388,8 @@ func (s *Server) handleMeetingAggregateEvents(w http.ResponseWriter, r *http.Req
 	}
 	var localUpdates <-chan core.MeetingEvent
 	unsubscribe := func() {}
-	if s.connect != nil {
+	selectedTarget := strings.TrimSpace(r.URL.Query().Get("target_id"))
+	if s.connect != nil && (selectedTarget == "" || selectedTarget == fleetAllTargetID || selectedTarget == fleetLocalTargetID) {
 		localUpdates, unsubscribe = s.connect.SubscribeMeetingEvents()
 	}
 	defer unsubscribe()
@@ -395,6 +400,9 @@ func (s *Server) handleMeetingAggregateEvents(w http.ResponseWriter, r *http.Req
 	if s.meetingPeers != nil {
 		for _, target := range s.meetingPeers.Targets() {
 			target := target
+			if selectedTarget != "" && selectedTarget != fleetAllTargetID && selectedTarget != target.ID {
+				continue
+			}
 			go s.streamRemoteMeetingEvents(streamCtx, target.ID, remoteUpdates)
 		}
 	}

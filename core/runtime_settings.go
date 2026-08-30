@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -77,6 +78,13 @@ type RuntimeSettingsCapabilities struct {
 	ReasoningEfforts []RuntimeOption `json:"reasoning_efforts,omitempty"`
 	ServiceTiers     []RuntimeOption `json:"service_tiers,omitempty"`
 	ApprovalModes    []RuntimeOption `json:"approval_modes,omitempty"`
+}
+
+// RuntimeSettingsCataloger is an optional Agent-level capability for reading
+// account-scoped model and setting options without creating a conversation.
+// Consoles use it to populate Agent defaults before any session exists.
+type RuntimeSettingsCataloger interface {
+	RuntimeSettingsCatalog(ctx context.Context, workDir string) (RuntimeSettings, RuntimeSettingsCapabilities, error)
 }
 
 func (c RuntimeSettingsCapabilities) Options(setting RuntimeSetting) []RuntimeOption {
@@ -259,6 +267,13 @@ func mergeRuntimeSettings(defaults, overrides RuntimeSettings) RuntimeSettings {
 }
 
 func RuntimeOptions(values []string) []RuntimeOption {
+	return RuntimeOptionsFor("", values)
+}
+
+// RuntimeOptionsFor builds options with labels scoped to one setting axis.
+// Values such as "auto" and "default" are valid model IDs as well as
+// approval/service values, so they must never be localized without context.
+func RuntimeOptionsFor(setting RuntimeSetting, values []string) []RuntimeOption {
 	seen := map[string]bool{}
 	options := make([]RuntimeOption, 0, len(values))
 	for _, raw := range values {
@@ -267,7 +282,11 @@ func RuntimeOptions(values []string) []RuntimeOption {
 			continue
 		}
 		seen[value] = true
-		options = append(options, RuntimeOption{Value: value, Label: runtimeOptionLabel(value)})
+		label := ""
+		if setting != "" {
+			label = runtimeOptionLabelForSetting(setting, value)
+		}
+		options = append(options, RuntimeOption{Value: value, Label: label})
 	}
 	return options
 }
@@ -314,24 +333,33 @@ func runtimeSettingLabel(setting RuntimeSetting) string {
 }
 
 func runtimeOptionLabel(value string) string {
-	switch strings.ToLower(value) {
-	case "priority", "fast":
-		return "快速"
-	case "default", "standard", "normal", "flex":
-		return "普通"
-	case ApprovalModeManual:
-		return "手动审批"
-	case ApprovalModeAutoEdit:
-		return "自动批准编辑"
-	case ApprovalModeAuto:
-		return "智能自动审批"
-	case ApprovalModePlan:
-		return "只读规划"
-	case ApprovalModeYolo:
-		return "YOLO（全部允许）"
-	default:
-		return value
+	return runtimeOptionLabelForSetting(RuntimeSettingApprovalMode, value)
+}
+
+func runtimeOptionLabelForSetting(setting RuntimeSetting, value string) string {
+	switch setting {
+	case RuntimeSettingServiceTier:
+		switch strings.ToLower(value) {
+		case "priority", "fast":
+			return "快速"
+		case "default", "standard", "normal", "flex":
+			return "普通"
+		}
+	case RuntimeSettingApprovalMode:
+		switch strings.ToLower(value) {
+		case ApprovalModeManual:
+			return "手动审批"
+		case ApprovalModeAutoEdit:
+			return "自动批准编辑"
+		case ApprovalModeAuto:
+			return "智能自动审批"
+		case ApprovalModePlan:
+			return "只读规划"
+		case ApprovalModeYolo:
+			return "YOLO（全部允许）"
+		}
 	}
+	return value
 }
 
 func normalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
@@ -343,14 +371,14 @@ func normalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 }
 
 func normalizeRuntimeCapabilities(c RuntimeSettingsCapabilities) RuntimeSettingsCapabilities {
-	c.Models = normalizeRuntimeOptions(c.Models)
-	c.ReasoningEfforts = normalizeRuntimeOptions(c.ReasoningEfforts)
-	c.ServiceTiers = normalizeRuntimeOptions(c.ServiceTiers)
-	c.ApprovalModes = normalizeRuntimeOptions(c.ApprovalModes)
+	c.Models = normalizeRuntimeOptions(c.Models, RuntimeSettingModel)
+	c.ReasoningEfforts = normalizeRuntimeOptions(c.ReasoningEfforts, RuntimeSettingReasoningEffort)
+	c.ServiceTiers = normalizeRuntimeOptions(c.ServiceTiers, RuntimeSettingServiceTier)
+	c.ApprovalModes = normalizeRuntimeOptions(c.ApprovalModes, RuntimeSettingApprovalMode)
 	return c
 }
 
-func normalizeRuntimeOptions(options []RuntimeOption) []RuntimeOption {
+func normalizeRuntimeOptions(options []RuntimeOption, setting RuntimeSetting) []RuntimeOption {
 	seen := map[string]bool{}
 	out := make([]RuntimeOption, 0, len(options))
 	for _, option := range options {
@@ -361,7 +389,7 @@ func normalizeRuntimeOptions(options []RuntimeOption) []RuntimeOption {
 		}
 		seen[option.Value] = true
 		if option.Label == "" {
-			option.Label = runtimeOptionLabel(option.Value)
+			option.Label = runtimeOptionLabelForSetting(setting, option.Value)
 		}
 		out = append(out, option)
 	}

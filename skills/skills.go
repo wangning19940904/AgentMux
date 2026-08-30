@@ -1,7 +1,7 @@
 // Package skills implements AgentMux Skills: unified discovery, installation
 // and management of Agent Skills. The default "fs" provider discovers
 // SKILL.md files under one or more roots (e.g. ~/.agentmux/skills); other
-// providers (git, registry) can register via core.RegisterSkillManager.
+// providers can implement core.SkillManager and be injected by the composition root.
 package skills
 
 import (
@@ -13,28 +13,23 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-func init() {
-	core.RegisterSkillManager("fs", func(cfg map[string]any) (core.SkillManager, error) {
-		var roots []string
-		if r, ok := cfg["roots"].([]any); ok {
-			for _, v := range r {
-				if s, ok := v.(string); ok {
-					roots = append(roots, expand(s))
-				}
-			}
-		}
-		return New(roots...), nil
-	})
-}
-
 // FSManager discovers skills from SKILL.md files on disk.
 type FSManager struct {
 	roots    []string
+	state    StateStore
+	stateMu  sync.RWMutex
 	disabled map[string]bool
+}
+
+type StateStore interface {
+	ListSkillStates(context.Context) (map[string]bool, error)
+	SetSkillEnabled(context.Context, string, bool) error
+	DeleteSkillState(context.Context, string) error
 }
 
 var _ core.SkillManager = (*FSManager)(nil)
@@ -42,10 +37,16 @@ var _ core.SkillManager = (*FSManager)(nil)
 // New builds a filesystem skill manager. With no roots it defaults to
 // ~/.agentmux/skills.
 func New(roots ...string) *FSManager {
+	return NewPersistent(nil, roots...)
+}
+
+// NewPersistent builds a filesystem manager whose enablement state survives
+// daemon restarts in the supplied PostgreSQL store.
+func NewPersistent(state StateStore, roots ...string) *FSManager {
 	if len(roots) == 0 {
 		roots = DefaultRoots()
 	}
-	return &FSManager{roots: roots, disabled: map[string]bool{}}
+	return &FSManager{roots: roots, state: state, disabled: map[string]bool{}}
 }
 
 // DefaultRoots returns the global AgentMux skill roots. The first root is the
@@ -63,6 +64,24 @@ func (m *FSManager) Name() string { return "fs" }
 
 // List scans the roots for SKILL.md files and returns discovered skills.
 func (m *FSManager) List(ctx context.Context) ([]core.Skill, error) {
+	if m.state != nil {
+		states, err := m.state.ListSkillStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		m.stateMu.Lock()
+		m.disabled = make(map[string]bool, len(states))
+		for name, enabled := range states {
+			m.disabled[name] = !enabled
+		}
+		m.stateMu.Unlock()
+	}
+	m.stateMu.RLock()
+	disabled := make(map[string]bool, len(m.disabled))
+	for name, value := range m.disabled {
+		disabled[name] = value
+	}
+	m.stateMu.RUnlock()
 	var out []core.Skill
 	seen := map[string]bool{}
 	for _, root := range m.roots {
@@ -74,7 +93,7 @@ func (m *FSManager) List(ctx context.Context) ([]core.Skill, error) {
 				s := parseSkill(path)
 				if s.Name != "" && !seen[s.Name] {
 					seen[s.Name] = true
-					s.Enabled = !m.disabled[s.Name]
+					s.Enabled = !disabled[s.Name]
 					s.Source = "local"
 					out = append(out, s)
 				}
@@ -111,14 +130,91 @@ func (m *FSManager) Install(ctx context.Context, ref string) (*core.Skill, error
 	}
 	s.Source = "local"
 	s.Enabled = true
+	if m.state != nil {
+		if err := m.state.SetSkillEnabled(ctx, s.Name, true); err != nil {
+			return nil, err
+		}
+	}
 	return &s, nil
 }
 
 // SetEnabled toggles a skill by name. The fs provider keeps this state
 // in-memory only, so toggles do not survive a daemon restart.
 func (m *FSManager) SetEnabled(ctx context.Context, name string, enabled bool) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("skills: name is required")
+	}
+	if m.state != nil {
+		if err := m.state.SetSkillEnabled(ctx, name, enabled); err != nil {
+			return err
+		}
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
 	m.disabled[name] = !enabled
 	return nil
+}
+
+// Uninstall removes the discovered installation for name only when its
+// directory is contained by one of the configured managed roots. The client
+// supplies a logical name, never a filesystem path.
+func (m *FSManager) Uninstall(ctx context.Context, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("skills: name is required")
+	}
+	items, err := m.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, skill := range items {
+		if skill.Name != name {
+			continue
+		}
+		dir := filepath.Dir(skill.Path)
+		managed, err := m.isManagedSkillDir(dir)
+		if err != nil {
+			return err
+		}
+		if !managed {
+			return fmt.Errorf("skills: refusing to remove %q outside managed roots", name)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("skills: remove %q: %w", name, err)
+		}
+		if m.state != nil {
+			if err := m.state.DeleteSkillState(ctx, name); err != nil {
+				return err
+			}
+		}
+		m.stateMu.Lock()
+		delete(m.disabled, name)
+		m.stateMu.Unlock()
+		return nil
+	}
+	return fmt.Errorf("skills: %q: %w", name, os.ErrNotExist)
+}
+
+func (m *FSManager) isManagedSkillDir(dir string) (bool, error) {
+	candidate, err := filepath.Abs(dir)
+	if err != nil {
+		return false, fmt.Errorf("skills: resolve install path: %w", err)
+	}
+	for _, configuredRoot := range m.roots {
+		root, err := filepath.Abs(configuredRoot)
+		if err != nil {
+			return false, fmt.Errorf("skills: resolve managed root: %w", err)
+		}
+		relative, err := filepath.Rel(root, candidate)
+		if err != nil {
+			continue
+		}
+		if relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // parseSkill reads name + description from a SKILL.md front-matter-ish header.

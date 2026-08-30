@@ -5,6 +5,15 @@ import (
 	"time"
 )
 
+const (
+	UsageTokenQualityExact     = "exact"
+	UsageTokenQualityEstimated = "estimated"
+	UsageTokenQualityUnknown   = "unknown"
+
+	UsageCostKindCalculated = "calculated"
+	UsageCostKindRecorded   = "recorded"
+)
+
 // UsageRecord is a single normalized usage row produced by a parser. Every
 // data-source adapter (Claude, Codex, Cursor, Gemini, ...) normalizes into
 // this shape so the aggregator and clients share one schema.
@@ -27,6 +36,10 @@ type UsageRecord struct {
 	CostUSD          float64   `json:"cost_usd"`
 	Host             string    `json:"host,omitempty"` // "" = local, else SSH host
 	Requests         int64     `json:"requests,omitempty"`
+	Provenance       string    `json:"provenance,omitempty"`
+	ProvenanceRank   int       `json:"-"`
+	TokenQuality     string    `json:"token_quality,omitempty"`
+	CostKind         string    `json:"cost_kind,omitempty"`
 }
 
 // UsageCollector reads a local (or remote-synced) data source and yields

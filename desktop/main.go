@@ -26,11 +26,13 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -48,6 +50,7 @@ func main() {
 		Width:             1100,
 		Height:            720,
 		HideWindowOnClose: true,
+		Mac:               agentMuxMacOptions(),
 		AssetServer: &assetserver.Options{
 			Assets:     assets,
 			Middleware: app.assetServerMiddleware,
@@ -71,6 +74,10 @@ func main() {
 	}
 }
 
+func agentMuxMacOptions() *mac.Options {
+	return &mac.Options{TitleBar: mac.TitleBarHiddenInset()}
+}
+
 // App holds desktop lifecycle state. The daemon runs in-process so the WebView
 // hits the same /api endpoints as the browser WebUI.
 type App struct {
@@ -85,6 +92,7 @@ type App struct {
 	apiTarget atomic.Value // *url.URL
 	apiToken  atomic.Value // string; injected only by the native Go proxy
 	apiProxy  *httputil.ReverseProxy
+	updateMu  sync.Mutex
 }
 
 func newApp() *App {

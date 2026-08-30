@@ -38,7 +38,7 @@ type Message struct {
 	Platform string
 	Project  string
 	// ChannelID routes the message to a console-managed channel runtime
-	// instead of a config.toml project. Stamped by the Engine's channel relay.
+	// instead of a legacy embedded project. Stamped by the Engine's channel relay.
 	ChannelID string
 	// Origin records what produced the message: channel, cron, webhook or api.
 	Origin string

@@ -82,6 +82,7 @@ remote-assets: web
 # Wails desktop app. Requires: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 # and a frontend symlink: ln -s ../web desktop/frontend
 desktop: web remote-assets
+	node desktop/frontend/sync-web-dist.mjs
 	go build -ldflags "$(HOOK_LDFLAGS)" -o $(HOOK_BINARY) $(HOOK_CMD)
 	@if [ "$$(uname -s)" = "Darwin" ]; then $(MAKE) menubar; fi
 	@mkdir -p desktop/build

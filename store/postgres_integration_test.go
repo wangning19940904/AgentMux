@@ -19,6 +19,9 @@ func openPostgresIntegrationStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := os.Getenv("AGENTMUX_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("AGENTMUX_TEST_DATABASE_URL must be set in CI")
+		}
 		t.Skip("AGENTMUX_TEST_DATABASE_URL is not set")
 	}
 	admin, err := sql.Open("pgx", dsn)
@@ -98,6 +101,50 @@ func TestPostgresObservationBatchDeduplicatesConcurrently(t *testing.T) {
 	}
 	if stats.Batches >= writers {
 		t.Fatalf("batches = %d, want fewer than %d", stats.Batches, writers)
+	}
+}
+
+func TestPostgresPersistentSkillStates(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	ctx := context.Background()
+	if err := st.SetSkillEnabled(ctx, "review", false); err != nil {
+		t.Fatal(err)
+	}
+	states, err := st.ListSkillStates(ctx)
+	if err != nil || states["review"] {
+		t.Fatalf("states=%+v err=%v", states, err)
+	}
+}
+
+func TestPostgresResourceImportIsAtomicAndIdempotent(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	now := time.Now().UTC()
+	resources := ResourceImportSet{
+		Agents: []core.AgentInstance{{
+			ID: "agent-import", Name: "Imported", RuntimeID: "codex", Enabled: true,
+			WorkspaceMode: "shared", SessionBackend: "structured", Source: "config-import",
+			MemoryScope: "agent:agent-import", Visibility: core.VisibilityPrivate,
+			CreatedAt: now, UpdatedAt: now,
+		}},
+		Channels: []core.Channel{{
+			ID: "channel-import", Name: "Imported Channel", Type: "slack", AgentID: "agent-import",
+			Config: map[string]string{"token": "secret"}, Enabled: true, Visibility: core.VisibilityPrivate,
+			CreatedAt: now, UpdatedAt: now,
+		}},
+	}
+	first, err := st.ImportResources(context.Background(), resources, false)
+	if err != nil || !first.Applied || first.Agents.Create != 1 || first.Channels.Create != 1 {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	second, err := st.ImportResources(context.Background(), resources, false)
+	if err != nil || second.Agents.Unchanged != 1 || second.Channels.Unchanged != 1 {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	conflict := resources
+	conflict.Agents = append([]core.AgentInstance(nil), resources.Agents...)
+	conflict.Agents[0].Name = "Conflict"
+	if report, err := st.ImportResources(context.Background(), conflict, false); err == nil || len(report.Conflicts) != 1 {
+		t.Fatalf("conflict=%+v err=%v", report, err)
 	}
 }
 
@@ -190,7 +237,7 @@ func TestPostgresDirtyTraceMaterializesUsageAsOneSet(t *testing.T) {
 func TestPostgresMigratesLegacySQLite(t *testing.T) {
 	target := openPostgresIntegrationStore(t)
 	sourcePath := t.TempDir() + "/legacy.db"
-	source, err := Open(sourcePath)
+	source, err := OpenLegacySQLite(sourcePath)
 	if err != nil {
 		t.Fatal(err)
 	}

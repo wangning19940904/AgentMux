@@ -77,19 +77,14 @@ def _raise_for_response(response: httpx.Response) -> None:
 def _invocation_payload(
     *,
     input: str,
-    agent_id: str | None,
-    project: str | None,
+    agent_id: str,
     conversation_id: str | None,
     attachments: list[Attachment] | None,
     output_schema: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if (agent_id is None) == (project is None):
-        raise ValueError("exactly one of agent_id and project is required")
-    payload: dict[str, Any] = {"input": input}
-    if agent_id:
-        payload["agent_id"] = agent_id
-    if project:
-        payload["project"] = project
+    if not agent_id.strip():
+        raise ValueError("agent_id is required")
+    payload: dict[str, Any] = {"agent_id": agent_id, "input": input}
     if conversation_id:
         payload["conversation_id"] = conversation_id
     if attachments:
@@ -346,8 +341,7 @@ class AgentMuxClient:
         self,
         *,
         input: str,
-        agent_id: str | None = None,
-        project: str | None = None,
+        agent_id: str,
         conversation_id: str | None = None,
         attachments: list[Attachment] | None = None,
         output_schema: dict[str, Any] | None = None,
@@ -356,7 +350,6 @@ class AgentMuxClient:
         payload = _invocation_payload(
             input=input,
             agent_id=agent_id,
-            project=project,
             conversation_id=conversation_id,
             attachments=attachments,
             output_schema=output_schema,
@@ -373,8 +366,7 @@ class AgentMuxClient:
         self,
         *,
         input: str,
-        agent_id: str | None = None,
-        project: str | None = None,
+        agent_id: str,
         conversation_id: str | None = None,
         attachments: list[Attachment] | None = None,
         output_schema: dict[str, Any] | None = None,
@@ -389,7 +381,6 @@ class AgentMuxClient:
         payload = _invocation_payload(
             input=input,
             agent_id=agent_id,
-            project=project,
             conversation_id=conversation_id,
             attachments=attachments,
             output_schema=output_schema,
@@ -417,19 +408,14 @@ class AgentMuxClient:
         self,
         *,
         text: str,
-        project: str | None = None,
-        channel_id: str | None = None,
-        conversation_key: str | None = None,
+        channel_id: str,
+        conversation_key: str,
         images: list[str] | None = None,
         files: list[str] | None = None,
     ) -> None:
         payload: dict[str, Any] = {"text": text}
-        if project:
-            payload["project"] = project
-        if channel_id:
-            payload["channel_id"] = channel_id
-        if conversation_key:
-            payload["conversation_key"] = conversation_key
+        payload["channel_id"] = channel_id
+        payload["conversation_key"] = conversation_key
         if images:
             payload["images"] = images
         if files:
@@ -755,8 +741,7 @@ class AsyncAgentMuxClient:
         self,
         *,
         input: str,
-        agent_id: str | None = None,
-        project: str | None = None,
+        agent_id: str,
         conversation_id: str | None = None,
         attachments: list[Attachment] | None = None,
         output_schema: dict[str, Any] | None = None,
@@ -765,7 +750,6 @@ class AsyncAgentMuxClient:
         payload = _invocation_payload(
             input=input,
             agent_id=agent_id,
-            project=project,
             conversation_id=conversation_id,
             attachments=attachments,
             output_schema=output_schema,
@@ -782,8 +766,7 @@ class AsyncAgentMuxClient:
         self,
         *,
         input: str,
-        agent_id: str | None = None,
-        project: str | None = None,
+        agent_id: str,
         conversation_id: str | None = None,
         attachments: list[Attachment] | None = None,
         output_schema: dict[str, Any] | None = None,
@@ -792,7 +775,6 @@ class AsyncAgentMuxClient:
         payload = _invocation_payload(
             input=input,
             agent_id=agent_id,
-            project=project,
             conversation_id=conversation_id,
             attachments=attachments,
             output_schema=output_schema,
@@ -818,19 +800,14 @@ class AsyncAgentMuxClient:
         self,
         *,
         text: str,
-        project: str | None = None,
-        channel_id: str | None = None,
-        conversation_key: str | None = None,
+        channel_id: str,
+        conversation_key: str,
         images: list[str] | None = None,
         files: list[str] | None = None,
     ) -> None:
         payload: dict[str, Any] = {"text": text}
-        if project:
-            payload["project"] = project
-        if channel_id:
-            payload["channel_id"] = channel_id
-        if conversation_key:
-            payload["conversation_key"] = conversation_key
+        payload["channel_id"] = channel_id
+        payload["conversation_key"] = conversation_key
         if images:
             payload["images"] = images
         if files:

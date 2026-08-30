@@ -1,20 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Activity,
+  AlertTriangle,
+  ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
+  Clock,
   DatabaseZap,
+  Download,
   Plus,
   PlugZap,
   PowerOff,
+  RefreshCw,
   Save,
   Settings2,
   Trash2,
   Workflow,
   X,
 } from "lucide-react";
-import { api, Provider, ProviderRoute, ProxyToolConfig } from "../../api";
+import {
+  activeMachineScope,
+  api,
+  Provider,
+  ProviderMonitorConfig,
+  ProviderMonitorProviderStatus,
+  ProviderRoute,
+  ProxyToolConfig,
+} from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
+import { TargetBadge, targetKey } from "../../components/TargetBadge";
+import { usePolling } from "../../hooks/usePolling";
 import {
   CLAUDE_CODE_TIER_ROWS,
   CLAUDE_DESKTOP_ROUTE_MODELS,
@@ -58,20 +74,60 @@ import {
   uniqueValues,
 } from "./providerUtils";
 import { CapabilityBadges, ProviderMark } from "./ProviderMark";
+import { ProviderSyncDialog, ProviderTransferForm } from "./ProviderTransfer";
+
+const defaultMonitorConfig: ProviderMonitorConfig = {
+  enabled: true,
+  interval_minutes: 360,
+  probe_models: true,
+  max_models_per_provider: 20,
+};
+
+function formatMonitorTime(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatMonitorInterval(minutes: number) {
+  if (minutes >= 24 * 60 && minutes % (24 * 60) === 0) return `${minutes / (24 * 60)}d`;
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+function monitorBadgeClass(state?: string) {
+  if (state === "healthy") return "status-badge success";
+  if (state === "warning" || state === "checking") return "status-badge warning";
+  if (state === "error") return "status-badge danger";
+  return "status-badge";
+}
 
 export function GatewayPanel() {
   const { t } = useI18n();
   const agents = useAsync(() => api.agents(), []);
   const frameworks = useAsync(() => api.frameworks(), []);
   const providers = useAsync(() => api.providers(), []);
+  const allProviders = useAsync(() => api.allProviders(), []);
+  const fleetTargets = useAsync(() => api.fleetTargets(), []);
   const presets = useAsync(() => api.presets(), []);
   const activeRoutes = useAsync(() => api.activeRoutes(), []);
   const proxyStatus = useAsync(() => api.proxyStatus(), []);
+  const providerMonitor = useAsync(() => api.providerMonitor(), []);
   const [activeTab, setActiveTab] = useState<"providers" | "routing">("providers");
   const [providerFormOpen, setProviderFormOpen] = useState(false);
+  const [providerFormMode, setProviderFormMode] = useState<"configure" | "import">("configure");
+  const [syncProvider, setSyncProvider] = useState<Provider | null>(null);
   const [routeFormOpen, setRouteFormOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [monitorNotice, setMonitorNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [monitorConfig, setMonitorConfig] = useState<ProviderMonitorConfig>(defaultMonitorConfig);
   const [probeNotice, setProbeNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [probeCapabilities, setProbeCapabilities] = useState<ProbeCapabilities | null>(null);
@@ -88,6 +144,19 @@ export function GatewayPanel() {
     if (!item?.api_key_env) return t("gateway.keyMissing");
     return item.api_key_available ? item.api_key_env : t("gateway.keyNotLoaded");
   };
+  const targetIDForProvider = (provider: Provider) => {
+    if (provider.target_id) return provider.target_id;
+    const scope = activeMachineScope();
+    return scope === "all" ? "local" : scope;
+  };
+  const defaultTransferDestinationID = activeMachineScope() === "all" ? "local" : activeMachineScope();
+  const providerHealthByKey = useMemo(() => {
+    const statuses = new Map<string, ProviderMonitorProviderStatus>();
+    (providerMonitor.data?.providers ?? []).forEach((status) => {
+      statuses.set(targetKey(status.target_id, status.provider_id), status);
+    });
+    return statuses;
+  }, [providerMonitor.data?.providers]);
 
   const curatedPresets = useMemo(() => {
     const byID = new Map(presetList.map((provider) => [provider.id, provider]));
@@ -102,7 +171,7 @@ export function GatewayPanel() {
 
   const proxyConfigByTool = useMemo(() => {
     const next = new Map<string, ProxyToolConfig>();
-    (proxyStatus.data?.tools ?? []).forEach((cfg) => next.set(localRoutingTool(cfg.tool), cfg));
+    (proxyStatus.data?.tools ?? []).forEach((cfg) => next.set(targetKey(cfg.target_id, localRoutingTool(cfg.tool)), cfg));
     return next;
   }, [proxyStatus.data]);
 
@@ -137,12 +206,13 @@ export function GatewayPanel() {
   }, [frameworks.data]);
 
   useEffect(() => {
-    if (!providerFormOpen && !routeFormOpen) return;
+    if (!providerFormOpen && !routeFormOpen && !syncProvider) return;
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setProviderFormOpen(false);
         setRouteFormOpen(false);
+        setSyncProvider(null);
       }
     };
     document.body.style.overflow = "hidden";
@@ -151,12 +221,103 @@ export function GatewayPanel() {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [providerFormOpen, routeFormOpen]);
+  }, [providerFormOpen, routeFormOpen, syncProvider]);
+
+  useEffect(() => {
+    if (providerMonitor.data?.config) setMonitorConfig(providerMonitor.data.config);
+  }, [providerMonitor.data?.config]);
+
+  usePolling(providerMonitor.reload, 30_000, {
+    enabled: monitorConfig.enabled || Boolean(providerMonitor.data?.running),
+  });
 
   function reloadProviders() {
     providers.reload();
+    allProviders.reload();
     activeRoutes.reload();
     proxyStatus.reload();
+  }
+
+  async function toggleProviderMonitor(enabled: boolean) {
+    const previous = monitorConfig;
+    const next = { ...monitorConfig, enabled, probe_models: true };
+    setMonitorConfig(next);
+    setBusy("provider-monitor-config");
+    setMonitorNotice(null);
+    try {
+      const snapshot = await api.saveProviderMonitor(next);
+      setMonitorConfig(snapshot.config);
+      setMonitorNotice({
+        kind: "success",
+        text: enabled ? t("gateway.modelMonitorEnabled") : t("gateway.modelMonitorDisabled"),
+      });
+      await providerMonitor.reload();
+    } catch (error) {
+      setMonitorConfig(previous);
+      setMonitorNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runProviderMonitor() {
+    setBusy("provider-monitor-run");
+    setMonitorNotice(null);
+    try {
+      if (!monitorConfig.probe_models) {
+        const next = { ...monitorConfig, probe_models: true };
+        const snapshot = await api.saveProviderMonitor(next);
+        setMonitorConfig(snapshot.config);
+      }
+      await api.runProviderMonitor();
+      setMonitorNotice({ kind: "success", text: t("gateway.modelMonitorComplete") });
+      await Promise.all([providerMonitor.reload(), providers.reload(), allProviders.reload()]);
+    } catch (error) {
+      setMonitorNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      await providerMonitor.reload();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function refreshProviderModels() {
+    setBusy("provider-model-refresh");
+    setMonitorNotice(null);
+    try {
+      await api.refreshProviderModels();
+      setMonitorNotice({ kind: "success", text: t("gateway.modelRefreshComplete") });
+      await Promise.all([providerMonitor.reload(), providers.reload(), allProviders.reload()]);
+    } catch (error) {
+      setMonitorNotice({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      await providerMonitor.reload();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function monitorStateLabel(status?: ProviderMonitorProviderStatus) {
+    if (!status) return t("gateway.modelMonitorPending");
+    const key = `providers.monitorState.${status.state}`;
+    const label = t(key);
+    return label === key ? status.state : label;
+  }
+
+  function monitorHealthSummary(status?: ProviderMonitorProviderStatus) {
+    if (!status) return t("gateway.modelMonitorPending");
+    if (status.checked_models > 0) {
+      return t("gateway.modelMonitorAvailability", {
+        healthy: status.healthy_models,
+        total: status.checked_models,
+      });
+    }
+    return t("gateway.modelMonitorCatalog", { count: status.catalog_count });
+  }
+
+  function monitorFailureDetail(status?: ProviderMonitorProviderStatus) {
+    if (!status) return "";
+    const failed = status.models?.find((model) => model.state !== "healthy");
+    if (failed) return `${failed.model}: ${failed.message || failed.state}`;
+    return status.message || "";
   }
 
   function toggleProviderModels(providerID: string) {
@@ -171,11 +332,11 @@ export function GatewayPanel() {
     });
   }
 
-  async function toggleTakeover(tool: string, enabled: boolean) {
+  async function toggleTakeover(tool: string, enabled: boolean, targetID?: string) {
     setBusy(`takeover:${tool}`);
     setNotice("");
     try {
-      await api.setTakeover(tool, enabled);
+      await api.setTakeover(tool, enabled, targetID);
       setNotice(t("gateway.takeoverUpdated"));
       reloadProviders();
     } catch (error) {
@@ -185,11 +346,11 @@ export function GatewayPanel() {
     }
   }
 
-  async function toggleAutoFailover(cfg: { tool: string; auto_failover: boolean }) {
+  async function toggleAutoFailover(cfg: { tool: string; auto_failover: boolean; target_id?: string }) {
     setBusy(`auto-failover:${cfg.tool}`);
     setNotice("");
     try {
-      await api.setProxyToolConfig({ tool: cfg.tool, auto_failover: !cfg.auto_failover });
+      await api.setProxyToolConfig({ tool: cfg.tool, auto_failover: !cfg.auto_failover }, cfg.target_id);
       reloadProviders();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -202,7 +363,7 @@ export function GatewayPanel() {
     setBusy(`failover:${provider.id}`);
     setNotice("");
     try {
-      await api.setFailoverQueue(provider.id, !provider.in_failover_queue, provider.sort_index ?? 0);
+      await api.setFailoverQueue(provider.id, !provider.in_failover_queue, provider.sort_index ?? 0, provider.target_id);
       reloadProviders();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -227,17 +388,17 @@ export function GatewayPanel() {
     return providerList.filter((provider) => providerSupportsRouteTool(provider, tool));
   }
 
-  function routeDraftForTool(tool: string, providerID = "", originalTool?: string): RouteDraft {
+  function routeDraftForTool(tool: string, providerID = "", originalTool?: string, targetID?: string): RouteDraft {
     const routeTool = normalizeTool(tool);
-    const candidates = providersForTool(routeTool);
+    const candidates = providersForTool(routeTool).filter((provider) => !targetID || provider.target_id === targetID);
     const compatibleProviderID = candidates.some((provider) => provider.id === providerID) ? providerID : "";
     const selectedProviderID = compatibleProviderID || candidates[0]?.id || "";
-    const currentRoute = routeByTool.get(normalizeTool(originalTool || routeTool));
-    const provider = providerList.find((item) => item.id === selectedProviderID);
+    const currentRoute = routeList.find((route) => (!targetID || route.target_id === targetID) && normalizeTool(route.tool) === normalizeTool(originalTool || routeTool));
+    const provider = providerList.find((item) => (!targetID || item.target_id === targetID) && item.id === selectedProviderID);
     const metaSource = currentRoute && currentRoute.provider_id === selectedProviderID ? currentRoute.meta : provider?.meta;
     const routeMetaDraft = routeMetaDraftForTool(provider, routeTool, metaSource);
     const localTool = localRoutingTool(routeTool);
-    const localCfg = proxyConfigByTool.get(localTool);
+    const localCfg = proxyConfigByTool.get(targetKey(currentRoute?.target_id, localTool));
     const supportsTakeover = supportsLocalRouting(routeTool);
     let localMode: LocalRouteMode = supportsTakeover ? "takeover" : "direct";
     if (currentRoute && supportsTakeover) {
@@ -256,6 +417,7 @@ export function GatewayPanel() {
       tool: routeTool,
       provider_id: selectedProviderID,
       original_tool: originalTool,
+      target_id: targetID,
       local_mode: localMode,
       ...routeMetaDraft,
     };
@@ -273,18 +435,18 @@ export function GatewayPanel() {
 
   function editRoute(route: ProviderRoute) {
     setNotice("");
-    setRouteDraft(routeDraftForTool(route.tool, route.provider_id, route.tool));
+    setRouteDraft(routeDraftForTool(route.tool, route.provider_id, route.tool, route.target_id));
     setActiveTab("routing");
     setProviderFormOpen(false);
     setRouteFormOpen(true);
   }
 
   function updateRouteTool(tool: string) {
-    setRouteDraft((current) => routeDraftForTool(tool, current.provider_id, current.original_tool));
+    setRouteDraft((current) => routeDraftForTool(tool, current.provider_id, current.original_tool, current.target_id));
   }
 
   function updateRouteProvider(providerID: string) {
-    const provider = providerList.find((item) => item.id === providerID);
+    const provider = providerList.find((item) => (!routeDraft.target_id || item.target_id === routeDraft.target_id) && item.id === providerID);
     setRouteDraft((current) => {
       const routeMetaDraft = routeMetaDraftForTool(provider, current.tool, provider?.meta);
       let localMode = current.local_mode;
@@ -313,6 +475,7 @@ export function GatewayPanel() {
 
   function openNewProvider() {
     resetProviderDraft();
+    setProviderFormMode("configure");
     setActiveTab("providers");
     setRouteFormOpen(false);
     setProviderFormOpen(true);
@@ -324,6 +487,7 @@ export function GatewayPanel() {
     setModelOptions([]);
     setProbeCapabilities(null);
     setDraft(providerToDraft(provider));
+    setProviderFormMode("configure");
     setActiveTab("providers");
     setRouteFormOpen(false);
     setProviderFormOpen(true);
@@ -340,7 +504,22 @@ export function GatewayPanel() {
     setModelOptions([]);
     setProbeCapabilities(null);
     setDraft(providerToDraft(provider));
+    setProviderFormMode("configure");
     setProviderFormOpen(true);
+  }
+
+  function openImportProvider() {
+    resetProviderDraft();
+    setProviderFormMode("import");
+    setActiveTab("providers");
+    setRouteFormOpen(false);
+    setProviderFormOpen(true);
+  }
+
+  function openProviderSync(provider: Provider) {
+    setProviderFormOpen(false);
+    setRouteFormOpen(false);
+    setSyncProvider(provider);
   }
 
   async function probeProvider() {
@@ -422,11 +601,11 @@ export function GatewayPanel() {
     }
   }
 
-  async function deleteProvider(id: string) {
+  async function deleteProvider(id: string, targetID?: string) {
     setBusy(`delete:${id}`);
     setNotice("");
     try {
-      await api.deleteProvider(id);
+      await api.deleteProvider(id, targetID);
       if (draft.id === id) {
         setDraft(emptyDraft);
         setProviderFormOpen(false);
@@ -447,13 +626,13 @@ export function GatewayPanel() {
     setBusy(`save-route:${tool}`);
     setNotice("");
     try {
-      const provider = providerList.find((item) => item.id === providerID);
+      const provider = providerList.find((item) => (!routeDraft.target_id || item.target_id === routeDraft.target_id) && item.id === providerID);
       const localTakeover = supportsLocalRouting(tool)
         ? routeDraft.local_mode === "takeover" || requiresLocalRouting(provider, tool)
         : undefined;
-      await api.switchProvider(providerID, tool, routeDraftToMeta(routeDraft), localTakeover);
+      await api.switchProvider(providerID, tool, routeDraftToMeta(routeDraft), localTakeover, routeDraft.target_id);
       if (routeDraft.original_tool && routeDraft.original_tool !== tool) {
-        await api.disableRoute(routeDraft.original_tool);
+        await api.disableRoute(routeDraft.original_tool, routeDraft.target_id);
       }
       setNotice(t("gateway.routeSaved"));
       reloadProviders();
@@ -465,16 +644,16 @@ export function GatewayPanel() {
     }
   }
 
-  async function disableRoute(tool: string) {
+  async function disableRoute(tool: string, targetID?: string) {
     setBusy(`disable-route:${tool}`);
     setNotice("");
     try {
       const localTool = localRoutingTool(tool);
-      const localCfg = proxyConfigByTool.get(localTool);
+      const localCfg = proxyConfigByTool.get(targetKey(targetID, localTool));
       if (supportsLocalRouting(tool) && localCfg?.enabled) {
-        await api.setTakeover(localTool, false);
+        await api.setTakeover(localTool, false, targetID);
       }
-      await api.disableRoute(tool);
+      await api.disableRoute(tool, targetID);
       setNotice(t("gateway.routeDisabled"));
       reloadProviders();
     } catch (error) {
@@ -519,10 +698,14 @@ export function GatewayPanel() {
         >
           <div className="provider-builder-head">
             <div className="provider-form-title">
-              <ProviderMark id={selectedPreset} name={draft.name} size="large" custom={customSelected && !draft.id} />
+              {providerFormMode === "import" ? (
+                <span className="provider-transfer-icon large"><Download size={20} /></span>
+              ) : (
+                <ProviderMark id={selectedPreset} name={draft.name} size="large" custom={customSelected && !draft.id} />
+              )}
               <div>
-                <h2 id="provider-drawer-title">{t("gateway.addProvider")}</h2>
-                <span className="muted">{t("gateway.addProviderSubtitle")}</span>
+                <h2 id="provider-drawer-title">{providerFormMode === "import" ? t("gateway.importProvider") : t("gateway.addProvider")}</h2>
+                <span className="muted">{providerFormMode === "import" ? t("gateway.importProviderHint") : t("gateway.addProviderSubtitle")}</span>
               </div>
             </div>
             <div className="table-actions">
@@ -542,10 +725,16 @@ export function GatewayPanel() {
           <div className="surface-body provider-builder-body">
             {presets.error && <div className="error">{presets.error}</div>}
             <div className="preset-strip">
-              <button className={customSelected ? "preset-tile selected" : "preset-tile"} onClick={openNewProvider}>
+              <button className={providerFormMode === "configure" && customSelected ? "preset-tile selected" : "preset-tile"} onClick={openNewProvider}>
                 <ProviderMark id="custom" size="large" custom />
                 <strong>{t("gateway.customProvider")}</strong>
                 <span>{t("gateway.customProviderHint")}</span>
+              </button>
+
+              <button className={providerFormMode === "import" ? "preset-tile selected" : "preset-tile"} onClick={openImportProvider}>
+                <span className="provider-transfer-icon"><Download size={17} /></span>
+                <strong>{t("gateway.importProvider")}</strong>
+                <span>{t("gateway.importProviderTileHint")}</span>
               </button>
 
               {curatedPresets.map((provider) => (
@@ -561,6 +750,18 @@ export function GatewayPanel() {
               ))}
             </div>
 
+            {providerFormMode === "import" ? (
+              <ProviderTransferForm
+                key={`provider-import:${defaultTransferDestinationID}`}
+                mode="import"
+                providers={allProviders.data ?? []}
+                targets={fleetTargets.data ?? []}
+                defaultDestinationID={defaultTransferDestinationID}
+                loading={allProviders.loading || fleetTargets.loading}
+                loadError={allProviders.error || fleetTargets.error || ""}
+                onApplied={reloadProviders}
+              />
+            ) : (
             <div className="provider-form-shell">
               {notice && <div className="session-notice">{notice}</div>}
 
@@ -736,6 +937,7 @@ export function GatewayPanel() {
               </div>
             </div>
             </div>
+            )}
           </div>
         </aside>
       </div>
@@ -1157,6 +1359,62 @@ export function GatewayPanel() {
           {(providers.error || activeRoutes.error) && (
             <div className="surface-body error">{providers.error || activeRoutes.error}</div>
           )}
+          <div className="surface-body provider-health-strip">
+            <div className="provider-health-strip-copy">
+              <span className="provider-health-strip-icon"><Activity size={17} /></span>
+              <span>
+                <strong>{t("gateway.modelMonitorTitle")}</strong>
+                <small>
+                  {t("gateway.modelMonitorSummary", { interval: formatMonitorInterval(monitorConfig.interval_minutes) })}
+                </small>
+              </span>
+            </div>
+            <div className="provider-health-strip-time">
+              <Clock size={14} />
+              <span>
+                {t("providers.monitorLastRun")}: {formatMonitorTime(providerMonitor.data?.last_run_at)}
+                {providerMonitor.data?.next_run_at
+                  ? ` · ${t("providers.monitorNextRun")}: ${formatMonitorTime(providerMonitor.data.next_run_at)}`
+                  : ""}
+              </span>
+            </div>
+            <div className="provider-health-strip-actions">
+              <label className="provider-health-toggle">
+                <span>{monitorConfig.enabled ? t("common.enabled") : t("common.disabled")}</span>
+                <input
+                  type="checkbox"
+                  checked={monitorConfig.enabled}
+                  disabled={busy === "provider-monitor-config"}
+                  onChange={(event) => void toggleProviderMonitor(event.target.checked)}
+                />
+              </label>
+              <button
+                className="ghost-action"
+                type="button"
+                disabled={busy === "provider-model-refresh" || busy === "provider-monitor-run" || providerMonitor.data?.running}
+                onClick={() => void refreshProviderModels()}
+              >
+                <RefreshCw size={15} className={busy === "provider-model-refresh" ? "spin" : ""} />
+                {busy === "provider-model-refresh" ? t("gateway.modelRefreshRunning") : t("gateway.modelRefreshNow")}
+              </button>
+              <button
+                className="ghost-action"
+                type="button"
+                disabled={busy === "provider-model-refresh" || busy === "provider-monitor-run" || providerMonitor.data?.running}
+                onClick={() => void runProviderMonitor()}
+              >
+                <Activity size={15} />
+                {busy === "provider-monitor-run" || providerMonitor.data?.running
+                  ? t("providers.monitorRunning")
+                  : t("providers.monitorRunNow")}
+              </button>
+            </div>
+            {(monitorNotice || providerMonitor.error) && (
+              <div className={`provider-health-strip-notice ${(monitorNotice?.kind === "error" || providerMonitor.error) ? "error" : ""}`}>
+                {monitorNotice?.text || providerMonitor.error}
+              </div>
+            )}
+          </div>
           <div className="surface-body provider-summary">
             <div className="summary-stat">
               <span>{t("gateway.configuredProviders")}</span>
@@ -1178,6 +1436,8 @@ export function GatewayPanel() {
           <div className="surface-body provider-list-grid">
             {providerList.map((provider) => {
               const keyReady = Boolean(provider.api_key_available);
+              const health = providerHealthByKey.get(targetKey(provider.target_id, provider.id));
+              const healthFailure = monitorFailureDetail(health);
               const supportedModels = providerSupportedModels(provider);
               const supportedProtocols = providerSupportedProtocols(provider);
               const modelsCollapsible = supportedModels.length > PROVIDER_MODEL_COLLAPSE_THRESHOLD;
@@ -1186,29 +1446,44 @@ export function GatewayPanel() {
                 modelsCollapsible && !modelsExpanded ? supportedModels.slice(0, PROVIDER_MODEL_PREVIEW_COUNT) : supportedModels;
               const hiddenModelCount = supportedModels.length - PROVIDER_MODEL_PREVIEW_COUNT;
               return (
-                <article className="provider-card" key={provider.id}>
+                <article className="provider-card" key={targetKey(provider.target_id, provider.id)}>
                   <header>
                     <span className="provider-card-title">
                       <ProviderMark id={provider.id} name={provider.name} />
                       <span>
                         <strong>{provider.name}</strong>
                         <small>{provider.id}</small>
+                        <TargetBadge target_id={provider.target_id} target_name={provider.target_name} />
                       </span>
                     </span>
-                    <span
-                      className={
-                        provider.enabled && keyReady ? "status-badge success" : keyReady ? "status-badge" : "status-badge warning"
-                      }
-                      title={provider.api_key_issue || undefined}
-                    >
-                      <span className="status-dot" />
-                      {provider.enabled
-                        ? keyReady
-                          ? t("common.enabled")
-                          : t("gateway.keyNotLoaded")
-                        : keyReady
-                          ? t("common.idle")
-                          : t("gateway.keyMissing")}
+                    <span className="provider-card-badges">
+                      <span
+                        className={
+                          provider.enabled && keyReady ? "status-badge success" : keyReady ? "status-badge" : "status-badge warning"
+                        }
+                        title={provider.api_key_issue || undefined}
+                      >
+                        <span className="status-dot" />
+                        {provider.enabled
+                          ? keyReady
+                            ? t("common.enabled")
+                            : t("gateway.keyNotLoaded")
+                          : keyReady
+                            ? t("common.idle")
+                            : t("gateway.keyMissing")}
+                      </span>
+                      <span className={monitorBadgeClass(health?.state)} title={healthFailure || undefined}>
+                        {health?.state === "healthy" ? (
+                          <CheckCircle2 size={13} />
+                        ) : health?.state === "error" || health?.state === "warning" ? (
+                          <AlertTriangle size={13} />
+                        ) : health?.state === "checking" ? (
+                          <RefreshCw size={13} className="spin" />
+                        ) : (
+                          <Clock size={13} />
+                        )}
+                        {monitorStateLabel(health)}
+                      </span>
                     </span>
                   </header>
                   <dl className="provider-facts">
@@ -1245,11 +1520,21 @@ export function GatewayPanel() {
                       <dd title={provider.api_key_issue || undefined}>{keyStatusLabel(provider)}</dd>
                     </div>
                     <div>
+                      <dt>{t("gateway.modelMonitorService")}</dt>
+                      <dd className={health?.state === "error" || health?.state === "warning" ? "provider-health-failure" : ""} title={healthFailure || undefined}>
+                        {monitorHealthSummary(health)}
+                      </dd>
+                    </div>
+                    <div>
                       <dt>{t("providers.baseUrl")}</dt>
                       <dd className="mono">{provider.base_url || "—"}</dd>
                     </div>
                   </dl>
                   <footer className="provider-card-actions">
+                    <button className="ghost-action" onClick={() => openProviderSync(provider)}>
+                      <ArrowRightLeft size={14} />
+                      {t("gateway.syncProvider")}
+                    </button>
                     <button className="ghost-action" onClick={() => editProvider(provider)}>
                       <Settings2 size={14} />
                       {t("common.edit")}
@@ -1266,7 +1551,7 @@ export function GatewayPanel() {
                     <button
                       className="ghost-action danger-action"
                       disabled={busy === `delete:${provider.id}`}
-                      onClick={() => deleteProvider(provider.id)}
+                      onClick={() => deleteProvider(provider.id, provider.target_id)}
                     >
                       <Trash2 size={14} />
                       {t("common.delete")}
@@ -1289,6 +1574,19 @@ export function GatewayPanel() {
         </section>
 
         {renderProviderForm()}
+        {syncProvider && (
+          <ProviderSyncDialog
+            key={`${targetIDForProvider(syncProvider)}:${syncProvider.id}`}
+            provider={syncProvider}
+            sourceTargetID={targetIDForProvider(syncProvider)}
+            providers={allProviders.data ?? []}
+            targets={fleetTargets.data ?? []}
+            loading={allProviders.loading || fleetTargets.loading}
+            loadError={allProviders.error || fleetTargets.error || ""}
+            onApplied={reloadProviders}
+            onClose={() => setSyncProvider(null)}
+          />
+        )}
       </div>
     );
   }
@@ -1324,8 +1622,8 @@ export function GatewayPanel() {
           <div className="surface-body provider-list-grid route-list-grid">
             {[...routeList].sort((a, b) => sortTools(normalizeTool(a.tool), normalizeTool(b.tool))).map((route) => {
               const localTool = localRoutingTool(route.tool);
-              const localCfg = supportsLocalRouting(route.tool) ? proxyConfigByTool.get(localTool) : undefined;
-              const routeProvider = providerList.find((provider) => provider.id === route.provider_id);
+              const localCfg = supportsLocalRouting(route.tool) ? proxyConfigByTool.get(targetKey(route.target_id, localTool)) : undefined;
+              const routeProvider = providerList.find((provider) => provider.target_id === route.target_id && provider.id === route.provider_id);
               const configured = Boolean(route.configured && routeProvider);
               const busyRoute = busy === `disable-route:${route.tool}`;
               const takeoverBusy = busy === `takeover:${localTool}`;
@@ -1333,13 +1631,14 @@ export function GatewayPanel() {
               const routeProviderName = routeProvider?.name || route.provider_name || route.provider_id || t("gateway.unrouted");
               const routeProviderID = routeProvider?.id || route.provider_id || "";
               return (
-                <article className={configured ? "route-card enabled" : "route-card"} key={route.tool}>
+                <article className={configured ? "route-card enabled" : "route-card"} key={targetKey(route.target_id, route.tool)}>
                   <header>
                     <span className="route-card-title">
                       <Workflow size={17} />
                       <span>
                         <strong>{toolLabel(normalizeTool(route.tool))}</strong>
                         <small>{route.tool}</small>
+                        <TargetBadge target_id={route.target_id} target_name={route.target_name} />
                       </span>
                     </span>
                     <span className={configured ? "status-badge success" : "status-badge warning"}>
@@ -1386,7 +1685,7 @@ export function GatewayPanel() {
                         <button
                           className={localCfg.enabled ? "ghost-action danger-action" : "ghost-action"}
                           disabled={takeoverBusy || !configured}
-                          onClick={() => toggleTakeover(localTool, !localCfg.enabled)}
+                          onClick={() => toggleTakeover(localTool, !localCfg.enabled, route.target_id)}
                         >
                           <PlugZap size={14} />
                           {(localCfg.enabled ? t("gateway.disableTakeoverForTool") : t("gateway.enableTakeoverForTool")).replace(
@@ -1414,7 +1713,7 @@ export function GatewayPanel() {
                     <button
                       className="ghost-action danger-action"
                       disabled={busyRoute}
-                      onClick={() => disableRoute(route.tool)}
+                      onClick={() => disableRoute(route.tool, route.target_id)}
                     >
                       <PowerOff size={14} />
                       {t("common.disable")}

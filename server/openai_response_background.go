@@ -141,7 +141,7 @@ func (s *Server) storeOpenAIResponse(req openAIResponseRequest, identity openAIR
 	})
 }
 
-func (s *Server) handleOpenAIBackgroundResponse(w http.ResponseWriter, _ *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest, fallback bool) {
+func (s *Server) handleOpenAIBackgroundResponse(w http.ResponseWriter, _ *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest) {
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := buildOpenAIResponse(req, identity, "queued", "", nil, nil)
 	s.storeOpenAIResponse(req, identity, queued, cancel)
@@ -150,7 +150,7 @@ func (s *Server) handleOpenAIBackgroundResponse(w http.ResponseWriter, _ *http.R
 	go func() {
 		inProgress := buildOpenAIResponse(req, identity, "in_progress", "", nil, nil)
 		s.storeOpenAIResponse(req, identity, inProgress, cancel)
-		result, err := invokeOpenAIResponse(ctx, s.invoker, invocation, fallback)
+		result, err := invokeOpenAIResponse(ctx, s.invoker, invocation)
 		if err != nil {
 			status := "failed"
 			code := "agent_error"
@@ -174,7 +174,7 @@ func (s *Server) handleOpenAIBackgroundResponse(w http.ResponseWriter, _ *http.R
 	}()
 }
 
-func (s *Server) handleOpenAIBackgroundResponseStream(w http.ResponseWriter, r *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest, fallback bool, startingAfter int) {
+func (s *Server) handleOpenAIBackgroundResponseStream(w http.ResponseWriter, r *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest, startingAfter int) {
 	streamer, ok := s.invoker.(core.StreamingInvoker)
 	if !ok {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "streaming invocation runtime unavailable", "server_error", nil, "streaming_unavailable")
@@ -187,11 +187,11 @@ func (s *Server) handleOpenAIBackgroundResponseStream(w http.ResponseWriter, r *
 	ctx, cancel := context.WithCancel(context.Background())
 	queued := buildOpenAIResponse(req, identity, "queued", "", nil, nil)
 	s.storeOpenAIResponse(req, identity, queued, cancel)
-	go s.runOpenAIBackgroundStream(ctx, streamer, req, identity, invocation, fallback)
+	go s.runOpenAIBackgroundStream(ctx, streamer, req, identity, invocation)
 	s.serveOpenAIRecordedEvents(w, r, identity.responseID, startingAfter)
 }
 
-func (s *Server) runOpenAIBackgroundStream(ctx context.Context, streamer core.StreamingInvoker, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest, fallback bool) {
+func (s *Server) runOpenAIBackgroundStream(ctx context.Context, streamer core.StreamingInvoker, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest) {
 	inProgress := buildOpenAIResponse(req, identity, "in_progress", "", nil, nil)
 	s.storeOpenAIResponse(req, identity, inProgress, nil)
 	state := &openAIResponseStreamState{
@@ -204,7 +204,7 @@ func (s *Server) runOpenAIBackgroundStream(ctx context.Context, streamer core.St
 		_ = state.fail(err)
 		return
 	}
-	result, err := invokeOpenAIResponseStream(ctx, streamer, invocation, fallback, func(event core.InvocationStreamEvent) error {
+	result, err := invokeOpenAIResponseStream(ctx, streamer, invocation, func(event core.InvocationStreamEvent) error {
 		return state.consume(event)
 	})
 	if state.terminal {

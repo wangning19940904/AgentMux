@@ -7,7 +7,7 @@ import (
 
 // Channel is a first-class messaging connection: one configured platform
 // adapter (feishu, telegram, dingtalk, slack, discord, webhook, ...) bound to
-// an Agent instance. Channels live in SQLite, are managed from the console and
+// an Agent instance. Channels live in PostgreSQL, are managed from the console and
 // are attached to the Engine at runtime — the console-managed counterpart of
 // config.toml's [[projects.platforms]].
 type Channel struct {
@@ -146,19 +146,19 @@ const (
 //     ActionType/ActionTarget (shell command or HTTP POST callback),
 //     optionally filtered to one ChannelID.
 type Trigger struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Kind         string    `json:"kind"`
-	AgentID      string    `json:"agent_id,omitempty"`
-	ChannelID    string    `json:"channel_id,omitempty"`
-	ChatID       string    `json:"chat_id,omitempty"`
-	CronExpr     string    `json:"cron_expr,omitempty"`
-	Prompt       string    `json:"prompt,omitempty"`
-	Event        string    `json:"event,omitempty"`
-	ActionType   string    `json:"action_type,omitempty"`
-	ActionTarget string    `json:"action_target,omitempty"`
-	Token        string    `json:"token,omitempty"`
-	SessionMode  string    `json:"session_mode,omitempty"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	AgentID       string    `json:"agent_id,omitempty"`
+	ChannelID     string    `json:"channel_id,omitempty"`
+	ChatID        string    `json:"chat_id,omitempty"`
+	CronExpr      string    `json:"cron_expr,omitempty"`
+	Prompt        string    `json:"prompt,omitempty"`
+	Event         string    `json:"event,omitempty"`
+	ActionType    string    `json:"action_type,omitempty"`
+	ActionTarget  string    `json:"action_target,omitempty"`
+	Token         string    `json:"token,omitempty"`
+	SessionMode   string    `json:"session_mode,omitempty"`
 	Enabled       bool      `json:"enabled"`
 	LastRun       time.Time `json:"last_run,omitempty"`
 	LastStatus    string    `json:"last_status,omitempty"` // running, ok, error

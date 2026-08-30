@@ -10,7 +10,7 @@ import (
 )
 
 func TestChannelTaskRecoveryDoesNotReplayStartedTasks(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "control.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestChannelTaskRecoveryDoesNotReplayStartedTasks(t *testing.T) {
 }
 
 func TestChannelInteractionNonceIsSingleUse(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "interaction.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "interaction.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestChannelInteractionNonceIsSingleUse(t *testing.T) {
 }
 
 func TestChannelTaskControllerUpdateIsPersistent(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "controller.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "controller.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,8 +142,38 @@ func TestChannelTaskControllerUpdateIsPersistent(t *testing.T) {
 	}
 }
 
+func TestListLatestChannelTasksReturnsOneCompactRowPerConversation(t *testing.T) {
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "latest-tasks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tasks := []core.ChannelTask{
+		{ID: "old", ChannelID: "c1", ConversationID: "conversation-1", ConversationKey: "root:one", Status: core.ChannelTaskRunning, Prompt: "large old prompt", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)},
+		{ID: "new", ChannelID: "c1", ConversationID: "conversation-1", ConversationKey: "root:one", Status: core.ChannelTaskSucceeded, Prompt: "large new prompt", CreatedAt: now, UpdatedAt: now},
+		{ID: "fallback", ChannelID: "c1", ConversationKey: "root:two", Status: core.ChannelTaskQueued, Prompt: "another prompt", CreatedAt: now.Add(-time.Second), UpdatedAt: now.Add(-time.Second)},
+	}
+	for _, task := range tasks {
+		if err := st.CreateChannelTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest, err := st.ListLatestChannelTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 2 || latest[0].ID != "new" || latest[1].ID != "fallback" {
+		t.Fatalf("latest tasks = %+v", latest)
+	}
+	if latest[0].Prompt != "" || latest[0].Status != core.ChannelTaskSucceeded {
+		t.Fatalf("latest task should contain only list status metadata: %+v", latest[0])
+	}
+}
+
 func TestChannelFeedbackRequiresSuccessfulDeliveredTaskAndOwner(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "feedback.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "feedback.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

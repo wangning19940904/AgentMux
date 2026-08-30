@@ -62,6 +62,10 @@ func (s *Store) GetTrigger(ctx context.Context, id string) (*core.Trigger, error
 // UpsertTrigger inserts or updates a trigger definition. Run bookkeeping
 // (last_run/last_status/last_error) is preserved on update.
 func (s *Store) UpsertTrigger(ctx context.Context, tr *core.Trigger) error {
+	return upsertTrigger(ctx, s.writer, tr)
+}
+
+func upsertTrigger(ctx context.Context, executor statementExecutor, tr *core.Trigger) error {
 	enabled := 0
 	if tr.Enabled {
 		enabled = 1
@@ -70,7 +74,7 @@ func (s *Store) UpsertTrigger(ctx context.Context, tr *core.Trigger) error {
 	if !tr.LastRun.IsZero() {
 		lastRun = tr.LastRun.Format(time.RFC3339Nano)
 	}
-	_, err := s.writer.ExecContext(ctx, `INSERT INTO triggers
+	_, err := executor.ExecContext(ctx, `INSERT INTO triggers
 		(id,name,kind,agent_id,channel_id,chat_id,cron_expr,prompt,event,action_type,
 		 action_target,token,session_mode,enabled,last_run,last_status,last_error,
 		 owner_tenant_id,created_at,updated_at)

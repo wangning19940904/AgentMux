@@ -17,7 +17,7 @@ func TestMigrateTranscriptPayloadReferencesValidatesAndRemovesEncryptedCopy(t *t
 	ctx := context.Background()
 	home := t.TempDir()
 	now := time.Now().UTC().Add(-time.Minute)
-	st, err := store.Open(filepath.Join(home, ".agentmux", "migration.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(home, ".agentmux", "migration.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

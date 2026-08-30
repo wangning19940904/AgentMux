@@ -1,4 +1,4 @@
-import { KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -16,6 +16,7 @@ import {
   TerminalSquare,
   Trash2,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -25,6 +26,9 @@ import { AgentSession, ProxyTrace, SessionMessage, api } from "../api";
 import { useI18n } from "../i18n";
 import { usePolling } from "../hooks/usePolling";
 import { useAsync } from "../useAsync";
+import { TargetBadge } from "../components/TargetBadge";
+import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
+import { Drawer } from "../components/ui";
 
 const PROVIDERS = [
   { id: "", labelKey: "sessions.allProviders" },
@@ -68,7 +72,7 @@ export function SessionsPanel() {
 	usePolling(sessions.reload, 10_000);
   const channels = useAsync(() => api.channels(), []);
   const channelByID = useMemo(
-    () => new Map((channels.data ?? []).map((channel) => [channel.id, channel])),
+    () => new Map((channels.data ?? []).map((channel) => [`${channel.target_id || "local"}::${channel.id}`, channel])),
     [channels.data]
   );
   const availableAgents = useMemo(() => {
@@ -115,24 +119,26 @@ export function SessionsPanel() {
     });
   }, [agentID, channelID, provider, query, sessions.data, source]);
 
+  const pagination = useCatalogPagination(filtered, [agentID, channelID, provider, query, source].join("\u0000"));
+
   const selected = useMemo(
-    () => filtered.find((session) => keyOf(session) === selectedID) ?? filtered[0],
-    [filtered, selectedID]
+    () => (sessions.data ?? []).find((session) => keyOf(session) === selectedID),
+    [selectedID, sessions.data]
   );
   const selectedKey = selected ? keyOf(selected) : "";
   const messages = useAsync(
     () => (selected ? api.sessionMessages(selected) : Promise.resolve([])),
-    [selected?.conversation_id, selected?.session_id, selected?.source_path, selected?.surface]
+    [selected?.conversation_id, selected?.session_id, selected?.source_path, selected?.surface, selected?.target_id]
   );
   const traceSessionID = selected?.native_session_id || (selected?.origin !== "channel" ? selected?.session_id : "");
   const traceTool = selected && traceSessionID ? routeToolForSession(selected) : "";
   const sessionTraces = useAsync(
-    () => (traceTool && traceSessionID ? api.proxyTraces({ tool: traceTool, sessionID: traceSessionID, limit: 20 }) : Promise.resolve([])),
-    [traceTool, traceSessionID]
+    () => (traceTool && traceSessionID ? api.proxyTraces({ tool: traceTool, sessionID: traceSessionID, limit: 20 }, selected?.target_id) : Promise.resolve([])),
+    [traceTool, traceSessionID, selected?.target_id]
   );
   const recentTraces = useAsync(
-    () => (traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }) : Promise.resolve([])),
-    [traceTool]
+    () => (traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }, selected?.target_id) : Promise.resolve([])),
+    [traceTool, selected?.target_id]
   );
   const channelConversations = useAsync(
     () => (bindChannelID ? api.channelConversations(bindChannelID) : Promise.resolve([])),
@@ -141,14 +147,14 @@ export function SessionsPanel() {
   const interactionChannelID = selected?.channel_id || bindChannelID;
   const interactionConversationID = selected?.conversation_id || bindConversationID;
   const pendingInteractions = useAsync(
-    () => (interactionChannelID ? api.channelInteractions(interactionChannelID, interactionConversationID) : Promise.resolve([])),
-    [interactionChannelID, interactionConversationID]
+    () => (interactionChannelID ? api.channelInteractions(interactionChannelID, interactionConversationID, selected?.target_id) : Promise.resolve([])),
+    [interactionChannelID, interactionConversationID, selected?.target_id]
   );
   const terminal = useAsync(
     () => terminalVisible && selected?.terminal_backend && selected.channel_id && selected.conversation_id
       ? api.terminalSession(selected)
       : Promise.resolve(null),
-    [terminalVisible, selected?.channel_id, selected?.conversation_id, selected?.terminal_backend]
+    [terminalVisible, selected?.channel_id, selected?.conversation_id, selected?.terminal_backend, selected?.target_id]
   );
   usePolling(terminal.reload, 750, { enabled: terminalVisible && Boolean(selected?.terminal_backend) });
   const visibleMessages = [...(messages.data ?? []), ...optimisticMessages];
@@ -170,9 +176,7 @@ export function SessionsPanel() {
 		(selected.can_stop || (selected.can_chat && busy === "message"))
 	);
 
-  useEffect(() => {
-    if (selected) setSelectedID(keyOf(selected));
-  }, [selected?.conversation_id, selected?.session_id, selected?.source_path]);
+  const closeDrawer = useCallback(() => setSelectedID(""), []);
 
   useEffect(() => {
     setOptimisticMessages([]);
@@ -282,7 +286,7 @@ export function SessionsPanel() {
     if (!threadID) return;
     setBusy("open-codex");
     try {
-      const result = await api.openCodexThread(threadID);
+      const result = await api.openCodexThread(threadID, selected?.target_id);
       if (!result.opened && result.command) await copy(result.command);
       showNotice(result.status_message || result.command || t("sessions.resumeReady"));
     } catch (error) {
@@ -297,7 +301,7 @@ export function SessionsPanel() {
     if (!threadID || !bindChannelID || !bindConversationID) return;
     setBusy("bind-codex");
     try {
-      await api.bindChannelConversation(bindChannelID, bindConversationID, threadID);
+      await api.bindChannelConversation(bindChannelID, bindConversationID, threadID, selected?.target_id);
       showNotice(t("sessions.channelBound"));
       await Promise.all([channelConversations.reload(), sessions.reload()]);
     } catch (error) {
@@ -354,7 +358,7 @@ export function SessionsPanel() {
       for (const questionID of questionIDs) {
         answers[questionID] = [localAnswers[`${interactionID}:${questionID}`] ?? ""];
       }
-      await api.respondChannelInteraction(interactionID, nonce, decision, answers);
+      await api.respondChannelInteraction(interactionID, nonce, decision, answers, selected?.target_id);
       showNotice(t("sessions.interactionResolved"));
       await pendingInteractions.reload();
     } catch (error) {
@@ -366,8 +370,6 @@ export function SessionsPanel() {
 
   return (
     <div className="page-stack sessions-page">
-      <p className="subtle-copy">{t("sessions.subtitle")}</p>
-
       <section className="surface">
         <div className="surface-header sessions-toolbar">
           <div>
@@ -397,11 +399,11 @@ export function SessionsPanel() {
           </div>
         </div>
         {sessions.error && <div className="surface-body error">{sessions.error}</div>}
-        {notice && <div className={`surface-body session-notice${noticeError ? " error" : ""}`}>{notice}</div>}
+        {notice && !selected && <div className={`surface-body session-notice${noticeError ? " error" : ""}`}>{notice}</div>}
         <div className="sessions-layout">
           <div className="session-list" role="list">
-            {filtered.map((session) => {
-              const channel = session.channel_id ? channelByID.get(session.channel_id) : undefined;
+            {pagination.pageItems.map((session) => {
+              const channel = session.channel_id ? channelByID.get(`${session.target_id || "local"}::${session.channel_id}`) : undefined;
 				const sessionRunStatus = selected && keyOf(selected) === keyOf(session) && busy === "message"
 					? "running"
 					: session.run_status || "idle";
@@ -421,27 +423,39 @@ export function SessionsPanel() {
                     )}
                   </span>
                   <span className="session-main">
-                    <strong>{session.title || session.conversation_key || session.session_id}</strong>
-                    <span>
-                      {session.origin === "channel"
-                        ? [session.agent_name, session.channel_name].filter(Boolean).join(" · ")
-                        : session.project_dir || session.status_message || session.session_id}
-                    </span>
-                    <span className="session-meta">
-						<SessionStatusBadge status={sessionRunStatus} t={t} />
-                      {session.origin === "channel" && <span className="pill accent">{t("sessions.channelSession")}</span>}
-                      {session.channel_type && <span className="pill">{channelTypeLabel(session.channel_type)}</span>}
-                      <span className="pill">{providerLabel(session.provider_id)}</span>
-                      <span className="muted">{formatDate(session.last_active_at, language)}</span>
+                    <span className="session-title-line">
+                      <strong>{session.title || session.conversation_key || session.session_id}</strong>
+                      <span className="session-meta">
+                        <SessionStatusBadge status={sessionRunStatus} t={t} />
+                        {session.origin === "channel" && <span className="pill accent">{t("sessions.channelSession")}</span>}
+                        {session.channel_type && <span className="pill">{channelTypeLabel(session.channel_type)}</span>}
+                        <span className="pill">{providerLabel(session.provider_id)}</span>
+                        <TargetBadge target_id={session.target_id} target_name={session.target_name} />
+                      </span>
+                      <time className="session-list-time">{formatDate(session.last_active_at, language)}</time>
                     </span>
                   </span>
                 </button>
               );
             })}
-            {!sessions.error && filtered.length === 0 && <div className="empty-state">{t("sessions.empty")}</div>}
+            {!sessions.error && filtered.length === 0 && (
+              <div className="empty-state">{sessions.loading ? t("common.loading") : t("sessions.empty")}</div>
+            )}
           </div>
 
-          <div className="session-detail">
+          <CatalogPagination
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            start={pagination.start}
+            end={pagination.end}
+            total={pagination.total}
+            onChange={pagination.setPage}
+          />
+        </div>
+      </section>
+
+      <Drawer open={Boolean(selected)} onClose={closeDrawer} className="session-drawer">
+          <div className="session-detail" role="dialog" aria-modal="true" aria-labelledby="session-drawer-title">
             {selected ? (
               <>
                 <div className="detail-header">
@@ -450,14 +464,9 @@ export function SessionsPanel() {
                       {selected.origin === "channel" ? t("sessions.channelSession") : t("sessions.localSession")}
                     </span>
 					<div className="session-title-row">
-						<h3>{selected.title || selected.conversation_key || selected.session_id}</h3>
+						<h3 id="session-drawer-title">{selected.title || selected.conversation_key || selected.session_id}</h3>
 						<SessionStatusBadge status={selectedRunStatus} t={t} />
 					</div>
-                    <p className="muted">
-                      {selected.origin === "channel"
-                        ? [selected.agent_name, selected.channel_name, channelTypeLabel(selected.channel_type || "")].filter(Boolean).join(" · ")
-                        : selected.project_dir || selected.status_message || selected.session_id}
-                    </p>
                   </div>
                   <div className="control-row">
                     {traceSessionID && (
@@ -521,15 +530,22 @@ export function SessionsPanel() {
                         {t("common.delete")}
                       </button>
                     )}
+                    <button className="ghost-action icon-action" onClick={closeDrawer} title={t("common.close")} aria-label={t("common.close")}>
+                      <X size={16} />
+                    </button>
                   </div>
                 </div>
+
+                {notice && <div className={`session-notice${noticeError ? " error" : ""}`}>{notice}</div>}
 
                 <div className="session-facts">
                   {selected.agent_name && <span><Bot size={13} /> {selected.agent_name}</span>}
                   {selected.channel_name && <span><MessageSquareText size={13} /> {selected.channel_name}</span>}
+                  {selected.channel_type && <span>{channelTypeLabel(selected.channel_type)}</span>}
                   <span>{providerLabel(selected.provider_id)} · {surfaceLabel(selected.surface, t)}</span>
+                  <TargetBadge target_id={selected.target_id} target_name={selected.target_name} />
                   <span>{selected.message_count}{selected.messages_partial ? "+" : ""} {t("sessions.messages")}</span>
-                  <span>{formatDate(selected.created_at, language)}</span>
+                  <span>{formatDate(selected.last_active_at || selected.created_at, language)}</span>
                 </div>
 
                 <div className="session-chat">
@@ -764,18 +780,18 @@ export function SessionsPanel() {
                 )}
               </>
             ) : (
-              <div className="empty-state">{t("sessions.empty")}</div>
+              <div className="empty-state">{sessions.loading ? t("common.loading") : t("sessions.empty")}</div>
             )}
           </div>
-        </div>
-      </section>
+      </Drawer>
     </div>
   );
 }
 
 function keyOf(session: AgentSession) {
-  if (session.conversation_id) return `conversation:${session.conversation_id}`;
-  return `${session.provider_id}:${session.surface}:${session.session_id}:${session.source_path ?? ""}`;
+  const target = session.target_id || "local";
+  if (session.conversation_id) return `${target}:conversation:${session.conversation_id}`;
+  return `${target}:${session.provider_id}:${session.surface}:${session.session_id}:${session.source_path ?? ""}`;
 }
 
 function SessionStatusBadge({ status, t }: { status?: string; t: (key: string) => string }) {

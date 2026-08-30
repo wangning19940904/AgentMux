@@ -12,7 +12,7 @@ import (
 )
 
 func TestReadsRemainAvailableDuringWriteTransaction(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "concurrent-read.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "concurrent-read.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,12 +52,12 @@ func TestReadsRemainAvailableDuringWriteTransaction(t *testing.T) {
 
 func TestConversationCreationSurvivesConcurrentStoreWriters(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared-writers.db")
-	first, err := Open(path)
+	first, err := OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.Close()
-	second, err := Open(path)
+	second, err := OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestConversationCreationSurvivesConcurrentStoreWriters(t *testing.T) {
 }
 
 func TestProviderCRUDAndActive(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestProviderCRUDAndActive(t *testing.T) {
 }
 
 func TestUsageUpsertDedupAndQuery(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,8 +224,39 @@ func TestUsageUpsertDedupAndQuery(t *testing.T) {
 	}
 }
 
+func TestUsageQueriesAcceptNullLegacyMetadata(t *testing.T) {
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	ts := time.Date(2026, 8, 30, 4, 0, 0, 0, time.UTC)
+	if _, err := st.writer.ExecContext(ctx, `INSERT INTO usage_records
+		(source,session_id,request_id,timestamp,input_tokens,host,provenance,provenance_rank,token_quality,cost_kind)
+		VALUES(?,?,?,?,?,?,NULL,NULL,NULL,NULL)`,
+		"codex", "legacy-null", "request-null", ts.Format(time.RFC3339Nano), 7, ""); err != nil {
+		t.Fatal(err)
+	}
+	records, err := st.QueryUsageRange(ctx, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Provenance != "" || records[0].ProvenanceRank != 0 ||
+		records[0].TokenQuality != core.UsageTokenQualityExact || records[0].CostKind != core.UsageCostKindCalculated {
+		t.Fatalf("records = %+v", records)
+	}
+	index, err := st.QueryUsageRequestIndex(ctx, "codex", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index["request-null"].InputTokens != 7 {
+		t.Fatalf("request index = %+v", index)
+	}
+}
+
 func TestProxyTraceInsertAndQuery(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +292,7 @@ func TestProxyTraceInsertAndQuery(t *testing.T) {
 }
 
 func TestAgentInstanceCRUD(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +384,7 @@ func TestAgentInstanceCRUD(t *testing.T) {
 }
 
 func TestConversationLifecycle(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +450,7 @@ func TestConversationLifecycle(t *testing.T) {
 }
 
 func TestConversationIdentityUsesConversationKeyWithinOneChat(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "conversation-key.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "conversation-key.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +499,7 @@ func TestConversationMigrationBackfillsConversationKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err := Open(path)
+	st, err := OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}

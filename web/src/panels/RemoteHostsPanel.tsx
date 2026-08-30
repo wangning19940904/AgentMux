@@ -4,7 +4,6 @@ import {
   KeyRound,
   Laptop,
   Pencil,
-  PlugZap,
   Plus,
   RefreshCw,
   Save,
@@ -16,15 +15,19 @@ import {
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   activeRemoteID,
+  setActiveMachineScope,
   api,
   DiscoveredRemoteHost,
   notifyRemoteHostsChanged,
   RemoteConnectionError,
   RemoteHost,
-  RemoteTestResult,
-  setActiveRemoteID,
 } from "../api";
 import { useI18n } from "../i18n";
+import {
+  isRemoteUpdateAvailable,
+  remoteUpdateCandidates,
+  type RemoteHostSnapshot,
+} from "./remoteHostModel";
 
 type RemoteForm = {
   id?: string;
@@ -50,7 +53,7 @@ const emptyForm = (): RemoteForm => ({
   clear_api_token: false,
 });
 
-export function RemoteHostsPanel() {
+export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const { t } = useI18n();
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredRemoteHost[]>([]);
@@ -62,42 +65,82 @@ export function RemoteHostsPanel() {
   const [discoveryError, setDiscoveryError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [testingID, setTestingID] = useState("");
   const [updatingID, setUpdatingID] = useState("");
-  const [confirmingUpdateID, setConfirmingUpdateID] = useState("");
-  const [checkingVersions, setCheckingVersions] = useState<Record<string, boolean>>({});
+  const [updatingAll, setUpdatingAll] = useState(false);
   const [importingName, setImportingName] = useState("");
-  const [testResults, setTestResults] = useState<Record<string, RemoteTestResult>>({});
+  const [localVersion, setLocalVersion] = useState("");
+  const [snapshots, setSnapshots] = useState<Record<string, RemoteHostSnapshot>>({});
   const [pendingFingerprints, setPendingFingerprints] = useState<Record<string, string>>({});
   const [pendingImportFingerprints, setPendingImportFingerprints] = useState<Record<string, string>>({});
   const hostsRequestVersion = useRef(0);
-  const statusScanVersion = useRef(0);
+  const probeVersions = useRef<Record<string, number>>({});
+  const handledAddRequest = useRef(0);
 
-  const inspectVersions = (nextHosts: RemoteHost[], hostsVersion: number) => {
-    const scanVersion = ++statusScanVersion.current;
-    const trustedHosts = nextHosts.filter((host) => host.trusted);
-    setCheckingVersions(Object.fromEntries(trustedHosts.map((host) => [host.id, true])));
-    void Promise.allSettled(
-      trustedHosts.map(async (host) => {
-        try {
-          const result = await api.statusRemoteHost(host.id);
-          if (
-            scanVersion === statusScanVersion.current &&
-            hostsVersion === hostsRequestVersion.current
-          ) {
-            setTestResults((current) => ({ ...current, [host.id]: result }));
-          }
-        } finally {
-          if (scanVersion === statusScanVersion.current) {
-            setCheckingVersions((current) => {
-              const next = { ...current };
-              delete next[host.id];
-              return next;
-            });
-          }
+  const probeHost = async (host: RemoteHost): Promise<RemoteHostSnapshot> => {
+    const probeVersion = (probeVersions.current[host.id] ?? 0) + 1;
+    probeVersions.current[host.id] = probeVersion;
+    setSnapshots((current) => ({
+      ...current,
+      [host.id]: { health: host.trusted ? "checking" : "unverified" },
+    }));
+    try {
+      const result = host.trusted
+        ? await api.statusRemoteHost(host.id)
+        : await api.testRemoteHost(host.id, false);
+      const snapshot: RemoteHostSnapshot = {
+        health: "healthy",
+        version: result.status?.version,
+      };
+      if (probeVersions.current[host.id] === probeVersion) {
+        setSnapshots((current) => ({ ...current, [host.id]: snapshot }));
+        setPendingFingerprints((current) => {
+          if (!current[host.id]) return current;
+          const next = { ...current };
+          delete next[host.id];
+          return next;
+        });
+      }
+      return snapshot;
+    } catch (cause) {
+      if (
+        !host.trusted &&
+        cause instanceof RemoteConnectionError &&
+        cause.code === "host_key_untrusted" &&
+        cause.fingerprint
+      ) {
+        const snapshot: RemoteHostSnapshot = { health: "unverified" };
+        if (probeVersions.current[host.id] === probeVersion) {
+          setSnapshots((current) => ({ ...current, [host.id]: snapshot }));
+          setPendingFingerprints((current) => ({ ...current, [host.id]: cause.fingerprint! }));
         }
-      }),
-    );
+        return snapshot;
+      }
+      const snapshot: RemoteHostSnapshot = {
+        health: host.trusted ? "error" : "unverified",
+        error: cause instanceof Error ? cause.message : String(cause),
+      };
+      if (probeVersions.current[host.id] === probeVersion) {
+        setSnapshots((current) => ({ ...current, [host.id]: snapshot }));
+      }
+      return snapshot;
+    }
+  };
+
+  const inspectHosts = async (nextHosts: RemoteHost[]) => {
+    setSnapshots((current) => ({
+      ...current,
+      ...Object.fromEntries(nextHosts.map((host) => [
+        host.id,
+        { health: host.trusted ? "checking" : "unverified" } satisfies RemoteHostSnapshot,
+      ])),
+    }));
+    try {
+      const status = await api.localStatus();
+      setLocalVersion(status.version || "");
+    } catch {
+      setLocalVersion("");
+    }
+    await Promise.allSettled(nextHosts.map((host) => probeHost(host)));
   };
 
   const load = async (): Promise<RemoteHost[] | null> => {
@@ -107,7 +150,12 @@ export function RemoteHostsPanel() {
       const next = await api.remoteHosts();
       if (version !== hostsRequestVersion.current) return null;
       setHosts(next);
-      inspectVersions(next, version);
+      setSnapshots((current) => Object.fromEntries(
+        next.map((host) => [host.id, current[host.id] ?? {
+          health: host.trusted ? "checking" : "unverified",
+        }]),
+      ));
+      void inspectHosts(next);
       setError("");
       return next;
     } catch (cause) {
@@ -234,55 +282,51 @@ export function RemoteHostsPanel() {
     setError("");
     try {
       const saved = await api.upsertRemoteHost(form);
-      setMessage(t("remote.saved"));
+      setSnapshots((current) => ({
+        ...current,
+        [saved.id]: { health: saved.trusted ? "checking" : "unverified" },
+      }));
+      setMessage(t("remote.savedChecking"));
       setForm(null);
       setHostDialogOpen(false);
       const next = await load();
       if (next) notifyRemoteHostsChanged(next);
-      if (!saved.trusted) {
-        setMessage(t("remote.savedTestHint"));
-      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
-  const test = async (host: RemoteHost, trustOnFirstUse = false) => {
-    statusScanVersion.current += 1;
-    setTestingID(host.id);
+  const verifyHost = async (host: RemoteHost) => {
+    const probeVersion = (probeVersions.current[host.id] ?? 0) + 1;
+    probeVersions.current[host.id] = probeVersion;
+    setSnapshots((current) => ({ ...current, [host.id]: { health: "checking" } }));
     setMessage("");
     setError("");
     try {
-      const result = await api.testRemoteHost(host.id, trustOnFirstUse);
-      setTestResults((current) => ({ ...current, [host.id]: result }));
+      const result = await api.testRemoteHost(host.id, true);
+      setSnapshots((current) => ({
+        ...current,
+        [host.id]: { health: "healthy", version: result.status?.version },
+      }));
       setPendingFingerprints((current) => {
         const next = { ...current };
         delete next[host.id];
         return next;
       });
-      setMessage(t("remote.testSucceeded", { latency: result.latency_ms }));
-      if (result.installed) setMessage(t("remote.testInstalled"));
+      setMessage(result.installed ? t("remote.importInstalled") : t("remote.connectionReady"));
       const next = await load();
       if (next) notifyRemoteHostsChanged(next);
     } catch (cause) {
-      if (
-        cause instanceof RemoteConnectionError &&
-        cause.code === "host_key_untrusted" &&
-        cause.fingerprint
-      ) {
-        setPendingFingerprints((current) => ({ ...current, [host.id]: cause.fingerprint! }));
-      } else {
-        setError(cause instanceof Error ? cause.message : String(cause));
-      }
-    } finally {
-      setTestingID("");
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      setSnapshots((current) => ({ ...current, [host.id]: { health: "error", error: detail } }));
+      setError(detail);
     }
   };
 
   const remove = async (host: RemoteHost) => {
     if (!window.confirm(t("remote.deleteConfirm", { name: host.name }))) return;
     try {
-      if (activeRemoteID() === host.id) setActiveRemoteID("");
+      if (activeRemoteID() === host.id) setActiveMachineScope("all");
       await api.deleteRemoteHost(host.id);
       setMessage(t("remote.deleted"));
       const next = await load();
@@ -292,38 +336,44 @@ export function RemoteHostsPanel() {
     }
   };
 
-  const updateRemote = async (host: RemoteHost) => {
-    statusScanVersion.current += 1;
-    setConfirmingUpdateID("");
+  const performUpdate = async (host: RemoteHost): Promise<string | null> => {
     setUpdatingID(host.id);
-    setMessage("");
-    setError("");
+    setSnapshots((current) => ({
+      ...current,
+      [host.id]: { ...current[host.id], health: "checking" },
+    }));
     try {
       const result = await api.updateRemoteHost(host.id);
-      const status = result.status
-        ? { ...result.status, version: result.version || result.status.version }
-        : result.status;
-      setTestResults((current) => ({
+      setSnapshots((current) => ({
         ...current,
-        [host.id]: { ...result, status },
+        [host.id]: {
+          health: "healthy",
+          version: result.version || result.status?.version,
+        },
       }));
-      const version = result.version || status?.version || "";
-      let nextMessage = t("remote.updateSucceeded", { version });
-      if (result.backup_path) {
-        nextMessage += ` ${t("remote.updateBackup", { path: result.backup_path })}`;
-      }
-      setMessage(nextMessage);
+      return null;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      setSnapshots((current) => ({
+        ...current,
+        [host.id]: { health: "error", error: detail },
+      }));
+      return detail;
     } finally {
       setUpdatingID("");
     }
   };
 
-  const useHost = (id: string) => {
-    setActiveRemoteID(id);
-    window.location.hash = "#overview";
-    window.location.reload();
+  const updateRemote = async (host: RemoteHost) => {
+    setMessage("");
+    setError("");
+    const failure = await performUpdate(host);
+    if (failure) {
+      setError(failure);
+      return;
+    }
+    setMessage(t("remote.updateMachineSucceeded", { name: host.name }));
+    await inspectHosts(hosts);
   };
 
   const closeHostDialog = () => {
@@ -339,26 +389,49 @@ export function RemoteHostsPanel() {
     void loadDiscovered();
   };
 
+  useEffect(() => {
+    if (addRequest <= 0 || handledAddRequest.current === addRequest) return;
+    handledAddRequest.current = addRequest;
+    openAddDialog();
+  }, [addRequest]);
+
+  const updateCandidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
+  const checkingHosts = hosts.some((host) => snapshots[host.id]?.health === "checking");
+  const updateCheckUnavailable = hosts.some((host) =>
+    !host.trusted || snapshots[host.id]?.health === "error" || !snapshots[host.id]?.version,
+  );
+
+  const updateAll = async () => {
+    const candidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
+    if (candidates.length === 0) return;
+    const names = candidates.map((host) => host.name).join("\n");
+    if (!window.confirm(t("remote.updateAllConfirm", { count: candidates.length, names }))) return;
+
+    setUpdatingAll(true);
+    setMessage("");
+    setError("");
+    const failures: string[] = [];
+    let succeeded = 0;
+    for (const host of candidates) {
+      const failure = await performUpdate(host);
+      if (failure) failures.push(host.name);
+      else succeeded += 1;
+    }
+    await inspectHosts(hosts);
+    if (failures.length > 0) {
+      setError(t("remote.updateAllPartial", {
+        succeeded,
+        failed: failures.length,
+        names: failures.join(", "),
+      }));
+    } else {
+      setMessage(t("remote.updateAllSucceeded", { count: succeeded }));
+    }
+    setUpdatingAll(false);
+  };
+
   return (
     <div className="page-stack remote-hosts-page">
-      <section className="surface remote-hosts-hero">
-        <div className="surface-header">
-          <div>
-            <h2>{t("remote.title")}</h2>
-            <p className="subtle-copy">{t("remote.subtitle")}</p>
-          </div>
-          <button className="action" onClick={openAddDialog}>
-            <Plus size={15} />
-            {t("remote.add")}
-          </button>
-        </div>
-        {(message || error) && (
-          <div className={`remote-feedback ${error ? "error" : "success"}`}>
-            {error || message}
-          </div>
-        )}
-      </section>
-
       {hostDialogOpen && (
         <button
           aria-label={t("common.close")}
@@ -628,26 +701,50 @@ export function RemoteHostsPanel() {
       </section>
       )}
 
-      <section className="surface">
-        <div className="surface-header">
-          <div>
-            <h2>{t("remote.hosts")}</h2>
-            <p className="subtle-copy">{t("remote.hostsHint")}</p>
-          </div>
-          <div className="remote-discovery-summary">
+      <section className="surface remote-machines-surface">
+        <div className="surface-header remote-machines-header">
+          <div className="remote-machines-heading">
+            <h2>{t("remote.title")}</h2>
             <span className="pill">{hosts.length}</span>
+          </div>
+          <div className="remote-machines-toolbar">
+            <button className="action" type="button" onClick={openAddDialog}>
+              <Plus size={15} />
+              {t("remote.add")}
+            </button>
             <button
               className="ghost-action"
               type="button"
-              disabled={loading || syncingSSHConfig || hosts.length === 0}
+              disabled={loading || syncingSSHConfig || updatingAll || hosts.length === 0}
               onClick={() => void syncSSHConfig()}
               title={t("remote.syncSSHConfigHint")}
             >
               <RefreshCw size={14} className={syncingSSHConfig ? "spin" : ""} />
               {syncingSSHConfig ? t("remote.syncingSSHConfig") : t("remote.syncSSHConfig")}
             </button>
+            <button
+              className="ghost-action"
+              type="button"
+              disabled={loading || syncingSSHConfig || updatingAll || checkingHosts || updateCandidates.length === 0}
+              onClick={() => void updateAll()}
+              title={
+                checkingHosts
+                  ? t("remote.checkingUpdates")
+                  : updateCandidates.length === 0
+                    ? t(updateCheckUnavailable ? "remote.updateCheckUnavailable" : "remote.allUpToDate")
+                    : t("remote.updateAll")
+              }
+            >
+              <RefreshCw size={14} className={updatingAll ? "spin" : ""} />
+              {updatingAll ? t("remote.updatingAll") : t("remote.updateAll")}
+            </button>
           </div>
         </div>
+        {(message || error) && (
+          <div className={`remote-feedback ${error ? "error" : "success"}`} role="status">
+            {error || message}
+          </div>
+        )}
         <div className="remote-host-list">
           {loading && <div className="empty-state">{t("common.loading")}</div>}
           {!loading && hosts.length === 0 && (
@@ -659,9 +756,24 @@ export function RemoteHostsPanel() {
           )}
           {hosts.map((host) => {
             const pendingFingerprint = pendingFingerprints[host.id];
-            const result = testResults[host.id];
-            const checkingVersion = checkingVersions[host.id];
+            const snapshot = snapshots[host.id] ?? {
+              health: host.trusted ? "checking" as const : "unverified" as const,
+            };
+            const updateAvailable = isRemoteUpdateAvailable(snapshot.version, localVersion);
+            const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
+            const healthTone = snapshot.health === "healthy"
+              ? "success"
+              : snapshot.health === "error"
+                ? "danger"
+                : "warning";
+            const healthLabel = snapshot.health === "healthy"
+              ? t("remote.healthHealthy")
+              : snapshot.health === "error"
+                ? t("remote.healthError")
+                : snapshot.health === "unverified"
+                  ? t("remote.healthUnverified")
+                  : t("remote.healthChecking");
             return (
               <article key={host.id} className={`remote-host-card${active ? " active" : ""}`}>
                 <div className="remote-host-icon">
@@ -673,30 +785,15 @@ export function RemoteHostsPanel() {
                       <strong>{host.name}</strong>
                       <span>{host.user}@{host.host}:{host.port}</span>
                     </div>
-                    <span className={`status-badge ${host.trusted ? "success" : "warning"}`}>
-                      {host.trusted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}
-                      {host.trusted ? t("remote.trusted") : t("remote.notTrusted")}
+                    <span className={`status-badge ${healthTone}`} title={snapshot.error}>
+                      {snapshot.health === "checking"
+                        ? <RefreshCw size={13} className="spin" />
+                        : snapshot.health === "healthy"
+                          ? <CheckCircle2 size={13} />
+                          : <ShieldAlert size={13} />}
+                      {healthLabel}
                     </span>
                   </header>
-                  <div className="remote-host-facts">
-                    <span><PlugZap size={13} />{host.remote_addr}</span>
-                    <span><KeyRound size={13} />{host.key_path || t("remote.agentOrDefaultKey")}</span>
-                    {host.host_key_fingerprint && (
-                      <span className="remote-fingerprint">
-                        <Fingerprint size={13} />{host.host_key_fingerprint}
-                      </span>
-                    )}
-                    {host.trusted && (
-                      <span>
-                        <RefreshCw size={13} className={checkingVersion ? "spin" : ""} />
-                        {t("remote.version")}: {result?.status?.version
-                          ? `v${result.status.version}`
-                          : checkingVersion
-                            ? t("remote.versionChecking")
-                            : t("remote.versionUnavailable")}
-                      </span>
-                    )}
-                  </div>
                   {pendingFingerprint && (
                     <div className="host-key-confirmation">
                       <Fingerprint size={18} />
@@ -705,62 +802,27 @@ export function RemoteHostsPanel() {
                         <code>{pendingFingerprint}</code>
                         <span>{t("remote.confirmFingerprintHint")}</span>
                       </div>
-                      <button className="action" onClick={() => void test(host, true)}>
+                      <button className="action" onClick={() => void verifyHost(host)}>
                         {t("remote.trustAndConnect")}
                       </button>
-                    </div>
-                  )}
-                  {confirmingUpdateID === host.id && (
-                    <div className="host-key-confirmation remote-update-confirmation">
-                      <RefreshCw size={18} />
-                      <div>
-                        <strong>{t("remote.update")}</strong>
-                        <span>{t("remote.updateConfirm", { name: host.name })}</span>
-                      </div>
-                      <div className="remote-update-confirm-actions">
-                        <button
-                          className="ghost-action"
-                          onClick={() => setConfirmingUpdateID("")}
-                        >
-                          {t("remote.cancelUpdate")}
-                        </button>
-                        <button className="action" onClick={() => void updateRemote(host)}>
-                          {t("remote.confirmUpdate")}
-                        </button>
-                      </div>
                     </div>
                   )}
                 </div>
                 <div className="remote-host-actions">
                   <button
-                    className="action"
-                    disabled={!host.trusted}
-                    onClick={() => useHost(host.id)}
-                    title={host.trusted ? t("remote.useMachine") : t("remote.testFirst")}
-                  >
-                    <Server size={14} />
-                    {active ? t("remote.inUse") : t("remote.useMachine")}
-                  </button>
-                  <button
                     className="ghost-action"
-                    disabled={testingID === host.id || updatingID === host.id}
-                    onClick={() => void test(host)}
-                  >
-                    <PlugZap size={14} />
-                    {testingID === host.id ? t("remote.testing") : t("remote.test")}
-                  </button>
-                  <button
-                    className="ghost-action"
-                    disabled={!host.trusted || updatingID === host.id || testingID === host.id}
-                    onClick={() => {
-                      setConfirmingUpdateID(host.id);
-                      setMessage("");
-                      setError("");
-                    }}
-                    title={host.trusted ? t("remote.update") : t("remote.testFirst")}
+                    disabled={!host.trusted || checking || updatingID === host.id || updatingAll}
+                    onClick={() => void (updateAvailable ? updateRemote(host) : inspectHosts([host]))}
+                    title={host.trusted ? undefined : t("remote.healthUnverified")}
                   >
                     <RefreshCw size={14} className={updatingID === host.id ? "spin" : ""} />
-                    {updatingID === host.id ? t("remote.updating") : t("remote.update")}
+                    {updatingID === host.id
+                      ? t("remote.updating")
+                      : checking
+                        ? t("remote.checkingUpdates")
+                        : updateAvailable
+                          ? t("remote.update")
+                          : t("remote.checkUpdates")}
                   </button>
                   <button className="ghost-action" onClick={() => edit(host)}>
                     <Pencil size={14} />
@@ -774,16 +836,6 @@ export function RemoteHostsPanel() {
               </article>
             );
           })}
-        </div>
-      </section>
-
-      <section className="surface remote-security-note">
-        <div className="surface-body">
-          <Fingerprint size={20} />
-          <div>
-            <strong>{t("remote.securityTitle")}</strong>
-            <p className="subtle-copy">{t("remote.securityHint")}</p>
-          </div>
         </div>
       </section>
     </div>

@@ -17,12 +17,10 @@ def make_client(handler, **kwargs) -> AgentMuxClient:
     return AgentMuxClient(transport=httpx.MockTransport(handler), token="secret", **kwargs)
 
 
-def test_invoke_requires_exactly_one_target() -> None:
+def test_invoke_requires_agent_target() -> None:
     client = make_client(lambda request: httpx.Response(200, json={}))
     with pytest.raises(ValueError):
-        client.invoke(input="hi")
-    with pytest.raises(ValueError):
-        client.invoke(input="hi", agent_id="a", project="p")
+        client.invoke(input="hi", agent_id="")
 
 
 def test_invoke_roundtrip() -> None:
@@ -123,7 +121,7 @@ def test_resources_roundtrip() -> None:
             )
         if path == "/api/v1/orchestrations" and method == "POST":
             payload = json.loads(request.content)
-            assert payload["tasks"][0] == {"id": "t1", "input": "do it"}
+            assert payload["tasks"][0] == {"id": "t1", "agent_id": "a1", "input": "do it"}
             return httpx.Response(
                 202,
                 json={"id": "orch-1", "status": "queued", "max_concurrency": 4, "tasks": []},
@@ -141,7 +139,7 @@ def test_resources_roundtrip() -> None:
     session = client.console.create_session(landing="tenants")
     assert session.enter_url.endswith("nonce=n")
     assert session.session_ttl_seconds == 28800
-    orchestration = client.orchestrations.create([OrchestrationTask(id="t1", input="do it")])
+    orchestration = client.orchestrations.create([OrchestrationTask(id="t1", agent_id="a1", input="do it")])
     assert orchestration.id == "orch-1"
     assert not orchestration.terminal
     assert client.usage() == {"days": []}

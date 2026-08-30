@@ -1,14 +1,13 @@
 import {
-  Cable,
   Plus,
   RefreshCw,
-  Zap,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Channel, Trigger, api } from "../../api";
 import { useI18n } from "../../i18n";
 import { usePolling } from "../../hooks/usePolling";
 import { useAsync } from "../../useAsync";
+import { targetKey } from "../../components/TargetBadge";
 import {
   CHANNEL_FIELDS,
   EMPTY_CHANNEL,
@@ -20,32 +19,50 @@ import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
 import { TriggerCard, TriggerEditor } from "./TriggerEditor";
 
-export function ConnectPanel() {
+export type ConnectView = "channels" | "schedules" | "triggers";
+
+export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
   const { t } = useI18n();
   const channels = useAsync(() => api.channels(), []);
   const triggers = useAsync(() => api.triggers(), []);
   const agents = useAsync(() => api.agentInstances(), []);
   const platforms = useAsync(() => api.platforms(), []);
 
-  const [tab, setTab] = useState<"channels" | "triggers">("channels");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
   const [channelDraft, setChannelDraft] = useState<Partial<Channel> | null>(null);
   const [triggerDraft, setTriggerDraft] = useState<Partial<Trigger> | null>(null);
 
   const channelItems = channels.data ?? [];
-  const triggerItems = triggers.data ?? [];
+  const allTriggerItems = triggers.data ?? [];
+  const triggerItems = allTriggerItems.filter((trigger) => (
+    view === "schedules" ? trigger.kind === "cron" : trigger.kind !== "cron"
+  ));
   const agentOptions = (agents.data ?? []).filter((a) => !a.id.startsWith("config:"));
   const platformOptions = platforms.data ?? [];
 
   usePolling(channels.reload, 15_000);
 
   const metrics = useMemo(() => {
-    const running = channelItems.filter((c) => c.state === "running").length;
-    const failed = channelItems.filter((c) => ["reconnecting", "degraded", "error"].includes(c.state ?? "")).length;
-    const cron = triggerItems.filter((tr) => tr.kind === "cron" && tr.enabled).length;
-    return { running, failed, cron };
-  }, [channelItems, triggerItems]);
+    const active = triggerItems.filter((trigger) => trigger.enabled).length;
+    return { active };
+  }, [triggerItems]);
+
+  const pageTitle = view === "channels"
+    ? t("nav.channels")
+    : view === "schedules"
+      ? t("nav.schedules")
+      : t("nav.triggers");
+  const pageHelp = view === "channels"
+    ? t("connect.channelsHelp")
+    : view === "schedules"
+      ? t("connect.schedulesHelp")
+      : t("connect.triggersHelp");
+  const listTitle = view === "channels"
+    ? t("connect.channelsList")
+    : view === "schedules"
+      ? t("connect.schedulesList")
+      : t("connect.triggersList");
 
   const unhealthyChannels = channelItems.filter(
     (channel) => channel.enabled && ["reconnecting", "degraded", "error"].includes(channel.state ?? ""),
@@ -79,40 +96,34 @@ export function ConnectPanel() {
 
   return (
     <div className="page-stack connect-page">
-      <div className="surface">
-        <div className="surface-header">
-          <div>
-            <h2>{t("connect.title")}</h2>
-            <p className="subtle-copy">{t("connect.subtitle")}</p>
+      {view !== "channels" && (
+        <div className="surface">
+          <div className="surface-header">
+            <div>
+              <h2>{pageTitle}</h2>
+              <p className="subtle-copy">{pageHelp}</p>
+            </div>
+            <button className="ghost-action" onClick={() => Promise.all([channels.reload(), triggers.reload()])}>
+              <RefreshCw size={15} />
+              {t("common.refresh")}
+            </button>
           </div>
-          <button className="ghost-action" onClick={() => Promise.all([channels.reload(), triggers.reload()])}>
-            <RefreshCw size={15} />
-            {t("common.refresh")}
-          </button>
+          <div className="surface-body agent-metrics">
+            <Summary
+              label={view === "schedules" ? t("connect.totalSchedules") : t("connect.totalTriggers")}
+              value={triggerItems.length}
+            />
+            <Summary
+              label={view === "schedules" ? t("connect.activeSchedules") : t("connect.activeTriggers")}
+              value={metrics.active}
+            />
+          </div>
         </div>
-        <div className="surface-body agent-metrics">
-          <Summary label={t("connect.totalChannels")} value={channelItems.length} />
-          <Summary label={t("connect.runningChannels")} value={metrics.running} />
-          <Summary label={t("connect.failedChannels")} value={metrics.failed} />
-          <Summary label={t("connect.totalTriggers")} value={triggerItems.length} />
-          <Summary label={t("connect.activeCron")} value={metrics.cron} />
-        </div>
-      </div>
-
-      <div className="connection-subtabs segmented" aria-label={t("nav.connect")}>
-        <button className={tab === "channels" ? "active" : ""} onClick={() => setTab("channels")}>
-          <Cable size={15} />
-          <span>{t("connect.channelsTab")}</span>
-        </button>
-        <button className={tab === "triggers" ? "active" : ""} onClick={() => setTab("triggers")}>
-          <Zap size={15} />
-          <span>{t("connect.triggersTab")}</span>
-        </button>
-      </div>
+      )}
 
       {notice && <div className={`session-notice ${/failed|error|invalid|required|unknown/i.test(notice) ? "error" : ""}`}>{notice}</div>}
 
-      {unhealthyChannels.length > 0 && (
+      {view === "channels" && unhealthyChannels.length > 0 && (
         <div className="session-notice error channel-health-alert" role="alert">
           <strong>{t("connect.healthAlertTitle")}</strong>
           <span>
@@ -121,12 +132,11 @@ export function ConnectPanel() {
         </div>
       )}
 
-      {tab === "channels" && (
+      {view === "channels" && (
         <div className="surface">
           <div className="surface-header">
             <div>
-              <h2>{t("connect.channelsTab")}</h2>
-              <p className="subtle-copy">{t("connect.channelsHelp")}</p>
+              <h2>{listTitle}</h2>
             </div>
             <button
               className="action"
@@ -159,7 +169,7 @@ export function ConnectPanel() {
             )}
             {channelItems.map((ch) => (
               <ChannelCard
-                key={ch.id}
+                key={targetKey(ch.target_id, ch.id)}
                 channel={ch}
                 busy={busy}
                 onEdit={() => {
@@ -169,30 +179,36 @@ export function ConnectPanel() {
                 onToggle={() =>
                   run(`toggle-${ch.id}`, () => api.upsertChannel({ ...ch, enabled: !ch.enabled }), "")
                 }
-                onRestart={() => run(`restart-${ch.id}`, () => api.restartChannel(ch.id), t("connect.channelRestarted"))}
-                onDelete={() => run(`delete-${ch.id}`, () => api.deleteChannel(ch.id), t("connect.channelDeleted"))}
+                onRestart={() => run(`restart-${ch.id}`, () => api.restartChannel(ch.id, ch.target_id), t("connect.channelRestarted"))}
+                onDelete={() => run(`delete-${ch.id}`, () => api.deleteChannel(ch.id, ch.target_id), t("connect.channelDeleted"))}
               />
             ))}
           </div>
+          {!channels.loading && (
+            <div className="surface-footer connect-list-count">
+              {t("connect.channelCount", { count: channelItems.length })}
+            </div>
+          )}
         </div>
       )}
 
-      {tab === "triggers" && (
+      {view !== "channels" && (
         <div className="surface">
           <div className="surface-header">
             <div>
-              <h2>{t("connect.triggersTab")}</h2>
-              <p className="subtle-copy">{t("connect.triggersHelp")}</p>
+              <h2>{listTitle}</h2>
             </div>
             <button
               className="action"
               onClick={() => {
                 setChannelDraft(null);
-                setTriggerDraft({ ...EMPTY_TRIGGER });
+                setTriggerDraft(view === "schedules"
+                  ? { ...EMPTY_TRIGGER }
+                  : { ...EMPTY_TRIGGER, kind: "webhook", cron_expr: undefined });
               }}
             >
               <Plus size={16} />
-              {t("connect.newTrigger")}
+              {view === "schedules" ? t("connect.newSchedule") : t("connect.newTrigger")}
             </button>
           </div>
           <div className="surface-body agent-mini-list">
@@ -202,6 +218,7 @@ export function ConnectPanel() {
                 setDraft={setTriggerDraft}
                 channels={channelItems}
                 agents={agentOptions.map((a) => ({ id: a.id, name: a.name }))}
+                allowedKinds={view === "schedules" ? ["cron"] : ["webhook", "event"]}
                 busy={busy === "save-trigger"}
                 onSave={() => triggerDraft && saveTrigger(triggerDraft)}
                 onCancel={() => setTriggerDraft(null)}
@@ -209,22 +226,22 @@ export function ConnectPanel() {
             )}
             {triggers.loading && <div className="empty-state">{t("common.loading")}</div>}
             {!triggers.loading && triggerItems.length === 0 && !triggerDraft && (
-              <div className="empty-state">{t("connect.noTriggers")}</div>
+              <div className="empty-state">{view === "schedules" ? t("connect.noSchedules") : t("connect.noTriggers")}</div>
             )}
             {triggerItems.map((tr) => (
               <TriggerCard
-                key={tr.id}
+                key={targetKey(tr.target_id, tr.id)}
                 trigger={tr}
                 busy={busy}
                 onEdit={() => {
                   setChannelDraft(null);
                   setTriggerDraft({ ...tr });
                 }}
-                onRun={() => run(`run-${tr.id}`, () => api.runTrigger(tr.id), t("connect.triggerStarted"))}
+                onRun={() => run(`run-${tr.id}`, () => api.runTrigger(tr.id, tr.target_id), t("connect.triggerStarted"))}
                 onToggle={() =>
                   run(`toggle-${tr.id}`, () => api.upsertTrigger({ ...tr, enabled: !tr.enabled }), "")
                 }
-                onDelete={() => run(`delete-${tr.id}`, () => api.deleteTrigger(tr.id), t("connect.triggerDeleted"))}
+                onDelete={() => run(`delete-${tr.id}`, () => api.deleteTrigger(tr.id, tr.target_id), t("connect.triggerDeleted"))}
               />
             ))}
           </div>

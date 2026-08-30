@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
-import { Activity } from "lucide-react";
-import { api, MenubarSettings } from "../api";
+import { useEffect, useState, type ReactNode } from "react";
+import { Activity, ChevronDown, ChevronUp, Cloud, Database, PlugZap, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
+import { api, type CursorUsageSourceStatus, type MenubarSettings } from "../api";
+import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { formatUsageCost, SupportedCurrency, validCNYRate } from "../currency";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 import { fmt } from "./OverviewPanel";
 
-const PERIODS = ["daily", "weekly", "monthly", "session", "blocks"];
+const PERIODS = ["hourly", "daily", "weekly", "monthly", "session", "blocks"];
 const RANGES = ["all", "today", "7d", "month", "custom"] as const;
 type UsageRange = (typeof RANGES)[number];
 
@@ -23,12 +25,26 @@ export function UsagePanel() {
     [period, bounds.from, bounds.to],
   );
   const currencyPreferences = useAsync(() => api.menubarSettings(), []);
+  const cursorSources = useAsync(() => api.usageSources(), []);
   const [preferences, setPreferences] = useState<MenubarSettings | null>(null);
   const [currencyStatus, setCurrencyStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [sourceBusy, setSourceBusy] = useState("");
+  const [sourceError, setSourceError] = useState("");
+  const [periodTableExpanded, setPeriodTableExpanded] = useState(false);
+  const periodPagination = useCatalogPagination(
+    data?.buckets ?? [],
+    `${period}:${bounds.from}:${bounds.to}`,
+  );
 
   useEffect(() => {
     if (currencyPreferences.data) setPreferences(currencyPreferences.data);
   }, [currencyPreferences.data]);
+
+  useEffect(() => {
+    if (!(cursorSources.data ?? []).some((source) => source.syncing)) return;
+    const interval = window.setInterval(() => cursorSources.reload(), 2000);
+    return () => window.clearInterval(interval);
+  }, [cursorSources.data]);
 
   const currency = preferences?.currency ?? "cny";
   const cnyRate = validCNYRate(preferences?.cny_rate ?? 7);
@@ -63,6 +79,22 @@ export function UsagePanel() {
     setCustomTo(value);
     if (customFrom && value < customFrom) setCustomFrom(value);
   };
+
+  async function runCursorAction(source: CursorUsageSourceStatus, action: "connect" | "sync" | "repair" | "disconnect") {
+    if (action === "connect" && !window.confirm(t("usage.cursorConsent"))) return;
+    if (action === "disconnect" && !window.confirm(t("usage.cursorDisconnectConfirm"))) return;
+    const key = targetKey(source.target_id, source.source);
+    setSourceBusy(`${key}:${action}`);
+    setSourceError("");
+    try {
+      await api.cursorUsageAction(action, source.target_id);
+      await cursorSources.reload();
+    } catch (actionError) {
+      setSourceError(String(actionError));
+    } finally {
+      setSourceBusy("");
+    }
+  }
 
   return (
     <div className="page-stack">
@@ -150,7 +182,32 @@ export function UsagePanel() {
         </div>
       </section>
 
+      <section className="surface cursor-usage-sources">
+        <div className="surface-header">
+          <div>
+            <h2>{t("usage.sourcesTitle")}</h2>
+            <p className="subtle-copy">{t("usage.sourcesHint")}</p>
+          </div>
+          <button className="ghost-action" type="button" onClick={cursorSources.reload}><RefreshCw size={14} />{t("common.refresh")}</button>
+        </div>
+        {cursorSources.error && <div className="surface-body error">{cursorSources.error}</div>}
+        {sourceError && <div className="surface-body error">{sourceError}</div>}
+        <div className="cursor-source-grid">
+          {(cursorSources.data ?? []).map((source) => (
+            <CursorSourceCard
+              key={targetKey(source.target_id, source.source)}
+              source={source}
+              busy={sourceBusy}
+              onAction={runCursorAction}
+              t={t}
+            />
+          ))}
+          {!cursorSources.loading && (cursorSources.data ?? []).length === 0 && <div className="empty-state">{t("usage.sourcesEmpty")}</div>}
+        </div>
+      </section>
+
       {error && <div className="surface surface-body error">{error}</div>}
+      {(data?.warnings ?? []).map((warning) => <div className="surface surface-body warning" key={warning}>{warning}</div>)}
       {loading && <div className="surface surface-body muted">{t("common.loading")}</div>}
 
       {data && (
@@ -159,43 +216,75 @@ export function UsagePanel() {
             <Stat label={t("usage.estimatedCost")} value={formatCost(data.totals.cost_usd)} />
             <Stat label={t("overview.input")} value={fmt(data.totals.input_tokens)} />
             <Stat label={t("overview.output")} value={fmt(data.totals.output_tokens)} />
-            <Stat label={t("usage.cacheRead")} value={fmt(data.totals.cache_read_tokens)} />
-            <Stat label={t("usage.cacheWrite")} value={fmt(data.totals.cache_write_tokens)} />
+            <Stat label={t("usage.cacheInput")} value={fmt(data.totals.cache_read_tokens + data.totals.cache_write_tokens)} />
             <Stat label={t("overview.records")} value={String(data.totals.records)} />
+            <Stat label={t("overview.sessions")} value={String(data.totals.sessions ?? 0)} />
+            <Stat
+              label={t("usage.estimatedTokens")}
+              value={fmt(data.totals.estimated_tokens ?? 0)}
+              detail={estimatedCoverageLabel(data.totals.estimated_tokens ?? 0, totalUsageTokens(data.totals), t)}
+            />
           </div>
 
-          <section className="surface">
+          <section className="surface usage-period-section">
             <div className="surface-header">
-              <h2>
-                {t("usage.byPeriod")} · {t(`period.${period}`)}
-              </h2>
+              <div>
+                <h2>
+                  {t("usage.byPeriod")} · {t(`period.${period}`)}
+                </h2>
+                <p className="subtle-copy">{t("usage.periodRows", { count: data.buckets.length })}</p>
+              </div>
+              <button
+                className="ghost-action"
+                type="button"
+                aria-expanded={periodTableExpanded}
+                aria-controls="usage-period-table"
+                onClick={() => setPeriodTableExpanded((expanded) => !expanded)}
+              >
+                {periodTableExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                {periodTableExpanded ? t("usage.collapsePeriodTable") : t("usage.expandPeriodTable")}
+              </button>
             </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t(`period.${period}`)}</th>
-                    <th>{t("overview.input")}</th>
-                    <th>{t("overview.output")}</th>
-                    <th>{t("usage.cacheRead")}</th>
-                    <th>{t("usage.cacheWrite")}</th>
-                    <th>{t("usage.estimatedCost")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.buckets.map((b) => (
-                    <tr key={b.key}>
-                      <td>{b.key}</td>
-                      <td>{fmt(b.totals.input_tokens)}</td>
-                      <td>{fmt(b.totals.output_tokens)}</td>
-                      <td>{fmt(b.totals.cache_read_tokens)}</td>
-                      <td>{fmt(b.totals.cache_write_tokens)}</td>
-                      <td>{formatCost(b.totals.cost_usd)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {periodTableExpanded && (
+              <div id="usage-period-table">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>{t(`period.${period}`)}</th>
+                        <th>{t("overview.input")}</th>
+                        <th>{t("overview.output")}</th>
+                        <th>{t("usage.cacheInput")}</th>
+                        <th>{t("usage.estimatedCost")}</th>
+                        <th>{t("usage.quality")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {periodPagination.pageItems.map((b) => (
+                        <tr key={b.key}>
+                          <td>{b.key}</td>
+                          <td>{fmt(b.totals.input_tokens)}</td>
+                          <td>{fmt(b.totals.output_tokens)}</td>
+                          <td>{fmt(b.totals.cache_read_tokens + b.totals.cache_write_tokens)}</td>
+                          <td>{formatCost(b.totals.cost_usd)}</td>
+                          <td>{(b.totals.estimated_tokens ?? 0) > 0 ? <span className="status-badge warning">{t("usage.estimated")}</span> : <span className="status-badge success">{t("usage.exact")}</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {periodPagination.totalPages > 1 && (
+                  <CatalogPagination
+                    page={periodPagination.page}
+                    totalPages={periodPagination.totalPages}
+                    start={periodPagination.start}
+                    end={periodPagination.end}
+                    total={periodPagination.total}
+                    onChange={periodPagination.setPage}
+                  />
+                )}
+              </div>
+            )}
           </section>
 
           <section className="surface">
@@ -209,6 +298,7 @@ export function UsagePanel() {
                     <th>{t("usage.model")}</th>
                     <th>{t("usage.tokens")}</th>
                     <th>{t("usage.cost")}</th>
+                    <th>{t("usage.quality")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -217,6 +307,7 @@ export function UsagePanel() {
                       <td>{m.model}</td>
                       <td>{fmt(m.tokens)}</td>
                       <td>{formatCost(m.cost_usd)}</td>
+                      <td className="usage-inline-quality">{(m.estimated_tokens ?? 0) > 0 ? <span className="status-badge warning">{t("usage.estimated")}</span> : <span className="status-badge success">{t("usage.exact")}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -259,12 +350,90 @@ function formatLocalDate(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function CursorSourceCard({
+  source,
+  busy,
+  onAction,
+  t,
+}: {
+  source: CursorUsageSourceStatus;
+  busy: string;
+  onAction: (source: CursorUsageSourceStatus, action: "connect" | "sync" | "repair" | "disconnect") => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const key = targetKey(source.target_id, source.source);
+  const coverage = source.total_tokens > 0
+    ? Math.max(0, Math.round((1 - source.estimated_tokens / source.total_tokens) * 100))
+    : 100;
+  const isBusy = busy.startsWith(`${key}:`) || source.syncing;
+  return (
+    <article className="cursor-source-card">
+      <header>
+        <span className="cursor-source-icon"><PlugZap size={20} /></span>
+        <div>
+          <strong>Cursor</strong>
+          <span>{t("usage.cursorAgentScope")}</span>
+          <TargetBadge target_id={source.target_id} target_name={source.target_name} />
+        </div>
+        <span className={`status-badge ${source.connected ? "success" : ""}`}>{source.connected ? t("common.connected") : t("common.disconnected")}</span>
+      </header>
+      <div className="cursor-source-status-grid">
+        <SourceState icon={<ShieldCheck size={15} />} label="Hook" value={sourceStatusLabel(source.hook.status, t)} />
+        <SourceState icon={<Database size={15} />} label={t("usage.cursorLocal")} value={sourceStatusLabel(source.local_status, t)} />
+        <SourceState icon={<Cloud size={15} />} label={t("usage.cursorCloud")} value={sourceStatusLabel(source.cloud_status, t)} />
+        <SourceState icon={<Activity size={15} />} label={t("usage.cursorCoverage")} value={`${coverage}%`} />
+      </div>
+      {!source.connected && <p className="cursor-source-consent">{t("usage.cursorConsentHint")}</p>}
+      {source.connected && (
+        <div className="cursor-source-meta">
+          <span>{t("usage.cursorBackfill", { days: source.backfill_days })}: {source.backfill_complete ? t("common.complete") : t("common.inProgress")}</span>
+          <span>{t("usage.cursorMatched", { count: source.cloud_matched_events })}</span>
+          <span>{t("usage.cursorEstimated", { tokens: fmt(source.estimated_tokens) })}</span>
+          {source.last_sync_at && <span>{t("common.updated")} {new Date(source.last_sync_at).toLocaleString()}</span>}
+        </div>
+      )}
+      {source.last_error && <div className="error cursor-source-error">{source.last_error}</div>}
+      <div className="cursor-source-actions">
+        {!source.connected ? (
+          <button className="action" type="button" disabled={isBusy} onClick={() => onAction(source, "connect")}><PlugZap size={14} />{t("usage.cursorConnect")}</button>
+        ) : (
+          <>
+            <button className="action" type="button" disabled={isBusy} onClick={() => onAction(source, "sync")}><RefreshCw size={14} />{source.syncing ? t("usage.cursorSyncing") : t("usage.cursorSync")}</button>
+            <button className="ghost-action" type="button" disabled={isBusy} onClick={() => onAction(source, "repair")}><ShieldCheck size={14} />{t("usage.cursorRepair")}</button>
+            <button className="ghost-action danger-action" type="button" disabled={isBusy} onClick={() => onAction(source, "disconnect")}><Unplug size={14} />{t("usage.cursorDisconnect")}</button>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SourceState({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return <div><span>{icon}{label}</span><strong>{value.replace(/_/g, " ")}</strong></div>;
+}
+
+function totalUsageTokens(totals: { input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number }) {
+  return totals.input_tokens + totals.output_tokens + totals.cache_read_tokens + totals.cache_write_tokens;
+}
+
+function estimatedCoverageLabel(estimated: number, total: number, t: (key: string, params?: Record<string, string | number>) => string) {
+  if (estimated <= 0 || total <= 0) return t("usage.exact");
+  return t("usage.coveragePercent", { coverage: Math.max(0, Math.round((1 - estimated / total) * 100)) });
+}
+
+function sourceStatusLabel(value: string, t: (key: string) => string) {
+  const key = `usage.sourceStatus.${value.trim().toLowerCase()}`;
+  const translated = t(key);
+  return translated === key ? value.replace(/_/g, " ") : translated;
+}
+
+function Stat({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="metric-card">
       <div>
         <div className="label">{label}</div>
         <div className="value">{value}</div>
+        {detail && <div className="muted metric-detail">{detail}</div>}
       </div>
     </div>
   );

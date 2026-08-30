@@ -27,7 +27,7 @@ func (s *Store) CreateOrchestration(ctx context.Context, orchestration core.Orch
 		dependsOn, _ := json.Marshal(task.DependsOn)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO orchestration_tasks
 			(orchestration_id,id,agent_id,project,input,depends_on,status,output,error,invocation_id,conversation_id,created_at,started_at,finished_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, orchestration.ID, task.ID, task.AgentID, task.Project, task.Input,
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, orchestration.ID, task.ID, task.AgentID, "", task.Input,
 			string(dependsOn), task.Status, task.Output, task.Error, task.InvocationID, task.ConversationID,
 			formatControlTime(task.CreatedAt), formatControlTime(task.StartedAt), formatControlTime(task.FinishedAt), formatControlTime(task.UpdatedAt)); err != nil {
 			return err
@@ -48,9 +48,9 @@ func (s *Store) UpdateOrchestration(ctx context.Context, orchestration core.Orch
 func (s *Store) UpdateOrchestrationTask(ctx context.Context, task core.OrchestrationTask) error {
 	dependsOn, _ := json.Marshal(task.DependsOn)
 	_, err := s.writer.ExecContext(ctx, `UPDATE orchestration_tasks SET
-		agent_id=?,project=?,input=?,depends_on=?,status=?,output=?,error=?,invocation_id=?,conversation_id=?,
+		agent_id=?,project='',input=?,depends_on=?,status=?,output=?,error=?,invocation_id=?,conversation_id=?,
 		started_at=?,finished_at=?,updated_at=? WHERE orchestration_id=? AND id=?`,
-		task.AgentID, task.Project, task.Input, string(dependsOn), task.Status, task.Output, task.Error,
+		task.AgentID, task.Input, string(dependsOn), task.Status, task.Output, task.Error,
 		task.InvocationID, task.ConversationID, formatControlTime(task.StartedAt), formatControlTime(task.FinishedAt),
 		formatControlTime(task.UpdatedAt), task.OrchestrationID, task.ID)
 	return err
@@ -137,7 +137,7 @@ func (s *Store) listOrchestrationTasks(ctx context.Context, id string) ([]core.O
 			&output, &errText, &invocationID, &conversationID, &createdAt, &startedAt, &finishedAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		task.AgentID, task.Project = agentID.String, project.String
+		task.AgentID = agentID.String
 		task.Output, task.Error = output.String, errText.String
 		task.InvocationID, task.ConversationID = invocationID.String, conversationID.String
 		_ = json.Unmarshal([]byte(dependsOn.String), &task.DependsOn)

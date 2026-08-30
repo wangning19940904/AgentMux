@@ -1,4 +1,4 @@
-import { api, type AgentInstance, type Channel, type Provider, type ProviderRoute, type Trigger } from "../../api";
+import { api, type AgentInstance, type Channel, type CLIManagedTool, type Provider, type ProviderRoute, type RuntimeOption, type Trigger } from "../../api";
 
 export type DrawerMode = "create" | "edit";
 
@@ -27,6 +27,22 @@ export const EMPTY_AGENT: AgentInstance = {
   enabled: true,
   source: "manual",
 };
+
+// Fleet tool discovery returns one catalog entry per machine. Agent editing is
+// target-scoped, so only that machine's catalog is relevant. A target-less
+// draft represents a fleet-wide create; collapse those entries and consider a
+// CLI available only when it is installed everywhere it was reported.
+export function cliCatalogForAgent(catalog: CLIManagedTool[], targetID?: string): CLIManagedTool[] {
+  const scoped = targetID ? catalog.filter((item) => item.target_id === targetID) : catalog;
+  const byID = new Map<string, CLIManagedTool>();
+  for (const item of scoped) {
+    const current = byID.get(item.spec.id);
+    byID.set(item.spec.id, current
+      ? { ...current, installed: current.installed && item.installed }
+      : item);
+  }
+  return [...byID.values()];
+}
 
 export function composeInjectedPrompt(
   base: string,
@@ -77,14 +93,14 @@ export async function syncAgentConnectBindings(
     .map((channel) => {
       const currentAgentID = channel.agent_id ?? "";
       const nextAgentID = selectedChannels.has(channel.id) ? agentID : currentAgentID === agentID ? "" : currentAgentID;
-      return nextAgentID === currentAgentID ? null : api.upsertChannel({ ...channel, agent_id: nextAgentID });
+      return nextAgentID === currentAgentID ? null : api.upsertChannel({ ...channel, agent_id: nextAgentID, target_id: channel.target_id });
     })
     .filter((update): update is Promise<Channel> => Boolean(update));
   const triggerUpdates = triggers
     .map((trigger) => {
       const currentAgentID = trigger.agent_id ?? "";
       const nextAgentID = selectedTriggers.has(trigger.id) ? agentID : currentAgentID === agentID ? "" : currentAgentID;
-      return nextAgentID === currentAgentID ? null : api.upsertTrigger({ ...trigger, agent_id: nextAgentID });
+      return nextAgentID === currentAgentID ? null : api.upsertTrigger({ ...trigger, agent_id: nextAgentID, target_id: trigger.target_id });
     })
     .filter((update): update is Promise<Trigger> => Boolean(update));
   await Promise.all([...channelUpdates, ...triggerUpdates]);
@@ -117,12 +133,13 @@ export function routeToolOptionsForRuntime(runtime: string): string[] {
 
 export function runtimeLabel(runtime: string): string {
   switch (runtime) {
+    case "claude":
     case "claudecode":
       return "Claude Code CLI";
     case "codex":
       return "Codex CLI";
     case "cursor":
-      return "Cursor Agent CLI";
+      return "Cursor";
     case "gemini":
       return "Gemini CLI";
     case "iflow":
@@ -147,6 +164,98 @@ export function runtimeLabel(runtime: string): string {
 export function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRoute | undefined {
   const normalized = normalizeTool(tool);
   return routes.find((route) => route.tool === tool) ?? routes.find((route) => normalizeTool(route.tool) === normalized);
+}
+
+export function resourceTargetID(resource: { target_id?: string }): string {
+  return resource.target_id?.trim() || "local";
+}
+
+export function activeRouteForAgent(agent: AgentInstance, routes: ProviderRoute[]): ProviderRoute | undefined {
+  const targetID = resourceTargetID(agent);
+  return activeRouteForTool(
+    routes.filter((route) => resourceTargetID(route) === targetID),
+    agent.provider_tool || agent.runtime_id,
+  );
+}
+
+export type EffectiveAgentProvider = {
+  id: string;
+  provider?: Provider;
+  route?: ProviderRoute;
+};
+
+export function effectiveAgentProvider(
+  agent: AgentInstance,
+  routes: ProviderRoute[],
+  providers: Provider[],
+): EffectiveAgentProvider | null {
+  const targetID = resourceTargetID(agent);
+  const explicitID = agent.provider_id?.trim();
+  if (explicitID) {
+    return {
+      id: explicitID,
+      provider: providers.find((provider) => resourceTargetID(provider) === targetID && provider.id === explicitID),
+    };
+  }
+
+  const route = activeRouteForAgent(agent, routes);
+  const routeProviderID = route?.configured ? route.provider_id?.trim() : "";
+  if (!routeProviderID) return null;
+  return {
+    id: routeProviderID,
+    provider: providers.find((provider) => resourceTargetID(provider) === targetID && provider.id === routeProviderID),
+    route,
+  };
+}
+
+export function agentRouteModel(
+  agent: AgentInstance,
+  routes: ProviderRoute[],
+  providers: Provider[],
+): { mode: "provider" | "login"; model: string } {
+  const binding = effectiveAgentProvider(agent, routes, providers);
+  return {
+    mode: binding ? "provider" : "login",
+    model: agent.default_model?.trim() || binding?.route?.model?.trim() || binding?.provider?.model?.trim() || "",
+  };
+}
+
+export function boundChannelsForAgent(agent: AgentInstance, channels: Channel[]): Channel[] {
+  const targetID = resourceTargetID(agent);
+  return channels.filter(
+    (channel) => resourceTargetID(channel) === targetID && channel.agent_id === agent.id,
+  );
+}
+
+export function agentRegistryMetrics(
+  agents: AgentInstance[],
+  routes: ProviderRoute[],
+  providers: Provider[],
+  channels: Channel[],
+): { agentCount: number; providerCount: number; machineCount: number; channelCount: number } {
+  const agentKeys = new Set(agents.map((agent) => `${resourceTargetID(agent)}::${agent.id}`));
+  const providerKeys = new Set<string>();
+  const machineIDs = new Set<string>();
+  const channelKeys = new Set<string>();
+
+  agents.forEach((agent) => {
+    const targetID = resourceTargetID(agent);
+    machineIDs.add(targetID);
+    const binding = effectiveAgentProvider(agent, routes, providers);
+    if (binding) providerKeys.add(`${targetID}::${binding.id}`);
+  });
+  channels.forEach((channel) => {
+    if (!channel.agent_id) return;
+    const targetID = resourceTargetID(channel);
+    if (agentKeys.has(`${targetID}::${channel.agent_id}`)) channelKeys.add(`${targetID}::${channel.id}`);
+  });
+
+  return {
+    agentCount: agents.length,
+    providerCount: providerKeys.size,
+    machineCount: machineIDs.size,
+    channelCount: channelKeys.size,
+  };
 }
 
 export function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
@@ -199,6 +308,19 @@ export function runtimeProviderOptions(provider: Provider | undefined, key: "sup
 	const values = provider?.meta?.[key];
 	if (!Array.isArray(values)) return [];
 	return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
+}
+
+export function runtimeOptionValues(options: RuntimeOption[] | undefined): string[] {
+	if (!Array.isArray(options)) return [];
+	const seen = new Set<string>();
+	const values: string[] = [];
+	options.forEach((option) => {
+		const value = option?.value?.trim();
+		if (!value || seen.has(value)) return;
+		seen.add(value);
+		values.push(value);
+	});
+	return values;
 }
 
 export function serviceTierLabel(value: string): string {

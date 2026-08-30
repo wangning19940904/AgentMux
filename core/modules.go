@@ -80,17 +80,11 @@ type WorkspaceInitOptions struct {
 	// by the Engine at runtime and are never user-editable settings.
 	ConversationScope string          `json:"conversation_scope,omitempty"`
 	ConversationKey   string          `json:"conversation_key,omitempty"`
+	MemoryScope       string          `json:"memory_scope,omitempty"`
 	Skills            []string        `json:"skills,omitempty"`
 	MCPServers        []string        `json:"mcp_servers,omitempty"`
+	MCPDefinitions    []MCPServer     `json:"-"`
 	RuntimeDefaults   RuntimeSettings `json:"runtime_defaults,omitempty"`
-}
-
-// ConversationBaseDir returns the configured agent working directory.
-//
-// Deprecated: conversations now run directly in WorkDir and no longer create
-// nested per-conversation working directories.
-func (o WorkspaceInitOptions) ConversationBaseDir() string {
-	return o.WorkDir
 }
 
 // WorkspaceInitResult reports what the initializer created or warned about.
@@ -149,10 +143,19 @@ const (
 
 // GuardRequest is a tool-call permission request flowing through the gate.
 type GuardRequest struct {
-	Project string            `json:"project"`
-	Tool    string            `json:"tool"`
-	Action  string            `json:"action,omitempty"`
-	Args    map[string]string `json:"args,omitempty"`
+	AgentID   string            `json:"agent_id,omitempty"`
+	RuntimeID string            `json:"runtime_id,omitempty"`
+	Tool      string            `json:"tool"`
+	Action    string            `json:"action,omitempty"`
+	Args      map[string]string `json:"args,omitempty"`
+}
+
+type GuardPolicy struct {
+	ID       string `json:"id"`
+	Tool     string `json:"tool"`
+	Action   string `json:"action,omitempty"`
+	Decision string `json:"decision"`
+	Priority int    `json:"priority"`
 }
 
 // Guard is the permission-approval and policy gate for tool calls

@@ -148,3 +148,10 @@ func providerAPIKeyFromEnvOrSecret(apiKeyEnv string) (string, error) {
 	}
 	return strings.TrimSpace(os.Getenv(apiKeyEnv)), nil
 }
+
+// LoadProviderAPIKey returns a configured provider credential for trusted
+// control-plane operations such as an explicitly confirmed fleet sync. It is
+// intentionally not used by normal API responses, which remain write-only.
+func LoadProviderAPIKey(apiKeyEnv string) (string, error) {
+	return providerAPIKeyFromEnvOrSecret(apiKeyEnv)
+}

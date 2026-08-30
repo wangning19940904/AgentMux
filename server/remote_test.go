@@ -21,12 +21,12 @@ func newRemoteTestServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "remote-hosts.json")
-	st, err := store.Open(filepath.Join(t.TempDir(), "remote-test.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "remote-test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), st, nil, nil)
+	return New(Dependencies{Config: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Store: st})
 }
 
 func TestRemoteHostCRUDRedactsSecrets(t *testing.T) {

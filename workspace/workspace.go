@@ -2,6 +2,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -11,10 +12,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/skills"
 )
@@ -25,6 +28,7 @@ const initVersion = 1
 // agent directories.
 type Initializer struct {
 	SkillRoots []string
+	Skills     core.SkillManager
 	worktreeMu sync.Mutex
 }
 
@@ -34,6 +38,14 @@ func New(skillRoots ...string) *Initializer {
 		skillRoots = skills.DefaultRoots()
 	}
 	return &Initializer{SkillRoots: skillRoots}
+}
+
+// NewWithSkillManager uses the same persistent skill catalogue as the server,
+// so disabled skills are never materialized into an Agent workspace.
+func NewWithSkillManager(manager core.SkillManager, skillRoots ...string) *Initializer {
+	initializer := New(skillRoots...)
+	initializer.Skills = manager
+	return initializer
 }
 
 type workspaceFile struct {
@@ -119,9 +131,200 @@ func (i *Initializer) InitializeWorkspace(ctx context.Context, opts core.Workspa
 		}
 	}
 	if skillDir != "" {
-		i.linkSkills(opts.Skills, skillDir, res)
+		names, err := i.effectiveSkills(ctx, opts.Skills, res)
+		if err != nil {
+			return nil, err
+		}
+		i.linkSkills(names, skillDir, res)
+	}
+	if err := i.reconcileMCP(workDir, opts.RuntimeID, opts.MCPDefinitions, res); err != nil {
+		return nil, err
 	}
 	return res, nil
+}
+
+func (i *Initializer) effectiveSkills(ctx context.Context, selected []string, res *core.WorkspaceInitResult) ([]string, error) {
+	if i.Skills == nil || len(selected) == 0 {
+		return selected, nil
+	}
+	available, err := i.Skills.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list effective skills: %w", err)
+	}
+	states := make(map[string]bool, len(available))
+	for _, skill := range available {
+		states[skill.Name] = skill.Enabled
+	}
+	result := make([]string, 0, len(selected))
+	for _, name := range selected {
+		name = strings.TrimSpace(name)
+		enabled, found := states[name]
+		if found && enabled {
+			result = append(result, name)
+			continue
+		}
+		if !found {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("skill %q is not installed", name))
+		} else {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("skill %q is disabled", name))
+		}
+	}
+	return result, nil
+}
+
+func (i *Initializer) reconcileMCP(workDir, runtimeID string, definitions []core.MCPServer, res *core.WorkspaceInitResult) error {
+	runtimeID = normalizeRuntime(runtimeID)
+	var target, owner string
+	switch runtimeID {
+	case "claudecode":
+		target = filepath.Join(workDir, ".mcp.json")
+		owner = filepath.Join(workDir, ".agentmux", "generated", "claude-mcp.sha256")
+	case "codex":
+		target = filepath.Join(workDir, ".codex", "config.toml")
+		owner = filepath.Join(workDir, ".agentmux", "generated", "codex-mcp.sha256")
+	default:
+		if len(definitions) > 0 {
+			return fmt.Errorf("runtime %q does not support AgentMux-managed MCP configuration", runtimeID)
+		}
+		return nil
+	}
+	if len(definitions) == 0 {
+		return removeManagedMCP(target, owner, res)
+	}
+	data, err := renderMCPConfig(runtimeID, definitions)
+	if err != nil {
+		return err
+	}
+	return writeManagedMCP(target, owner, data, res)
+}
+
+func renderMCPConfig(runtimeID string, definitions []core.MCPServer) ([]byte, error) {
+	servers := map[string]map[string]any{}
+	for _, definition := range definitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" || !definition.Enabled {
+			return nil, fmt.Errorf("mcp definitions must be enabled and named")
+		}
+		entry := map[string]any{}
+		switch strings.ToLower(strings.TrimSpace(definition.Transport)) {
+		case "", "stdio":
+			if strings.TrimSpace(definition.Command) == "" {
+				return nil, fmt.Errorf("mcp server %q requires a command", name)
+			}
+			entry["command"] = definition.Command
+			if len(definition.Args) > 0 {
+				entry["args"] = definition.Args
+			}
+			if len(definition.Env) > 0 {
+				entry["env"] = definition.Env
+			}
+		case "http", "sse":
+			if strings.TrimSpace(definition.URL) == "" {
+				return nil, fmt.Errorf("mcp server %q requires a url", name)
+			}
+			entry["url"] = definition.URL
+			if runtimeID == "claudecode" {
+				entry["type"] = strings.ToLower(strings.TrimSpace(definition.Transport))
+			}
+		default:
+			return nil, fmt.Errorf("mcp server %q has unsupported transport %q", name, definition.Transport)
+		}
+		servers[name] = entry
+	}
+	if runtimeID == "claudecode" {
+		return json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+	}
+	var buffer bytes.Buffer
+	if err := toml.NewEncoder(&buffer).Encode(map[string]any{"mcp_servers": servers}); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func writeManagedMCP(target, owner string, data []byte, res *core.WorkspaceInitResult) error {
+	payload := append(append([]byte(nil), data...), '\n')
+	previousDigest, _ := os.ReadFile(owner)
+	if existing, err := os.ReadFile(target); err == nil {
+		if len(previousDigest) == 0 || strings.TrimSpace(string(previousDigest)) != digestHex(existing) {
+			return fmt.Errorf("refusing to overwrite unmanaged MCP config %s", target)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	created := false
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		created = true
+	}
+	if err := atomicWriteFile(target, payload, 0o600); err != nil {
+		return err
+	}
+	if err := atomicWriteFile(owner, []byte(digestHex(payload)+"\n"), 0o600); err != nil {
+		return err
+	}
+	if created {
+		res.Created = append(res.Created, target)
+	} else {
+		res.Updated = append(res.Updated, target)
+	}
+	return nil
+}
+
+func removeManagedMCP(target, owner string, res *core.WorkspaceInitResult) error {
+	digest, err := os.ReadFile(owner)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	existing, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && strings.TrimSpace(string(digest)) != digestHex(existing) {
+		return fmt.Errorf("refusing to remove modified MCP config %s", target)
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(owner); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	res.Updated = append(res.Updated, target)
+	return nil
+}
+
+func digestHex(data []byte) string {
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:])
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".agentmux-write-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
 }
 
 func normalizeWorkDir(raw string) (string, error) {
@@ -418,10 +621,35 @@ func displayOrDash(v string) string {
 }
 
 func (i *Initializer) linkSkills(names []string, targetRoot string, res *core.WorkspaceInitResult) {
-	if len(names) == 0 {
-		return
-	}
 	installed := discoverInstalledSkills(i.SkillRoots)
+	workDir := filepath.Dir(filepath.Dir(targetRoot))
+	manifestPath := filepath.Join(workDir, ".agentmux", "managed-skills.json")
+	var previous []string
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		_ = json.Unmarshal(data, &previous)
+	}
+	previousSet := map[string]bool{}
+	for _, target := range previous {
+		previousSet[filepath.Clean(target)] = true
+	}
+	desired := map[string]bool{}
+	for _, name := range names {
+		if src, ok := installed[strings.TrimSpace(name)]; ok {
+			desired[filepath.Join(targetRoot, filepath.Base(src))] = true
+		}
+	}
+	for _, target := range previous {
+		target = filepath.Clean(target)
+		if desired[target] || !pathContainedBy(targetRoot, target) {
+			continue
+		}
+		if err := os.RemoveAll(target); err != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("remove stale managed skill %q: %v", target, err))
+		} else {
+			res.Updated = append(res.Updated, target)
+		}
+	}
+	managed := make([]string, 0, len(names))
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -434,10 +662,16 @@ func (i *Initializer) linkSkills(names []string, targetRoot string, res *core.Wo
 		}
 		target := filepath.Join(targetRoot, filepath.Base(src))
 		if _, err := os.Lstat(target); err == nil {
+			if previousSet[filepath.Clean(target)] || symlinkPointsTo(target, src) {
+				managed = append(managed, target)
+				continue
+			}
+			res.Warnings = append(res.Warnings, fmt.Sprintf("skill target %q exists and is not AgentMux-managed", target))
 			continue
 		}
 		if err := os.Symlink(src, target); err == nil {
 			res.Created = append(res.Created, target)
+			managed = append(managed, target)
 			continue
 		} else {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("symlink skill %q failed, copied instead: %v", name, err))
@@ -447,7 +681,34 @@ func (i *Initializer) linkSkills(names []string, targetRoot string, res *core.Wo
 			continue
 		}
 		res.Created = append(res.Created, target)
+		managed = append(managed, target)
 	}
+	sort.Strings(managed)
+	data, err := json.MarshalIndent(managed, "", "  ")
+	if err == nil {
+		data = append(data, '\n')
+		if err := atomicWriteFile(manifestPath, data, 0o600); err != nil {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("write managed skill manifest: %v", err))
+		} else {
+			res.Updated = append(res.Updated, manifestPath)
+		}
+	}
+}
+
+func pathContainedBy(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func symlinkPointsTo(target, source string) bool {
+	value, err := os.Readlink(target)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(filepath.Dir(target), value)
+	}
+	return samePath(value, source)
 }
 
 func discoverInstalledSkills(roots []string) map[string]string {

@@ -22,6 +22,7 @@ func toolsCmd() *cobra.Command {
 	cmd.AddCommand(toolsCheckCmd())
 	cmd.AddCommand(toolsInstallCmd("install"))
 	cmd.AddCommand(toolsInstallCmd("update"))
+	cmd.AddCommand(toolsInstallCmd("uninstall"))
 	cmd.AddCommand(toolsBundleCmd())
 	return cmd
 }
@@ -259,6 +260,9 @@ func printInstallResult(cmd *cobra.Command, result toolpkg.CLIInstallResult) {
 func actionLabel(action string) string {
 	if action == "update" {
 		return "Update"
+	}
+	if action == "uninstall" {
+		return "Uninstall"
 	}
 	return "Install"
 }

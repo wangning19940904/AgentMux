@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -22,6 +23,12 @@ type frameworksResponse struct {
 	Frameworks []frameworkView   `json:"frameworks"`
 }
 
+type frameworkRuntimeSettingsResponse struct {
+	Kind         string                           `json:"kind"`
+	Defaults     core.RuntimeSettings             `json:"defaults"`
+	Capabilities core.RuntimeSettingsCapabilities `json:"capabilities"`
+}
+
 func (s *Server) handleFrameworksList(w http.ResponseWriter, r *http.Request) {
 	statuses := framework.DetectAll()
 	views := make([]frameworkView, 0, len(statuses))
@@ -34,6 +41,47 @@ func (s *Server) handleFrameworksList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, frameworksResponse{
 		Prereqs:    framework.DetectPrereqs(),
 		Frameworks: views,
+	})
+}
+
+// handleFrameworkRuntimeSettings discovers the model and runtime-setting
+// catalogue exposed by the selected CLI's currently signed-in account. It is
+// deliberately independent of Provider routing: the Console uses it when an
+// Agent runs directly through the CLI's local login state.
+func (s *Server) handleFrameworkRuntimeSettings(w http.ResponseWriter, r *http.Request) {
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	if kind == "" {
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
+		return
+	}
+	if !core.HasAgent(kind) {
+		writeErr(w, http.StatusNotFound, "framework runtime is not registered")
+		return
+	}
+	workDir := strings.TrimSpace(r.URL.Query().Get("work_dir"))
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+	agent, err := core.CreateAgent(kind, map[string]any{})
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer func() { _ = agent.Stop(r.Context()) }()
+	cataloger, ok := agent.(core.RuntimeSettingsCataloger)
+	if !ok {
+		writeJSON(w, http.StatusOK, frameworkRuntimeSettingsResponse{Kind: kind})
+		return
+	}
+	defaults, capabilities, err := cataloger.RuntimeSettingsCatalog(r.Context(), workDir)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "discover runtime settings: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, frameworkRuntimeSettingsResponse{
+		Kind:         kind,
+		Defaults:     defaults,
+		Capabilities: capabilities,
 	})
 }
 
@@ -95,8 +143,10 @@ func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, a
 		res = framework.InstallWithProgressOptions(ctx, kind, framework.InstallOptions{AcknowledgeInternal: acknowledgeInternal}, progress)
 	case "update":
 		res = framework.UpdateWithProgress(ctx, kind, progress)
+	case "uninstall":
+		res = framework.UninstallWithProgress(ctx, kind, progress)
 	default:
-		return framework.InstallResult{Kind: kind, Action: action, Error: "action must be install or update"}
+		return framework.InstallResult{Kind: kind, Action: action, Error: "action must be install, update, or uninstall"}
 	}
 	return res
 }
@@ -122,6 +172,22 @@ func (s *Server) handleFrameworkAuthStatus(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, framework.CheckAuth(r.Context(), kind))
+}
+
+func (s *Server) handleFrameworkLogout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind string `json:"kind"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	status, err := framework.Logout(r.Context(), req.Kind)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handleFrameworkLogin(w http.ResponseWriter, r *http.Request) {

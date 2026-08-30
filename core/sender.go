@@ -8,13 +8,6 @@ import (
 	"time"
 )
 
-// Sender lets external callers (the bridge HTTP API) push a message into a
-// project as if it came from a platform.
-type Sender interface {
-	// SendToProject delivers text to all platforms bound to project.
-	SendToProject(ctx context.Context, project, text string) error
-}
-
 // ChannelDelivery is an out-of-band payload produced by the agent that owns
 // the currently running channel turn. The channel and conversation keys are
 // both required so a local helper cannot accidentally publish into a different
@@ -32,8 +25,8 @@ type ChannelDeliveryFile struct {
 	Data []byte
 }
 
-// ChannelDeliverySender is the session-scoped counterpart of Sender. It is an
-// optional API used by the local amux CLI while an agent turn is active.
+// ChannelDeliverySender sends an out-of-band payload to an active managed
+// channel conversation.
 type ChannelDeliverySender interface {
 	SendToChannel(ctx context.Context, delivery ChannelDelivery) error
 }
@@ -72,27 +65,6 @@ type ConversationTerminalController interface {
 	TerminalSnapshot(ctx context.Context, channelID string, conversation Conversation) (string, error)
 	WriteTerminal(ctx context.Context, channelID string, conversation Conversation, text string, submit bool) error
 	ResizeTerminal(ctx context.Context, channelID string, conversation Conversation, columns, rows int) error
-}
-
-// SendToProject implements Sender on the Engine: it sends an unsolicited
-// message to every platform of the named project.
-func (e *Engine) SendToProject(ctx context.Context, project, text string) error {
-	e.mu.RLock()
-	pr := e.projects[project]
-	e.mu.RUnlock()
-	if pr == nil {
-		return ErrNoProject
-	}
-	for _, p := range pr.platforms {
-		// Broadcasting needs a chat id; bridge callers typically target a
-		// known chat, so we surface the first configured chat via Send with an
-		// empty id which adapters may reject. This is a thin hook; richer
-		// targeting is added with per-platform default chats.
-		if err := p.Send(ctx, "", text); err != nil {
-			e.log.Warn("bridge send", "platform", p.Name(), "err", err)
-		}
-	}
-	return nil
 }
 
 // SendToChannel delivers text and artifacts to the exact conversation that
@@ -279,10 +251,3 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	}
 	return answer, nil
 }
-
-// ErrNoProject is returned when a project name is unknown.
-var ErrNoProject = errProject("unknown project")
-
-type errProject string
-
-func (e errProject) Error() string { return string(e) }

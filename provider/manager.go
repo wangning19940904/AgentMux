@@ -1,5 +1,5 @@
 // Package provider implements LLM provider management ported from cc-switch:
-// CRUD over the SQLite SSOT plus atomic switching that writes a tool's live
+// CRUD over the PostgreSQL SSOT plus atomic switching that writes a tool's live
 // config (e.g. ~/.claude/settings.json).
 package provider
 

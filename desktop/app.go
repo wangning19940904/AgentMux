@@ -52,23 +52,13 @@ func (a *App) runDesktopBackend(log *slog.Logger, cfg *config.Config) {
 	}
 	defer st.Close()
 
-	srv, svc, ue := bootstrap.NewServer(log, cfg, st, version)
-	if eng, connectSvc, err := bootstrap.AttachRuntime(a.ctx, log, cfg, st, srv, svc, ue, false); err != nil {
-		log.Error("build engine", "err", err)
-	} else {
-		go func() {
-			if err := eng.Start(a.ctx); err != nil {
-				log.Error("engine stopped", "err", err)
-			}
-		}()
-		if err := connectSvc.Start(a.ctx); err != nil {
-			log.Warn("connect runtime start failed", "err", err)
-		}
+	runtime, err := bootstrap.NewRuntime(a.ctx, log, cfg, st, version, false)
+	if err != nil {
+		log.Error("build runtime", "err", err)
+		return
 	}
-	if err := svc.RestoreProxyState(a.ctx); err != nil {
-		log.Warn("local routing restore failed", "err", err)
-	}
-	if err := srv.ListenAndServe(a.ctx); err != nil && a.ctx.Err() == nil {
+	defer runtime.Stop()
+	if err := runtime.Run(); err != nil && a.ctx.Err() == nil {
 		log.Error("serve desktop API", "err", err)
 	}
 }

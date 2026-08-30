@@ -81,8 +81,9 @@ git tag -a vX.Y.Z -m "AgentMux vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The Release workflow builds macOS and Linux archives for amd64/arm64, plus a
-Windows amd64 zip, writes `checksums.txt`, uploads
+The Release workflow builds macOS and Linux CLI archives for amd64/arm64, plus
+a Windows amd64 zip and the native macOS desktop app. It writes checksums for
+the CLI and desktop artifacts, uploads
 `scripts/ensure-agentmux.sh` as a release asset, publishes the GitHub Release,
 updates `wangning19940904/homebrew-tap` for non-prerelease versions, publishes
 `agentmux-sdk` to PyPI (Trusted Publishing) and publishes the npm

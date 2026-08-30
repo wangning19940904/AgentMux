@@ -48,6 +48,7 @@ func TestTenantRoutePolicyAndMiddleware(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/v1/status", true},
 		{http.MethodGet, "/api/v1/capabilities", true},
+		{http.MethodGet, "/api/v1/frameworks/runtime-settings", true},
 		{http.MethodGet, "/api/v1/agent-instances", true},
 		{http.MethodGet, "/api/v1/channels", true},
 		{http.MethodGet, "/api/v1/triggers", true},
@@ -62,6 +63,9 @@ func TestTenantRoutePolicyAndMiddleware(t *testing.T) {
 		{http.MethodDelete, "/api/v1/usage", false},
 		{http.MethodGet, "/api/v1/setup/feishu/begin", false},
 		{http.MethodGet, "/api/v1/remote/hosts", false},
+		{http.MethodPost, "/api/v1/remote/fleet/query", false},
+		{http.MethodPost, "/api/v1/remote/sync/preview", false},
+		{http.MethodPost, "/api/v1/fleet-sync/export", false},
 		{http.MethodGet, "/api/v1/sessions", false},
 		{http.MethodGet, "/api/v1/observability/traces", false},
 		{http.MethodPost, "/api/v1/providers", false},
@@ -102,6 +106,36 @@ func TestTenantRoutePolicyAndMiddleware(t *testing.T) {
 	}
 	if code := request("/api/v1/sessions", false); code != http.StatusNoContent {
 		t.Fatalf("bridge-disabled admin route = %d", code)
+	}
+}
+
+func TestRemoteProxyDefersAdminTenantScopeToDestination(t *testing.T) {
+	srv, _, _, tenantSecret := newTenantServer(t)
+	handler := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !requestPrincipal(r).Admin {
+			t.Fatal("controller resolved a destination tenant id against the local store")
+		}
+		if got := r.Header.Get(tenantScopeHeader); got != "ten_remote" {
+			t.Fatalf("forwarded tenant scope = %q", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	adminRequest := httptest.NewRequest(http.MethodGet, "/api/v1/remote/proxy/ssh-1/agent-instances", nil)
+	adminRequest.Header.Set("Authorization", "Bearer admin-secret")
+	adminRequest.Header.Set(tenantScopeHeader, "ten_remote")
+	adminResponse := httptest.NewRecorder()
+	handler.ServeHTTP(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusNoContent {
+		t.Fatalf("admin remote preview = %d body = %s", adminResponse.Code, adminResponse.Body.String())
+	}
+
+	tenantRequest := httptest.NewRequest(http.MethodGet, "/api/v1/remote/proxy/ssh-1/agent-instances", nil)
+	tenantRequest.Header.Set("Authorization", "Bearer "+tenantSecret)
+	tenantResponse := httptest.NewRecorder()
+	handler.ServeHTTP(tenantResponse, tenantRequest)
+	if tenantResponse.Code != http.StatusForbidden {
+		t.Fatalf("tenant reached remote proxy = %d body = %s", tenantResponse.Code, tenantResponse.Body.String())
 	}
 }
 

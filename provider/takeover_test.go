@@ -16,7 +16,7 @@ import (
 
 func newTestService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "svc.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "svc.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

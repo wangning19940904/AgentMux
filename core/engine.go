@@ -4,18 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 )
 
-// EventSink receives every lifecycle event the Engine emits, in addition to
-// the config.toml HookRunner. The connect runtime uses it to fire
+// EventSink receives every lifecycle event the Engine emits. The connect runtime uses it to fire
 // store-managed event triggers.
 type EventSink func(event HookEvent, data map[string]string)
 
 // Engine is the central orchestrator. It wires platforms to agents and routes
 // inbound messages to agent sessions, streaming responses back. Besides
-// config.toml projects it hosts dynamically attached console-managed channels.
+// it hosts dynamically attached PostgreSQL-managed channels.
 type Engine struct {
 	log                     *slog.Logger
 	hooks                   *HookRunner
@@ -29,10 +27,11 @@ type Engine struct {
 	childTelemetry          ObservationChildTelemetry
 	mu                      sync.RWMutex
 	projects                map[string]*projectRuntime
-	projectByAgentID        map[string]string
 	channels                map[string]*channelRuntime
 	inbound                 chan *Message
 	workspace               WorkspaceInitializer
+	memory                  MemoryStore
+	guard                   Guard
 	conversations           ConversationStore
 	channelControl          ChannelControlStore
 	feedbackStore           ChannelFeedbackStore
@@ -58,7 +57,6 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		hooks:                   hooks,
 		sinks:                   map[uint64]EventSink{},
 		projects:                map[string]*projectRuntime{},
-		projectByAgentID:        map[string]string{},
 		channels:                map[string]*channelRuntime{},
 		inbound:                 make(chan *Message, 256),
 		meetingEventSubscribers: map[uint64]chan MeetingEvent{},
@@ -109,6 +107,10 @@ func (e *Engine) SetWorkspaceInitializer(initializer WorkspaceInitializer) {
 	e.workspace = initializer
 }
 
+func (e *Engine) SetMemoryStore(memory MemoryStore) { e.memory = memory }
+
+func (e *Engine) SetGuard(guard Guard) { e.guard = guard }
+
 // SetConversationStore attaches the durable conversation backend. When set,
 // runtimes locate and persist conversations by (scope, chatID); when nil they
 // fall back to purely in-memory sessions keyed by chatID.
@@ -123,7 +125,7 @@ func (e *Engine) SetConversationStore(cs ConversationStore) {
 }
 
 // RuntimeSettingsDefaultStore persists Agent-level defaults selected from a
-// channel picker. It is optional so config.toml projects keep working.
+// channel picker. It remains optional for embedded/test runtimes.
 type RuntimeSettingsDefaultStore interface {
 	UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error
 }
@@ -198,25 +200,6 @@ func (e *Engine) AddProject(name, workDir string, agent Agent, platforms []Platf
 		workDir:   workDir,
 		workspace: opts,
 		sessions:  map[string]AgentSession{},
-	}
-	if opts.AgentID != "" {
-		e.projectByAgentID[opts.AgentID] = name
-	}
-}
-
-// AddProjectAgentAlias lets management APIs address a config.toml project by
-// the same Agent ID exposed from their catalog. The project's canonical
-// workspace AgentID remains unchanged for conversation compatibility.
-func (e *Engine) AddProjectAgentAlias(project, agentID string) {
-	project = strings.TrimSpace(project)
-	agentID = strings.TrimSpace(agentID)
-	if project == "" || agentID == "" {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.projects[project] != nil {
-		e.projectByAgentID[agentID] = project
 	}
 }
 

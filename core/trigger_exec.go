@@ -77,6 +77,7 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 		return "", fmt.Errorf("trigger %q has no agent to run (bind an agent or a channel with an agent)", tr.Name)
 	}
 	data["runtime_id"] = opts.RuntimeID
+	data["memory_scope"] = opts.MemoryScope
 	if agent != nil {
 		data["agent_name"] = agent.Name()
 	}

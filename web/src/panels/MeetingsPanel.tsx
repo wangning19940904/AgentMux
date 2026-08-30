@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api";
 import type { ActiveMeeting, MeetingDetail, MeetingResponseMode, MeetingTimelineItem, MeetingTurn } from "../api";
+import { MeetingJoinControl } from "../MeetingControls";
 import { useMeetings } from "../MeetingContext";
 import { useI18n } from "../i18n";
 
@@ -103,20 +104,22 @@ export function MeetingsPanel() {
 
   if (overview.meetings.length === 0) {
     return (
-      <section className="surface meeting-panel-empty">
-        <div className="meeting-empty-icon"><Video size={28} /></div>
-        <h2>{t("meetings.emptyTitle")}</h2>
-        <p>{t("meetings.emptyHint")}</p>
-        <button className="action" type="button" onClick={() => document.querySelector<HTMLButtonElement>(".meeting-launch-button")?.click()}>
-          <Video size={16} />{t("meeting.joinButton")}
-        </button>
-      </section>
+      <div className="meeting-page">
+        <MeetingPageToolbar />
+        <section className="surface meeting-panel-empty">
+          <div className="meeting-empty-icon"><Video size={28} /></div>
+          <h2>{t("meetings.emptyTitle")}</h2>
+          <p>{t("meetings.emptyHint")}</p>
+        </section>
+      </div>
     );
   }
 
   return (
-    <section className="meeting-workspace">
-      <aside className="surface meeting-list-pane">
+    <div className="meeting-page">
+      <MeetingPageToolbar />
+      <section className="meeting-workspace">
+        <aside className="surface meeting-list-pane">
         <header><div><span className="eyebrow">LIVE</span><h2>{t("meetings.active")}</h2></div><span className="count-badge">{overview.meetings.length}</span></header>
         <div className="meeting-list">
           {overview.meetings.map((meeting) => {
@@ -131,9 +134,9 @@ export function MeetingsPanel() {
             );
           })}
         </div>
-      </aside>
+        </aside>
 
-      <div className="surface meeting-conversation-pane">
+        <div className="surface meeting-conversation-pane">
         <header className="meeting-conversation-header">
           <div><span className="eyebrow">{selected.meeting_number}</span><h2>{selected.topic || t("meeting.untitled")}</h2><p>{selected.bot_name || t("meeting.botNameUnavailable")} · {selected.agent_name || t("meeting.agentUnavailable")}</p></div>
           <div className="meeting-header-actions">
@@ -174,27 +177,40 @@ export function MeetingsPanel() {
           </div>
           {error && <div className="session-notice error">{error}</div>}
         </form>
-      </div>
-    </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MeetingPageToolbar() {
+  const { t } = useI18n();
+  return (
+    <header className="meeting-page-toolbar">
+      <p>{t("meetings.subtitle")}</p>
+      <MeetingJoinControl />
+    </header>
   );
 }
 
 function ActivityEntry({ item, language }: { item: MeetingTimelineItem; language: string }) {
+	const { t } = useI18n();
   const time = new Date(item.event_time).toLocaleTimeString(language === "zh" ? "zh-CN" : "en-US", { hour: "2-digit", minute: "2-digit" });
   if (["participant_joined", "participant_left", "share_started", "share_ended"].includes(item.kind)) {
-    const action = item.kind === "participant_joined" ? "加入了会议" : item.kind === "participant_left" ? "离开了会议" : item.kind === "share_started" ? `开始共享 ${item.share_title || "内容"}` : "结束共享";
-    return <div className="meeting-system-entry"><span>{time}</span>{item.actor?.name || "参会者"} {action}{item.share_url && <a href={item.share_url} target="_blank" rel="noreferrer">查看</a>}</div>;
+		const action = item.kind === "participant_joined" ? t("meetings.participantJoined") : item.kind === "participant_left" ? t("meetings.participantLeft") : item.kind === "share_started" ? t("meetings.shareStarted", { title: item.share_title || t("meetings.sharedContent") }) : t("meetings.shareEnded");
+		return <div className="meeting-system-entry"><span>{time}</span>{item.actor?.name || t("meetings.participant")} {action}{item.share_url && <a href={item.share_url} target="_blank" rel="noreferrer">{t("meetings.view")}</a>}</div>;
   }
-  if (item.kind === "reaction") return <div className="meeting-reaction-entry"><span>{item.actor?.name || "参会者"}</span><strong>{item.text}</strong><time>{time}</time></div>;
+	if (item.kind === "reaction") return <div className="meeting-reaction-entry"><span>{item.actor?.name || t("meetings.participant")}</span><strong>{item.text}</strong><time>{time}</time></div>;
   const bot = item.kind === "bot" || item.actor?.participant_type === "bot";
   return (
     <div className={`meeting-message-entry${bot ? " bot" : ""}${item.kind === "transcript" ? " transcript" : ""}`}>
       <div className="meeting-message-avatar">{bot ? <Bot size={16} /> : (item.actor?.name || "?").slice(0, 1)}</div>
-      <div><header><strong>{item.actor?.name || (bot ? "Bot" : "参会者")}</strong><span>{item.kind === "transcript" ? "字幕" : "聊天"}</span><time>{time}</time></header><p>{item.text}</p></div>
+		<div><header><strong>{item.actor?.name || (bot ? "Bot" : t("meetings.participant"))}</strong><span>{item.kind === "transcript" ? t("meetings.transcript") : t("meetings.chat")}</span><time>{time}</time></header><p>{item.text}</p></div>
     </div>
   );
 }
 
 function TurnEntry({ turn }: { turn: MeetingTurn }) {
-  return <div className="meeting-app-question"><span>仅 App 可见</span><Bot size={15} /><p>{turn.question}</p><small>{turn.status === "running" ? "智能体正在回答…" : turn.status === "failed" ? `回答失败：${turn.error ?? "未知错误"}` : "答案已发送到会议"}</small></div>;
+	const { t } = useI18n();
+	return <div className="meeting-app-question"><span>{t("meetings.appOnly")}</span><Bot size={15} /><p>{turn.question}</p><small>{turn.status === "running" ? t("meetings.answering") : turn.status === "failed" ? t("meetings.answerFailed", { error: turn.error ?? t("meetings.unknownError") }) : t("meetings.answerSent")}</small></div>;
 }

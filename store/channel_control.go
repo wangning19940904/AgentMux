@@ -92,6 +92,45 @@ func (s *Store) ListChannelTasks(ctx context.Context, channelID, conversationID 
 	return out, rows.Err()
 }
 
+// ListLatestChannelTasks returns only the newest task for each conversation.
+// The session list needs status metadata, not every historical prompt and
+// delivery record, so keeping this query compact avoids work proportional to
+// the full task history on every console refresh.
+func (s *Store) ListLatestChannelTasks(ctx context.Context) ([]core.ChannelTask, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,channel_id,conversation_id,conversation_key,status,created_at
+		FROM (
+			SELECT id,channel_id,conversation_id,conversation_key,status,created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY channel_id, CASE
+						WHEN conversation_id IS NOT NULL AND conversation_id<>'' THEN 'id:' || conversation_id
+						ELSE 'key:' || conversation_key
+					END
+					ORDER BY created_at DESC,id DESC
+				) AS task_rank
+			FROM channel_tasks
+		) latest
+		WHERE task_rank=1
+		ORDER BY created_at DESC,id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.ChannelTask
+	for rows.Next() {
+		var task core.ChannelTask
+		var conversationID, createdAt sql.NullString
+		var status string
+		if err := rows.Scan(&task.ID, &task.ChannelID, &conversationID, &task.ConversationKey, &status, &createdAt); err != nil {
+			return nil, err
+		}
+		task.ConversationID = conversationID.String
+		task.Status = core.ChannelTaskStatus(status)
+		task.CreatedAt = parseControlTime(createdAt.String)
+		out = append(out, task)
+	}
+	return out, rows.Err()
+}
+
 // RecoverChannelTasks returns queued tasks and atomically marks tasks that had
 // already started as interrupted. Started prompts are never replayed.
 func (s *Store) RecoverChannelTasks(ctx context.Context, channelID string) ([]core.ChannelTask, error) {

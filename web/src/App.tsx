@@ -1,5 +1,6 @@
-import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import type { ErrorInfo, ReactNode } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ErrorInfo, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Activity,
   Blocks,
@@ -7,10 +8,10 @@ import {
   Boxes,
   Brain,
   Cable,
+  CalendarClock,
   ChevronDown,
-  Command,
+  ChevronLeft,
   Coffee,
-  DatabaseZap,
   ExternalLink,
   Gauge,
   Languages,
@@ -27,65 +28,56 @@ import {
   Sun,
   Workflow,
   Video,
+  Zap,
 } from "lucide-react";
 import { RemoteTargetSelector } from "./RemoteTargetSelector";
-import { MeetingControls } from "./MeetingControls";
+import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
+import { RegisteredPanel } from "./panelRegistry";
 
-// Panels load lazily so the initial bundle only carries the shell; each panel
-// chunk downloads when its tab is first selected.
-const ProvidersPanel = lazy(() => import("./panels/ProvidersPanel").then((m) => ({ default: m.ProvidersPanel })));
-const UsagePanel = lazy(() => import("./panels/UsagePanel").then((m) => ({ default: m.UsagePanel })));
-const ObservabilityPanel = lazy(() => import("./panels/ObservabilityPanel").then((m) => ({ default: m.ObservabilityPanel })));
-const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((m) => ({ default: m.AgentsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
-const FrameworksPanel = lazy(() => import("./panels/FrameworksPanel").then((m) => ({ default: m.FrameworksPanel })));
-const GatewayPanel = lazy(() => import("./panels/GatewayPanel").then((m) => ({ default: m.GatewayPanel })));
-const OverviewPanel = lazy(() => import("./panels/OverviewPanel").then((m) => ({ default: m.OverviewPanel })));
-const MemoryPanel = lazy(() => import("./panels/MemoryPanel").then((m) => ({ default: m.MemoryPanel })));
-const SkillsPanel = lazy(() => import("./panels/SkillsPanel").then((m) => ({ default: m.SkillsPanel })));
-const MCPPanel = lazy(() => import("./panels/MCPPanel").then((m) => ({ default: m.MCPPanel })));
-const GuardPanel = lazy(() => import("./panels/GuardPanel").then((m) => ({ default: m.GuardPanel })));
-const FeedbackPanel = lazy(() => import("./panels/FeedbackPanel").then((m) => ({ default: m.FeedbackPanel })));
-const OrchestrationsPanel = lazy(() => import("./panels/OrchestrationsPanel").then((m) => ({ default: m.OrchestrationsPanel })));
-const SessionsPanel = lazy(() => import("./panels/SessionsPanel").then((m) => ({ default: m.SessionsPanel })));
-const MenuBarPanel = lazy(() => import("./panels/MenuBarPanel").then((m) => ({ default: m.MenuBarPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
-const MeetingsPanel = lazy(() => import("./panels/MeetingsPanel").then((m) => ({ default: m.MeetingsPanel })));
 const TenantsPanel = lazy(() => import("./panels/TenantsPanel").then((m) => ({ default: m.TenantsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
+	activeTenantScopeKey,
+  activeMachineScope,
   api,
+  FLEET_WARNING_EVENT,
   getLaunchAtLogin,
   isDesktopApp,
   KeepAwakeStatus,
   LaunchAtLoginStatus,
   openLocalWebUI,
+  setActiveTenantScopeID,
+  setActiveMachineScope,
   setLaunchAtLogin,
+	tenantScopeKey,
+  type Tenant,
   type TenancySelf,
 } from "./api";
 import { resolveTenancyGateWithRetry, type TenancyGateState } from "./tenancyGate";
+import {
+  navigationGroupForTab,
+  primaryGroupDestination,
+  searchNavigationItems,
+  secondaryNavigationForTab,
+} from "./navigationModel";
+import {
+  NAVIGATION_GROUP_SEARCH_ALIASES,
+  NAVIGATION_SEARCH_ALIASES,
+  type NavigationTabID,
+} from "./navigationSearchAliases";
+import {
+  clampSidebarWidth,
+  PRIMARY_SIDEBAR_STORAGE_KEY,
+  PRIMARY_SIDEBAR_WIDTH,
+  readSidebarWidth,
+  SECONDARY_SIDEBAR_STORAGE_KEY,
+  SECONDARY_SIDEBAR_WIDTH,
+} from "./sidebarSizing";
 
-type Tab =
-  | "overview"
-  | "agents"
-  | "connect"
-  | "frameworks"
-  | "observability"
-  | "usage"
-  | "menubar"
-  | "machines"
-  | "providers"
-  | "gateway"
-  | "memory"
-  | "sessions"
-  | "meetings"
-  | "skills"
-  | "mcp"
-  | "guard"
-  | "feedback"
-  | "orchestrations"
-  | "tenants";
+type Tab = NavigationTabID;
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
@@ -101,11 +93,10 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
       { id: "orchestrations", labelKey: "nav.orchestrations", icon: Workflow },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
+      { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
       { id: "skills", labelKey: "nav.skills", icon: Sparkles },
       { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
       { id: "memory", labelKey: "nav.memory", icon: Brain },
-      { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
-      { id: "meetings", labelKey: "nav.meetings", icon: Video },
     ],
   },
   {
@@ -113,9 +104,10 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.connectivity",
     icon: Cable,
     items: [
-      { id: "connect", labelKey: "nav.connect", icon: Cable },
-      { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
-      { id: "providers", labelKey: "nav.providers", icon: DatabaseZap },
+      { id: "channels", labelKey: "nav.channels", icon: Cable },
+      { id: "schedules", labelKey: "nav.schedules", icon: CalendarClock },
+      { id: "triggers", labelKey: "nav.triggers", icon: Zap },
+      { id: "meetings", labelKey: "nav.meetings", icon: Video },
     ],
   },
   {
@@ -123,6 +115,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.operations",
     icon: Activity,
     items: [
+      { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
       { id: "observability", labelKey: "nav.observability", icon: Activity },
       { id: "usage", labelKey: "nav.usage", icon: Gauge },
       { id: "feedback", labelKey: "nav.feedback", icon: MessageSquareText },
@@ -136,7 +129,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "machines", labelKey: "nav.machines", icon: ServerCog },
       { id: "tenants", labelKey: "nav.tenants", icon: ShieldCheck },
-      { id: "menubar", labelKey: "nav.menubar", icon: PanelTop },
+      { id: "settings", labelKey: "nav.settings", icon: Settings },
     ],
   },
 ];
@@ -154,6 +147,27 @@ const LANG_OPTIONS: { id: Language; labelKey: string }[] = [
   { id: "zh", labelKey: "lang.zh" },
 ];
 
+const TENANT_OPTIONS_CACHE_KEY = "agentmux:tenant-options";
+
+function cachedTenantOptions(): Tenant[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(TENANT_OPTIONS_CACHE_KEY) || "[]") as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is Tenant => Boolean(
+      item && typeof item === "object" &&
+      typeof (item as Tenant).id === "string" &&
+      typeof (item as Tenant).name === "string" &&
+      ["active", "disabled"].includes((item as Tenant).status),
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function cacheTenantOptions(tenants: Tenant[]) {
+  localStorage.setItem(TENANT_OPTIONS_CACHE_KEY, JSON.stringify(tenants));
+}
+
 function initialLanguage(): Language {
   const stored = localStorage.getItem("agentmux:language");
   if (stored === "zh" || stored === "en") return stored;
@@ -169,6 +183,9 @@ function initialThemeMode(): ThemeMode {
 function tabFromHash(): Tab | null {
   const value = window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0];
   if (value === "tools") return "skills";
+  if (value === "menubar") return "settings";
+  if (value === "providers") return "gateway";
+  if (value === "connect") return "channels";
   return TABS.some((item) => item.id === value) ? value as Tab : null;
 }
 
@@ -256,36 +273,134 @@ function Shell({
   const tenantIdentity = tenantGate.identity;
   const nativeDesktopAdmin = window.location.protocol === "wails:";
   const identityIsAdmin = tenantIdentity?.admin === true || (!tenantIdentity && nativeDesktopAdmin);
-  const identityName = identityIsAdmin ? t("app.admin") : t("app.tenant");
-  const identityDetail = tenantIdentity?.admin
-    ? t("app.adminScope")
-    : tenantIdentity
-      ? tenantIdentity.tenant || t("app.tenant")
-      : nativeDesktopAdmin
-        ? t("app.adminScope")
-        : t("app.identityLoading");
-  const identityAvatarSource = identityIsAdmin
-    ? identityName
-    : tenantIdentity?.tenant || identityName;
+  const [tenantOptions, setTenantOptions] = useState<Tenant[]>(cachedTenantOptions);
+  const [tenantOptionsLoaded, setTenantOptionsLoaded] = useState(false);
+	const [tenantOptionsRevision, setTenantOptionsRevision] = useState(0);
+	const [selectedTenantScopeID, setSelectedTenantScopeID] = useState(activeTenantScopeKey);
+  const activeTenantOptions = useMemo(
+    () => tenantOptions.filter((tenant) => tenant.status === "active"),
+    [tenantOptions],
+  );
+	const selectedTenant = identityIsAdmin
+		? activeTenantOptions.find((tenant) => {
+			const canonical = tenantScopeKey(tenant.id, tenant.target_id || "local");
+			return canonical === selectedTenantScopeID || tenant.id === selectedTenantScopeID;
+		})
+    : undefined;
+	const selectedTenantTargetID = selectedTenant?.target_id || (selectedTenant ? "local" : undefined);
+  const identityName = selectedTenant?.name ?? (identityIsAdmin
+    ? t("app.admin")
+    : tenantIdentity?.tenant || t("app.tenant"));
   const navigationLocked = tenantGate.state !== "ready";
   const visibleTab = tenantGate.state === "required" ? "tenants" : tab;
   const active = useMemo(
     () => TABS.find((item) => item.id === visibleTab) ?? TABS[0],
     [visibleTab],
   );
-  const groupOfActive = useMemo(
-    () => NAV_GROUPS.find((group) => group.items.some((item) => item.id === visibleTab))?.id ?? null,
+  const activeGroup = useMemo(
+    () => navigationGroupForTab(NAV_GROUPS, visibleTab),
     [visibleTab],
   );
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(NAV_GROUPS.map((group) => [group.id, true])),
+  const initialSecondaryNavigation = secondaryNavigationForTab(NAV_GROUPS, tab, "overview");
+  const [secondaryGroupID, setSecondaryGroupID] = useState<string | null>(initialSecondaryNavigation.groupID);
+  const [secondaryOpen, setSecondaryOpen] = useState(initialSecondaryNavigation.open);
+  const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() =>
+    readSidebarWidth(
+      localStorage,
+      PRIMARY_SIDEBAR_STORAGE_KEY,
+      PRIMARY_SIDEBAR_WIDTH.default,
+      PRIMARY_SIDEBAR_WIDTH.min,
+      PRIMARY_SIDEBAR_WIDTH.max,
+    ),
   );
+  const [secondarySidebarWidth, setSecondarySidebarWidth] = useState(() =>
+    readSidebarWidth(
+      localStorage,
+      SECONDARY_SIDEBAR_STORAGE_KEY,
+      SECONDARY_SIDEBAR_WIDTH.default,
+      SECONDARY_SIDEBAR_WIDTH.min,
+      SECONDARY_SIDEBAR_WIDTH.max,
+    ),
+  );
+  const [quickActionError, setQuickActionError] = useState("");
+  const [fleetWarnings, setFleetWarnings] = useState<string[]>([]);
+  const [machineScopeVersion, setMachineScopeVersion] = useState(0);
+  const [remoteAddRequest, setRemoteAddRequest] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
+  const preferencesButtonRef = useRef<HTMLButtonElement>(null);
+  const preferencesPanelRef = useRef<HTMLDivElement>(null);
+  const desktop = isDesktopApp();
+  const secondaryGroup = NAV_GROUPS.find((group) => group.id === secondaryGroupID) ?? activeGroup;
+  const ActiveIcon = active.icon;
+  const SecondaryIcon = secondaryGroup?.icon ?? LayoutGrid;
+  const tenantPanelOptions = useMemo(() => {
+    const machineScope = activeMachineScope();
+    return machineScope === "all"
+      ? tenantOptions
+      : tenantOptions.filter((tenant) => (tenant.target_id || "local") === machineScope);
+  }, [machineScopeVersion, tenantOptions]);
+  const shellStyle = {
+    "--primary-sidebar-width": `${primarySidebarWidth}px`,
+    "--secondary-sidebar-width": `${secondarySidebarWidth}px`,
+  } as CSSProperties;
+  const searchResults = useMemo(() => {
+    const searchableTabs = TABS
+      .filter((item) => !navigationLocked || item.id === "tenants")
+      .map((item) => {
+        const group = navigationGroupForTab(NAV_GROUPS, item.id);
+        return {
+          ...item,
+          label: t(item.labelKey),
+          groupLabel: group ? t(group.labelKey) : "",
+          keywords: [item.labelKey, ...NAVIGATION_SEARCH_ALIASES[item.id]],
+          groupKeywords: group ? NAVIGATION_GROUP_SEARCH_ALIASES[group.id] ?? [] : [],
+        };
+      });
+    return searchNavigationItems(searchableTabs, searchQuery);
+  }, [language, navigationLocked, searchQuery, t]);
+  const showSearchResults = searchOpen && searchQuery.trim().length > 0;
+
+  const positionPreferencesPanel = useCallback(() => {
+    const anchor = preferencesButtonRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const viewportPadding = 12;
+    const panelGap = 8;
+    const panelWidth = Math.min(270, Math.max(0, window.innerWidth - viewportPadding * 2));
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding),
+    );
+    const top = rect.bottom + panelGap;
+    setPreferencesPanelStyle({
+      top,
+      left,
+      width: panelWidth,
+      maxHeight: Math.max(120, window.innerHeight - top - viewportPadding),
+    });
+  }, []);
 
   useEffect(() => {
-    if (groupOfActive) {
-      setOpenGroups((current) => (current[groupOfActive] ? current : { ...current, [groupOfActive]: true }));
+    if (tenantIdentity && !tenantIdentity.admin && activeMachineScope() !== "local") {
+      setActiveMachineScope("local");
+      window.location.reload();
     }
-  }, [groupOfActive]);
+  }, [tenantIdentity]);
+
+  useEffect(() => {
+    if (visibleTab === "overview") {
+      setSecondaryOpen(false);
+      return;
+    }
+    if (activeGroup) {
+      setSecondaryGroupID(activeGroup.id);
+      setSecondaryOpen(true);
+    }
+  }, [activeGroup, visibleTab]);
 
   useEffect(() => {
     if (tenantGate.state === "required" && tab !== "tenants") {
@@ -293,25 +408,307 @@ function Shell({
     }
   }, [setTab, tab, tenantGate.state]);
 
-  function toggleGroup(id: string) {
-    setOpenGroups((current) => ({ ...current, [id]: !current[id] }));
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [visibleTab]);
+
+  useEffect(() => {
+    // Do not treat the identity-loading state as a confirmed tenant session.
+    // Clearing here loses a persisted admin preview before /tenancy/self has
+    // had a chance to prove that the Console is still running as admin.
+    if (!tenantIdentity) return;
+    if (!tenantIdentity?.admin) {
+      setTenantOptions([]);
+      setTenantOptionsLoaded(true);
+      if (selectedTenantScopeID) {
+        setActiveTenantScopeID("");
+        setSelectedTenantScopeID("");
+      }
+      return;
+    }
+    let active = true;
+    setTenantOptionsLoaded(false);
+		api.allTenants()
+      .then((tenants) => {
+        if (!active) return;
+        const nextTenants = tenants ?? [];
+        setTenantOptions(nextTenants);
+        cacheTenantOptions(nextTenants);
+        setTenantOptionsLoaded(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        // Keep the last successful tenant index visible while a remote machine
+        // is temporarily slow or offline.
+        setTenantOptionsLoaded(true);
+      });
+    return () => { active = false; };
+  }, [tenantIdentity?.admin, tenantOptionsRevision]);
+
+  useEffect(() => {
+    if (!tenantOptionsLoaded || !selectedTenantScopeID || !identityIsAdmin) return;
+		const selected = activeTenantOptions.find((tenant) => {
+			const canonical = tenantScopeKey(tenant.id, tenant.target_id || "local");
+			return canonical === selectedTenantScopeID || tenant.id === selectedTenantScopeID;
+		});
+		if (selected) {
+			const canonical = tenantScopeKey(selected.id, selected.target_id || "local");
+			if (canonical !== selectedTenantScopeID) {
+				setActiveTenantScopeID(selected.id, selected.target_id || "local");
+				setSelectedTenantScopeID(canonical);
+			}
+			return;
+		}
+    setActiveTenantScopeID("");
+    setSelectedTenantScopeID("");
+  }, [activeTenantOptions, identityIsAdmin, selectedTenantScopeID, tenantOptionsLoaded]);
+
+  useEffect(() => {
+    localStorage.setItem(PRIMARY_SIDEBAR_STORAGE_KEY, String(primarySidebarWidth));
+  }, [primarySidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(SECONDARY_SIDEBAR_STORAGE_KEY, String(secondarySidebarWidth));
+  }, [secondarySidebarWidth]);
+
+  useEffect(() => {
+    setActiveSearchIndex((current) => Math.min(current, Math.max(0, searchResults.length - 1)));
+  }, [searchResults.length]);
+
+  useEffect(() => {
+    if (!preferencesOpen) return;
+    positionPreferencesPanel();
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (preferencesButtonRef.current?.contains(target) || preferencesPanelRef.current?.contains(target)) return;
+      setPreferencesOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setPreferencesOpen(false);
+    };
+    window.addEventListener("resize", positionPreferencesPanel);
+    window.addEventListener("scroll", positionPreferencesPanel, true);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", positionPreferencesPanel);
+      window.removeEventListener("scroll", positionPreferencesPanel, true);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [preferencesOpen, positionPreferencesPanel, primarySidebarWidth]);
+
+  useEffect(() => {
+    const receiveWarnings = (event: Event) => {
+      const warnings = (event as CustomEvent<string[]>).detail;
+      if (Array.isArray(warnings)) setFleetWarnings(warnings);
+    };
+    window.addEventListener(FLEET_WARNING_EVENT, receiveWarnings);
+    return () => window.removeEventListener(FLEET_WARNING_EVENT, receiveWarnings);
+  }, []);
+
+  useEffect(() => {
+    const refreshScope = () => {
+      setFleetWarnings([]);
+      setMachineScopeVersion((version) => version + 1);
+    };
+    window.addEventListener("agentmux:machine-scope-changed", refreshScope);
+    return () => window.removeEventListener("agentmux:machine-scope-changed", refreshScope);
+  }, []);
+
+  function selectGroup(group: NavGroup) {
+    const destination = primaryGroupDestination(group, visibleTab);
+    setSecondaryGroupID(group.id);
+    setSecondaryOpen(true);
+    if (destination) setTab(destination);
+  }
+
+  function selectOverview() {
+    setSecondaryOpen(false);
+    setTab("overview");
+  }
+
+  function openWebUI() {
+    setQuickActionError("");
+    openLocalWebUI().catch((error) => {
+      setQuickActionError(error instanceof Error ? error.message : String(error));
+    });
+  }
+
+  function selectSearchResult(item: NavItem) {
+    setSearchQuery("");
+    setSearchOpen(false);
+    setActiveSearchIndex(0);
+    setTab(item.id);
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      setSearchQuery("");
+      setSearchOpen(false);
+      setActiveSearchIndex(0);
+      return;
+    }
+    if (!searchResults.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSearchOpen(true);
+      setActiveSearchIndex((current) => (current + 1) % searchResults.length);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSearchOpen(true);
+      setActiveSearchIndex((current) => (current - 1 + searchResults.length) % searchResults.length);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      selectSearchResult(searchResults[activeSearchIndex] ?? searchResults[0]);
+    }
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell${secondaryOpen && secondaryGroup ? " secondary-open" : ""}${desktop ? " native-desktop" : ""}`}
+      style={shellStyle}
+    >
       <aside className="sidebar">
+        <div className="brand-actions titlebar-actions">
+          <button
+            ref={preferencesButtonRef}
+            className="brand-action-button preference-trigger"
+            type="button"
+            title={t("app.settings")}
+            aria-label={t("app.settings")}
+            aria-haspopup="dialog"
+            aria-expanded={preferencesOpen}
+            aria-controls="sidebar-preference-panel"
+            onClick={() => setPreferencesOpen((open) => !open)}
+          >
+            <Settings size={17} />
+          </button>
+          {preferencesOpen && createPortal(
+            <div
+              ref={preferencesPanelRef}
+              id="sidebar-preference-panel"
+              className="preference-panel sidebar-preference-popover"
+              style={preferencesPanelStyle}
+              role="dialog"
+              aria-label={t("app.settings")}
+            >
+              <PreferenceControls
+                language={language}
+                setLanguage={setLanguage}
+                themeMode={themeMode}
+                setThemeMode={setThemeMode}
+              />
+            </div>,
+            document.body,
+          )}
+          {desktop && (
+            <button
+              className="brand-action-button"
+              type="button"
+              title={t("app.openLocalWebUI")}
+              aria-label={t("app.openLocalWebUI")}
+              onClick={openWebUI}
+            >
+              <ExternalLink size={17} />
+            </button>
+          )}
+        </div>
         <div className="brand">
           <img className="brand-logo" src="/agentmux-logo.png" alt="" aria-hidden="true" />
-          <div>
+          <div className="brand-copy">
             <strong>AgentMux</strong>
-            <span>Command Surface</span>
           </div>
         </div>
 
-        <nav className="nav" aria-label="Primary">
+        <div
+          className="sidebar-search-container"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setSearchOpen(false);
+          }}
+        >
+          <div className="sidebar-search search-box">
+            <Search size={17} aria-hidden="true" />
+            <input
+              type="search"
+              role="combobox"
+              aria-label={t("app.search")}
+              aria-autocomplete="list"
+              aria-controls="sidebar-search-results"
+              aria-expanded={showSearchResults}
+              aria-activedescendant={showSearchResults && searchResults.length
+                ? `sidebar-search-result-${searchResults[activeSearchIndex]?.id ?? searchResults[0].id}`
+                : undefined}
+              autoComplete="off"
+              placeholder={t("app.search")}
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchOpen(true);
+                setActiveSearchIndex(0);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {searchQuery && (
+              <button
+                className="sidebar-search-clear"
+                type="button"
+                title={t("app.searchClear")}
+                aria-label={t("app.searchClear")}
+                onClick={() => {
+                  setSearchQuery("");
+                  setSearchOpen(false);
+                  setActiveSearchIndex(0);
+                }}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
+          </div>
+          {showSearchResults && (
+            <div
+              id="sidebar-search-results"
+              className="sidebar-search-results"
+              role="listbox"
+              aria-label={t("app.searchResults")}
+            >
+              {searchResults.length ? searchResults.map((item, index) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    id={`sidebar-search-result-${item.id}`}
+                    key={item.id}
+                    className={index === activeSearchIndex ? "active" : ""}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSearchIndex}
+                    onMouseEnter={() => setActiveSearchIndex(index)}
+                    onClick={() => selectSearchResult(item)}
+                  >
+                    <Icon size={17} aria-hidden="true" />
+                    <span>
+                      <strong>{item.label}</strong>
+                      {item.groupLabel && <small>{item.groupLabel}</small>}
+                    </span>
+                  </button>
+                );
+              }) : (
+                <div className="sidebar-search-empty" role="status">{t("app.searchEmpty")}</div>
+              )}
+            </div>
+          )}
+        </div>
+        {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
+
+        <nav className="nav primary-nav" aria-label={t("nav.primary")}>
           <button
-            className={`nav-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
-            onClick={() => setTab(OVERVIEW_ITEM.id)}
+            className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
+            onClick={selectOverview}
             title={t(OVERVIEW_ITEM.labelKey)}
             disabled={navigationLocked}
           >
@@ -321,89 +718,158 @@ function Shell({
 
           {NAV_GROUPS.map((group) => {
             const GroupIcon = group.icon;
-            const isOpen = openGroups[group.id];
-            const hasActive = group.items.some((item) => item.id === tab);
+            const hasActive = group.items.some((item) => item.id === visibleTab);
+            const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
             return (
-              <div key={group.id} className="nav-group">
-                <button
-                  className={`nav-group-header${hasActive && !isOpen ? " has-active" : ""}`}
-                  onClick={() => toggleGroup(group.id)}
-                  aria-expanded={isOpen}
-                >
-                  <GroupIcon size={16} />
-                  <span>{t(group.labelKey)}</span>
-                  <ChevronDown size={15} className={`nav-chevron${isOpen ? " open" : ""}`} />
-                </button>
-                {isOpen && (
-                  <div className="nav-group-items">
-                    {group.items.map((item) => {
-                      const Icon = item.icon;
-                      return (
-                        <button
-                          key={item.id}
-                          className={`nav-item nav-subitem${visibleTab === item.id ? " active" : ""}`}
-                          onClick={() => setTab(item.id)}
-                          title={t(item.labelKey)}
-                          disabled={navigationLocked && item.id !== "tenants"}
-                        >
-                          <Icon size={17} />
-                          <span>{t(item.labelKey)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              <button
+                key={group.id}
+                className={`nav-item nav-primary-item${hasActive ? " active" : ""}`}
+                onClick={() => selectGroup(group)}
+                aria-expanded={secondaryOpen && secondaryGroup?.id === group.id}
+                title={t(group.labelKey)}
+                disabled={navigationLocked && !canOpenWhileLocked}
+              >
+                <GroupIcon size={18} />
+                <span>{t(group.labelKey)}</span>
+              </button>
             );
           })}
         </nav>
 
-        <div className="account">
-          <div className="avatar">{identityInitials(identityAvatarSource)}</div>
-          <div>
+        <nav className="mobile-flat-nav" aria-label={t("nav.primary")}>
+          {TABS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={`nav-item${visibleTab === item.id ? " active" : ""}`}
+                onClick={() => setTab(item.id)}
+                title={t(item.labelKey)}
+                disabled={navigationLocked && item.id !== "tenants"}
+              >
+                <Icon size={18} />
+                <span>{t(item.labelKey)}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className={`account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`}>
+          {identityIsAdmin && activeTenantOptions.length > 0 ? (
+            <>
+              <select
+                className="account-identity-select"
+                aria-label={t("app.switchIdentity")}
+                value={selectedTenantScopeID}
+                onChange={(event) => {
+					const scopeKey = event.target.value;
+					const tenant = activeTenantOptions.find((item) =>
+						tenantScopeKey(item.id, item.target_id || "local") === scopeKey,
+					);
+					setActiveTenantScopeID(tenant?.id || "", tenant?.target_id || "local");
+					setSelectedTenantScopeID(scopeKey);
+                }}
+              >
+                <option value="">{t("app.admin")}</option>
+                {activeTenantOptions.map((tenant) => (
+				  <option
+					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}
+					value={tenantScopeKey(tenant.id, tenant.target_id || "local")}
+				  >
+					{tenant.name} · {(tenant.target_id || "local") === "local" ? t("remote.localMachine") : tenant.target_name || tenant.target_id}
+				  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} aria-hidden="true" />
+            </>
+          ) : (
             <strong>{identityName}</strong>
-            <span>{identityDetail}</span>
-          </div>
-          <ChevronDown size={16} />
+          )}
         </div>
+        <SidebarResizeHandle
+          label={t("nav.resizePrimary")}
+          value={primarySidebarWidth}
+          limits={PRIMARY_SIDEBAR_WIDTH}
+          onChange={setPrimarySidebarWidth}
+        />
       </aside>
 
+      {secondaryOpen && secondaryGroup && (
+        <aside className="secondary-sidebar">
+          <header className="secondary-sidebar-header">
+            <span className="secondary-sidebar-title">
+              <SecondaryIcon size={18} />
+              <strong>{t(secondaryGroup.labelKey)}</strong>
+            </span>
+            <button
+              type="button"
+              className="secondary-collapse"
+              onClick={() => setSecondaryOpen(false)}
+              title={t("nav.collapse")}
+              aria-label={t("nav.collapse")}
+            >
+              <ChevronLeft size={18} />
+            </button>
+          </header>
+          <nav className="secondary-nav" aria-label={t(secondaryGroup.labelKey)}>
+            {secondaryGroup.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
+                  onClick={() => setTab(item.id)}
+                  disabled={navigationLocked && item.id !== "tenants"}
+                >
+                  <Icon size={18} />
+                  <span>{t(item.labelKey)}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <SidebarResizeHandle
+            label={t("nav.resizeSecondary")}
+            value={secondarySidebarWidth}
+            limits={SECONDARY_SIDEBAR_WIDTH}
+            onChange={setSecondarySidebarWidth}
+          />
+        </aside>
+      )}
+
       <div className="workspace">
-        <header className="topbar">
-          <div className="title-block">
-            <div className="title-row">
-              <Command size={22} />
-              <h1>{t(active.labelKey)}</h1>
-              <span className="system-pill">
-                <span className="status-dot" />
-                {t("app.status")}
-              </span>
-            </div>
-            <label className="search-box">
-              <Search size={17} />
-              <input placeholder={t("app.search")} />
-            </label>
+        <header className="workspace-header">
+          <div className="title-row">
+            <ActiveIcon size={20} />
+            <h1>{t(active.labelKey)}</h1>
+            <span className="system-pill">
+              <span className="status-dot" />
+              {t("app.status")}
+            </span>
           </div>
-          <MeetingControls />
-          <RemoteTargetSelector onManage={() => setTab("machines")} />
-          <details className="topbar-preferences">
-            <summary title={t("app.settings")} aria-label={t("app.settings")}>
-              <Settings size={18} />
-            </summary>
-            <div className="preference-panel">
-              <PreferenceControls
-                language={language}
-                setLanguage={setLanguage}
-                themeMode={themeMode}
-                setThemeMode={setThemeMode}
-              />
-            </div>
-          </details>
+		  {identityIsAdmin && (
+			<RemoteTargetSelector
+				allowedTargetID={selectedTenantTargetID}
+				onAddMachine={selectedTenant ? undefined : () => {
+                  setRemoteAddRequest((request) => request + 1);
+                  setTab("machines");
+                }}
+			/>
+		  )}
         </header>
 
+        <MeetingInvitationOverlay />
+
         <main className="main">
+          {fleetWarnings.length > 0 && (
+            <div className="session-notice warning" role="status">
+              <strong>{t("remote.partialFleetWarning")}</strong>
+              <span>{fleetWarnings.join(" · ")}</span>
+              <button className="ghost-action" type="button" onClick={() => setFleetWarnings([])}>{t("common.close")}</button>
+            </div>
+          )}
           <PanelErrorBoundary
-            resetKey={visibleTab}
+            key={`${visibleTab}:${machineScopeVersion}`}
+            resetKey={`${visibleTab}:${machineScopeVersion}`}
             title={t("app.panelError")}
             description={t("app.panelErrorHint")}
             retryLabel={t("common.retry")}
@@ -413,36 +879,119 @@ function Shell({
                 <div className="empty-state">{t("tenants.checking")}</div>
               ) : (
                 <>
-                  {visibleTab === "overview" && <OverviewPanel />}
-                  {visibleTab === "agents" && <AgentsPanel />}
-                  {visibleTab === "orchestrations" && <OrchestrationsPanel />}
-                  {visibleTab === "connect" && <ConnectPanel />}
-                  {visibleTab === "frameworks" && <FrameworksPanel />}
-                  {visibleTab === "observability" && <ObservabilityPanel />}
-                  {visibleTab === "usage" && <UsagePanel />}
-                  {visibleTab === "menubar" && <MenuBarPanel />}
-                  {visibleTab === "machines" && <RemoteHostsPanel />}
+				  <RegisteredPanel tab={visibleTab} />
+				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
+				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
+				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
+				  {visibleTab === "machines" && <RemoteHostsPanel addRequest={remoteAddRequest} />}
                   {visibleTab === "tenants" && (
                     <TenantsPanel
+                      identity={tenantIdentity ?? undefined}
+                      initialTenants={tenantPanelOptions}
                       onContinue={() => setTab("agents")}
-                      onTenantChanged={() => void tenantGate.refresh()}
+                      onTenantChanged={(change) => {
+                        if (change?.type === "delete") {
+                          const deletedKey = tenantScopeKey(change.tenant.id, change.tenant.target_id || "local");
+                          setTenantOptions((current) => {
+                            const next = current.filter((tenant) =>
+                              tenantScopeKey(tenant.id, tenant.target_id || "local") !== deletedKey,
+                            );
+                            cacheTenantOptions(next);
+                            return next;
+                          });
+                          if (selectedTenantScopeID === deletedKey || selectedTenantScopeID === change.tenant.id) {
+                            setActiveTenantScopeID("");
+                            setSelectedTenantScopeID("");
+                          }
+                        }
+                        setTenantOptionsRevision((revision) => revision + 1);
+                        void tenantGate.refresh();
+                      }}
                     />
                   )}
-                  {visibleTab === "sessions" && <SessionsPanel />}
-                  {visibleTab === "meetings" && <MeetingsPanel />}
-                  {visibleTab === "providers" && <ProvidersPanel />}
-                  {visibleTab === "gateway" && <GatewayPanel />}
-                  {visibleTab === "memory" && <MemoryPanel />}
-                  {visibleTab === "skills" && <SkillsPanel />}
-                  {visibleTab === "mcp" && <MCPPanel />}
-                  {visibleTab === "feedback" && <FeedbackPanel />}
-                  {visibleTab === "guard" && <GuardPanel />}
                 </>
               )}
             </Suspense>
           </PanelErrorBoundary>
         </main>
       </div>
+    </div>
+  );
+}
+
+function SidebarResizeHandle({
+  label,
+  value,
+  limits,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  limits: { default: number; min: number; max: number };
+  onChange: (value: number) => void;
+}) {
+  const drag = useRef<{ pointerID: number; startX: number; startWidth: number } | null>(null);
+
+  useEffect(() => () => document.body.classList.remove("sidebar-resizing"), []);
+
+  function startResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    drag.current = { pointerID: event.pointerId, startX: event.clientX, startWidth: value };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("sidebar-resizing");
+    event.preventDefault();
+  }
+
+  function resize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!drag.current || drag.current.pointerID !== event.pointerId) return;
+    onChange(clampSidebarWidth(
+      drag.current.startWidth + event.clientX - drag.current.startX,
+      limits.min,
+      limits.max,
+    ));
+  }
+
+  function finishResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!drag.current || drag.current.pointerID !== event.pointerId) return;
+    drag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    document.body.classList.remove("sidebar-resizing");
+  }
+
+  function resizeWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const step = event.shiftKey ? 1 : 8;
+    let next = value;
+    if (event.key === "ArrowLeft") next -= step;
+    else if (event.key === "ArrowRight") next += step;
+    else if (event.key === "Home") next = limits.min;
+    else if (event.key === "End") next = limits.max;
+    else return;
+    event.preventDefault();
+    onChange(clampSidebarWidth(next, limits.min, limits.max));
+  }
+
+  return (
+    <div
+      className="sidebar-resize-handle"
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      aria-valuenow={value}
+      aria-valuetext={`${value}px`}
+      tabIndex={0}
+      title={label}
+      onDoubleClick={() => onChange(limits.default)}
+      onKeyDown={resizeWithKeyboard}
+      onPointerCancel={finishResize}
+      onPointerDown={startResize}
+      onPointerMove={resize}
+      onPointerUp={finishResize}
+    >
+      <span aria-hidden="true" />
     </div>
   );
 }
@@ -476,12 +1025,6 @@ function useTenancyGate(): {
   }, [refresh]);
 
   return { state, identity, refresh };
-}
-
-function identityInitials(value: string): string {
-  const parts = value.trim().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return Array.from(parts[0] || "?").slice(0, 2).join("").toUpperCase();
 }
 
 type PanelErrorBoundaryProps = {
@@ -715,21 +1258,6 @@ function PreferenceControls({
             )}
           </div>
         </div>
-      )}
-      {desktop && (
-        <button
-          className="preference-action"
-          type="button"
-          onClick={() => {
-            setPreferenceError("");
-            openLocalWebUI().catch((error) => {
-              setPreferenceError(error instanceof Error ? error.message : String(error));
-            });
-          }}
-        >
-          <ExternalLink size={17} />
-          <span>{t("app.openLocalWebUI")}</span>
-        </button>
       )}
       {preferenceError && <small className="preference-error">{preferenceError}</small>}
     </>

@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "1.3"
-  x-contract-version: "1.3"
+  version: "2.0"
+  x-contract-version: "2.0"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -75,8 +75,6 @@ paths:
                 properties:
                   ok:
                     type: boolean
-                  projects:
-                    type: integer
                   version:
                     type: string
                   contract_version:
@@ -144,8 +142,8 @@ paths:
       operationId: invoke
       summary: Run an Agent synchronously
       description: >
-        Runs a configured Agent and returns its final answer. Exactly one of
-        agent_id and project must be set. Request body limit is 1 MiB. A
+        Runs a configured Agent and returns its final answer. agent_id is
+        required. Request body limit is 1 MiB. A
         concurrent call with the same target and conversation_id returns 409.
       requestBody:
         required: true
@@ -219,9 +217,8 @@ paths:
       operationId: send
       summary: Send an outbound message without running an Agent
       description: >
-        Delivers text to a config.toml project conversation, or (loopback
-        only) to a channel conversation with optional image/file attachments
-        referenced by absolute local paths.
+        Delivers text to an active channel conversation from loopback, with
+        optional image/file attachments referenced by absolute local paths.
       requestBody:
         required: true
         content:
@@ -230,8 +227,6 @@ paths:
               type: object
               required: [text]
               properties:
-                project:
-                  type: string
                 channel_id:
                   type: string
                 conversation_key:
@@ -681,8 +676,9 @@ components:
           additionalProperties:
             type: object
             properties:
-              registered: { type: boolean }
-              active: { type: boolean }
+              configured: { type: boolean }
+              runtime_active: { type: boolean }
+              enforced: { type: boolean }
         agents:
           type: object
           properties:
@@ -694,7 +690,6 @@ components:
           type: object
           properties:
             count: { type: integer }
-        projects: { type: integer }
         auth:
           type: object
           properties:
@@ -710,11 +705,10 @@ components:
 
     InvocationRequest:
       type: object
-      required: [input]
-      description: Exactly one of agent_id and project must be set.
+      required: [agent_id, input]
+      description: agent_id selects one PostgreSQL-backed Agent.
       properties:
         agent_id: { type: string }
-        project: { type: string }
         conversation_id:
           type: string
           maxLength: 200
@@ -750,7 +744,6 @@ components:
       properties:
         id: { type: string }
         agent_id: { type: string }
-        project: { type: string }
         conversation_id: { type: string }
         session_id: { type: string }
         answer: { type: string }
@@ -989,7 +982,6 @@ components:
         id: { type: string }
         orchestration_id: { type: string }
         agent_id: { type: string }
-        project: { type: string }
         input: { type: string }
         depends_on:
           type: array

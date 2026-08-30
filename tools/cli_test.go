@@ -372,6 +372,89 @@ exit 1
 	}
 }
 
+func TestUninstallCLIAlsoRemovesLinkedSkills(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	testCLI := filepath.Join(bin, "agentmux-uninstall-test")
+	originalCatalog := cliCatalog
+	cliCatalog = append(append([]CLISpec(nil), cliCatalog...), CLISpec{
+		ID: "agentmux-uninstall-test", Name: "Uninstall Test", Bin: "agentmux-uninstall-test", Package: "agentmux-uninstall-test",
+		UninstallSupported: true,
+		LinkedSkills:       []CLILinkedSkillSpec{{ID: "agentmux-uninstall-test", Name: "Uninstall Test Skill"}},
+	})
+	defer func() { cliCatalog = originalCatalog }()
+	t.Setenv("HOME", home)
+	t.Setenv("CLI_UNINSTALL_BIN", testCLI)
+	t.Setenv("PATH", bin)
+	writeExecutable(t, testCLI, "#!/bin/sh\necho '0.44.0'\n")
+	writeExecutable(t, filepath.Join(bin, "npm"), `#!/bin/sh
+if [ "$1" = "uninstall" ] && [ "$2" = "-g" ] && [ "$3" = "agentmux-uninstall-test" ]; then
+  /bin/rm -f "$CLI_UNINSTALL_BIN"
+  echo removed
+  exit 0
+fi
+exit 2
+`)
+	skillDir := filepath.Join(home, ".agentmux", "tools", "skills", "agentmux-uninstall-test")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: agentmux-uninstall-test\nversion: 0.44.0\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := InstallCLIWithProgressOptions(context.Background(), "agentmux-uninstall-test", "uninstall", CLIInstallOptions{}, nil)
+	if !res.OK || res.Action != "uninstall" || res.Command != "npm uninstall -g agentmux-uninstall-test" {
+		t.Fatalf("uninstall result = %+v", res)
+	}
+	if _, err := os.Stat(testCLI); !os.IsNotExist(err) {
+		t.Fatalf("CLI still exists: %v", err)
+	}
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Fatalf("linked Skill still exists: %v", err)
+	}
+	if len(res.LinkedSkills) != 1 || !res.LinkedSkills[0].OK {
+		t.Fatalf("linked Skill result = %+v", res.LinkedSkills)
+	}
+}
+
+func TestUninstallCLIFailureKeepsLinkedSkills(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	originalCatalog := cliCatalog
+	cliCatalog = append(append([]CLISpec(nil), cliCatalog...), CLISpec{
+		ID: "agentmux-uninstall-failure", Name: "Uninstall Failure", Bin: "agentmux-uninstall-failure", Package: "agentmux-uninstall-failure",
+		UninstallSupported: true,
+		LinkedSkills:       []CLILinkedSkillSpec{{ID: "agentmux-uninstall-failure", Name: "Uninstall Failure Skill"}},
+	})
+	defer func() { cliCatalog = originalCatalog }()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	writeExecutable(t, filepath.Join(bin, "agentmux-uninstall-failure"), "#!/bin/sh\necho '0.44.0'\n")
+	writeExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\necho failed >&2\nexit 9\n")
+	skillDir := filepath.Join(home, ".agentmux", "tools", "skills", "agentmux-uninstall-failure")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: agentmux-uninstall-failure\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := InstallCLIWithProgressOptions(context.Background(), "agentmux-uninstall-failure", "uninstall", CLIInstallOptions{}, nil)
+	if res.OK || !strings.Contains(res.Error, "uninstall failed") {
+		t.Fatalf("uninstall result = %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		t.Fatalf("linked Skill should remain after CLI failure: %v", err)
+	}
+}
+
 func TestCheckCLIUpdateDetectsAvailableVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
@@ -409,6 +492,13 @@ func TestInstallCLISkipsUpdateWhenLatestMatches(t *testing.T) {
 func TestInstallCLIRejectsUnknownID(t *testing.T) {
 	res := InstallCLIWithProgressOptions(context.Background(), "curl", "install", CLIInstallOptions{}, nil)
 	if res.OK || !strings.Contains(res.Error, "unknown CLI") {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestInstallCLIRejectsUnknownAction(t *testing.T) {
+	res := InstallCLIWithProgressOptions(context.Background(), "lark-cli", "remove-everything", CLIInstallOptions{}, nil)
+	if res.OK || !strings.Contains(res.Error, "install, update, or uninstall") {
 		t.Fatalf("result = %+v", res)
 	}
 }

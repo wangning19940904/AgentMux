@@ -220,6 +220,25 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 	}, nil
 }
 
+// RuntimeSettingsCatalog exposes the signed-in CLI account's live model
+// catalogue without starting a conversation process. Generic CLI sessions are
+// in-memory until Send, so reusing StartSession keeps catalogue normalization
+// identical to the actual execution path.
+func (a *Agent) RuntimeSettingsCatalog(ctx context.Context, workDir string) (core.RuntimeSettings, core.RuntimeSettingsCapabilities, error) {
+	agentSession, err := a.StartSession(ctx, workDir)
+	if err != nil {
+		return core.RuntimeSettings{}, core.RuntimeSettingsCapabilities{}, err
+	}
+	defer func() { _ = agentSession.Close(ctx) }()
+	cliSession, ok := agentSession.(*session)
+	if !ok || cliSession.Settings.RuntimeSettingsSelection == nil {
+		return core.RuntimeSettings{}, core.RuntimeSettingsCapabilities{}, nil
+	}
+	// Agent defaults need the account-wide union. Per-conversation controls use
+	// RuntimeSettingsView to narrow these options after a model is selected.
+	return cliSession.Settings.DefaultRuntimeSettings(), cliSession.Settings.RuntimeSettingsCapabilities(), nil
+}
+
 func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelCatalog {
 	if a == nil || len(a.spec.ModelCatalogArgs) == 0 || a.spec.ParseModelCatalog == nil {
 		return ModelCatalog{}

@@ -11,6 +11,9 @@ package contract
 // channels, the /api/v1/tenancy/* endpoints, and the "tenancy" feature flag.
 // 1.2 replaces enrollment codes with open tenant self-registration. New
 // tenants start empty and receive resources only through administrator grants.
-// 1.3 adds explicit Provider grants; tenant Provider catalogues and active
+// 1.3 added explicit Provider grants; tenant Provider catalogues and active
 // routes are filtered to the Providers the administrator granted.
-const Version = "1.3"
+// 2.0 makes PostgreSQL the sole runtime resource source. Invocation and
+// orchestration targets now require agent_id; config.toml projects and the
+// X-AgentMux-Project compatibility path were removed.
+const Version = "2.0"

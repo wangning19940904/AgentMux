@@ -17,6 +17,22 @@ jobs:
     name: Build and publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTMUX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
 
     steps:
       - name: Check out repository
@@ -49,6 +65,58 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  publish-macos-desktop:
+    name: Build and publish macOS desktop app (${{ matrix.arch }})
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Build desktop app
+        run: make desktop VERSION="${GITHUB_REF_NAME#v}" WAILS="$(go env GOPATH)/bin/wails"
+
+      - name: Package and checksum desktop app
+        run: |
+          ARCH="$(go env GOARCH)"
+          ASSET="agentmux-desktop_darwin_${ARCH}.zip"
+          ditto -c -k --sequesterRsrc --keepParent desktop/build/bin/AgentMux.app "$ASSET"
+          shasum -a 256 "$ASSET" >"$ASSET.sha256"
+          echo "ASSET=$ASSET" >>"$GITHUB_ENV"
+
+      - name: Upload desktop app to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --clobber
 
   publish-python-sdk:
     name: Publish Python SDK to PyPI

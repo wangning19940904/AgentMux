@@ -48,6 +48,7 @@ func (s *Server) scopeUsageReport(r *http.Request, report any) (any, error) {
 		scoped.ByAgent = append(scoped.ByAgent, row)
 		scoped.Totals.CostUSD += row.CostUSD
 		scoped.Totals.Records += row.Records
+		scoped.Totals.Sessions += row.Sessions
 		// The per-agent rows carry a single token total rather than the input
 		// and output split, so it is reported as input tokens to keep the
 		// grand total honest instead of silently zero.

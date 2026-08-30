@@ -2,7 +2,9 @@ package remote
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,6 +319,157 @@ func TestManagerFallsBackToSystemOpenSSHAuthentication(t *testing.T) {
 	}
 }
 
+func TestManagerFallsBackToSystemOpenSSHWhenNativeChannelOpenIsMalformed(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := ssh.NewPublicKey(privateKey.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), 2*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	saved, err := manager.Upsert(Host{
+		Name: "channel-fallback", Host: "192.0.2.10", Port: 22, User: "tester",
+		RemoteAddr: defaultRemoteAddr, HostKeyFingerprint: ssh.FingerprintSHA256(publicKey),
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := &malformedChannelRemoteClient{key: publicKey}
+	manager.clients[saved.ID] = &cachedClient{host: mustStoredHost(t, manager, saved.ID), client: native}
+
+	originalFactory := newOpenSSHRemoteClient
+	t.Cleanup(func() { newOpenSSHRemoteClient = originalFactory })
+	fallback := &pipeFallbackRemoteClient{}
+	newOpenSSHRemoteClient = func(_ Host, key ssh.PublicKey, _ time.Duration) (remoteClient, error) {
+		if ssh.FingerprintSHA256(key) != ssh.FingerprintSHA256(publicKey) {
+			t.Fatal("fallback did not receive the verified host key")
+		}
+		return fallback, nil
+	}
+
+	conn, err := manager.DialContext(context.Background(), saved.ID, "tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if fallback.runs != 1 || fallback.dials != 1 {
+		t.Fatalf("fallback runs = %d, dials = %d", fallback.runs, fallback.dials)
+	}
+}
+
+func TestManagerSharesSystemOpenSSHFallbackAcrossConcurrentDials(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := ssh.NewPublicKey(privateKey.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), 2*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	saved, err := manager.Upsert(Host{
+		Name: "concurrent-fallback", Host: "192.0.2.11", Port: 22, User: "tester",
+		RemoteAddr: defaultRemoteAddr, HostKeyFingerprint: ssh.FingerprintSHA256(publicKey),
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := &malformedChannelRemoteClient{key: publicKey}
+	manager.clients[saved.ID] = &cachedClient{host: mustStoredHost(t, manager, saved.ID), client: native}
+
+	originalFactory := newOpenSSHRemoteClient
+	t.Cleanup(func() { newOpenSSHRemoteClient = originalFactory })
+	fallback := &concurrentFallbackRemoteClient{}
+	var creations atomic.Int32
+	newOpenSSHRemoteClient = func(_ Host, _ ssh.PublicKey, _ time.Duration) (remoteClient, error) {
+		creations.Add(1)
+		return fallback, nil
+	}
+
+	const callers = 12
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			conn, dialErr := manager.DialContext(context.Background(), saved.ID, "tcp")
+			if conn != nil {
+				_ = conn.Close()
+			}
+			results <- dialErr
+		}()
+	}
+	close(start)
+	for range callers {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if creations.Load() != 1 || fallback.runs.Load() != 1 || fallback.dials.Load() != callers {
+		t.Fatalf("creations = %d, runs = %d, dials = %d", creations.Load(), fallback.runs.Load(), fallback.dials.Load())
+	}
+}
+
+func TestManagerStatusPreservesClientPromotedWhileStaleRequestFails(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"version":"replacement"}`)
+	}))
+	t.Cleanup(apiServer.Close)
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), 2*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	saved, err := manager.Upsert(Host{
+		Name: "conditional-invalidation", Host: "192.0.2.12", Port: 22, User: "tester",
+		RemoteAddr: apiServer.Listener.Addr().String(), HostKeyFingerprint: "SHA256:trusted",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := mustStoredHost(t, manager, saved.ID)
+	stale := &blockingFailedRemoteClient{started: make(chan struct{}), release: make(chan struct{})}
+	manager.clients[saved.ID] = &cachedClient{host: host, client: stale}
+
+	resultCh := make(chan TestResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, statusErr := manager.Status(context.Background(), saved.ID)
+		resultCh <- result
+		errCh <- statusErr
+	}()
+	<-stale.started
+	manager.cache(host, &fallbackRemoteClient{})
+	close(stale.release)
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	result := <-resultCh
+	if result.Status["version"] != "replacement" {
+		t.Fatalf("status = %+v", result.Status)
+	}
+}
+
+func mustStoredHost(t *testing.T, manager *Manager, id string) Host {
+	t.Helper()
+	host, ok := manager.Get(id)
+	if !ok {
+		t.Fatalf("host %s was not stored", id)
+	}
+	return host
+}
+
 func TestOpenSSHClientRunsCommandsAndPinsHostKey(t *testing.T) {
 	if _, err := exec.LookPath("ssh"); err != nil {
 		t.Skip("system OpenSSH is not installed")
@@ -382,6 +536,75 @@ func TestOpenSSHClientRunsCommandsAndPinsHostKey(t *testing.T) {
 	}
 }
 
+func TestOpenSSHClientUsesVerifiedKeyWhenServerOffersAnotherPreferredKey(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("system OpenSSH is not installed")
+	}
+	_, clientPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientSigner, err := ssh.NewSignerFromKey(clientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBlock, err := ssh.MarshalPrivateKey(clientPrivate, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(keyBlock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	verifiedPrivate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedSigner, err := ssh.NewSignerFromKey(verifiedPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, preferredPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferredSigner, err := ssh.NewSignerFromKey(preferredPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshHost, sshPort := startSSHForwarderWithHostSigners(
+		t, clientSigner.PublicKey(), verifiedSigner, preferredSigner,
+	)
+	host := Host{
+		Name: "multi-key", Host: sshHost, Port: sshPort, User: "tester",
+		KeyPath: keyPath, RemoteAddr: defaultRemoteAddr,
+	}
+
+	// Reproduce a conflicting SSH Config preference: OpenSSH is told to use
+	// the server's Ed25519 key first, while the isolated known_hosts file only
+	// contains the ECDSA key already verified by the native Go SSH connection.
+	unpinned, err := newOpenSSHClient(host, verifiedSigner.PublicKey(), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpinned.hostKeyAlgos = ssh.KeyAlgoED25519 + "," + ssh.KeyAlgoECDSA256
+	if _, err := unpinned.Run(context.Background(), "true", nil); err == nil {
+		_ = unpinned.Close()
+		t.Fatal("OpenSSH unexpectedly accepted a different offered host key without algorithm pinning")
+	}
+	_ = unpinned.Close()
+
+	pinned, err := newOpenSSHClient(host, verifiedSigner.PublicKey(), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pinned.Close() })
+	if _, err := pinned.Run(context.Background(), "true", nil); err != nil {
+		t.Fatalf("OpenSSH did not use the already verified host key: %v", err)
+	}
+}
+
 type fallbackRemoteClient struct{}
 
 func (*fallbackRemoteClient) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -393,6 +616,68 @@ func (*fallbackRemoteClient) Run(context.Context, string, io.Reader) ([]byte, er
 }
 
 func (*fallbackRemoteClient) Close() error { return nil }
+
+type malformedChannelRemoteClient struct {
+	key ssh.PublicKey
+}
+
+func (c *malformedChannelRemoteClient) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("ssh: unexpected packet in response to channel open: <nil>")
+}
+func (c *malformedChannelRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	return nil, nil
+}
+func (c *malformedChannelRemoteClient) Close() error                   { return nil }
+func (c *malformedChannelRemoteClient) VerifiedHostKey() ssh.PublicKey { return c.key }
+
+type pipeFallbackRemoteClient struct {
+	runs  int
+	dials int
+}
+
+func (c *pipeFallbackRemoteClient) DialContext(context.Context, string, string) (net.Conn, error) {
+	c.dials++
+	left, right := net.Pipe()
+	go func() { _ = right.Close() }()
+	return left, nil
+}
+func (c *pipeFallbackRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	c.runs++
+	return nil, nil
+}
+func (*pipeFallbackRemoteClient) Close() error { return nil }
+
+type concurrentFallbackRemoteClient struct {
+	runs  atomic.Int32
+	dials atomic.Int32
+}
+
+func (c *concurrentFallbackRemoteClient) DialContext(context.Context, string, string) (net.Conn, error) {
+	c.dials.Add(1)
+	left, right := net.Pipe()
+	go func() { _ = right.Close() }()
+	return left, nil
+}
+func (c *concurrentFallbackRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	c.runs.Add(1)
+	return nil, nil
+}
+func (*concurrentFallbackRemoteClient) Close() error { return nil }
+
+type blockingFailedRemoteClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingFailedRemoteClient) DialContext(context.Context, string, string) (net.Conn, error) {
+	close(c.started)
+	<-c.release
+	return nil, errors.New("stale tunnel failed")
+}
+func (*blockingFailedRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	return nil, nil
+}
+func (*blockingFailedRemoteClient) Close() error { return nil }
 
 func startSSHForwarder(t *testing.T, allowedKey ssh.PublicKey) (string, int) {
 	host, port, _ := startSSHForwarderWithHostKey(t, allowedKey)
@@ -409,6 +694,15 @@ func startSSHForwarderWithHostKey(t *testing.T, allowedKey ssh.PublicKey) (strin
 	if err != nil {
 		t.Fatal(err)
 	}
+	host, port := startSSHForwarderWithHostSigners(t, allowedKey, hostSigner)
+	return host, port, hostSigner.PublicKey()
+}
+
+func startSSHForwarderWithHostSigners(t *testing.T, allowedKey ssh.PublicKey, hostSigners ...ssh.Signer) (string, int) {
+	t.Helper()
+	if len(hostSigners) == 0 {
+		t.Fatal("at least one SSH host key is required")
+	}
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if string(key.Marshal()) != string(allowedKey.Marshal()) {
@@ -417,7 +711,9 @@ func startSSHForwarderWithHostKey(t *testing.T, allowedKey ssh.PublicKey) (strin
 			return nil, nil
 		},
 	}
-	config.AddHostKey(hostSigner)
+	for _, hostSigner := range hostSigners {
+		config.AddHostKey(hostSigner)
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -440,7 +736,7 @@ func startSSHForwarderWithHostKey(t *testing.T, allowedKey ssh.PublicKey) (strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	return host, port, hostSigner.PublicKey()
+	return host, port
 }
 
 func serveSSHConnection(raw net.Conn, config *ssh.ServerConfig) {

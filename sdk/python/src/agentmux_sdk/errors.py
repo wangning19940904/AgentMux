@@ -37,7 +37,7 @@ class AgentMuxUnauthorized(AgentMuxAPIError):
 
 
 class AgentMuxNotFound(AgentMuxAPIError):
-    """Target agent/project/resource does not exist (HTTP 404)."""
+    """Target agent/resource does not exist (HTTP 404)."""
 
     def __init__(self, message: str = "not found") -> None:
         super().__init__(404, message)

@@ -1,7 +1,7 @@
 // Package memory implements AgentMux Memory: the unified, cross-agent and
 // cross-session memory layer. The default backend stores entries in the
 // PostgreSQL SSOT; richer backends (vector stores, remote services) can register
-// themselves via core.RegisterMemory under a different name.
+// themselves by implementing the consumer-owned Repository/MemoryStore ports.
 package memory
 
 import (
@@ -11,27 +11,24 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/store"
 )
 
-func init() {
-	// The PostgreSQL backend needs the shared store, so the factory returns a
-	// placeholder that New wires up at server-build time. Registration
-	// keeps Memory discoverable via core.RegisteredMemories().
-	core.RegisterMemory("postgres", func(cfg map[string]any) (core.MemoryStore, error) {
-		return &PostgreSQLStore{}, nil
-	})
+type Repository interface {
+	PutMemory(context.Context, *core.MemoryEntry) error
+	GetMemory(context.Context, string) (*core.MemoryEntry, error)
+	SearchMemory(context.Context, string, string, int) ([]*core.MemoryEntry, error)
+	DeleteMemory(context.Context, string) error
 }
 
 // PostgreSQLStore implements core.MemoryStore on top of the AgentMux store.
 type PostgreSQLStore struct {
-	st *store.Store
+	st Repository
 }
 
 var _ core.MemoryStore = (*PostgreSQLStore)(nil)
 
 // New builds a store-backed memory layer.
-func New(st *store.Store) *PostgreSQLStore { return &PostgreSQLStore{st: st} }
+func New(st Repository) *PostgreSQLStore { return &PostgreSQLStore{st: st} }
 
 // Name returns the backend id.
 func (m *PostgreSQLStore) Name() string { return "postgres" }

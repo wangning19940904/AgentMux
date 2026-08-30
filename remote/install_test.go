@@ -14,7 +14,7 @@ import (
 
 func TestStartRemoteServiceUsesPostgres(t *testing.T) {
 	client := &recordingRemoteClient{}
-	if err := startRemoteServiceAt(context.Background(), client, "linux", "127.0.0.1:8765", remoteLinuxPostgresURL); err != nil {
+	if err := startRemoteServiceAt(context.Background(), client, "linux", "127.0.0.1:8765", remoteLinuxPostgresURL, "bridge-secret"); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.commands) != 1 {
@@ -27,6 +27,28 @@ func TestStartRemoteServiceUsesPostgres(t *testing.T) {
 	}
 	if !strings.Contains(command, "After=network-online.target postgresql.service") {
 		t.Fatalf("remote service does not wait for PostgreSQL:\n%s", command)
+	}
+	if !strings.Contains(command, `Environment="AGENTMUX_BRIDGE_TOKEN=bridge-secret"`) ||
+		!strings.Contains(command, `AGENTMUX_BRIDGE_TOKEN='bridge-secret' nohup`) ||
+		!strings.Contains(command, `chmod 0600 "$HOME/.config/systemd/user/agentmux.service"`) {
+		t.Fatalf("remote service does not securely preserve bridge authentication:\n%s", command)
+	}
+}
+
+func TestStartRemoteDarwinServicePreservesBridgeToken(t *testing.T) {
+	client := &recordingRemoteClient{}
+	if err := startRemoteServiceAt(context.Background(), client, "darwin", "127.0.0.1:8765", remoteDarwinPostgresURL, "bridge<&secret"); err != nil {
+		t.Fatal(err)
+	}
+	command := client.commands[0]
+	for _, want := range []string{
+		`<key>EnvironmentVariables</key><dict><key>AGENTMUX_BRIDGE_TOKEN</key><string>bridge&lt;&amp;secret</string></dict>`,
+		`chmod 0600 "$HOME/Library/LaunchAgents/com.agentmux.client.plist"`,
+		`AGENTMUX_BRIDGE_TOKEN='bridge<&secret' nohup`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("remote launchd service does not contain %q:\n%s", want, command)
+		}
 	}
 }
 
@@ -87,6 +109,7 @@ func TestUpdateRemoteAgentMuxPreservesLegacyDatabase(t *testing.T) {
 	client := &updateRecordingRemoteClient{}
 	artifact, err := updateRemoteAgentMux(context.Background(), client, Host{
 		RemoteAddr: "127.0.0.1:8765",
+		APIToken:   "bridge-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +128,7 @@ func TestUpdateRemoteAgentMuxPreservesLegacyDatabase(t *testing.T) {
 	joined := strings.Join(client.commands, "\n---\n")
 	if !strings.Contains(joined, `kill -TERM "$pid"`) ||
 		!strings.Contains(joined, `database migrate-sqlite`) ||
+		!strings.Contains(joined, `Environment="AGENTMUX_BRIDGE_TOKEN=bridge-secret"`) ||
 		!strings.Contains(joined, `--database-url "postgresql:///agentmux?host=/var/run/postgresql&port=5432&sslmode=disable"`) ||
 		strings.Contains(joined, `--sqlite-path`) {
 		t.Fatalf("update did not stop, migrate, and restart on PostgreSQL:\n%s", joined)

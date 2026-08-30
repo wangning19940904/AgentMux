@@ -13,7 +13,7 @@ import (
 
 func TestRuntimeAlwaysRedactsIngestAndConfiguredMasterKeys(t *testing.T) {
 	home := t.TempDir()
-	st, err := store.Open(filepath.Join(home, "runtime.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(home, "runtime.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

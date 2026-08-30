@@ -1,35 +1,44 @@
-import { ServerCog, Settings2 } from "lucide-react";
+import { ServerCog } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  activeRemoteID,
+  activeMachineScope,
   api,
   REMOTE_HOSTS_CHANGED_EVENT,
-  RemoteHost,
-  setActiveRemoteID,
+  MachineTarget,
+  setActiveMachineScope,
 } from "./api";
 import { useI18n } from "./i18n";
 
-export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
+export function RemoteTargetSelector({
+	onAddMachine,
+	allowedTargetID,
+}: {
+	onAddMachine?: () => void;
+	allowedTargetID?: string;
+}) {
   const { t } = useI18n();
-  const [hosts, setHosts] = useState<RemoteHost[]>([]);
+  const [hosts, setHosts] = useState<MachineTarget[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const requestVersion = useRef(0);
-  const activeID = activeRemoteID();
+  const [activeID, setActiveID] = useState(activeMachineScope());
 
-  const applyHosts = useCallback((items: RemoteHost[]) => {
-    const next = items ?? [];
+  const applyHosts = useCallback((items: MachineTarget[]) => {
+		const next = (items ?? []).filter((item) => item.kind === "ssh" && (!allowedTargetID || item.id === allowedTargetID));
     setHosts(next);
     setLoadFailed(false);
-    const selectedID = activeRemoteID();
-    if (selectedID && !next.some((item) => item.id === selectedID)) {
-      setActiveRemoteID("");
+    const selectedID = activeMachineScope();
+		const allowed = !allowedTargetID || selectedID === allowedTargetID;
+		if (!allowed || (selectedID !== "all" && selectedID !== "local" && !next.some((item) => item.id === selectedID))) {
+			const fallback = allowedTargetID || "all";
+			setActiveMachineScope(fallback);
+			setActiveID(fallback);
     }
-  }, []);
+	}, [allowedTargetID]);
 
   const load = useCallback(async () => {
     const version = ++requestVersion.current;
     try {
-      const next = await api.remoteHosts();
+      const next = await api.fleetTargets();
       if (version !== requestVersion.current) return;
       applyHosts(next ?? []);
     } catch {
@@ -41,14 +50,7 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
 
   useEffect(() => {
     const handleHostsChanged = (event: Event) => {
-      const next = (event as CustomEvent<RemoteHost[] | undefined>).detail;
-      if (Array.isArray(next)) {
-        // A successful mutation already fetched this exact snapshot. Apply it
-        // directly and invalidate any older request still in flight.
-        requestVersion.current += 1;
-        applyHosts(next);
-        return;
-      }
+      void event;
       void load();
     };
     const handleVisible = () => {
@@ -57,13 +59,16 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
     const intervalID = window.setInterval(handleVisible, 15_000);
 
     void load();
+    const handleScopeChanged = () => setActiveID(activeMachineScope());
     window.addEventListener(REMOTE_HOSTS_CHANGED_EVENT, handleHostsChanged);
+    window.addEventListener("agentmux:machine-scope-changed", handleScopeChanged);
     window.addEventListener("focus", load);
     window.addEventListener("pageshow", load);
     document.addEventListener("visibilitychange", handleVisible);
     return () => {
       window.clearInterval(intervalID);
       window.removeEventListener(REMOTE_HOSTS_CHANGED_EVENT, handleHostsChanged);
+      window.removeEventListener("agentmux:machine-scope-changed", handleScopeChanged);
       window.removeEventListener("focus", load);
       window.removeEventListener("pageshow", load);
       document.removeEventListener("visibilitychange", handleVisible);
@@ -71,9 +76,10 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
   }, [applyHosts, load]);
 
   const active = hosts.find((host) => host.id === activeID);
+  const remoteScope = activeID !== "all" && activeID !== "local";
 
   return (
-    <div className={`remote-target-selector${activeID ? " remote" : ""}`}>
+    <div className={`remote-target-selector${remoteScope ? " remote" : ""}`}>
       <ServerCog size={16} />
       <label>
         <span>{t("remote.currentMachine")}</span>
@@ -83,29 +89,27 @@ export function RemoteTargetSelector({ onManage }: { onManage: () => void }) {
           onFocus={() => void load()}
           onPointerDown={() => void load()}
           onChange={(event) => {
-            setActiveRemoteID(event.target.value);
-            window.location.reload();
+            if (event.target.value === "add-ssh-machine") {
+              event.target.value = activeID;
+              onAddMachine?.();
+              return;
+            }
+            setActiveMachineScope(event.target.value);
+            setActiveID(event.target.value);
           }}
         >
-          <option value="">{t("remote.localMachine")}</option>
+		  {!allowedTargetID && <option value="all">{t("remote.allMachines")}</option>}
+		  {(!allowedTargetID || allowedTargetID === "local") && <option value="local">{t("remote.localMachine")}</option>}
           {hosts.map((host) => (
             <option key={host.id} value={host.id} disabled={!host.trusted}>
-              {host.name}{host.trusted ? "" : ` · ${t("remote.untrustedShort")}`}
+              {host.name}{!host.trusted ? ` · ${t("remote.untrustedShort")}` : !host.online ? ` · ${t("remote.offlineShort")}` : ""}
             </option>
           ))}
           {loadFailed && <option disabled>{t("remote.loadFailed")}</option>}
-          {activeID && !active && <option value={activeID}>{t("remote.unavailable")}</option>}
+          {remoteScope && !active && <option value={activeID}>{t("remote.unavailable")}</option>}
+          {onAddMachine && <option value="add-ssh-machine">＋ {t("remote.add")}</option>}
         </select>
       </label>
-      <button
-        type="button"
-        className="remote-target-manage"
-        onClick={onManage}
-        title={t("remote.manage")}
-        aria-label={t("remote.manage")}
-      >
-        <Settings2 size={15} />
-      </button>
     </div>
   );
 }

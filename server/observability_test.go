@@ -17,7 +17,7 @@ import (
 
 func newObservationHTTPTestServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "server.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "server.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func newObservationHTTPTestServer(t *testing.T) (*httptest.Server, *store.Store)
 	}
 	bus := core.NewObservationBus()
 	ingest := observationpkg.NewIngestService(nil, bus, t.TempDir(), "ingest-token")
-	srv := New(cfg, nil, st, nil, nil)
+	srv := New(Dependencies{Config: cfg, Store: st})
 	srv.SetObservability(cfg.Observability, recorder, observationpkg.NewInsightEngine(st), nil, ingest)
 	httpServer := httptest.NewServer(srv.withAuth(srv.mux))
 	t.Cleanup(func() {

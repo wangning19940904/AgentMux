@@ -40,12 +40,12 @@ func TestOpenAIResponsesCreateReturnsSDKShape(t *testing.T) {
 	if !ok || usage["input_tokens"] != float64(4) || usage["output_tokens"] != float64(3) || usage["total_tokens"] != float64(7) {
 		t.Fatalf("usage = %#v", response.Usage)
 	}
-	if invoker.request.AgentID != "agent-1" || invoker.request.Project != "" || invoker.request.Input != "say hello" || !strings.HasPrefix(invoker.request.ConversationID, "oai_") {
+	if invoker.request.AgentID != "agent-1" || invoker.request.Input != "say hello" || !strings.HasPrefix(invoker.request.ConversationID, "oai_") {
 		t.Fatalf("invocation request = %+v", invoker.request)
 	}
 }
 
-func TestOpenAIResponsesAcceptsMessageInputAndExplicitProject(t *testing.T) {
+func TestOpenAIResponsesAcceptsMessageInputAndExplicitAgent(t *testing.T) {
 	server, _ := newTestServer(t)
 	invoker := &invocationTestService{result: core.InvocationResult{Answer: "ok"}}
 	server.SetInvoker(invoker)
@@ -59,13 +59,13 @@ func TestOpenAIResponsesAcceptsMessageInputAndExplicitProject(t *testing.T) {
 	}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(openAIProjectHeader, "demo")
+	request.Header.Set(openAIAgentHeader, "demo")
 	recorder := httptest.NewRecorder()
 	server.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if invoker.request.Project != "demo" || invoker.request.AgentID != "" {
+	if invoker.request.AgentID != "demo" {
 		t.Fatalf("target = %+v", invoker.request)
 	}
 	for _, want := range []string{"Instructions:\nBe concise", "DEVELOPER:\nUse the repository context", "USER:\nRun tests"} {
@@ -157,30 +157,27 @@ func TestOpenAIResponsesPreviousResponseContinuesConversation(t *testing.T) {
 	}
 }
 
-type openAIFallbackInvoker struct {
+type openAIMissingInvoker struct {
 	requests []core.InvocationRequest
 }
 
-func (i *openAIFallbackInvoker) Invoke(_ context.Context, req core.InvocationRequest) (core.InvocationResult, error) {
+func (i *openAIMissingInvoker) Invoke(_ context.Context, req core.InvocationRequest) (core.InvocationResult, error) {
 	i.requests = append(i.requests, req)
-	if req.AgentID != "" {
-		return core.InvocationResult{}, core.ErrInvocationNotFound
-	}
-	return core.InvocationResult{Project: req.Project, ConversationID: req.ConversationID, Answer: "project result"}, nil
+	return core.InvocationResult{}, core.ErrInvocationNotFound
 }
 
-func TestOpenAIResponsesModelFallsBackToProject(t *testing.T) {
+func TestOpenAIResponsesModelDoesNotFallBackToProject(t *testing.T) {
 	server, _ := newTestServer(t)
-	invoker := &openAIFallbackInvoker{}
+	invoker := &openAIMissingInvoker{}
 	server.SetInvoker(invoker)
 	recorder := doJSON(t, server, http.MethodPost, "/v1/responses", map[string]any{
 		"model": "demo", "input": "hello",
 	})
-	if recorder.Code != http.StatusOK {
+	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	if len(invoker.requests) != 2 || invoker.requests[0].AgentID != "demo" || invoker.requests[1].Project != "demo" {
-		t.Fatalf("fallback requests = %+v", invoker.requests)
+	if len(invoker.requests) != 1 || invoker.requests[0].AgentID != "demo" {
+		t.Fatalf("requests = %+v", invoker.requests)
 	}
 }
 

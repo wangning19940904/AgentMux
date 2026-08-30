@@ -2,10 +2,41 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
+
+type memorySkillStateStore struct {
+	mu     sync.Mutex
+	states map[string]bool
+}
+
+func (s *memorySkillStateStore) ListSkillStates(context.Context) (map[string]bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]bool, len(s.states))
+	for name, enabled := range s.states {
+		out[name] = enabled
+	}
+	return out, nil
+}
+
+func (s *memorySkillStateStore) SetSkillEnabled(_ context.Context, name string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states[name] = enabled
+	return nil
+}
+
+func (s *memorySkillStateStore) DeleteSkillState(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.states, name)
+	return nil
+}
 
 func TestInstallCopiesLocalSkillIntoWriteRoot(t *testing.T) {
 	srcRoot := t.TempDir()
@@ -65,6 +96,79 @@ func TestValidateGitHubRequestRejectsUnsafePath(t *testing.T) {
 	}
 	if _, _, err := validateGitHubRequest(InstallRequest{Repo: "not a repo", Path: "skills/demo"}); err == nil {
 		t.Fatal("expected repo format error")
+	}
+}
+
+func TestUninstallRemovesManagedSkill(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "demo")
+	writeSkill(t, dir, "demo", "Managed demo")
+	m := New(root)
+
+	if err := m.Uninstall(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("skill directory still exists: %v", err)
+	}
+	if err := m.Uninstall(context.Background(), "demo"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing skill error = %v", err)
+	}
+}
+
+func TestManagedSkillDirRejectsSibling(t *testing.T) {
+	parent := t.TempDir()
+	m := New(filepath.Join(parent, "managed"))
+	managed, err := m.isManagedSkillDir(filepath.Join(parent, "outside", "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed {
+		t.Fatal("sibling directory was treated as managed")
+	}
+}
+
+func TestConcurrentListAndToggle(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, filepath.Join(root, "demo"), "demo", "Concurrent demo")
+	m := New(root)
+
+	var group sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			for iteration := 0; iteration < 100; iteration++ {
+				if worker%2 == 0 {
+					if _, err := m.List(context.Background()); err != nil {
+						t.Errorf("List: %v", err)
+					}
+					continue
+				}
+				if err := m.SetEnabled(context.Background(), "demo", iteration%2 == 0); err != nil {
+					t.Errorf("SetEnabled: %v", err)
+				}
+			}
+		}(worker)
+	}
+	group.Wait()
+}
+
+func TestPersistentEnablementSurvivesManagerRestart(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, filepath.Join(root, "demo"), "demo", "Persistent demo")
+	state := &memorySkillStateStore{states: map[string]bool{}}
+	first := NewPersistent(state, root)
+	if err := first.SetEnabled(context.Background(), "demo", false); err != nil {
+		t.Fatal(err)
+	}
+	second := NewPersistent(state, root)
+	items, err := second.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Enabled {
+		t.Fatalf("items = %+v", items)
 	}
 }
 

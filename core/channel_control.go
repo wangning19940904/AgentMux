@@ -158,7 +158,7 @@ type ChannelInteraction struct {
 }
 
 // ChannelControlStore persists queue and interaction state. The engine treats
-// it as optional so config.toml projects and lightweight test stores continue
+// it as optional so lightweight embedded runtimes and test stores continue
 // to work without implementing remote control.
 type ChannelControlStore interface {
 	CreateChannelTask(ctx context.Context, task ChannelTask) error

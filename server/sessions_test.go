@@ -21,9 +21,10 @@ type testConversationSender struct {
 	runtimeChannel string
 	runtimeKey     string
 	stoppedTaskID  string
+	terminalCalls  int
 }
 
-func (s *testConversationSender) SendToProject(context.Context, string, string) error {
+func (s *testConversationSender) SendToChannel(context.Context, core.ChannelDelivery) error {
 	return nil
 }
 
@@ -45,6 +46,23 @@ func (s *testConversationSender) StopConversation(_ context.Context, channelID, 
 	s.runtimeKey = conversationKey
 	s.stoppedTaskID = expectedTaskID
 	return core.ConversationRuntimeState{Status: core.ConversationStatusStopping, CanStop: true, TaskID: expectedTaskID}, nil
+}
+
+func (s *testConversationSender) TerminalSessionInfo(context.Context, string, core.Conversation) (core.TerminalSessionInfo, error) {
+	s.terminalCalls++
+	return core.TerminalSessionInfo{Backend: "tmux", Available: true}, nil
+}
+
+func (s *testConversationSender) TerminalSnapshot(context.Context, string, core.Conversation) (string, error) {
+	return "", nil
+}
+
+func (s *testConversationSender) WriteTerminal(context.Context, string, core.Conversation, string, bool) error {
+	return nil
+}
+
+func (s *testConversationSender) ResizeTerminal(context.Context, string, core.Conversation, int, int) error {
+	return nil
 }
 
 func TestSessionRowsIncludeAgentAndChannelContext(t *testing.T) {
@@ -97,6 +115,44 @@ func TestSessionRowsIncludeAgentAndChannelContext(t *testing.T) {
 	}
 	if rows[1].Origin != "local" || rows[1].ConversationID != "" {
 		t.Fatalf("local row was not preserved: %+v", rows[1])
+	}
+}
+
+func TestSessionRowsDoNotResumeHistoricalTerminalSessions(t *testing.T) {
+	srv, st := newTestServer(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	agent := core.AgentInstance{
+		ID: "agent-terminal", Name: "Terminal Agent", RuntimeID: "codex", SessionBackend: "tmux",
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertAgentInstance(ctx, &agent); err != nil {
+		t.Fatal(err)
+	}
+	channel := core.Channel{
+		ID: "channel-terminal", Name: "Terminal channel", Type: "feishu",
+		AgentID: agent.ID, Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertChannel(ctx, &channel); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.GetOrCreateConversation(ctx, core.Conversation{
+		Scope: "channel:" + channel.ID, ConversationKey: "chat:terminal", AgentID: agent.ID,
+		NativeSessionID: "persisted-tmux-session", WorkDir: "/tmp/terminal",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sender := &testConversationSender{}
+	srv.sender = sender
+	rows, err := srv.enrichSessionRows(ctx, nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].TerminalBackend != "tmux" {
+		t.Fatalf("session rows = %+v", rows)
+	}
+	if sender.terminalCalls != 0 {
+		t.Fatalf("list resumed %d historical terminal sessions", sender.terminalCalls)
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 func TestChannelCRUD(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestChannelCRUD(t *testing.T) {
 }
 
 func TestTriggerCRUDAndRunUpdate(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestTriggerCRUDAndRunUpdate(t *testing.T) {
 func TestMigrateAgentBindings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "t.db")
-	st, err := Open(path)
+	st, err := OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestMigrateAgentBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	st, err = Open(path)
+	st, err = OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestMigrateAgentBindings(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = Open(path)
+	st, err = OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}

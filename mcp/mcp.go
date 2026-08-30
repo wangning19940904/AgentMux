@@ -1,6 +1,6 @@
 // Package mcp implements AgentMux MCP Registry: registration, orchestration
 // and distribution of Model Context Protocol server configurations. The
-// default "store" registry persists server definitions in the SQLite SSOT so
+// default "store" registry persists server definitions in the PostgreSQL SSOT so
 // they can be rendered into per-tool MCP config files.
 package mcp
 
@@ -9,24 +9,23 @@ import (
 	"fmt"
 
 	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/store"
 )
 
-func init() {
-	core.RegisterMCPRegistry("store", func(cfg map[string]any) (core.MCPRegistry, error) {
-		return &Registry{}, nil
-	})
+type Repository interface {
+	ListMCPServers(context.Context) ([]core.MCPServer, error)
+	UpsertMCPServer(context.Context, *core.MCPServer) error
+	DeleteMCPServer(context.Context, string) error
 }
 
 // Registry implements core.MCPRegistry backed by the store.
 type Registry struct {
-	st *store.Store
+	st Repository
 }
 
 var _ core.MCPRegistry = (*Registry)(nil)
 
 // New builds a store-backed MCP registry.
-func New(st *store.Store) *Registry { return &Registry{st: st} }
+func New(st Repository) *Registry { return &Registry{st: st} }
 
 // Name returns the registry id.
 func (r *Registry) Name() string { return "store" }

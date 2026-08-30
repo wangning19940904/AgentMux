@@ -14,7 +14,6 @@ import (
 
 func sendCmd() *cobra.Command {
 	var (
-		project         string
 		channelID       string
 		conversationKey string
 		text            string
@@ -27,16 +26,8 @@ func sendCmd() *cobra.Command {
 		Use:   "send",
 		Short: "Send text or artifacts through the running AgentMux daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			channelDelivery := strings.TrimSpace(channelID) != "" || strings.TrimSpace(conversationKey) != "" || len(images) > 0 || len(files) > 0
-			if channelDelivery {
-				if strings.TrimSpace(channelID) == "" || strings.TrimSpace(conversationKey) == "" {
-					return fmt.Errorf("--channel-id and --conversation-key are required for channel delivery")
-				}
-				if strings.TrimSpace(project) != "" {
-					return fmt.Errorf("--project cannot be combined with channel delivery")
-				}
-			} else if strings.TrimSpace(text) == "" {
-				return fmt.Errorf("--text is required for project delivery")
+			if strings.TrimSpace(channelID) == "" || strings.TrimSpace(conversationKey) == "" {
+				return fmt.Errorf("--channel-id and --conversation-key are required")
 			}
 			if strings.TrimSpace(text) == "" && len(images) == 0 && len(files) == 0 {
 				return fmt.Errorf("provide --text, --image, or --file")
@@ -59,13 +50,12 @@ func sendCmd() *cobra.Command {
 				token = cfg.Bridge.Token
 			}
 			body, _ := json.Marshal(struct {
-				Project         string   `json:"project,omitempty"`
 				ChannelID       string   `json:"channel_id,omitempty"`
 				ConversationKey string   `json:"conversation_key,omitempty"`
 				Text            string   `json:"text,omitempty"`
 				Images          []string `json:"images,omitempty"`
 				Files           []string `json:"files,omitempty"`
-			}{project, channelID, conversationKey, text, images, files})
+			}{channelID, conversationKey, text, images, files})
 			url := "http://" + addr + "/api/v1/send"
 			req, err := http.NewRequestWithContext(cmd.Context(), http.MethodPost, url, bytes.NewReader(body))
 			if err != nil {
@@ -92,7 +82,6 @@ func sendCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "target project name")
 	cmd.Flags().StringVar(&channelID, "channel-id", "", "active channel ID")
 	cmd.Flags().StringVar(&conversationKey, "conversation-key", "", "active conversation key")
 	cmd.Flags().StringVar(&text, "text", "", "message text (optional with an attachment)")

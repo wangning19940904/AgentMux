@@ -56,6 +56,16 @@ func TestDesktopAssetMiddlewareProxiesAPIOnSameOrigin(t *testing.T) {
 	}
 }
 
+func TestDesktopMacTitleBarIntegratesContentWithoutTitleText(t *testing.T) {
+	options := agentMuxMacOptions()
+	if options == nil || options.TitleBar == nil {
+		t.Fatal("macOS titlebar options are missing")
+	}
+	if !options.TitleBar.HideTitle || !options.TitleBar.FullSizeContent || !options.TitleBar.TitlebarAppearsTransparent {
+		t.Fatalf("titlebar options = %+v", options.TitleBar)
+	}
+}
+
 func TestDesktopAssetMiddlewareMarksObservabilitySession(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("X-AgentMux-Desktop") != "1" {

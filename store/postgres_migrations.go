@@ -3,8 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"fmt"
-	"strings"
 )
 
 const postgresMigrationLock int64 = 0x414E584442
@@ -15,22 +15,10 @@ type postgresMigration struct {
 	sql     string
 }
 
-func postgresBaseSchema() string {
-	schema := sqliteCoreSchema + "\n" + observationSchema
-	schema = strings.ReplaceAll(schema, " BLOB ", " BYTEA ")
-	schema = strings.ReplaceAll(schema, " INTEGER", " BIGINT")
-	schema = strings.ReplaceAll(schema, " REAL", " DOUBLE PRECISION")
-	schema = strings.ReplaceAll(schema, "\tcontroller_id TEXT,\n\tcontroller_id TEXT,\n", "\tcontroller_id TEXT,\n")
-	lines := strings.Split(schema, "\n")
-	filtered := lines[:0]
-	for _, line := range lines {
-		if strings.Contains(line, "json_extract(") {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	return strings.Join(filtered, "\n")
-}
+//go:embed postgres_schema.sql
+var postgresBaseSchemaSQL string
+
+func postgresBaseSchema() string { return postgresBaseSchemaSQL }
 
 func postgresMigrations() []postgresMigration {
 	return []postgresMigration{
@@ -312,6 +300,27 @@ CREATE INDEX IF NOT EXISTS idx_orchestrations_owner ON orchestrations(owner_tena
 			name:    "remove_tenant_enrollment_codes",
 			sql: `
 DROP TABLE IF EXISTS tenant_enrollments;
+`,
+		},
+		{
+			version: 13,
+			name:    "usage_quality_and_provenance",
+			sql: `
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS provenance TEXT;
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS provenance_rank BIGINT DEFAULT 0;
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS token_quality TEXT DEFAULT 'exact';
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cost_kind TEXT DEFAULT 'calculated';
+`,
+		},
+		{
+			version: 14,
+			name:    "persistent_skill_states",
+			sql: `
+CREATE TABLE IF NOT EXISTS skill_states (
+	name TEXT PRIMARY KEY,
+	enabled BIGINT NOT NULL DEFAULT 1,
+	updated_at TEXT NOT NULL
+);
 `,
 		},
 	}

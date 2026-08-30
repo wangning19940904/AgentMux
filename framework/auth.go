@@ -28,11 +28,12 @@ const (
 // Detail is deliberately generic so account identifiers and command output do
 // not leak through the HTTP API.
 type AuthStatus struct {
-	Kind           string    `json:"kind"`
-	State          AuthState `json:"state"`
-	Installed      bool      `json:"installed"`
-	LoginSupported bool      `json:"login_supported"`
-	Detail         string    `json:"detail,omitempty"`
+	Kind            string    `json:"kind"`
+	State           AuthState `json:"state"`
+	Installed       bool      `json:"installed"`
+	LoginSupported  bool      `json:"login_supported"`
+	LogoutSupported bool      `json:"logout_supported"`
+	Detail          string    `json:"detail,omitempty"`
 }
 
 // LoginResult contains the actionable part of a CLI login flow. The command
@@ -57,6 +58,7 @@ type LoginSessionStatus struct {
 type frameworkAuthConfig struct {
 	statusArgs    []string
 	loginArgs     []string
+	logoutArgs    []string
 	loginEnv      map[string]string
 	inputRequired bool
 	extraEnvKeys  []string
@@ -64,24 +66,25 @@ type frameworkAuthConfig struct {
 
 var frameworkAuthConfigs = map[string]frameworkAuthConfig{
 	"claudecode": {
-		statusArgs: []string{"auth", "status", "--json"}, loginArgs: []string{"auth", "login"},
+		statusArgs: []string{"auth", "status", "--json"}, loginArgs: []string{"auth", "login"}, logoutArgs: []string{"auth", "logout"},
 		loginEnv: map[string]string{"BROWSER": "false"}, inputRequired: true,
 	},
 	"codex": {
-		statusArgs: []string{"login", "status"}, loginArgs: []string{"login", "--device-auth"},
+		statusArgs: []string{"login", "status"}, loginArgs: []string{"login", "--device-auth"}, logoutArgs: []string{"logout"},
 		extraEnvKeys: []string{"CODEX_API_KEY"},
 	},
 	"cursor": {
-		statusArgs: []string{"status"}, loginArgs: []string{"login"},
+		statusArgs: []string{"status"}, loginArgs: []string{"login"}, logoutArgs: []string{"logout"},
 		loginEnv: map[string]string{"NO_OPEN_BROWSER": "1"}, extraEnvKeys: []string{"CURSOR_API_KEY"},
 	},
 	"traecli": {
-		statusArgs: []string{"login", "status"}, loginArgs: []string{"login", "--sso-device"},
+		statusArgs: []string{"login", "status"}, loginArgs: []string{"login", "--sso-device"}, logoutArgs: []string{"logout"},
 	},
 }
 
 const (
 	frameworkAuthCheckTimeout = 5 * time.Second
+	frameworkLogoutTimeout    = 15 * time.Second
 	frameworkLoginTimeout     = 15 * time.Minute
 	frameworkLoginLinkTimeout = 15 * time.Second
 	frameworkLoginSessionTTL  = 10 * time.Minute
@@ -104,12 +107,14 @@ func CheckAuth(ctx context.Context, kind string) AuthStatus {
 	status.Installed = IsInstalled(kind)
 	config, supported := frameworkAuthConfigs[kind]
 	status.LoginSupported = supported && len(config.loginArgs) > 0
+	status.LogoutSupported = supported && len(config.logoutArgs) > 0
 	if !status.Installed {
 		status.Detail = "framework is not installed"
 		return status
 	}
 	if frameworkCredentialEnvironmentAvailable(spec, config) {
 		status.State = AuthStateAuthenticated
+		status.LogoutSupported = false
 		status.Detail = "credential environment is configured"
 		return status
 	}
@@ -142,6 +147,34 @@ func CheckAuth(ctx context.Context, kind string) AuthStatus {
 		status.Detail = "could not determine CLI login state"
 	}
 	return status
+}
+
+// Logout removes credentials owned by the framework CLI. Environment-backed
+// credentials are intentionally left alone because the daemon cannot safely
+// mutate its parent process environment.
+func Logout(ctx context.Context, kind string) (AuthStatus, error) {
+	kind = strings.TrimSpace(kind)
+	spec, ok := Lookup(kind)
+	if !ok || !spec.Supported {
+		return AuthStatus{}, fmt.Errorf("unknown framework %q", kind)
+	}
+	config, ok := frameworkAuthConfigs[kind]
+	if !ok || len(config.logoutArgs) == 0 {
+		return AuthStatus{}, fmt.Errorf("framework %q does not support in-app logout", kind)
+	}
+	if frameworkCredentialEnvironmentAvailable(spec, config) {
+		return CheckAuth(ctx, kind), fmt.Errorf("framework credentials are provided by the environment and cannot be removed here")
+	}
+	binary, err := resolveCLIExecutable(spec.Bin)
+	if err != nil {
+		return AuthStatus{}, fmt.Errorf("framework %q is not installed", kind)
+	}
+	logoutCtx, cancel := context.WithTimeout(ctx, frameworkLogoutTimeout)
+	defer cancel()
+	if err := frameworkCommandContext(logoutCtx, binary, config.logoutArgs...).Run(); err != nil {
+		return CheckAuth(ctx, kind), fmt.Errorf("framework %q logout failed: %w", kind, err)
+	}
+	return CheckAuth(ctx, kind), nil
 }
 
 func frameworkCredentialEnvironmentAvailable(spec Spec, config frameworkAuthConfig) bool {

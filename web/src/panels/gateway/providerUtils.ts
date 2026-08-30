@@ -65,6 +65,8 @@ export type ProviderDraft = {
   model_list: string;
   tools: string[];
   enabled: boolean;
+  target_id?: string;
+  target_name?: string;
 };
 
 export type RouteDraft = {
@@ -79,6 +81,7 @@ export type RouteDraft = {
   claude_desktop_mode: string;
   manual_models: boolean;
   model_list: string;
+  target_id?: string;
 };
 
 export type LocalRouteMode = "takeover" | "direct";
@@ -331,6 +334,8 @@ export function providerToDraft(provider: Provider): ProviderDraft {
     model_list: modelList,
     tools: routeToolsForProvider(provider),
     enabled: provider.enabled,
+    target_id: provider.target_id,
+    target_name: provider.target_name,
   };
 }
 
@@ -611,6 +616,8 @@ export function draftToProvider(draft: ProviderDraft, providers: Provider[]): Pr
     extra,
     meta,
     enabled: draft.enabled,
+    target_id: draft.target_id,
+    target_name: draft.target_name,
   };
 }
 

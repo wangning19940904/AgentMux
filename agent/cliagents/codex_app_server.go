@@ -93,6 +93,33 @@ func newCodexAgent(cfg map[string]any) *codexAgent {
 
 func (a *codexAgent) Name() string { return "codex" }
 
+// RuntimeSettingsCatalog asks app-server for the signed-in account's models
+// directly. Unlike StartSession this does not call thread/start, so opening an
+// Agent form never creates an empty Codex conversation.
+func (a *codexAgent) RuntimeSettingsCatalog(ctx context.Context, workDir string) (core.RuntimeSettings, core.RuntimeSettingsCapabilities, error) {
+	client, err := a.appClient(ctx, workDir)
+	if err != nil {
+		return core.RuntimeSettings{}, core.RuntimeSettingsCapabilities{}, err
+	}
+	result, err := client.call(ctx, "model/list", map[string]any{"limit": 100, "includeHidden": false})
+	if err != nil {
+		return core.RuntimeSettings{}, core.RuntimeSettingsCapabilities{}, err
+	}
+	serviceTiers := codexServiceTiersFromResult(result)
+	if len(serviceTiers) > 0 && !containsCodexOption(serviceTiers, "default") {
+		serviceTiers = append([]string{"default"}, serviceTiers...)
+	}
+	return core.RuntimeSettings{
+			Model: a.defaultModel, ReasoningEffort: a.defaultReasoningEffort,
+			ServiceTier: a.defaultServiceTier, ApprovalMode: a.defaultApprovalMode,
+		}, core.RuntimeSettingsCapabilities{
+			Models:           core.RuntimeOptionsFor(core.RuntimeSettingModel, codexModelsFromResult(result)),
+			ReasoningEfforts: core.RuntimeOptionsFor(core.RuntimeSettingReasoningEffort, codexReasoningEffortsFromResult(result)),
+			ServiceTiers:     core.RuntimeOptionsFor(core.RuntimeSettingServiceTier, serviceTiers),
+			ApprovalModes:    core.RuntimeOptionsFor(core.RuntimeSettingApprovalMode, a.supportedApprovalModes),
+		}, nil
+}
+
 func (a *codexAgent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
 	threadID, err := a.resumeThreadID("")
 	if err != nil {
@@ -407,10 +434,10 @@ func (s *codexSession) RuntimeSettingsCapabilities() core.RuntimeSettingsCapabil
 		serviceTiers = append([]string{"default"}, serviceTiers...)
 	}
 	return core.RuntimeSettingsCapabilities{
-		Models:           core.RuntimeOptions(s.supportedModel),
-		ReasoningEfforts: core.RuntimeOptions(efforts),
-		ServiceTiers:     core.RuntimeOptions(serviceTiers),
-		ApprovalModes:    core.RuntimeOptions(s.supportedApprovalModes),
+		Models:           core.RuntimeOptionsFor(core.RuntimeSettingModel, s.supportedModel),
+		ReasoningEfforts: core.RuntimeOptionsFor(core.RuntimeSettingReasoningEffort, efforts),
+		ServiceTiers:     core.RuntimeOptionsFor(core.RuntimeSettingServiceTier, serviceTiers),
+		ApprovalModes:    core.RuntimeOptionsFor(core.RuntimeSettingApprovalMode, s.supportedApprovalModes),
 	}
 }
 

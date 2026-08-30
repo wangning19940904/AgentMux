@@ -16,6 +16,8 @@ export interface Provider {
   enabled: boolean;
   in_failover_queue?: boolean;
   sort_index?: number;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ProxyToolConfig {
@@ -25,12 +27,15 @@ export interface ProxyToolConfig {
   max_retries: number;
   failure_threshold: number;
   cooldown_seconds: number;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ProxyStatus {
   running: boolean;
   base_url: string;
   tools: ProxyToolConfig[];
+  warnings?: string[];
 }
 
 export interface ProxyTrace {
@@ -62,6 +67,8 @@ export interface ProviderRoute {
   api_format?: string;
   meta?: Record<string, unknown>;
   configured: boolean;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ProviderProbeResult {
@@ -113,6 +120,8 @@ export interface ProviderMonitorProviderStatus {
   models?: ProviderModelHealth[];
   message?: string;
   last_checked_at: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ProviderMonitorAlert {
@@ -126,6 +135,8 @@ export interface ProviderMonitorAlert {
   message?: string;
   created_at: string;
   last_seen_at: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ProviderMonitorSnapshot {
@@ -135,6 +146,7 @@ export interface ProviderMonitorSnapshot {
   next_run_at?: string;
   providers: ProviderMonitorProviderStatus[];
   alerts: ProviderMonitorAlert[];
+  warnings?: string[];
 }
 
 export interface Claude3PStatus {
@@ -160,35 +172,44 @@ export interface UsageTotals {
   cache_write_tokens: number;
   cost_usd: number;
   records: number;
+  sessions: number;
+  estimated_tokens: number;
+  estimated_records: number;
 }
 
 export interface UsageBucket {
   key: string;
   totals: UsageTotals;
+  by_runtime?: RuntimeStat[];
 }
 
 export interface ModelStat {
   model: string;
   tokens: number;
   cost_usd: number;
+  estimated_tokens?: number;
 }
 
 export interface SourceStat {
   source: string;
   tokens: number;
   cost_usd: number;
+  estimated_tokens?: number;
 }
 
 export interface AgentStat {
   agent: string;
   tokens: number;
   cost_usd: number;
+  records?: number;
+  sessions?: number;
 }
 
 export interface RuntimeStat {
   runtime: string;
   tokens: number;
   cost_usd: number;
+  estimated_tokens?: number;
 }
 
 export interface UsageReport {
@@ -202,6 +223,45 @@ export interface UsageReport {
   by_source: SourceStat[];
   by_agent?: AgentStat[];
   by_runtime?: RuntimeStat[];
+  warnings?: string[];
+  by_machine?: Array<{ target_id: string; target_name: string; totals: UsageTotals; buckets?: UsageBucket[] }>;
+}
+
+export interface CursorHookStatus {
+  status: string;
+  hooks_path: string;
+  helper_path: string;
+  actions?: string[];
+}
+
+export interface CursorUsageSourceStatus extends TargetMetadata {
+  source: "cursor";
+  connected: boolean;
+  syncing: boolean;
+  scope: "agent";
+  backfill_days: number;
+  allow_estimates: boolean;
+  hook: CursorHookStatus;
+  local_database: string;
+  local_status: string;
+  cloud_status: string;
+  backfill_complete: boolean;
+  backfill_page?: number;
+  last_sync_at?: string;
+  last_error?: string;
+  local_records: number;
+  cloud_matched_events: number;
+  cloud_ignored_events: number;
+  estimated_tokens: number;
+  total_tokens: number;
+}
+
+export interface CursorUsageActionResult extends TargetMetadata {
+  ok: boolean;
+  action: string;
+  message: string;
+  started?: boolean;
+  status: CursorUsageSourceStatus;
 }
 
 export interface MenubarSettings {
@@ -225,6 +285,16 @@ export interface LaunchAtLoginStatus {
   enabled: boolean;
 }
 
+export interface DesktopUpdateStatus {
+  supported: boolean;
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_url?: string;
+  published_at?: string;
+  restarting?: boolean;
+}
+
 export interface KeepAwakeStatus {
   supported: boolean;
   enabled: boolean;
@@ -246,7 +316,6 @@ export interface SystemDirectoryListing {
 
 export interface Status {
   ok: boolean;
-  projects: number;
   version: string;
 }
 
@@ -264,6 +333,80 @@ export interface RemoteHost {
   host_key_fingerprint?: string;
   trusted?: boolean;
   clear_api_token?: boolean;
+}
+
+export type MachineScope = "all" | "local" | string;
+
+export interface MachineTarget {
+  id: string;
+  name: string;
+  kind: "local" | "ssh";
+  trusted: boolean;
+  online: boolean;
+  version?: string;
+  error?: string;
+}
+
+export interface TargetMetadata {
+  target_id?: string;
+  target_name?: string;
+}
+
+export interface FleetOperation {
+  key: string;
+  method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
+  path: string;
+  body?: unknown;
+}
+
+export interface FleetOperationResult<T = unknown> {
+  key: string;
+  status: number;
+  ok: boolean;
+  data?: T;
+  error?: string;
+  duration_ms: number;
+}
+
+export interface FleetTargetResult<T = unknown> {
+  target: MachineTarget;
+  responses: FleetOperationResult<T>[];
+}
+
+export interface FleetBatchResult<T = unknown> {
+  targets: FleetTargetResult<T>[];
+}
+
+export interface FleetSyncPathMapping {
+  from: string;
+  to: string;
+}
+
+export interface FleetSyncResourceResult {
+  type: string;
+  key: string;
+  name: string;
+  action: "add" | "exists" | "conflict" | "blocked" | string;
+  reason?: string;
+  credentials_missing?: boolean;
+}
+
+export interface FleetSyncInspection {
+  home_dir?: string;
+  resources: FleetSyncResourceResult[];
+  warnings?: string[];
+}
+
+export interface FleetSyncPreview {
+  plan_id: string;
+  expires_at: string;
+  source: MachineTarget;
+  destinations: Array<{ target: MachineTarget; inspection: FleetSyncInspection; path_mappings?: FleetSyncPathMapping[]; error?: string }>;
+}
+
+export interface FleetSyncApplyResult {
+  plan_id: string;
+  targets: Array<{ target: MachineTarget; inspection: FleetSyncInspection; error?: string }>;
 }
 
 export interface DiscoveredRemoteHost {
@@ -370,6 +513,8 @@ export interface AgentInstance {
   visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface Channel {
@@ -409,6 +554,8 @@ export interface Channel {
   visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 // Tenancy: one AgentMux instance is shared by several host applications. See
@@ -424,8 +571,11 @@ export interface Tenant {
   kind?: TenantKind;
   status: "active" | "disabled";
   note?: string;
+  resource_count?: number;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface TenantToken {
@@ -448,6 +598,8 @@ export interface ResourceGrant {
   level: GrantLevel;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 // TenancySelf tells the Console whether it is running with administrator
@@ -720,6 +872,8 @@ export interface Trigger {
   owner_tenant_name?: string;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface MemoryEntry {
@@ -730,6 +884,8 @@ export interface MemoryEntry {
   meta?: Record<string, string>;
   created_at: string;
   updated_at: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface Skill {
@@ -739,6 +895,8 @@ export interface Skill {
   tags?: string[];
   enabled: boolean;
   source?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface MCPServer {
@@ -749,6 +907,8 @@ export interface MCPServer {
   url?: string;
   env?: Record<string, string>;
   enabled: boolean;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface GuardPolicy {
@@ -757,11 +917,14 @@ export interface GuardPolicy {
   action?: string;
   decision: string;
   priority: number;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface FrameworkSpec {
   kind: string;
   display: string;
+  company?: string;
   kind_type: "cli" | "sdk";
   language?: string;
   packages?: string[];
@@ -769,6 +932,7 @@ export interface FrameworkSpec {
   install_supported: boolean;
   install_requires_npm: boolean;
   update_supported: boolean;
+  uninstall_supported?: boolean;
   env_required?: string[];
   supported: boolean;
   note?: string;
@@ -782,6 +946,8 @@ export interface Framework {
   version?: string;
   detail?: string;
   registered: boolean;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface FrameworkPrereqs {
@@ -794,6 +960,32 @@ export interface FrameworkPrereqs {
 export interface FrameworksResponse {
   prereqs: FrameworkPrereqs;
   frameworks: Framework[];
+  warnings?: string[];
+}
+
+export interface RuntimeOption {
+  value: string;
+  label?: string;
+}
+
+export interface RuntimeSettings {
+  model?: string;
+  reasoning_effort?: string;
+  service_tier?: string;
+  approval_mode?: string;
+}
+
+export interface RuntimeSettingsCapabilities {
+  models?: RuntimeOption[];
+  reasoning_efforts?: RuntimeOption[];
+  service_tiers?: RuntimeOption[];
+  approval_modes?: RuntimeOption[];
+}
+
+export interface FrameworkRuntimeSettings {
+  kind: string;
+  defaults: RuntimeSettings;
+  capabilities: RuntimeSettingsCapabilities;
 }
 
 export interface FrameworkAuthStatus {
@@ -801,6 +993,7 @@ export interface FrameworkAuthStatus {
   state: "authenticated" | "unauthenticated" | "unknown";
   installed: boolean;
   login_supported: boolean;
+  logout_supported?: boolean;
   detail?: string;
 }
 
@@ -821,7 +1014,7 @@ export interface FrameworkLoginSessionStatus {
 
 export interface FrameworkInstallResult {
   kind: string;
-  action: "install" | "update";
+  action: "install" | "update" | "uninstall";
   ok: boolean;
   command?: string;
   log?: string;
@@ -847,9 +1040,10 @@ export interface CLIManagedTool {
     bin: string;
     package: string;
     registry?: string;
-    note?: string;
-    login_supported?: boolean;
-    internal_only?: boolean;
+	    note?: string;
+	    login_supported?: boolean;
+	    uninstall_supported: boolean;
+	    internal_only?: boolean;
     linked_skills?: CLILinkedSkillSpec[];
   };
   installed: boolean;
@@ -857,6 +1051,8 @@ export interface CLIManagedTool {
   version?: string;
   detail?: string;
   linked_skills?: CLILinkedSkillStatus[];
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface CLILinkedSkillSpec {
@@ -889,7 +1085,7 @@ export interface CLILinkedSkillResult {
 
 export interface CLIInstallResult {
   id: string;
-  action: "install" | "update" | "sync-skills";
+  action: "install" | "update" | "uninstall" | "sync-skills";
   ok: boolean;
   command?: string;
   log?: string;
@@ -934,6 +1130,8 @@ export interface ToolBundle {
     detail?: string;
   }>;
   detail?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface BundleComponentResult {
@@ -1046,6 +1244,7 @@ export interface ToolsResponse {
   skills: Skill[];
   mcp: MCPServer[];
   marketplace: MarketplaceSkill[];
+  warnings?: string[];
 }
 
 export interface AgentSession {
@@ -1084,6 +1283,8 @@ export interface AgentSession {
   terminal_backend?: string;
   terminal_available?: boolean;
   terminal_attach_command?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface TerminalSessionView {
@@ -1107,6 +1308,8 @@ export interface ChannelFeedback {
   comment?: string;
   created_at: string;
   updated_at: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface FeedbackReport {
@@ -1116,10 +1319,9 @@ export interface FeedbackReport {
 }
 
 export interface OrchestrationTask {
-  id: string;
-  orchestration_id?: string;
-  agent_id?: string;
-  project?: string;
+	id: string;
+	orchestration_id?: string;
+	agent_id: string;
   input: string;
   depends_on?: string[];
   status: string;
@@ -1144,6 +1346,8 @@ export interface Orchestration {
   started_at?: string;
   finished_at?: string;
   updated_at: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface SessionMessage {
@@ -1243,6 +1447,8 @@ export interface ObservationTrace {
   attributes?: Record<string, unknown>;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ObservationSpan {
@@ -1329,6 +1535,7 @@ export interface ObservationOverview {
   usage?: ObservationUsage;
   coverage?: ObservationCoverage[];
   recent_traces?: ObservationTrace[];
+  warnings?: string[];
 }
 
 export interface ObservationInsight {
@@ -1349,6 +1556,8 @@ export interface ObservationInsight {
   only_suggestion?: boolean;
   created_at?: string;
   updated_at?: string;
+  target_id?: string;
+  target_name?: string;
 }
 
 export interface ObservationExporterSettings {
@@ -1388,6 +1597,8 @@ export interface ObservationIntegration {
   status?: string;
   installed?: boolean;
   version?: string;
+  target_id?: string;
+  target_name?: string;
   trust?: string;
   pending_trust?: boolean;
   plugin?: ObservationIntegrationCoverage;

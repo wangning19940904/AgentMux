@@ -269,6 +269,9 @@ func normalizeHost(host Host) (Host, error) {
 	if strings.ContainsAny(host.Name, "\r\n\x00") {
 		return Host{}, fmt.Errorf("name contains unsupported control characters")
 	}
+	if strings.ContainsAny(host.APIToken, "\r\n\x00") {
+		return Host{}, fmt.Errorf("api_token contains unsupported control characters")
+	}
 	if host.SSHAlias != "" && !isConcreteSSHAlias(host.SSHAlias) {
 		return Host{}, fmt.Errorf("ssh_alias must be a concrete SSH Config host alias")
 	}

@@ -5,7 +5,7 @@
  */
 
 /** Contract major this SDK speaks; servers outside it report `incompatible`. */
-export const SUPPORTED_CONTRACT_MAJOR = 1;
+export const SUPPORTED_CONTRACT_MAJOR = 2;
 
 /** Unified 5-state health machine (see contract/CONTRACT.md). */
 export type HealthState =
@@ -16,8 +16,9 @@ export type HealthState =
   | "missing";
 
 export interface ModuleState {
-  registered: boolean;
-  active: boolean;
+	configured: boolean;
+	runtime_active: boolean;
+	enforced: boolean;
 }
 
 /** Response of GET /api/v1/capabilities. */
@@ -30,7 +31,6 @@ export interface Capabilities {
   modules?: Record<string, ModuleState>;
   agents?: { count: number; runtimes?: string[] };
   channels?: { count: number };
-  projects?: number;
   auth?: {
     bridge_enabled: boolean;
     /**
@@ -62,8 +62,7 @@ export interface Attachment {
 }
 
 export interface InvocationRequest {
-  agent_id?: string;
-  project?: string;
+	agent_id: string;
   conversation_id?: string;
   input: string;
   attachments?: Attachment[];
@@ -71,14 +70,30 @@ export interface InvocationRequest {
 }
 
 export interface InvocationResult {
-  id: string;
-  agent_id?: string;
-  project?: string;
+	id: string;
+	agent_id?: string;
   conversation_id: string;
   session_id?: string;
   answer: string;
   duration_ms: number;
-  usage?: Record<string, unknown>;
+	usage?: TurnUsage;
+}
+
+export interface TurnUsage {
+	Model: string;
+	RequestID: string;
+	RequestedModel: string;
+	ResolvedModel: string;
+	InputTokens: number;
+	OutputTokens: number;
+	CacheReadTokens: number;
+	CacheWriteTokens: number;
+	ReasoningTokens: number;
+	TotalTokens: number;
+	Cumulative: boolean;
+	Attempt: number;
+	TTFTMs: number;
+	DurationMs: number;
 }
 
 export type InvocationEventType =
@@ -124,24 +139,38 @@ export interface InvocationEvent {
   result?: InvocationResult;
 }
 
-/** Console-managed Agent (contract/schemas/agent_instance.json subset). */
+/** Console-managed Agent (contract/schemas/agent_instance.json). */
 export interface AgentInstance {
   id: string;
   name: string;
   runtime_id: string;
   enabled: boolean;
+	desktop_thread_id?: string;
   work_dir?: string;
+	workspace_mode?: string;
+	worktree_base_ref?: string;
+	session_backend?: string;
   system_prompt?: string;
   provider_tool?: string;
+	provider_id?: string;
+	provider_name?: string;
   default_model?: string;
   default_reasoning_effort?: string;
   default_service_tier?: string;
   default_approval_mode?: string;
+	memory_scope?: string;
+	env?: Record<string, string>;
+	channel_bindings?: Array<Record<string, unknown>>;
+	schedules?: Array<Record<string, unknown>>;
+	mcp_servers?: string[];
+	skills?: string[];
+	clis?: string[];
   source?: string;
   owner_tenant_id?: string;
   owner_tenant_name?: string;
   visibility?: ResourceVisibility;
-  [extra: string]: unknown;
+	created_at: string;
+	updated_at: string;
 }
 
 /** IM channel (contract/schemas/channel.json). */
@@ -155,7 +184,8 @@ export interface Channel {
   owner_tenant_id?: string;
   owner_tenant_name?: string;
   visibility?: ResourceVisibility;
-  [extra: string]: unknown;
+	created_at: string;
+	updated_at: string;
 }
 
 /**
@@ -172,7 +202,8 @@ export interface Tenant {
   status: "active" | "disabled" | (string & {});
   kind?: "app" | "web" | "service" | (string & {});
   note?: string;
-  [extra: string]: unknown;
+	created_at: string;
+	updated_at: string;
 }
 
 /**
@@ -194,7 +225,7 @@ export interface TenancySelf {
   status?: string;
 }
 
-/** Automation trigger (contract/schemas/trigger.json subset). */
+/** Automation trigger (contract/schemas/trigger.json). */
 export interface Trigger {
   id: string;
   name: string;
@@ -202,12 +233,20 @@ export interface Trigger {
   enabled: boolean;
   agent_id?: string;
   channel_id?: string;
+	chat_id?: string;
   cron_expr?: string;
   prompt?: string;
   event?: string;
+	action_type?: string;
+	action_target?: string;
+	token?: string;
+	session_mode?: string;
+	last_run?: string;
   last_status?: string;
   last_error?: string;
-  [extra: string]: unknown;
+	owner_tenant_id?: string;
+	created_at: string;
+	updated_at: string;
 }
 
 export type OrchestrationStatus =
@@ -218,17 +257,26 @@ export type OrchestrationStatus =
   | "cancelled";
 
 export interface OrchestrationTask {
-  id: string;
-  input: string;
-  agent_id?: string;
-  project?: string;
+	id: string;
+	input: string;
+	agent_id: string;
+	orchestration_id?: string;
   depends_on?: string[];
   status?: OrchestrationStatus;
   output?: string;
   error?: string;
   invocation_id?: string;
   conversation_id?: string;
+	created_at: string;
+	started_at?: string;
+	finished_at?: string;
+	updated_at: string;
 }
+
+export type OrchestrationTaskInput = Pick<
+	OrchestrationTask,
+	"id" | "agent_id" | "input" | "depends_on"
+>;
 
 export interface Orchestration {
   id: string;
@@ -237,6 +285,11 @@ export interface Orchestration {
   max_concurrency: number;
   error?: string;
   tasks?: OrchestrationTask[];
+	owner_tenant_id?: string;
+	created_at: string;
+	started_at?: string;
+	finished_at?: string;
+	updated_at: string;
 }
 
 /**

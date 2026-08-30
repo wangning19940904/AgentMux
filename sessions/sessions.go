@@ -95,7 +95,24 @@ type ResumeResult struct {
 // Service coordinates the file-backed scanners and Codex app-server adapter.
 type Service struct {
 	app *CodexAppClient
+
+	listMu       sync.Mutex
+	listCache    map[string]sessionListCacheEntry
+	listInFlight map[string]*sessionListCall
 }
+
+type sessionListCacheEntry struct {
+	loadedAt time.Time
+	items    []Meta
+}
+
+type sessionListCall struct {
+	done  chan struct{}
+	items []Meta
+	err   error
+}
+
+const sessionListCacheTTL = 2 * time.Second
 
 // New builds the default session service.
 func New() *Service {
@@ -106,40 +123,105 @@ func New() *Service {
 func (s *Service) List(ctx context.Context, providerID, surface string) ([]Meta, error) {
 	providerID = strings.TrimSpace(providerID)
 	surface = strings.TrimSpace(surface)
-	var out []Meta
-	var appErr error
-	if matches(providerID, "claudecode", "claude") && matches(surface, "cli", "") {
-		items, err := (&claudeScanner{}).List(ctx)
-		if err != nil {
-			return nil, err
+	cacheKey := providerID + "\x00" + surface
+
+	s.listMu.Lock()
+	if cached, ok := s.listCache[cacheKey]; ok && time.Since(cached.loadedAt) < sessionListCacheTTL {
+		items := cloneSessionMeta(cached.items)
+		s.listMu.Unlock()
+		return items, nil
+	}
+	if call := s.listInFlight[cacheKey]; call != nil {
+		s.listMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-call.done:
+			return cloneSessionMeta(call.items), call.err
 		}
-		out = append(out, items...)
+	}
+	if s.listInFlight == nil {
+		s.listInFlight = make(map[string]*sessionListCall)
+	}
+	call := &sessionListCall{done: make(chan struct{})}
+	s.listInFlight[cacheKey] = call
+	s.listMu.Unlock()
+
+	items, err := s.listUncached(ctx, providerID, surface)
+
+	s.listMu.Lock()
+	call.items = cloneSessionMeta(items)
+	call.err = err
+	if err == nil {
+		if s.listCache == nil {
+			s.listCache = make(map[string]sessionListCacheEntry)
+		}
+		s.listCache[cacheKey] = sessionListCacheEntry{loadedAt: time.Now(), items: cloneSessionMeta(items)}
+	}
+	delete(s.listInFlight, cacheKey)
+	close(call.done)
+	s.listMu.Unlock()
+	return items, err
+}
+
+func (s *Service) listUncached(ctx context.Context, providerID, surface string) ([]Meta, error) {
+	type listResult struct {
+		kind  string
+		items []Meta
+		err   error
+	}
+	type listJob struct {
+		kind string
+		run  func() ([]Meta, error)
+	}
+	jobs := make([]listJob, 0, 3)
+	if matches(providerID, "claudecode", "claude") && matches(surface, "cli", "") {
+		jobs = append(jobs, listJob{kind: "claude", run: func() ([]Meta, error) {
+			return (&claudeScanner{}).List(ctx)
+		}})
 	}
 	if matches(providerID, "codex", "") && matches(surface, "cli", "") {
-		items, err := (&codexScanner{}).List(ctx, surface)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, items...)
+		jobs = append(jobs, listJob{kind: "codex", run: func() ([]Meta, error) {
+			return (&codexScanner{}).List(ctx, surface)
+		}})
 	}
 	if matches(providerID, "codex", "") && matches(surface, "app-server", "desktop", "") {
-		var items []Meta
-		var err error
-		if surface == "desktop" || surface == "" {
-			items, err = s.app.ListSourceKinds(ctx, "vscode")
-			if err == nil {
-				items, err = filterCodexDesktopThreads(ctx, items)
+		jobs = append(jobs, listJob{kind: "app-server", run: func() ([]Meta, error) {
+			if surface == "desktop" || surface == "" {
+				items, err := s.app.ListSourceKinds(ctx, "vscode")
+				if err != nil {
+					return nil, err
+				}
+				return filterCodexDesktopThreads(ctx, items)
 			}
-		} else if surface == "app-server" {
-			items, err = s.app.List(ctx)
-		}
-		if err != nil {
-			appErr = err
-			if surface == "app-server" || surface == "desktop" {
-				return nil, err
+			return s.app.List(ctx)
+		}})
+	}
+
+	results := make(chan listResult, len(jobs))
+	for _, job := range jobs {
+		job := job
+		go func() {
+			items, err := job.run()
+			results <- listResult{kind: job.kind, items: items, err: err}
+		}()
+	}
+
+	var out []Meta
+	var appErr error
+	for range jobs {
+		result := <-results
+		if result.err != nil {
+			if result.kind == "app-server" {
+				appErr = result.err
+				continue
 			}
+			return nil, result.err
 		}
-		out = append(out, items...)
+		out = append(out, result.items...)
+	}
+	if appErr != nil && (surface == "app-server" || surface == "desktop") {
+		return nil, appErr
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].LastActiveAt.After(out[j].LastActiveAt)
@@ -153,6 +235,19 @@ func (s *Service) List(ctx context.Context, providerID, surface string) ([]Meta,
 		return out, nil
 	}
 	return out, nil
+}
+
+func cloneSessionMeta(items []Meta) []Meta {
+	if items == nil {
+		return nil
+	}
+	return append([]Meta(nil), items...)
+}
+
+func (s *Service) invalidateListCache() {
+	s.listMu.Lock()
+	s.listCache = nil
+	s.listMu.Unlock()
 }
 
 // Messages returns the parsed transcript for a session.
@@ -259,7 +354,11 @@ func (s *Service) Delete(ctx context.Context, req ResumeRequest) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		return os.Remove(req.SourcePath)
+		if err := os.Remove(req.SourcePath); err != nil {
+			return err
+		}
+		s.invalidateListCache()
+		return nil
 	}
 }
 
@@ -343,7 +442,7 @@ func (s *claudeScanner) List(ctx context.Context) ([]Meta, error) {
 				return ctx.Err()
 			default:
 			}
-			meta, err := cachedSessionMeta(path, d, parseClaudeFile)
+			meta, err := cachedSessionMeta(path, d, parseClaudeFileSummary)
 			if err == nil && meta.SessionID != "" {
 				out = append(out, meta)
 			}
@@ -365,6 +464,14 @@ func claudeRoots() []string {
 }
 
 func parseClaudeFile(path string) (Meta, []Message, error) {
+	return parseClaudeFileWithLimit(path, 0)
+}
+
+func parseClaudeFileSummary(path string) (Meta, []Message, error) {
+	return parseClaudeFileWithLimit(path, 220)
+}
+
+func parseClaudeFileWithLimit(path string, maxLines int) (Meta, []Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Meta{}, nil, err
@@ -383,7 +490,14 @@ func parseClaudeFile(path string) (Meta, []Message, error) {
 	var messages []Message
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
+	lines := 0
+	truncated := false
 	for sc.Scan() {
+		lines++
+		if maxLines > 0 && lines > maxLines {
+			truncated = true
+			break
+		}
 		var raw map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
 			continue
@@ -423,6 +537,7 @@ func parseClaudeFile(path string) (Meta, []Message, error) {
 		meta.Title = meta.SessionID
 	}
 	meta.MessageCount = len(messages)
+	meta.MessagesPartial = truncated
 	return meta, messages, nil
 }
 

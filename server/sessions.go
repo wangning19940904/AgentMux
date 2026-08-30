@@ -227,7 +227,7 @@ func (s *Server) enrichSessionRows(
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := s.st.ListChannelTasks(ctx, "", "", false)
+	tasks, err := s.st.ListLatestChannelTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -344,12 +344,6 @@ func (s *Server) enrichSessionRows(
 		}
 		if agent.SessionBackend == "tmux" {
 			row.TerminalBackend = "tmux"
-			if terminal, ok := s.sender.(core.ConversationTerminalController); ok {
-				if info, infoErr := terminal.TerminalSessionInfo(ctx, channelID, conversation); infoErr == nil {
-					row.TerminalAvailable = info.Available
-					row.TerminalAttachCommand = info.AttachCommand
-				}
-			}
 		}
 		rows = append(rows, row)
 	}

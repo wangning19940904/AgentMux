@@ -46,12 +46,14 @@ An async twin (`AsyncAgentMuxClient`) offers the same API with `await` /
 ## Management resources
 
 ```python
+from agentmux_sdk import OrchestrationTask
+
 client.agents.list()
 client.channels.list()
 client.triggers.run("trigger-id")
-client.orchestrations.create([{"id": "t1", "input": "..."}])
+client.orchestrations.create([OrchestrationTask(id="t1", agent_id="agent-abc", input="...")])
 client.usage(period="daily")
-client.send(project="myproj", text="deploy finished")
+client.send(channel_id="channel-id", conversation_key="root:message-id", text="deploy finished")
 ```
 
 ## Build a native host integration page
@@ -125,7 +127,7 @@ checks.
 
 ## Contract
 
-This SDK speaks contract major `1` as defined in
+This SDK speaks contract major `2` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
-Tenancy needs a server on contract `1.1` or later; feature-detect it with
+Feature-detect tenancy with
 `report.capabilities.supports("tenancy")`.

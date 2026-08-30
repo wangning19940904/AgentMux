@@ -12,7 +12,7 @@ import (
 )
 
 func TestInsightEngineToolFailureThresholdIsAdvisory(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "insights.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "insights.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestInsightEngineToolFailureThresholdIsAdvisory(t *testing.T) {
 }
 
 func TestInsightEngineDeduplicatesStableRequestAcrossTraces(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "insights.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "insights.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestInsightEngineDeduplicatesStableRequestAcrossTraces(t *testing.T) {
 }
 
 func TestInsightEngineKeepsUniqueLowerPriorityRequestInSameTurn(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "insights.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "insights.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestInsightEngineKeepsUniqueLowerPriorityRequestInSameTurn(t *testing.T) {
 }
 
 func TestInsightEngineDeduplicatesToolCallBySessionAndCallID(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "insights.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "insights.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

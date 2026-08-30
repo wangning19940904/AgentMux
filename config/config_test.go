@@ -73,6 +73,56 @@ enabled = true
 	}
 }
 
+func TestBridgeTokenEnvironmentEnablesAndOverridesBridge(t *testing.T) {
+	t.Setenv("AGENTMUX_BRIDGE_TOKEN", " environment-secret ")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[bridge]
+enabled = false
+token = "stale-config-secret"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Bridge.Enabled || cfg.Bridge.Token != "environment-secret" {
+		t.Fatalf("bridge environment override = %+v", cfg.Bridge)
+	}
+}
+
+func TestValidateListenSecurity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		addr    string
+		enabled bool
+		wantErr bool
+	}{
+		{name: "ipv4 loopback", addr: "127.0.0.1:8765"},
+		{name: "ipv6 loopback", addr: "[::1]:8765"},
+		{name: "localhost", addr: "localhost:8765"},
+		{name: "ipv4 wildcard", addr: "0.0.0.0:8765", wantErr: true},
+		{name: "ipv6 wildcard", addr: "[::]:8765", wantErr: true},
+		{name: "empty host wildcard", addr: ":8765", wantErr: true},
+		{name: "authenticated wildcard", addr: "0.0.0.0:8765", enabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Server.Addr = test.addr
+			cfg.Bridge.Enabled = test.enabled
+			if test.enabled {
+				cfg.Bridge.Token = "test-secret"
+			}
+			err := cfg.ValidateListenSecurity()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("ValidateListenSecurity() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestProjectWorkspacePolicy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	content := `

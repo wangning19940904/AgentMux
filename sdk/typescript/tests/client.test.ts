@@ -10,7 +10,7 @@ const CAPABILITIES = {
   ok: true,
   product: "agentmux",
   version: "v0.1.4",
-  contract_version: "1.0",
+  contract_version: "2.0",
   features: ["invocations", "invocations.stream", "send"],
   auth: { bridge_enabled: true },
 };
@@ -53,7 +53,7 @@ describe("health", () => {
 
   it("reports incompatible on foreign contract major", async () => {
     const client = clientWith(() =>
-      Response.json({ ...CAPABILITIES, contract_version: "2.0" }),
+      Response.json({ ...CAPABILITIES, contract_version: "3.0" }),
     );
     expect((await client.health()).state).toBe("incompatible");
   });
@@ -87,12 +87,11 @@ describe("health", () => {
 });
 
 describe("invocations", () => {
-  it("requires exactly one target", async () => {
-    const client = clientWith(() => Response.json({}));
-    await expect(client.invoke({ input: "hi" })).rejects.toThrow(/exactly one/);
-    await expect(
-      client.invoke({ input: "hi", agentId: "a", project: "p" }),
-    ).rejects.toThrow(/exactly one/);
+	it("requires an agent target", async () => {
+		const client = clientWith(() => Response.json({}));
+		await expect(
+      client.invoke({ input: "hi", agentId: "" }),
+    ).rejects.toThrow(/agentId is required/);
   });
 
   it("posts the contract payload and parses the result", async () => {
@@ -169,7 +168,7 @@ describe("errors and resources", () => {
       }
       if (pathname === "/api/v1/orchestrations" && method === "POST") {
         const payload = JSON.parse(String(init.body));
-        expect(payload.tasks).toEqual([{ id: "t1", input: "do it" }]);
+			expect(payload.tasks).toEqual([{ id: "t1", agent_id: "a1", input: "do it" }]);
         return Response.json(
           { id: "orch-1", status: "queued", max_concurrency: 4 },
           { status: 202 },
@@ -183,7 +182,7 @@ describe("errors and resources", () => {
     });
     expect((await client.agents.list())[0]?.runtime_id).toBe("codex");
     expect((await client.console.createSession({ landing: "tenants" })).session_ttl_seconds).toBe(28800);
-    expect((await client.orchestrations.create([{ id: "t1", input: "do it" }])).id).toBe("orch-1");
+		expect((await client.orchestrations.create([{ id: "t1", agent_id: "a1", input: "do it" }])).id).toBe("orch-1");
     expect(await client.usage()).toEqual({ days: [] });
   });
 

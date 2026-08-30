@@ -19,10 +19,6 @@
     "output_schema": {
       "omitempty": true,
       "type": "map\u003cstring,any\u003e"
-    },
-    "project": {
-      "omitempty": true,
-      "type": "string"
     }
   },
   "go_type": "core.InvocationRequest"

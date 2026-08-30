@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -71,6 +72,38 @@ func TestClaudeScannerPairsToolInputAndOutput(t *testing.T) {
 	}
 	if tool.ToolInput != "{\n  \"path\": \"README.md\"\n}" {
 		t.Fatalf("tool input = %q", tool.ToolInput)
+	}
+}
+
+func TestClaudeScannerUsesBoundedSummaryForLongTranscripts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	dir := filepath.Join(root, "projects", "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "long.jsonl")
+	var data strings.Builder
+	data.WriteString("{\"type\":\"user\",\"sessionId\":\"long\",\"message\":{\"role\":\"user\",\"content\":\"first prompt\"}}\n")
+	for i := 0; i < 300; i++ {
+		data.WriteString("{\"type\":\"assistant\",\"sessionId\":\"long\",\"message\":{\"role\":\"assistant\",\"content\":\"answer\"}}\n")
+	}
+	if err := os.WriteFile(path, []byte(data.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, err := New().List(context.Background(), "claudecode", "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || !items[0].MessagesPartial || items[0].MessageCount != 220 {
+		t.Fatalf("summary meta = %+v", items)
+	}
+	messages, err := New().Messages(context.Background(), ResumeRequest{ProviderID: "claudecode", Surface: "cli", SourcePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 301 {
+		t.Fatalf("full messages = %d, want 301", len(messages))
 	}
 }
 
@@ -168,6 +201,51 @@ func TestCodexAppServerMockList(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].SessionID != "thread-1" || items[0].Surface != "app-server" {
 		t.Fatalf("items = %+v", items)
+	}
+}
+
+func TestServiceListCoalescesConcurrentDiscovery(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	dir := t.TempDir()
+	cmd := filepath.Join(dir, "codex-mock")
+	starts := filepath.Join(dir, "starts")
+	body1 := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	body2 := `{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"thread-1"}]}}`
+	script := "#!/bin/sh\n" +
+		fmt.Sprintf("printf x >> %q\n", starts) +
+		"sleep 0.2\n" +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body1) +
+		fmt.Sprintf("printf %%s\\\\n %q\n", body2) +
+		"sleep 1\n"
+	if err := os.WriteFile(cmd, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{app: &CodexAppClient{Command: cmd}}
+	var wait sync.WaitGroup
+	wait.Add(2)
+	errors := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wait.Done()
+			_, err := service.List(context.Background(), "codex", "app-server")
+			errors <- err
+		}()
+	}
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, err := os.ReadFile(starts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(started) != "x" {
+		t.Fatalf("app-server starts = %q, want one", started)
 	}
 }
 

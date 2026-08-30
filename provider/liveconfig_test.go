@@ -310,7 +310,7 @@ func TestSwitchCodexAppRouteUsesCodexProviderConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("approval_policy = \"never\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(filepath.Join(home, "providers.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(home, "providers.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

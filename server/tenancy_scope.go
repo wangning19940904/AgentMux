@@ -253,18 +253,12 @@ func (s *Server) labelChannelOwners(ctx context.Context, items []core.Channel) {
 	}
 }
 
-// authorizeInvocationTarget checks that the caller may run what it asked for.
-// An invocation names either an Agent instance or a config.toml project;
-// projects are host infrastructure with no owner, so they stay admin-only.
-func (s *Server) authorizeInvocationTarget(w http.ResponseWriter, r *http.Request, agentID, project string) bool {
+// authorizeInvocationTarget checks that the caller may run the requested
+// PostgreSQL-backed Agent instance.
+func (s *Server) authorizeInvocationTarget(w http.ResponseWriter, r *http.Request, agentID string) bool {
 	principal := requestPrincipal(r)
 	if !principal.IsTenant() {
 		return true
-	}
-	if strings.TrimSpace(project) != "" {
-		writeErr(w, http.StatusForbidden,
-			"config.toml projects are managed by the AgentMux administrator; target an agent_id instead")
-		return false
 	}
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
@@ -304,11 +298,6 @@ func (s *Server) authorizeOpenAIInvocationTarget(w http.ResponseWriter, r *http.
 	principal := requestPrincipal(r)
 	if !principal.IsTenant() {
 		return true
-	}
-	if strings.TrimSpace(invocation.Project) != "" {
-		writeOpenAIError(w, http.StatusForbidden,
-			"config.toml projects are managed by the AgentMux administrator", "permission_error", "model", "insufficient_scope")
-		return false
 	}
 	agentID := strings.TrimSpace(invocation.AgentID)
 	if agentID == "" {

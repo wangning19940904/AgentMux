@@ -15,10 +15,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-const (
-	openAIAgentHeader   = "X-AgentMux-Agent-ID"
-	openAIProjectHeader = "X-AgentMux-Project"
-)
+const openAIAgentHeader = "X-AgentMux-Agent-ID"
 
 // openAIResponseRequest contains the Responses create fields that AgentMux
 // consumes or reflects. Unknown fields remain forward-compatible because the
@@ -164,7 +161,7 @@ func (s *Server) handleOpenAIResponse(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", openAIRequestErrorParam(err), "invalid_request")
 		return
 	}
-	invocation, fallback, err := openAIInvocationRequest(r, req, identity.conversationID, prompt)
+	invocation, err := openAIInvocationRequest(r, req, identity.conversationID, prompt)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "model", "invalid_target")
 		return
@@ -174,17 +171,17 @@ func (s *Server) handleOpenAIResponse(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Background {
 		if req.Stream {
-			s.handleOpenAIBackgroundResponseStream(w, r, req, identity, invocation, fallback, -1)
+			s.handleOpenAIBackgroundResponseStream(w, r, req, identity, invocation, -1)
 			return
 		}
-		s.handleOpenAIBackgroundResponse(w, r, req, identity, invocation, fallback)
+		s.handleOpenAIBackgroundResponse(w, r, req, identity, invocation)
 		return
 	}
 	if req.Stream {
-		s.handleOpenAIResponseStream(w, r, req, identity, invocation, fallback)
+		s.handleOpenAIResponseStream(w, r, req, identity, invocation)
 		return
 	}
-	result, err := invokeOpenAIResponse(r.Context(), s.invoker, invocation, fallback)
+	result, err := invokeOpenAIResponse(r.Context(), s.invoker, invocation)
 	if err != nil {
 		writeOpenAIInvocationError(w, err)
 		return
@@ -308,12 +305,8 @@ func openAIConversationID(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func openAIInvocationRequest(r *http.Request, req openAIResponseRequest, conversationID, prompt string) (core.InvocationRequest, bool, error) {
+func openAIInvocationRequest(r *http.Request, req openAIResponseRequest, conversationID, prompt string) (core.InvocationRequest, error) {
 	agentID := strings.TrimSpace(r.Header.Get(openAIAgentHeader))
-	project := strings.TrimSpace(r.Header.Get(openAIProjectHeader))
-	if agentID != "" && project != "" {
-		return core.InvocationRequest{}, false, fmt.Errorf("only one of %s and %s may be set", openAIAgentHeader, openAIProjectHeader)
-	}
 	outputSchema := req.outputFormat.Schema
 	if hasOpenAIFunctionTools(req) && openAIToolChoiceRequired(req.ToolChoice) {
 		outputSchema = openAIFunctionEnvelopeSchema(req)
@@ -324,37 +317,17 @@ func openAIInvocationRequest(r *http.Request, req openAIResponseRequest, convers
 	}
 	if agentID != "" {
 		invocation.AgentID = agentID
-		return invocation, false, nil
-	}
-	if project != "" {
-		invocation.Project = project
-		return invocation, false, nil
+		return invocation, nil
 	}
 	invocation.AgentID = req.Model
-	return invocation, true, nil
+	return invocation, nil
 }
 
-func invokeOpenAIResponse(ctx context.Context, invoker core.Invoker, req core.InvocationRequest, fallback bool) (core.InvocationResult, error) {
-	result, err := invoker.Invoke(ctx, req)
-	if !fallback || !errors.Is(err, core.ErrInvocationNotFound) {
-		return result, err
-	}
-	req.Project = req.AgentID
-	req.AgentID = ""
+func invokeOpenAIResponse(ctx context.Context, invoker core.Invoker, req core.InvocationRequest) (core.InvocationResult, error) {
 	return invoker.Invoke(ctx, req)
 }
 
-func invokeOpenAIResponseStream(ctx context.Context, invoker core.StreamingInvoker, req core.InvocationRequest, fallback bool, sink core.InvocationEventSink) (core.InvocationResult, error) {
-	emitted := false
-	result, err := invoker.InvokeStream(ctx, req, func(event core.InvocationStreamEvent) error {
-		emitted = true
-		return sink(event)
-	})
-	if !fallback || emitted || !errors.Is(err, core.ErrInvocationNotFound) {
-		return result, err
-	}
-	req.Project = req.AgentID
-	req.AgentID = ""
+func invokeOpenAIResponseStream(ctx context.Context, invoker core.StreamingInvoker, req core.InvocationRequest, sink core.InvocationEventSink) (core.InvocationResult, error) {
 	return invoker.InvokeStream(ctx, req, sink)
 }
 
@@ -499,7 +472,7 @@ type openAIStreamOutcome struct {
 	err    error
 }
 
-func (s *Server) handleOpenAIResponseStream(w http.ResponseWriter, r *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest, fallback bool) {
+func (s *Server) handleOpenAIResponseStream(w http.ResponseWriter, r *http.Request, req openAIResponseRequest, identity openAIResponseIdentity, invocation core.InvocationRequest) {
 	streamer, ok := s.invoker.(core.StreamingInvoker)
 	if !ok {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "streaming invocation runtime unavailable", "server_error", nil, "streaming_unavailable")
@@ -515,7 +488,7 @@ func (s *Server) handleOpenAIResponseStream(w http.ResponseWriter, r *http.Reque
 	events := make(chan core.InvocationStreamEvent)
 	done := make(chan openAIStreamOutcome, 1)
 	go func() {
-		result, err := invokeOpenAIResponseStream(streamCtx, streamer, invocation, fallback, func(event core.InvocationStreamEvent) error {
+		result, err := invokeOpenAIResponseStream(streamCtx, streamer, invocation, func(event core.InvocationStreamEvent) error {
 			select {
 			case events <- event:
 				return nil

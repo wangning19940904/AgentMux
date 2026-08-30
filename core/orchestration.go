@@ -30,7 +30,6 @@ type OrchestrationTask struct {
 	ID              string              `json:"id"`
 	OrchestrationID string              `json:"orchestration_id,omitempty"`
 	AgentID         string              `json:"agent_id,omitempty"`
-	Project         string              `json:"project,omitempty"`
 	Input           string              `json:"input"`
 	DependsOn       []string            `json:"depends_on,omitempty"`
 	Status          OrchestrationStatus `json:"status"`

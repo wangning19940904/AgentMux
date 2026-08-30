@@ -120,40 +120,24 @@ func (s *richInvocationSession) SendInput(_ context.Context, input AgentTurnInpu
 func (s *richInvocationSession) RespondPermission(context.Context, bool) error { return nil }
 func (s *richInvocationSession) Close(context.Context) error                   { return nil }
 
-func TestInvokeConfigProjectReturnsAnswerAndReusesConversation(t *testing.T) {
+func TestInvokeRequiresPostgresBackedAgent(t *testing.T) {
+	const runtimeID = "invocation-postgres-agent-test"
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
 	agent := &invocationTestAgent{}
-	engine.AddProject("demo", t.TempDir(), agent, nil, WorkspaceInitOptions{
-		AgentID: "config:demo", AgentName: "Demo", RuntimeID: "invocation-test",
-	})
-	engine.AddProjectAgentAlias("demo", "config:demo-1")
-	service := NewConnectService(nil, engine, &fakeStore{})
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return agent, nil })
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-1": {ID: "agent-1", Name: "Managed", RuntimeID: runtimeID, WorkDir: t.TempDir(), Enabled: true},
+	}}
+	service := NewConnectService(nil, engine, store)
 
-	first, err := service.Invoke(context.Background(), InvocationRequest{
-		Project: "demo", ConversationID: "order-42", Input: "first",
+	result, err := service.Invoke(context.Background(), InvocationRequest{
+		AgentID: "agent-1", ConversationID: "order-42", Input: "first",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.Invoke(context.Background(), InvocationRequest{
-		AgentID: "config:demo-1", ConversationID: first.ConversationID, Input: "second",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Answer != "answer: first" || second.Answer != "answer: second" {
-		t.Fatalf("answers = %q, %q", first.Answer, second.Answer)
-	}
-	if first.ConversationID != "order-42" || first.SessionID != second.SessionID {
-		t.Fatalf("conversation/session mismatch: first=%+v second=%+v", first, second)
-	}
-	if second.Project != "demo" || second.AgentID != "config:demo-1" {
-		t.Fatalf("config Agent alias result = %+v", second)
-	}
-	agent.mu.Lock()
-	defer agent.mu.Unlock()
-	if agent.sessions != 1 {
-		t.Fatalf("sessions = %d, want 1", agent.sessions)
+	if result.AgentID != "agent-1" || result.ConversationID != "order-42" || result.Answer != "answer: first" {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -177,12 +161,16 @@ func TestInvokeManagedAgent(t *testing.T) {
 }
 
 func TestInvokeMaterializesRichAttachmentsAndPassesOutputSchema(t *testing.T) {
+	const runtimeID = "invocation-rich-test"
 	session := &richInvocationSession{}
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return &richInvocationAgent{session: session}, nil })
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
-	engine.AddProject("rich", t.TempDir(), &richInvocationAgent{session: session}, nil)
-	service := NewConnectService(nil, engine, &fakeStore{})
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-rich": {ID: "agent-rich", Name: "Rich", RuntimeID: runtimeID, WorkDir: t.TempDir(), Enabled: true},
+	}}
+	service := NewConnectService(nil, engine, store)
 	result, err := service.Invoke(context.Background(), InvocationRequest{
-		Project: "rich", Input: "inspect",
+		AgentID: "agent-rich", Input: "inspect",
 		Attachments:  []AgentAttachment{{Kind: "image", Name: "screen.png", MIMEType: "image/png", Data: []byte("png")}},
 		OutputSchema: map[string]any{"type": "object"},
 	})
@@ -201,14 +189,18 @@ func TestInvokeMaterializesRichAttachmentsAndPassesOutputSchema(t *testing.T) {
 }
 
 func TestInvokeRejectsConcurrentTurnForSameConversation(t *testing.T) {
+	const runtimeID = "invocation-blocking-test"
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
 	started := make(chan struct{})
-	engine.AddProject("demo", t.TempDir(), &blockingInvocationAgent{started: started}, nil)
-	service := NewConnectService(nil, engine, &fakeStore{})
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return &blockingInvocationAgent{started: started}, nil })
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-blocking": {ID: "agent-blocking", Name: "Blocking", RuntimeID: runtimeID, WorkDir: t.TempDir(), Enabled: true},
+	}}
+	service := NewConnectService(nil, engine, store)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.Invoke(ctx, InvocationRequest{Project: "demo", ConversationID: "same", Input: "wait"})
+		_, err := service.Invoke(ctx, InvocationRequest{AgentID: "agent-blocking", ConversationID: "same", Input: "wait"})
 		done <- err
 	}()
 	select {
@@ -216,7 +208,7 @@ func TestInvokeRejectsConcurrentTurnForSameConversation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first invocation did not start")
 	}
-	_, err := service.Invoke(context.Background(), InvocationRequest{Project: "demo", ConversationID: "same", Input: "again"})
+	_, err := service.Invoke(context.Background(), InvocationRequest{AgentID: "agent-blocking", ConversationID: "same", Input: "again"})
 	if !errors.Is(err, ErrInvocationBusy) {
 		t.Fatalf("error = %v, want ErrInvocationBusy", err)
 	}
@@ -235,9 +227,8 @@ func TestInvokeValidatesTargetAndInput(t *testing.T) {
 	service := NewConnectService(nil, NewEngine(nil, NewHookRunner(nil, nil)), &fakeStore{})
 	for _, req := range []InvocationRequest{
 		{},
-		{Project: "a", AgentID: "b", Input: "hello"},
-		{Project: "a", Input: "   "},
-		{Project: "a", ConversationID: "bad\nkey", Input: "hello"},
+		{AgentID: "a", Input: "   "},
+		{AgentID: "a", ConversationID: "bad\nkey", Input: "hello"},
 	} {
 		if _, err := service.Invoke(context.Background(), req); !errors.Is(err, ErrInvalidInvocation) {
 			t.Fatalf("request %+v: error = %v", req, err)
@@ -246,18 +237,23 @@ func TestInvokeValidatesTargetAndInput(t *testing.T) {
 }
 
 func TestInvokeStreamForwardsAgentEventsAndCompletion(t *testing.T) {
+	const runtimeID = "invocation-stream-test"
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
-	engine.AddProject("stream", t.TempDir(), &streamingInvocationAgent{events: []*Event{
+	agent := &streamingInvocationAgent{events: []*Event{
 		{Type: EventThinking, Text: "checking"},
 		{Type: EventToolUse, ToolName: "shell", ToolInput: "go test ./..."},
 		{Type: EventModelResponse, Usage: &TurnUsage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8}},
 		{Type: EventOutput, Text: "almost"},
 		{Type: EventFinal, Text: "done", Final: true},
-	}}, nil)
-	service := NewConnectService(nil, engine, &fakeStore{})
+	}}
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return agent, nil })
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-stream": {ID: "agent-stream", Name: "Stream", RuntimeID: runtimeID, WorkDir: t.TempDir(), Enabled: true},
+	}}
+	service := NewConnectService(nil, engine, store)
 	var events []InvocationStreamEvent
 	result, err := service.InvokeStream(context.Background(), InvocationRequest{
-		Project: "stream", ConversationID: "stream-1", Input: "test",
+		AgentID: "agent-stream", ConversationID: "stream-1", Input: "test",
 	}, func(event InvocationStreamEvent) error {
 		events = append(events, event)
 		return nil

@@ -7,6 +7,7 @@ import { Channel } from "../../api";
 import { ChannelAvatar } from "../../ChannelAvatar";
 import { useI18n } from "../../i18n";
 import { OwnerBadge } from "../agents/AgentsPanel";
+import { TargetBadge } from "../../components/TargetBadge";
 import {
   formatChannelTime,
   stateBadge,
@@ -54,6 +55,7 @@ export function ChannelCard({
           {badge.label}
         </span>
         <OwnerBadge resource={channel} />
+        <TargetBadge target_id={channel.target_id} target_name={channel.target_name} />
       </div>
       {channel.error && <div className="session-notice error">{channel.error}</div>}
       {healthTimes.length > 0 && <div className="channel-health-meta">{healthTimes.join(" · ")}</div>}

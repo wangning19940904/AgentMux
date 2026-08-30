@@ -139,6 +139,43 @@ func TestAgentListIsScopedPerTenant(t *testing.T) {
 	}
 }
 
+func TestAdministratorCanPreviewTenantScopeWithoutTenantElevation(t *testing.T) {
+	srv, _, homebook, rookie := newTwoTenantServer(t)
+	handler := srv.withAuth(srv.mux)
+
+	previewReq := httptest.NewRequest(http.MethodGet, "/api/v1/agent-instances", nil)
+	previewReq.Header.Set("Authorization", "Bearer admin-secret")
+	previewReq.Header.Set(tenantScopeHeader, homebook.tenant.ID)
+	previewRec := httptest.NewRecorder()
+	handler.ServeHTTP(previewRec, previewReq)
+	if previewRec.Code != http.StatusOK {
+		t.Fatalf("admin tenant preview = %d %s", previewRec.Code, previewRec.Body.String())
+	}
+	previewIDs := agentIDsIn(t, previewRec.Body.Bytes())
+	if !previewIDs["agent-homebook"] || previewIDs["agent-rookie"] || previewIDs["agent-legacy"] {
+		t.Fatalf("admin preview scope = %v", previewIDs)
+	}
+
+	closedReq := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	closedReq.Header.Set("Authorization", "Bearer admin-secret")
+	closedReq.Header.Set(tenantScopeHeader, homebook.tenant.ID)
+	closedRec := httptest.NewRecorder()
+	handler.ServeHTTP(closedRec, closedReq)
+	if closedRec.Code != http.StatusForbidden {
+		t.Fatalf("tenant preview reached admin route: %d", closedRec.Code)
+	}
+
+	peerReq := httptest.NewRequest(http.MethodGet, "/api/v1/agent-instances", nil)
+	peerReq.Header.Set("Authorization", "Bearer "+rookie.secret)
+	peerReq.Header.Set(tenantScopeHeader, homebook.tenant.ID)
+	peerRec := httptest.NewRecorder()
+	handler.ServeHTTP(peerRec, peerReq)
+	peerIDs := agentIDsIn(t, peerRec.Body.Bytes())
+	if !peerIDs["agent-rookie"] || peerIDs["agent-homebook"] {
+		t.Fatalf("tenant changed scope through admin header: %v", peerIDs)
+	}
+}
+
 func TestChannelListIsScopedPerTenant(t *testing.T) {
 	srv, _, homebook, _ := newTwoTenantServer(t)
 
@@ -382,12 +419,4 @@ func TestTenantCannotInvokePeerAgent(t *testing.T) {
 		t.Skip("invocation runtime is not wired in this test server")
 	}
 
-	// A project target is administrator-only.
-	project := asTenant(t, srv, homebook.secret, http.MethodPost, "/api/v1/invocations", map[string]any{
-		"project": "anything",
-		"input":   "hello",
-	})
-	if project.Code != http.StatusServiceUnavailable && project.Code != http.StatusForbidden {
-		t.Fatalf("project target status %d body = %s", project.Code, project.Body.String())
-	}
 }

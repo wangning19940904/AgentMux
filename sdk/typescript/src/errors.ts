@@ -44,7 +44,7 @@ export class AgentMuxUnauthorizedError extends AgentMuxAPIError {
   }
 }
 
-/** Target agent/project/resource does not exist (HTTP 404). */
+/** Target agent/resource does not exist (HTTP 404). */
 export class AgentMuxNotFoundError extends AgentMuxAPIError {
   constructor(message = "not found") {
     super(404, message);

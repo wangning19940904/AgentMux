@@ -2,6 +2,7 @@ package usage
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -28,45 +29,53 @@ type Totals struct {
 	CacheReadTokens  int64   `json:"cache_read_tokens"`
 	CacheWriteTokens int64   `json:"cache_write_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
-	Records          int     `json:"records"`
+	Records          int     `json:"records"`  // model request count
+	Sessions         int     `json:"sessions"` // distinct non-empty sessions
+	EstimatedTokens  int64   `json:"estimated_tokens"`
+	EstimatedRecords int     `json:"estimated_records"`
 }
 
 // Bucket is one period bucket (a day/week/month/session/block).
 type Bucket struct {
-	Key    string `json:"key"`
-	Totals Totals `json:"totals"`
+	Key       string        `json:"key"`
+	Totals    Totals        `json:"totals"`
+	ByRuntime []RuntimeStat `json:"by_runtime,omitempty"`
 }
 
 // ModelStat aggregates by model.
 type ModelStat struct {
-	Model   string  `json:"model"`
-	Tokens  int64   `json:"tokens"`
-	CostUSD float64 `json:"cost_usd"`
-	Records int     `json:"records"`
+	Model           string  `json:"model"`
+	Tokens          int64   `json:"tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	Records         int     `json:"records"`
+	EstimatedTokens int64   `json:"estimated_tokens,omitempty"`
 }
 
 // SourceStat aggregates by data source.
 type SourceStat struct {
-	Source  string  `json:"source"`
-	Tokens  int64   `json:"tokens"`
-	CostUSD float64 `json:"cost_usd"`
-	Records int     `json:"records"`
+	Source          string  `json:"source"`
+	Tokens          int64   `json:"tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	Records         int     `json:"records"`
+	EstimatedTokens int64   `json:"estimated_tokens,omitempty"`
 }
 
 // AgentStat aggregates by agent (the project/agent id on each record).
 type AgentStat struct {
-	Agent   string  `json:"agent"`
-	Tokens  int64   `json:"tokens"`
-	CostUSD float64 `json:"cost_usd"`
-	Records int     `json:"records"`
+	Agent    string  `json:"agent"`
+	Tokens   int64   `json:"tokens"`
+	CostUSD  float64 `json:"cost_usd"`
+	Records  int     `json:"records"`
+	Sessions int     `json:"sessions"`
 }
 
 // RuntimeStat aggregates by runtime/framework (claude, codex, ...).
 type RuntimeStat struct {
-	Runtime string  `json:"runtime"`
-	Tokens  int64   `json:"tokens"`
-	CostUSD float64 `json:"cost_usd"`
-	Records int     `json:"records"`
+	Runtime         string  `json:"runtime"`
+	Tokens          int64   `json:"tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	Records         int     `json:"records"`
+	EstimatedTokens int64   `json:"estimated_tokens,omitempty"`
 }
 
 // Aggregate buckets records by the requested period.
@@ -84,10 +93,18 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 	sourceMap := map[string]*SourceStat{}
 	agentMap := map[string]*AgentStat{}
 	runtimeMap := map[string]*RuntimeStat{}
+	bucketRuntimeMap := map[string]map[string]*RuntimeStat{}
+	sessionSet := map[string]struct{}{}
+	bucketSessionSets := map[string]map[string]struct{}{}
+	agentSessionSets := map[string]map[string]struct{}{}
 
 	for _, rec := range recs {
 		addTotals(&r.Totals, rec)
 		recCount := recordCount(rec)
+		session := usageSessionKey(rec)
+		if session != "" && addUnique(sessionSet, session) {
+			r.Totals.Sessions++
+		}
 
 		key := bucketKey(period, rec)
 		bt := bucketMap[key]
@@ -96,6 +113,16 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 			bucketMap[key] = bt
 		}
 		addTotals(bt, rec)
+		if session != "" {
+			set := bucketSessionSets[key]
+			if set == nil {
+				set = map[string]struct{}{}
+				bucketSessionSets[key] = set
+			}
+			if addUnique(set, session) {
+				bt.Sessions++
+			}
+		}
 
 		ms := modelMap[rec.Model]
 		if ms == nil {
@@ -105,6 +132,9 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		ms.Tokens += totalTokens(rec)
 		ms.CostUSD += rec.CostUSD
 		ms.Records += recCount
+		if rec.TokenQuality == core.UsageTokenQualityEstimated {
+			ms.EstimatedTokens += totalTokens(rec)
+		}
 
 		ss := sourceMap[rec.Source]
 		if ss == nil {
@@ -114,6 +144,9 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		ss.Tokens += totalTokens(rec)
 		ss.CostUSD += rec.CostUSD
 		ss.Records += recCount
+		if rec.TokenQuality == core.UsageTokenQualityEstimated {
+			ss.EstimatedTokens += totalTokens(rec)
+		}
 
 		agentKey := rec.Project
 		if agentKey == "" {
@@ -127,6 +160,16 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		as.Tokens += totalTokens(rec)
 		as.CostUSD += rec.CostUSD
 		as.Records += recCount
+		if session != "" {
+			set := agentSessionSets[agentKey]
+			if set == nil {
+				set = map[string]struct{}{}
+				agentSessionSets[agentKey] = set
+			}
+			if addUnique(set, session) {
+				as.Sessions++
+			}
+		}
 
 		runtimeKey := rec.RuntimeID
 		if runtimeKey == "" {
@@ -143,10 +186,35 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		rs.Tokens += totalTokens(rec)
 		rs.CostUSD += rec.CostUSD
 		rs.Records += recCount
+		if rec.TokenQuality == core.UsageTokenQualityEstimated {
+			rs.EstimatedTokens += totalTokens(rec)
+		}
+
+		bucketRuntimes := bucketRuntimeMap[key]
+		if bucketRuntimes == nil {
+			bucketRuntimes = map[string]*RuntimeStat{}
+			bucketRuntimeMap[key] = bucketRuntimes
+		}
+		bucketRuntime := bucketRuntimes[runtimeKey]
+		if bucketRuntime == nil {
+			bucketRuntime = &RuntimeStat{Runtime: runtimeKey}
+			bucketRuntimes[runtimeKey] = bucketRuntime
+		}
+		bucketRuntime.Tokens += totalTokens(rec)
+		bucketRuntime.CostUSD += rec.CostUSD
+		bucketRuntime.Records += recCount
+		if rec.TokenQuality == core.UsageTokenQualityEstimated {
+			bucketRuntime.EstimatedTokens += totalTokens(rec)
+		}
 	}
 
 	for k, t := range bucketMap {
-		r.Buckets = append(r.Buckets, Bucket{Key: k, Totals: *t})
+		bucket := Bucket{Key: k, Totals: *t, ByRuntime: []RuntimeStat{}}
+		for _, runtime := range bucketRuntimeMap[k] {
+			bucket.ByRuntime = append(bucket.ByRuntime, *runtime)
+		}
+		sort.Slice(bucket.ByRuntime, func(i, j int) bool { return bucket.ByRuntime[i].Tokens > bucket.ByRuntime[j].Tokens })
+		r.Buckets = append(r.Buckets, bucket)
 	}
 	sort.Slice(r.Buckets, func(i, j int) bool { return r.Buckets[i].Key < r.Buckets[j].Key })
 	for _, ms := range modelMap {
@@ -179,6 +247,10 @@ func addTotals(t *Totals, rec core.UsageRecord) {
 		requests = 1
 	}
 	t.Records += int(requests)
+	if rec.TokenQuality == core.UsageTokenQualityEstimated {
+		t.EstimatedTokens += totalTokens(rec)
+		t.EstimatedRecords += int(requests)
+	}
 }
 
 func totalTokens(rec core.UsageRecord) int64 {
@@ -195,9 +267,33 @@ func recordCount(rec core.UsageRecord) int {
 	return int(requests)
 }
 
+// usageSessionKey keeps session identities distinct across machines and
+// frameworks while collapsing every model request inside one session.
+func usageSessionKey(rec core.UsageRecord) string {
+	sessionID := strings.TrimSpace(rec.SessionID)
+	if sessionID == "" {
+		return ""
+	}
+	source := strings.TrimSpace(rec.Source)
+	if source == "" {
+		source = strings.TrimSpace(rec.RuntimeID)
+	}
+	return strings.Join([]string{strings.TrimSpace(rec.Host), source, sessionID}, "\x00")
+}
+
+func addUnique(set map[string]struct{}, value string) bool {
+	if _, exists := set[value]; exists {
+		return false
+	}
+	set[value] = struct{}{}
+	return true
+}
+
 func bucketKey(period string, rec core.UsageRecord) string {
 	ts := rec.Timestamp
 	switch period {
+	case "hourly":
+		return ts.Format("2006-01-02 15:00")
 	case "weekly":
 		y, w := ts.ISOWeek()
 		return isoWeek(y, w)

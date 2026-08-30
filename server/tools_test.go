@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -106,6 +107,57 @@ func TestSkillsMarketplaceEndpointFilters(t *testing.T) {
 	}
 	if len(items) == 0 || items[0].Name != "pdf" {
 		t.Fatalf("items = %+v", items)
+	}
+}
+
+func TestValidateAgentMCPServers(t *testing.T) {
+	s, st := newTestServer(t)
+	registry := mcp.New(st)
+	if err := registry.Upsert(context.Background(), &core.MCPServer{
+		Name: "files", Transport: "stdio", Command: "npx", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.mcp = registry
+	if err := s.validateAgentMCPServers(context.Background(), &core.AgentInstance{
+		RuntimeID: "claudecode", MCPServers: []string{"files"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.validateAgentMCPServers(context.Background(), &core.AgentInstance{
+		RuntimeID: "codex-app", MCPServers: []string{"files"},
+	}); err == nil {
+		t.Fatal("expected unsupported runtime error")
+	}
+	if err := s.validateAgentMCPServers(context.Background(), &core.AgentInstance{
+		RuntimeID: "codex", MCPServers: []string{"missing"},
+	}); err == nil {
+		t.Fatal("expected missing MCP server error")
+	}
+}
+
+func TestSkillUninstallEndpointRemovesManagedSkill(t *testing.T) {
+	s, _ := newTestServer(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: demo\ndescription: Demo\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s.SetModules(nil, skills.New(root), nil, nil)
+
+	rec := doJSON(t, s, http.MethodDelete, "/api/v1/skills?name=demo", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("skill directory still exists: %v", err)
+	}
+	rec = doJSON(t, s, http.MethodDelete, "/api/v1/skills?name=demo", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing skill code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }
 

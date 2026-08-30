@@ -14,7 +14,7 @@ import (
 
 func TestInitialCollectSinceResumesFromCheckpoint(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "usage.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "usage.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestInitialCollectSinceResumesFromCheckpoint(t *testing.T) {
 
 func TestReportRangeUsesCanonicalRowsFiltersDatesAndReprices(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "usage.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "usage.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,5 +80,35 @@ func TestReportRangeUsesCanonicalRowsFiltersDatesAndReprices(t *testing.T) {
 	wantCost := float64(200)*1.25/1e6 + float64(10)*10/1e6
 	if math.Abs(report.Totals.CostUSD-wantCost) > 1e-12 {
 		t.Fatalf("cost = %.12f, want %.12f", report.Totals.CostUSD, wantCost)
+	}
+}
+
+func TestReportRangeInLocationBucketsByRequestedTimezone(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := NewEngine(&config.Config{Usage: config.UsageConfig{CacheDir: t.TempDir(), Offline: true}}, st, nil)
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := core.UsageRecord{
+		Source: "codex", SessionID: "timezone", Model: "gpt-5",
+		Timestamp: time.Date(2026, 8, 29, 16, 30, 0, 0, time.UTC), InputTokens: 10,
+	}
+	if err := st.UpsertUsage(ctx, []core.UsageRecord{record}); err != nil {
+		t.Fatal(err)
+	}
+	since := time.Date(2026, 8, 30, 0, 0, 0, 0, location)
+	until := since.AddDate(0, 0, 1)
+	report, err := eng.ReportRangeInLocation(ctx, "daily", since, until, location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Timezone != "Asia/Shanghai" || len(report.Buckets) != 1 || report.Buckets[0].Key != "2026-08-30" {
+		t.Fatalf("report = %+v", report)
 	}
 }

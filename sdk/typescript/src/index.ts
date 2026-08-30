@@ -35,8 +35,10 @@ export type {
   Orchestration,
   OrchestrationStatus,
   OrchestrationTask,
+  OrchestrationTaskInput,
   ResourceVisibility,
   TenancySelf,
   Tenant,
   Trigger,
+  TurnUsage,
 } from "./types.js";

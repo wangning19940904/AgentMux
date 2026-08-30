@@ -33,6 +33,18 @@ func TestCatalogHasKnownFrameworks(t *testing.T) {
 	}
 }
 
+func TestCatalogIncludesCompactDisplayMetadata(t *testing.T) {
+	for _, spec := range Catalog() {
+		if strings.TrimSpace(spec.Company) == "" {
+			t.Errorf("framework %q has no company metadata", spec.Kind)
+		}
+	}
+	codex, ok := Lookup("codex")
+	if !ok || codex.Company != "OpenAI" || !codex.UninstallSupported {
+		t.Fatalf("Codex metadata = %+v", codex)
+	}
+}
+
 func TestCatalogOmitsHiddenFrameworks(t *testing.T) {
 	visible := map[string]bool{}
 	for _, spec := range Catalog() {
@@ -66,6 +78,36 @@ func TestTraeInstallRequiresInternalAcknowledgement(t *testing.T) {
 	res := InstallWithProgressOptions(context.Background(), "traecli", InstallOptions{}, nil)
 	if res.OK || !strings.Contains(res.Error, "explicit acknowledgement") {
 		t.Fatalf("install result = %+v", res)
+	}
+}
+
+func TestUninstallNPMFrameworkPreservesCatalogOwnedCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	home := t.TempDir()
+	bin := t.TempDir()
+	codexPath := filepath.Join(bin, "codex")
+	writeFrameworkExecutable(t, codexPath, "#!/bin/sh\necho 'codex-cli 0.151.0'\n")
+	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\n/bin/rm -f \""+codexPath+"\"\n")
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
+	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
+
+	res := UninstallWithProgress(context.Background(), "codex", nil)
+	if !res.OK || res.Command != "npm uninstall -g @openai/codex" || res.Error != "" {
+		t.Fatalf("uninstall result = %+v", res)
+	}
+	if IsInstalled("codex") {
+		t.Fatal("Codex remained installed after uninstall")
+	}
+}
+
+func TestUninstallRejectsFrameworkWithoutSafeCommand(t *testing.T) {
+	res := UninstallWithProgress(context.Background(), "cursor", nil)
+	if res.OK || !strings.Contains(res.Error, "does not support automatic uninstall") {
+		t.Fatalf("uninstall result = %+v", res)
 	}
 }
 
@@ -162,6 +204,41 @@ exit 2
 	status := CheckAuth(context.Background(), "traecli")
 	if status.State != AuthStateAuthenticated || !status.LoginSupported {
 		t.Fatalf("TRAE auth = %+v", status)
+	}
+}
+
+func TestFrameworkLogoutUsesNativeCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	bin := t.TempDir()
+	state := filepath.Join(t.TempDir(), "authenticated")
+	if err := os.WriteFile(state, []byte("ready"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFrameworkExecutable(t, filepath.Join(bin, "cursor-agent"), `#!/bin/sh
+if [ "$1" = "status" ]; then
+  if [ -f "`+state+`" ]; then echo 'Authenticated'; else echo 'Not logged in'; fi
+  exit 0
+fi
+if [ "$1" = "logout" ]; then
+  rm -f "`+state+`"
+  exit 0
+fi
+exit 2
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/bin:/usr/bin")
+	t.Setenv("CURSOR_API_KEY", "")
+	before := CheckAuth(context.Background(), "cursor")
+	if before.State != AuthStateAuthenticated || !before.LogoutSupported {
+		t.Fatalf("auth before logout = %+v", before)
+	}
+	after, err := Logout(context.Background(), "cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != AuthStateUnauthenticated {
+		t.Fatalf("auth after logout = %+v", after)
 	}
 }
 

@@ -27,7 +27,7 @@ func (s *Server) handleInvocation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.authorizeInvocationTarget(w, r, req.AgentID, req.Project) {
+	if !s.authorizeInvocationTarget(w, r, req.AgentID) {
 		return
 	}
 	result, err := s.invoker.Invoke(r.Context(), req)
@@ -62,7 +62,7 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 	if !decoded {
 		return
 	}
-	if !s.authorizeInvocationTarget(w, r, req.AgentID, req.Project) {
+	if !s.authorizeInvocationTarget(w, r, req.AgentID) {
 		return
 	}
 
