@@ -835,6 +835,91 @@
   gap: 8px;
 }
 
+.provider-model-pill {
+  position: relative;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.provider-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-model-health-indicator {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--muted);
+}
+
+.provider-model-pill.healthy .provider-model-health-indicator {
+  color: var(--green);
+}
+
+.provider-model-pill.unhealthy {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red-soft) 68%, var(--bg));
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+  cursor: help;
+}
+
+.provider-model-pill.unhealthy.offline {
+  border-style: dashed;
+}
+
+.provider-model-pill.unhealthy:hover,
+.provider-model-pill.unhealthy:focus-visible {
+  z-index: 20;
+  outline: none;
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.provider-model-health-tooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  gap: 4px;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 64px));
+  padding: 9px 11px;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.provider-model-health-tooltip strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.provider-model-health-tooltip span:last-child {
+  color: var(--red);
+}
+
+.provider-model-pill.unhealthy:hover .provider-model-health-tooltip,
+.provider-model-pill.unhealthy:focus-visible .provider-model-health-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .provider-model-toggle {
   display: inline-flex;
   align-items: center;
@@ -2165,4 +2250,3 @@
   color: var(--muted);
   text-align: center;
 }
-
