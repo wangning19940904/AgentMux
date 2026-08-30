@@ -5,7 +5,10 @@
 /dist/
 macos-menubar/AgentMuxMenuBar
 desktop/build/
-desktop/frontend
+desktop/frontend/dist/
+desktop/frontend/node_modules/
+desktop/frontend/wailsjs/
+desktop/frontend/package.json.md5
 
 # Frontend
 web/node_modules/
