@@ -74,7 +74,9 @@ import {
   uniqueValues,
 } from "./providerUtils";
 import { CapabilityBadges, ProviderMark } from "./ProviderMark";
+import { ProviderModelBadges } from "./ProviderModelBadges";
 import { ProviderSyncDialog, ProviderTransferForm } from "./ProviderTransfer";
+import { providerModelHealthRows } from "./providerModelHealth";
 
 const defaultMonitorConfig: ProviderMonitorConfig = {
   enabled: true,
@@ -1439,12 +1441,13 @@ export function GatewayPanel() {
               const health = providerHealthByKey.get(targetKey(provider.target_id, provider.id));
               const healthFailure = monitorFailureDetail(health);
               const supportedModels = providerSupportedModels(provider);
+              const modelHealthRows = providerModelHealthRows(supportedModels, health?.models);
               const supportedProtocols = providerSupportedProtocols(provider);
-              const modelsCollapsible = supportedModels.length > PROVIDER_MODEL_COLLAPSE_THRESHOLD;
+              const modelsCollapsible = modelHealthRows.length > PROVIDER_MODEL_COLLAPSE_THRESHOLD;
               const modelsExpanded = expandedProviderModels.has(provider.id);
-              const visibleModels =
-                modelsCollapsible && !modelsExpanded ? supportedModels.slice(0, PROVIDER_MODEL_PREVIEW_COUNT) : supportedModels;
-              const hiddenModelCount = supportedModels.length - PROVIDER_MODEL_PREVIEW_COUNT;
+              const visibleModelRows =
+                modelsCollapsible && !modelsExpanded ? modelHealthRows.slice(0, PROVIDER_MODEL_PREVIEW_COUNT) : modelHealthRows;
+              const hiddenModelCount = modelHealthRows.length - PROVIDER_MODEL_PREVIEW_COUNT;
               return (
                 <article className="provider-card" key={targetKey(provider.target_id, provider.id)}>
                   <header>
@@ -1492,7 +1495,7 @@ export function GatewayPanel() {
                       <dd className="provider-fact-chips">
                         <div className="provider-model-list">
                           <div className="provider-fact-chips">
-                            <CapabilityBadges items={visibleModels} />
+                            <ProviderModelBadges rows={visibleModelRows} />
                           </div>
                           {modelsCollapsible && (
                             <button
