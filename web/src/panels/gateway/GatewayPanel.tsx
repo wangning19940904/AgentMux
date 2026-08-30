@@ -679,8 +679,6 @@ export function GatewayPanel() {
       routeCandidates.some((provider) => provider.id === routeDraft.provider_id) &&
       busy !== `save-route:${routeDraft.tool}`
   );
-  const activeProviderCount = providerList.filter((provider) => provider.enabled).length;
-  const configuredKeyCount = providerList.filter((provider) => provider.api_key_available).length;
 
   function renderProviderForm() {
     if (!providerFormOpen) return null;
@@ -1416,24 +1414,6 @@ export function GatewayPanel() {
                 {monitorNotice?.text || providerMonitor.error}
               </div>
             )}
-          </div>
-          <div className="surface-body provider-summary">
-            <div className="summary-stat">
-              <span>{t("gateway.configuredProviders")}</span>
-              <strong>{providerList.length}</strong>
-            </div>
-            <div className="summary-stat">
-              <span>{t("gateway.activeProviders")}</span>
-              <strong>{activeProviderCount}</strong>
-            </div>
-            <div className="summary-stat">
-              <span>{t("gateway.keysReady")}</span>
-              <strong>{configuredKeyCount}</strong>
-            </div>
-            <div className="summary-stat">
-              <span>{t("gateway.activeRoutesCount")}</span>
-              <strong>{routeList.length}</strong>
-            </div>
           </div>
           <div className="surface-body provider-list-grid">
             {providerList.map((provider) => {
