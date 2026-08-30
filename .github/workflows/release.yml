@@ -109,7 +109,7 @@ jobs:
         run: |
           ARCH="$(go env GOARCH)"
           ASSET="agentmux-desktop_darwin_${ARCH}.zip"
-          ditto -c -k --sequesterRsrc --keepParent desktop/build/bin/AgentMux.app "$ASSET"
+          ditto -c -k --sequesterRsrc --keepParent desktop/build/bin/agentmux-desktop.app "$ASSET"
           shasum -a 256 "$ASSET" >"$ASSET.sha256"
           echo "ASSET=$ASSET" >>"$GITHUB_ENV"
 
