@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -66,7 +65,6 @@ func openRuntimeStore(cfg *config.Config) (*store.Store, error) {
 
 type daemonOptions struct {
 	addrOverride string
-	sqlitePath   string
 	printConfig  bool
 	printReady   bool
 	printWebUI   bool
@@ -79,33 +77,28 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 	if err != nil {
 		return err
 	}
-	st, err := openDaemonStore(cfg, opts.sqlitePath)
+	if opts.addrOverride != "" {
+		cfg.Server.Addr = opts.addrOverride
+	}
+	if err := cfg.ValidateListenSecurity(); err != nil {
+		return err
+	}
+	st, err := openRuntimeStore(cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	if opts.addrOverride != "" {
-		cfg.Server.Addr = opts.addrOverride
-	}
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	srv, providerSvc, usageEngine := newServer(cfg, st)
-	eng, connectSvc, err := attachRuntime(ctx, cfg, st, srv, providerSvc, usageEngine)
+	runtime, err := newRuntime(ctx, cfg, st)
 	if err != nil {
 		return err
 	}
-	if err := providerSvc.RestoreProxyState(ctx); err != nil {
-		logger.Warn("local routing restore failed", "err", err)
-	}
-	defer func() { _ = providerSvc.Proxy().Stop() }()
-
-	errCh := make(chan error, 2)
-	go func() { errCh <- srv.ListenAndServe(ctx) }()
-	go func() { errCh <- eng.Start(ctx) }()
-	if err := connectSvc.Start(ctx); err != nil {
-		logger.Warn("connect runtime start failed", "err", err)
+	defer runtime.Stop()
+	if err := runtime.Start(); err != nil {
+		return err
 	}
 
 	if opts.printConfig {
@@ -129,27 +122,7 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 		cmd.Println("WebUI:", url)
 	}
 
-	select {
-	case err := <-errCh:
-		cancel()
-		if err != nil && ctx.Err() == nil {
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		return nil
-	}
-}
-
-func openDaemonStore(cfg *config.Config, sqlitePath string) (*store.Store, error) {
-	if strings.TrimSpace(sqlitePath) == "" {
-		return openRuntimeStore(cfg)
-	}
-	path, err := config.ExpandPath(sqlitePath)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite-path: %w", err)
-	}
-	return store.Open(path)
+	return runtime.Wait()
 }
 
 func serveCmd() *cobra.Command {

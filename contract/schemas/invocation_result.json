@@ -20,10 +20,6 @@
       "omitempty": false,
       "type": "string"
     },
-    "project": {
-      "omitempty": true,
-      "type": "string"
-    },
     "session_id": {
       "omitempty": true,
       "type": "string"

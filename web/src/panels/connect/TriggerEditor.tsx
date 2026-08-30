@@ -8,6 +8,7 @@ import {
 import { useState } from "react";
 import { Channel, Trigger } from "../../api";
 import { useI18n } from "../../i18n";
+import { TargetBadge } from "../../components/TargetBadge";
 import {
   EVENT_OPTIONS,
   kindBadge,
@@ -54,6 +55,7 @@ export function TriggerCard({
           <span className="status-dot" />
           {trigger.enabled ? t("common.enabled") : t("common.disabled")}
         </span>
+        <TargetBadge target_id={trigger.target_id} target_name={trigger.target_name} />
         {lastStatus && (
           <span className={`status-badge ${statusClass}`} title={trigger.last_error || ""}>
             {t("connect.lastRun")}: {lastStatus}
@@ -122,6 +124,7 @@ export function TriggerEditor({
   setDraft,
   channels,
   agents,
+  allowedKinds = ["cron", "webhook", "event"],
   busy,
   onSave,
   onCancel,
@@ -130,13 +133,15 @@ export function TriggerEditor({
   setDraft: (next: Partial<Trigger> | null) => void;
   channels: Channel[];
   agents: { id: string; name: string }[];
+  allowedKinds?: Array<"cron" | "webhook" | "event">;
   busy: boolean;
   onSave: () => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
   const update = (patch: Partial<Trigger>) => setDraft({ ...draft, ...patch });
-  const kind = draft.kind ?? "cron";
+  const draftKind = draft.kind as "cron" | "webhook" | "event" | undefined;
+  const kind = draftKind && allowedKinds.includes(draftKind) ? draftKind : allowedKinds[0];
   const canSave = Boolean((draft.name ?? "").trim());
 
   return (
@@ -146,14 +151,16 @@ export function TriggerEditor({
           <span>{t("common.name")}</span>
           <input value={draft.name ?? ""} onChange={(e) => update({ name: e.target.value })} />
         </label>
-        <label className="field">
-          <span>{t("connect.kind")}</span>
-          <select value={kind} onChange={(e) => update({ kind: e.target.value })}>
-            <option value="cron">{t("connect.kindCron")}</option>
-            <option value="webhook">{t("connect.kindWebhook")}</option>
-            <option value="event">{t("connect.kindEvent")}</option>
-          </select>
-        </label>
+        {allowedKinds.length > 1 && (
+          <label className="field">
+            <span>{t("connect.kind")}</span>
+            <select value={kind} onChange={(e) => update({ kind: e.target.value })}>
+              {allowedKinds.includes("cron") && <option value="cron">{t("connect.kindCron")}</option>}
+              {allowedKinds.includes("webhook") && <option value="webhook">{t("connect.kindWebhook")}</option>}
+              {allowedKinds.includes("event") && <option value="event">{t("connect.kindEvent")}</option>}
+            </select>
+          </label>
+        )}
 
         {kind === "cron" && (
           <label className="field">

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -22,6 +24,7 @@ func (s *Server) registerModuleRoutes() {
 	s.mux.HandleFunc("GET /api/v1/skills/marketplace", s.handleSkillsMarketplace)
 	s.mux.HandleFunc("POST /api/v1/skills/install", s.handleSkillInstall)
 	s.mux.HandleFunc("POST /api/v1/skills/toggle", s.handleSkillToggle)
+	s.mux.HandleFunc("DELETE /api/v1/skills", s.handleSkillUninstall)
 
 	s.mux.HandleFunc("GET /api/v1/mcp", s.handleMCPList)
 	s.mux.HandleFunc("POST /api/v1/mcp", s.handleMCPUpsert)
@@ -37,10 +40,10 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 		"connect": core.RegisteredPlatforms(),
 		"router":  core.RegisteredAgents(),
 		"ledger":  s.cfg.Usage.Sources,
-		"memory":  core.RegisteredMemories(),
-		"skills":  core.RegisteredSkillManagers(),
-		"mcp":     core.RegisteredMCPRegistries(),
-		"guard":   core.RegisteredGuards(),
+		"memory":  moduleNames(s.memory),
+		"skills":  moduleNames(s.skills),
+		"mcp":     moduleNames(s.mcp),
+		"guard":   moduleNames(s.guard),
 		"active": map[string]bool{
 			"memory": s.memory != nil,
 			"skills": s.skills != nil,
@@ -48,6 +51,15 @@ func (s *Server) handleModules(w http.ResponseWriter, r *http.Request) {
 			"guard":  s.guard != nil,
 		},
 	})
+}
+
+type namedModule interface{ Name() string }
+
+func moduleNames(module namedModule) []string {
+	if module == nil {
+		return []string{}
+	}
+	return []string{module.Name()}
 }
 
 func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +129,10 @@ type marketplaceSkillManager interface {
 	InstallMarketplace(ctx context.Context, req skillpkg.InstallRequest) (*core.Skill, error)
 }
 
+type uninstallableSkillManager interface {
+	Uninstall(ctx context.Context, name string) error
+}
+
 func (s *Server) handleSkillsMarketplace(w http.ResponseWriter, r *http.Request) {
 	mgr, ok := s.skills.(marketplaceSkillManager)
 	if !ok || mgr == nil {
@@ -163,6 +179,27 @@ func (s *Server) handleSkillToggle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.skills.SetEnabled(r.Context(), req.Name, req.Enabled); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w)
+}
+
+func (s *Server) handleSkillUninstall(w http.ResponseWriter, r *http.Request) {
+	mgr, ok := s.skills.(uninstallableSkillManager)
+	if !ok || mgr == nil {
+		serviceUnavailable(w, "skill uninstall")
+		return
+	}
+	name, ok := requireQuery(w, r, "name")
+	if !ok {
+		return
+	}
+	if err := mgr.Uninstall(r.Context(), name); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -14,7 +14,7 @@ import (
 //
 // Scope namespaces a chat to the runtime that owns it:
 //   - "channel:<channelID>" for console-managed channels
-//   - "project:<name>"      for config.toml projects
+//   - "project:<name>"      for legacy embedded project runtimes
 //   - "api-agent:<agentID>" for direct API invocations of managed Agents
 //
 // Group chats are shared per chat (all members share one Conversation, keyed

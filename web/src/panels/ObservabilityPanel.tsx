@@ -36,6 +36,7 @@ import {
 } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 type ObservabilityView = "overview" | "traces" | "insights" | "integrations";
 
@@ -275,7 +276,9 @@ function TraceExplorer({
     filters.limit,
     filters.offset,
   ]);
-  const traces = Array.isArray(tracesQuery.data) ? tracesQuery.data : tracesQuery.data?.traces ?? [];
+  const traces = (Array.isArray(tracesQuery.data) ? tracesQuery.data : tracesQuery.data?.traces ?? [])
+    .sort((left, right) => Date.parse(right.started_at) - Date.parse(left.started_at))
+    .slice(0, filters.limit);
   const total = Array.isArray(tracesQuery.data) ? undefined : tracesQuery.data?.total;
 
   function applyFilters(event: FormEvent) {
@@ -335,11 +338,11 @@ function TraceExplorer({
           <div className="trace-list" role="list">
             {traces.map((trace) => (
               <TraceListItem
-                key={trace.trace_id}
+                key={targetKey(trace.target_id, trace.trace_id)}
                 trace={trace}
                 language={language}
-                active={selectedTraceID === trace.trace_id}
-                onClick={() => onSelectTrace(trace.trace_id)}
+                active={selectedTraceID === traceRouteKey(trace)}
+                onClick={() => onSelectTrace(traceRouteKey(trace))}
               />
             ))}
           </div>
@@ -389,6 +392,7 @@ function TraceListItem({ trace, active, language, onClick }: { trace: Observatio
         <span className="trace-list-identity">
           <code>{shortID(trace.trace_id)}</code>
           <span>{trace.runtime_id || trace.source || "—"}</span>
+          <TargetBadge target_id={trace.target_id} target_name={trace.target_name} />
         </span>
         <span className="trace-list-metrics">
           <span>{formatDuration(durationBetween(trace.started_at, trace.ended_at))}</span>
@@ -408,7 +412,8 @@ function TraceListItem({ trace, active, language, onClick }: { trace: Observatio
 
 function TraceDetail({ traceID, onClose }: { traceID: string; onClose: () => void }) {
   const { t, language } = useI18n();
-  const detail = useAsync(() => api.observationTrace(traceID), [traceID]);
+  const selected = parseTraceRouteKey(traceID);
+  const detail = useAsync(() => api.observationTrace(selected.traceID, selected.targetID), [selected.traceID, selected.targetID]);
 
   if (detail.loading) return <div className="trace-detail-loading">{t("common.loading")}</div>;
   if (detail.error) return <LoadError error={detail.error} reload={detail.reload} />;
@@ -629,7 +634,7 @@ function InsightsPanel({ onOpenTrace }: { onOpenTrace: (traceID: string) => void
       {query.loading && <LoadingSurface />}
       {!query.loading && !query.error && insights.length === 0 && <section className="surface empty-state">{t("observability.noInsights")}</section>}
       <div className="insights-grid">
-        {insights.map((insight) => <InsightCard key={insight.id} insight={insight} language={language} onOpenTrace={onOpenTrace} />)}
+        {insights.map((insight) => <InsightCard key={targetKey(insight.target_id, insight.id)} insight={insight} language={language} onOpenTrace={onOpenTrace} />)}
       </div>
     </>
   );
@@ -649,6 +654,7 @@ function InsightCard({ insight, language, onOpenTrace }: { insight: ObservationI
             {insight.only_suggestion !== false && <span className="status-badge success">{t("observability.suggestionOnly")}</span>}
           </div>
           <h3>{insight.title}</h3>
+          <TargetBadge target_id={insight.target_id} target_name={insight.target_name} />
           {insight.summary && <p>{insight.summary}</p>}
         </div>
       </header>
@@ -669,7 +675,7 @@ function InsightCard({ insight, language, onOpenTrace }: { insight: ObservationI
           <strong>{t("observability.relatedTraces")}</strong>
           <div>
             {traceIDs.slice(0, 8).map((traceID) => (
-              <button className="ghost-action mono" key={traceID} onClick={() => onOpenTrace(traceID)}>{shortID(traceID)}</button>
+              <button className="ghost-action mono" key={traceID} onClick={() => onOpenTrace(insight.target_id ? `${insight.target_id}::${traceID}` : traceID)}>{shortID(traceID)}</button>
             ))}
           </div>
         </div>
@@ -687,16 +693,17 @@ function IntegrationsPanel() {
   const [results, setResults] = useState<Record<string, ObservationIntegrationActionResult>>({});
   const [actionError, setActionError] = useState<Record<string, string>>({});
 
-  async function runAction(host: string, action: "preview" | "install" | "repair" | "uninstall" | "doctor") {
-    const key = `${host}:${action}`;
+  async function runAction(host: string, action: "preview" | "install" | "repair" | "uninstall" | "doctor", targetID?: string) {
+    const resourceKey = targetKey(targetID, host);
+    const key = `${resourceKey}:${action}`;
     setBusy(key);
-    setActionError((current) => ({ ...current, [host]: "" }));
+    setActionError((current) => ({ ...current, [resourceKey]: "" }));
     try {
-      const result = await api.observationIntegrationAction(host, action);
-      setResults((current) => ({ ...current, [host]: result }));
+      const result = await api.observationIntegrationAction(host, action, {}, targetID);
+      setResults((current) => ({ ...current, [resourceKey]: result }));
       if (action !== "preview") query.reload();
     } catch (error) {
-      setActionError((current) => ({ ...current, [host]: String(error) }));
+      setActionError((current) => ({ ...current, [resourceKey]: String(error) }));
     } finally {
       setBusy("");
     }
@@ -724,12 +731,12 @@ function IntegrationsPanel() {
       <div className="integrations-grid">
         {integrations.map((integration) => (
           <IntegrationCard
-            key={integration.host}
+            key={targetKey(integration.target_id, integration.host)}
             integration={integration}
             language={language}
             busy={busy}
-            result={results[integration.host]}
-            error={actionError[integration.host]}
+            result={results[targetKey(integration.target_id, integration.host)]}
+            error={actionError[targetKey(integration.target_id, integration.host)]}
             onAction={runAction}
           />
         ))}
@@ -751,7 +758,7 @@ function IntegrationCard({
   busy: string;
   result?: ObservationIntegrationActionResult;
   error?: string;
-  onAction: (host: string, action: "preview" | "install" | "repair" | "uninstall" | "doctor") => void;
+  onAction: (host: string, action: "preview" | "install" | "repair" | "uninstall" | "doctor", targetID?: string) => void;
 }) {
   const { t } = useI18n();
   const host = integration.host;
@@ -777,6 +784,7 @@ function IntegrationCard({
         <div>
           <h2>{integration.name || hostLabel(host)}</h2>
           <span>{integration.version ? `v${integration.version}` : t("observability.nativePlugin")}</span>
+          <TargetBadge target_id={integration.target_id} target_name={integration.target_name} />
         </div>
         <StatusBadge value={integration.drift ? "drift" : integration.pending_trust ? "pending_trust" : integration.status || (installed ? "installed" : "not_installed")} />
       </header>
@@ -802,19 +810,19 @@ function IntegrationCard({
       {error && <ErrorNotice error={error} />}
 
       <div className="integration-actions">
-        <button className="ghost-action" disabled={busy !== ""} onClick={() => onAction(host, "preview")}>{t("observability.preview")}</button>
-        <button className="ghost-action" disabled={busy !== ""} onClick={() => onAction(host, "doctor")}><ShieldCheck size={14} /> {t("observability.doctor")}</button>
+        <button className="ghost-action" disabled={busy !== ""} onClick={() => onAction(host, "preview", integration.target_id)}>{t("observability.preview")}</button>
+        <button className="ghost-action" disabled={busy !== ""} onClick={() => onAction(host, "doctor", integration.target_id)}><ShieldCheck size={14} /> {t("observability.doctor")}</button>
         {!installed ? (
-          <button className="action" disabled={busy !== ""} onClick={() => onAction(host, "install")}><Plug size={14} /> {t("observability.install")}</button>
+          <button className="action" disabled={busy !== ""} onClick={() => onAction(host, "install", integration.target_id)}><Plug size={14} /> {t("observability.install")}</button>
         ) : (
           <>
-            <button className="action" disabled={busy !== ""} onClick={() => onAction(host, "repair")}><Wrench size={14} /> {t("observability.repair")}</button>
-            <button className="ghost-action danger-action" disabled={busy !== ""} onClick={() => onAction(host, "uninstall")}>{t("observability.uninstall")}</button>
+            <button className="action" disabled={busy !== ""} onClick={() => onAction(host, "repair", integration.target_id)}><Wrench size={14} /> {t("observability.repair")}</button>
+            <button className="ghost-action danger-action" disabled={busy !== ""} onClick={() => onAction(host, "uninstall", integration.target_id)}>{t("observability.uninstall")}</button>
           </>
         )}
       </div>
 
-      {busy.startsWith(`${host}:`) && <div className="integration-result muted">{t("observability.runningAction")}</div>}
+      {busy.startsWith(`${targetKey(integration.target_id, host)}:`) && <div className="integration-result muted">{t("observability.runningAction")}</div>}
       {result && (
         <div className="integration-result">
           <div>
@@ -854,12 +862,12 @@ function TraceTable({ traces, language, onOpenTrace }: { traces: ObservationTrac
         <thead><tr><th>{t("observability.trace")}</th><th>{t("observability.agent")}</th><th>{t("observability.duration")}</th><th>{t("observability.totalTokens")}</th><th>{t("common.source")}</th><th>{t("common.status")}</th></tr></thead>
         <tbody>
           {traces.map((trace) => (
-            <tr key={trace.trace_id} onClick={() => onOpenTrace(trace.trace_id)} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && onOpenTrace(trace.trace_id)}>
+            <tr key={targetKey(trace.target_id, trace.trace_id)} onClick={() => onOpenTrace(traceRouteKey(trace))} tabIndex={0} onKeyDown={(event) => event.key === "Enter" && onOpenTrace(traceRouteKey(trace))}>
               <td><strong>{trace.name || shortID(trace.trace_id)}</strong><span className="table-secondary">{formatDate(trace.started_at, language)}</span></td>
               <td>{trace.agent_name || trace.agent_id || "—"}</td>
               <td>{formatDuration(durationBetween(trace.started_at, trace.ended_at))}</td>
               <td>{formatCompact(trace.usage?.total_tokens ?? tokenTotal(trace.usage), language)}</td>
-              <td>{sourceLabel(trace.source || "")}</td>
+              <td>{sourceLabel(trace.source || "")} <TargetBadge target_id={trace.target_id} target_name={trace.target_name} /></td>
               <td><StatusBadge value={trace.status || "unset"} /></td>
             </tr>
           ))}
@@ -959,6 +967,17 @@ function readObservabilityRoute(): ObservabilityRoute {
     sessionID: params.get("session_id") || "",
     agentID: params.get("agent_id") || "",
   };
+}
+
+function traceRouteKey(trace: Pick<ObservationTrace, "trace_id" | "target_id">) {
+  return trace.target_id ? `${trace.target_id}::${trace.trace_id}` : trace.trace_id;
+}
+
+function parseTraceRouteKey(value: string) {
+  const separator = value.indexOf("::");
+  return separator > 0
+    ? { targetID: value.slice(0, separator), traceID: value.slice(separator + 2) }
+    : { targetID: undefined, traceID: value };
 }
 
 function spanDepths(spans: ObservationSpan[]) {

@@ -21,7 +21,7 @@ import (
 )
 
 func TestOTLPExporterDefaultsToMetadataAndRequiresPerExporterContentOptIn(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "obs.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "obs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestOTLPExporterDefaultsToMetadataAndRequiresPerExporterContentOptIn(t *tes
 }
 
 func TestOTLPExporterFallsBackToMetadataAfterContentExpires(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "expired.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "expired.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

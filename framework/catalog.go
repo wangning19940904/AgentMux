@@ -31,6 +31,8 @@ type Spec struct {
 	Kind string `json:"kind"`
 	// Display is the human-facing label.
 	Display string `json:"display"`
+	// Company is the publisher shown in the compact framework catalogue.
+	Company string `json:"company"`
 	// KindType is "cli" or "sdk".
 	KindType KindType `json:"kind_type"`
 	// Language is the runtime language ("node", "python", or "" for CLIs).
@@ -63,6 +65,12 @@ type Spec struct {
 	// UpdateSupported reports whether this framework can be checked and updated
 	// from the Console.
 	UpdateSupported bool `json:"update_supported"`
+	// UninstallCommand is the catalog-owned command used to remove a framework.
+	// It deliberately preserves user configuration and session data when the
+	// upstream CLI exposes that option.
+	UninstallCommand []string `json:"-"`
+	// UninstallSupported reports whether AgentMux can safely remove the CLI.
+	UninstallSupported bool `json:"uninstall_supported"`
 	// EnvRequired lists environment variables the framework needs at runtime.
 	EnvRequired []string `json:"env_required,omitempty"`
 	// Supported is false for frameworks that are catalogued but not yet
@@ -84,23 +92,23 @@ type Spec struct {
 // catalog is the built-in framework registry.
 var catalog = []Spec{
 	{
-		Kind: "claudecode", Display: "Claude Code", KindType: KindCLI,
+		Kind: "claudecode", Display: "Claude Code", Company: "Anthropic", KindType: KindCLI,
 		Bin: "claude", VersionArgs: []string{"--version"},
 		NPMPackage: "@anthropic-ai/claude-code", UpdateCommand: []string{"claude", "update"},
-		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true, UninstallSupported: true,
 		EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
 		Note: "Anthropic Claude Code CLI",
 	},
 	{
-		Kind: "codex", Display: "Codex", KindType: KindCLI,
+		Kind: "codex", Display: "Codex", Company: "OpenAI", KindType: KindCLI,
 		Bin: "codex", VersionArgs: []string{"--version"},
 		NPMPackage: "@openai/codex", UpdateCommand: []string{"codex", "update"},
-		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true, UninstallSupported: true,
 		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
 		Note: "OpenAI Codex CLI",
 	},
 	{
-		Kind: "cursor", Display: "Cursor Agent", KindType: KindCLI,
+		Kind: "cursor", Display: "Cursor Agent", Company: "Cursor", KindType: KindCLI,
 		Bin: "cursor-agent", VersionArgs: []string{"--version"},
 		InstallCommand:   []string{"bash", "-c", "curl https://cursor.com/install -fsS | bash"},
 		InstallSupported: true,
@@ -112,29 +120,30 @@ var catalog = []Spec{
 		ExactLatest: true, UpdateSupported: true, Supported: true, Note: "Cursor Agent CLI",
 	},
 	{
-		Kind: "gemini", Display: "Gemini CLI", KindType: KindCLI,
+		Kind: "gemini", Display: "Gemini CLI", Company: "Google", KindType: KindCLI,
 		Bin: "gemini", VersionArgs: []string{"--version"},
 		NPMPackage: "@google/gemini-cli", UpdateCommand: []string{"npm", "install", "-g", "@google/gemini-cli@latest"},
-		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true,
+		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true, UninstallSupported: true,
 		EnvRequired: []string{"GEMINI_API_KEY"}, Supported: true,
 		Note: "Google Gemini CLI",
 	},
 	{
-		Kind: "qoder", Display: "Qoder", KindType: KindCLI,
+		Kind: "qoder", Display: "Qoder", Company: "Alibaba", KindType: KindCLI,
 		Bin: "qodercli", VersionArgs: []string{"--version"},
 		NPMPackage: "@qoder-ai/qodercli", UpdateCommand: []string{"qodercli", "update"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "Qoder CLI",
+		UpdateSupported: true, UninstallSupported: true, Supported: true, Note: "Qoder CLI",
 	},
 	{
-		Kind: "opencode", Display: "OpenCode", KindType: KindCLI,
+		Kind: "opencode", Display: "OpenCode", Company: "Anomaly", KindType: KindCLI,
 		Bin: "opencode", VersionArgs: []string{"--version"},
 		NPMPackage: "opencode-ai", UpdateCommand: []string{"opencode", "upgrade"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "OpenCode CLI",
+		UpdateSupported: true, UninstallCommand: []string{"opencode", "uninstall", "--keep-config", "--keep-data", "--force"},
+		UninstallSupported: true, Supported: true, Note: "OpenCode CLI",
 	},
 	{
-		Kind: "traecli", Display: "TRAE CLI", KindType: KindCLI,
+		Kind: "traecli", Display: "TRAE CLI", Company: "ByteDance", KindType: KindCLI,
 		Bin: "traecli", VersionArgs: []string{"--version"},
 		InstallCommand: []string{
 			"bash", "-c",
@@ -147,21 +156,21 @@ var catalog = []Spec{
 		Note: "ByteDance internal TRAE coding-agent CLI",
 	},
 	{
-		Kind: "iflow", Display: "iFlow", KindType: KindCLI,
+		Kind: "iflow", Display: "iFlow", Company: "iFlow AI", KindType: KindCLI,
 		Bin: "iflow", VersionArgs: []string{"--version"},
 		NPMPackage: "@iflow-ai/iflow-cli", UpdateCommand: []string{"npm", "install", "-g", "@iflow-ai/iflow-cli@latest"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "iFlow CLI", Hidden: true,
+		UpdateSupported: true, UninstallSupported: true, Supported: true, Note: "iFlow CLI", Hidden: true,
 	},
 	{
-		Kind: "kimi", Display: "Kimi", KindType: KindCLI,
+		Kind: "kimi", Display: "Kimi", Company: "Moonshot AI", KindType: KindCLI,
 		Bin: "kimi", VersionArgs: []string{"--version"},
 		NPMPackage: "@moonshot-ai/kimi-code", UpdateCommand: []string{"npm", "install", "-g", "@moonshot-ai/kimi-code@latest"},
 		InstallSupported: true, InstallRequiresNPM: true,
-		UpdateSupported: true, Supported: true, Note: "Kimi Code CLI", Hidden: true,
+		UpdateSupported: true, UninstallSupported: true, Supported: true, Note: "Kimi Code CLI", Hidden: true,
 	},
 	{
-		Kind: "deepagents", Display: "DeepAgents", KindType: KindSDK,
+		Kind: "deepagents", Display: "DeepAgents", Company: "LangChain", KindType: KindSDK,
 		Language: "python", Packages: []string{"deepagents", "langgraph"},
 		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: false,
 		Note: "LangGraph DeepAgents (Python) — requires a Python runtime; experimental",

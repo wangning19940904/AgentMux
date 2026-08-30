@@ -11,7 +11,7 @@ import (
 
 func newTenancyStore(t *testing.T) *Store {
 	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "tenancy.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "tenancy.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -161,6 +161,13 @@ func TestTenantVisibilityCoversOwnPublicAndGranted(t *testing.T) {
 		if err := st.UpsertAgentInstance(ctx, &agents[i]); err != nil {
 			t.Fatalf("upsert agent %s: %v", agents[i].ID, err)
 		}
+	}
+	counts, err := st.CountOwnedResourcesByTenant(ctx)
+	if err != nil {
+		t.Fatalf("count owned resources: %v", err)
+	}
+	if counts["ten_homebook"] != 1 || counts["ten_rookie"] != 2 {
+		t.Fatalf("unexpected ownership counts: %+v", counts)
 	}
 	if err := st.UpsertResourceGrant(ctx, &core.ResourceGrant{
 		TenantID: "ten_homebook", ResourceType: core.ResourceTypeAgent,

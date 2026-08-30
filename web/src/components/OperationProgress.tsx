@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { OperationProgress as Progress } from "../api";
 import { useI18n } from "../i18n";
 
-const knownPhases = new Set(["preparing", "checking", "installing", "updating", "syncing", "verifying", "complete"]);
+const knownPhases = new Set(["preparing", "checking", "installing", "updating", "uninstalling", "syncing", "verifying", "complete"]);
 
 export function OperationProgress({ progress }: { progress: Progress }) {
   const { t } = useI18n();

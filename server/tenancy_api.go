@@ -132,10 +132,20 @@ func (s *Server) handleTenantsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if tenants == nil {
-		tenants = []core.Tenant{}
+	counts, err := s.st.CountOwnedResourcesByTenant(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	writeJSON(w, http.StatusOK, tenants)
+	type tenantListItem struct {
+		core.Tenant
+		ResourceCount int `json:"resource_count"`
+	}
+	items := make([]tenantListItem, 0, len(tenants))
+	for _, tenant := range tenants {
+		items = append(items, tenantListItem{Tenant: tenant, ResourceCount: counts[tenant.ID]})
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) handleTenantUpsert(w http.ResponseWriter, r *http.Request) {

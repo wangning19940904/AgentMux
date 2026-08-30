@@ -377,6 +377,8 @@ func (e *Engine) runMeetingTurn(ctx context.Context, cancel context.CancelFunc, 
 	prompt := meetingTurnPrompt(activity.MeetingPromptContext(meeting.ID), meeting, turn.Question)
 	data := eventData(msg)
 	data["agent_id"] = rt.workspace.AgentID
+	data["runtime_id"] = rt.workspace.RuntimeID
+	data["memory_scope"] = rt.workspace.MemoryScope
 	data["meeting_id"] = meeting.ID
 	data["meeting_turn_id"] = turn.ID
 	replyMode := MeetingReplyModeStream

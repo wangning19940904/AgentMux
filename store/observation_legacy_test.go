@@ -13,7 +13,7 @@ import (
 )
 
 func TestImportLegacyObservationsIsIdempotentAndCorrelates(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "legacy.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "legacy.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestImportLegacyObservationsIsIdempotentAndCorrelates(t *testing.T) {
 }
 
 func TestSecureLegacyProxyErrorsEncryptsThenClearsCompatibilityPlaintext(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "legacy-error.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "legacy-error.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestSecureLegacyProxyErrorsEncryptsThenClearsCompatibilityPlaintext(t *test
 }
 
 func TestImportLegacyObservationsReusesRequestSpanWithoutDoubleCounting(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "legacy-dedupe.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "legacy-dedupe.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

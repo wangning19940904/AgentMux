@@ -7,9 +7,11 @@ import {
   type ResourceGrant,
   type Tenant,
   type TenantKind,
+  type TenancySelf,
 } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 import {
   resourcesForType,
   toggleResourceSelection,
@@ -27,42 +29,63 @@ const RESOURCE_TYPES: GrantableResourceType[] = ["agent", "channel", "trigger", 
 export function TenantsPanel({
   onContinue,
   onTenantChanged,
+  identity,
+  initialTenants,
 }: {
   onContinue?: () => void;
-  onTenantChanged?: () => void;
+  onTenantChanged?: (change?: { type: "delete"; tenant: Tenant }) => void;
+  identity?: TenancySelf;
+  initialTenants?: Tenant[];
 }) {
   const { t } = useI18n();
-  const self = useAsync(() => api.tenancySelf(), []);
-  const admin = self.data?.admin === true;
+  const self = useAsync(() => identity ? Promise.resolve(identity) : api.tenancySelf(), [identity]);
+  const admin = identity?.admin === true || self.data?.admin === true;
   const tenants = useAsync(() => admin ? api.tenants() : Promise.resolve([]), [admin]);
-  const grants = useAsync(() => admin ? api.resourceGrants() : Promise.resolve([]), [admin]);
-  const agents = useAsync(() => admin ? api.agentInstances() : Promise.resolve([]), [admin]);
-  const channels = useAsync(() => admin ? api.channels() : Promise.resolve([]), [admin]);
-  const triggers = useAsync(() => admin ? api.triggers() : Promise.resolve([]), [admin]);
-  const providers = useAsync(() => admin ? api.providers() : Promise.resolve([]), [admin]);
 
   const [selectedID, setSelectedID] = useState("");
   const [notice, setNotice] = useState("");
   const [issued, setIssued] = useState<{ label: string; value: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<Tenant | null>(null);
+  const [deletedTenantIDs, setDeletedTenantIDs] = useState<string[]>([]);
 
-  const items = useMemo(() => tenants.data ?? [], [tenants.data]);
-  const selected = items.find((item) => item.id === selectedID) ?? items[0];
+  const items = useMemo(
+    () => (tenants.data ?? initialTenants ?? [])
+      .filter((tenant) => !deletedTenantIDs.includes(targetKey(tenant.target_id, tenant.id))),
+    [deletedTenantIDs, initialTenants, tenants.data],
+  );
+  const selected = selectedID
+    ? items.find((item) => targetKey(item.target_id, item.id) === selectedID)
+    : undefined;
+  const details = useAsync(
+    () => admin && selected
+      ? api.tenantAdminDetails(selected.id, selected.target_id)
+      : Promise.resolve({ grants: [], agents: [], channels: [], triggers: [], providers: [] }),
+    [admin, selectedID],
+  );
   const scoped = self.data && !self.data.admin;
   const hasActiveTenant = scoped
     ? Boolean(self.data?.tenant_id && self.data.status !== "disabled")
     : items.some((item) => item.status === "active");
 
-  async function run(action: () => Promise<unknown>) {
-    if (busy) return;
+  async function run(
+    action: () => Promise<unknown>,
+    reload: { tenants?: boolean; details?: boolean } = {},
+  ): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setNotice("");
     try {
       await action();
-      await Promise.all([tenants.reload(), grants.reload()]);
+      await Promise.all([
+        reload.tenants ? tenants.reload() : Promise.resolve(null),
+        reload.details ? details.reload() : Promise.resolve(null),
+      ]);
+      return true;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -146,7 +169,7 @@ export function TenantsPanel({
           </div>
         </div>
         {notice && <div className="surface-body error">{notice}</div>}
-        {!hasActiveTenant && (
+        {!tenants.loading && !hasActiveTenant && (
           <div className="surface-body">
             <p className="muted">{t("tenants.requiredHint")}</p>
           </div>
@@ -178,15 +201,27 @@ export function TenantsPanel({
             <p>{t("tenants.listSubtitle")}</p>
           </div>
         </div>
-        {items.length === 0 ? (
+        {tenants.loading && items.length === 0 ? (
+          <div className="empty-state">{t("common.loading")}</div>
+        ) : items.length === 0 ? (
           <div className="empty-state">{t("tenants.empty")}</div>
         ) : (
           <div className="surface-body">
             {items.map((tenant) => (
               <article
-                className="agent-registry-row"
-                key={tenant.id}
-                onClick={() => setSelectedID(tenant.id)}
+                aria-expanded={targetKey(tenant.target_id, tenant.id) === selectedID}
+                className={`agent-registry-row tenant-list-row${targetKey(tenant.target_id, tenant.id) === selectedID ? " is-selected" : ""}`}
+                key={targetKey(tenant.target_id, tenant.id)}
+                onClick={() => setSelectedID(targetKey(tenant.target_id, tenant.id))}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedID(targetKey(tenant.target_id, tenant.id));
+                  }
+                }}
+                role="button"
+                tabIndex={0}
               >
                 <div className="agent-list-main">
                   <span className="provider-icon">
@@ -203,20 +238,23 @@ export function TenantsPanel({
                     {t(tenant.status === "active" ? "tenants.active" : "tenants.disabled")}
                   </span>
                   <span className="source-badge manual">{tenant.kind ?? "app"}</span>
+                  <TargetBadge target_id={tenant.target_id} target_name={tenant.target_name} />
                   <span className="pill">
-                    {countOwned(agents.data ?? [], channels.data ?? [], triggers.data ?? [], tenant.id)}{" "}
+                    {tenant.resource_count ?? 0}{" "}
                     {t("tenants.resourceCount")}
                   </span>
                 </div>
                 <div className="table-actions">
                   <button
                     className="ghost-action"
+                    disabled={busy}
                     onClick={(event) => {
                       event.stopPropagation();
                       void run(async () => {
                         const token = await api.createTenantToken({
                           tenant_id: tenant.id,
                           name: "console",
+                          target_id: tenant.target_id,
                         });
                         if (token.secret) {
                           setIssued({
@@ -231,24 +269,27 @@ export function TenantsPanel({
                   </button>
                   <button
                     className="ghost-action"
-                    onClick={(event) => {
+                    disabled={busy}
+                    onClick={async (event) => {
                       event.stopPropagation();
-                      void run(() =>
-                        api.upsertTenant({
+                      const changed = await run(
+                        () => api.upsertTenant({
                           ...tenant,
                           status: tenant.status === "active" ? "disabled" : "active",
-                        }).then(() => onTenantChanged?.()),
+                        }),
+                        { tenants: true },
                       );
+                      if (changed) onTenantChanged?.();
                     }}
                   >
                     {t(tenant.status === "active" ? "tenants.disable" : "tenants.enable")}
                   </button>
                   <button
-                    className="ghost-action danger"
+                    className="ghost-action danger-action"
+                    disabled={busy}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (!window.confirm(t("tenants.confirmRemove", { tenant: tenant.name }))) return;
-                      void run(() => api.deleteTenant(tenant.id).then(() => onTenantChanged?.()));
+                      setDeleteCandidate(tenant);
                     }}
                   >
                     <Trash2 size={14} /> {t("common.delete")}
@@ -262,45 +303,141 @@ export function TenantsPanel({
 
 
       {selected && (
-        <GrantEditor
-          tenant={selected}
-          grants={(grants.data ?? []).filter((grant) => grant.tenant_id === selected.id)}
-          agents={agents.data ?? []}
-          channels={channels.data ?? []}
-          triggers={triggers.data ?? []}
-          providers={providers.data ?? []}
-          busy={busy}
-          onGrantMany={(resources, level) =>
-            run(() => Promise.all(resources.map((resource) => api.upsertResourceGrant({
-              tenant_id: selected.id,
-              resource_type: resource.type,
-              resource_id: resource.id,
-              level,
-            }))))
-          }
-          onRevoke={(grant) => run(() => api.deleteResourceGrant(grant))}
-          onAssign={(resourceType, resourceID) =>
-            run(async () => {
-              await api.assignResourceOwner({
+        details.loading ? (
+          <section className="surface">
+            <div className="empty-state">{t("common.loading")}</div>
+          </section>
+        ) : details.error || !details.data ? (
+          <section className="surface">
+            <div className="surface-header">
+              <div>
+                <h3>{t("tenants.grantsTitle", { tenant: selected.name })}</h3>
+                <p className="error">{details.error}</p>
+              </div>
+              <button className="ghost-action" onClick={() => void details.reload()}>
+                <RefreshCw size={15} /> {t("common.retry")}
+              </button>
+            </div>
+          </section>
+        ) : (
+          <GrantEditor
+            tenant={selected}
+            grants={details.data.grants}
+            agents={details.data.agents}
+            channels={details.data.channels}
+            triggers={details.data.triggers}
+            providers={details.data.providers}
+            busy={busy}
+            onGrantMany={(resources, level) =>
+              run(
+                () => Promise.all(resources.map((resource) => api.upsertResourceGrant({
+                  tenant_id: selected.id,
+                  resource_type: resource.type,
+                  resource_id: resource.id,
+                  level,
+                  target_id: selected.target_id,
+                }))),
+                { details: true },
+              ).then(() => undefined)
+            }
+            onRevoke={(grant) => void run(() => api.deleteResourceGrant(grant), { details: true })}
+            onAssign={(resourceType, resourceID) => void run(
+              () => api.assignResourceOwner({
                 resource_type: resourceType,
                 resource_id: resourceID,
                 tenant_id: selected.id,
-              });
-              await Promise.all([agents.reload(), channels.reload(), triggers.reload()]);
-            })
-          }
+                target_id: selected.target_id,
+              }),
+              { details: true },
+            ).then((changed) => {
+              if (changed) void tenants.reload();
+            })}
+          />
+        )
+      )}
+
+      {deleteCandidate && (
+        <DeleteTenantDialog
+          tenant={deleteCandidate}
+          busy={busy}
+          onClose={() => {
+            if (!busy) setDeleteCandidate(null);
+          }}
+          onConfirm={async () => {
+            const key = targetKey(deleteCandidate.target_id, deleteCandidate.id);
+            const removed = await run(
+              () => api.deleteTenant(deleteCandidate.id, deleteCandidate.target_id),
+            );
+            if (!removed) return;
+            setDeletedTenantIDs((current) => [...current, key]);
+            if (selectedID === key) setSelectedID("");
+            setDeleteCandidate(null);
+            onTenantChanged?.({ type: "delete", tenant: deleteCandidate });
+            void tenants.reload();
+          }}
         />
       )}
 
       {registerOpen && (
         <RegisterTenantDialog
           onClose={() => setRegisterOpen(false)}
-          onCreated={(tenantID) => {
-            setSelectedID(tenantID);
+          onCreated={() => {
             void tenants.reload().then(() => onTenantChanged?.());
           }}
         />
       )}
+    </div>
+  );
+}
+
+function DeleteTenantDialog({
+  tenant,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  tenant: Tenant;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="meeting-dialog-layer" role="presentation">
+      <button
+        aria-label={t("common.cancel")}
+        className="meeting-dialog-backdrop internal-dialog-backdrop"
+        disabled={busy}
+        onClick={onClose}
+        type="button"
+      />
+      <section
+        aria-labelledby="tenant-delete-title"
+        aria-modal="true"
+        className="surface meeting-dialog tenant-delete-dialog"
+        role="dialog"
+      >
+        <div className="meeting-dialog-icon tenant-delete-dialog-icon">
+          <Trash2 size={22} />
+        </div>
+        <div className="meeting-dialog-heading">
+          <h2 id="tenant-delete-title">{t("tenants.deleteTitle", { tenant: tenant.name })}</h2>
+          <p>{t("tenants.confirmRemove", { tenant: tenant.name })}</p>
+        </div>
+        <div className="meeting-dialog-actions">
+          <button className="ghost-action" disabled={busy} onClick={onClose} type="button">
+            {t("common.cancel")}
+          </button>
+          <button
+            className="ghost-action danger-action"
+            disabled={busy}
+            onClick={() => void onConfirm()}
+            type="button"
+          >
+            <Trash2 size={14} /> {busy ? t("tenants.deleting") : t("common.delete")}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -605,15 +742,4 @@ function GrantEditor({
       </div>
     </section>
   );
-}
-
-function countOwned(
-  agents: { owner_tenant_id?: string }[],
-  channels: { owner_tenant_id?: string }[],
-  triggers: { owner_tenant_id?: string }[],
-  tenantID: string,
-): number {
-  const owned = (items: { owner_tenant_id?: string }[]) =>
-    items.filter((item) => item.owner_tenant_id === tenantID).length;
-  return owned(agents) + owned(channels) + owned(triggers);
 }

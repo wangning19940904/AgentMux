@@ -102,3 +102,17 @@ func TestStoreRejectsNonLoopbackRemoteAddress(t *testing.T) {
 		t.Fatal("expected non-loopback remote address to be rejected")
 	}
 }
+
+func TestStoreRejectsAPITokenControlCharacters(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "remote-hosts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Upsert(Host{
+		Name: "box", Host: "box.local", User: "dev",
+		RemoteAddr: "127.0.0.1:8765", APIToken: "secret\nAGENTMUX_UNIT",
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "api_token") {
+		t.Fatalf("control-character token error = %v", err)
+	}
+}

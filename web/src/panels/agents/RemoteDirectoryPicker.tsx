@@ -7,11 +7,13 @@ import { workDirErrorMessage } from "./agentUtils";
 
 export function RemoteDirectoryPicker({
   initialPath,
+  targetID,
   onClose,
   onSelect,
   t,
 }: {
   initialPath: string;
+  targetID?: string;
   onClose: () => void;
   onSelect: (path: string) => void;
   t: (key: string) => string;
@@ -34,10 +36,10 @@ export function RemoteDirectoryPicker({
     try {
       let next: SystemDirectoryListing;
       try {
-        next = await api.directories(nextPath);
+        next = await api.directories(nextPath, targetID);
       } catch (err) {
         if (!fallbackToHome || !nextPath.trim()) throw err;
-        next = await api.directories("");
+        next = await api.directories("", targetID);
       }
       setListing(next);
       setPath(next.path);
@@ -65,7 +67,7 @@ export function RemoteDirectoryPicker({
     setCreateError("");
     const basePath = listing.path === "/" ? "" : listing.path.replace(/\/+$/, "");
     try {
-      const created = await api.ensureDirectory(`${basePath}/${name}`);
+      const created = await api.ensureDirectory(`${basePath}/${name}`, targetID);
       await openPath(created.path);
     } catch (err) {
       setCreateError(workDirErrorMessage(err, t));

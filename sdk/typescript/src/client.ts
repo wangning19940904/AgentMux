@@ -27,7 +27,7 @@ import {
   type InvocationResult,
   type IntegrationSnapshot,
   type Orchestration,
-  type OrchestrationTask,
+	type OrchestrationTaskInput,
   type TenancySelf,
   type Tenant,
   type Trigger,
@@ -48,8 +48,7 @@ export interface AgentMuxClientOptions {
 }
 
 export interface InvokeOptions {
-  agentId?: string;
-  project?: string;
+	agentId: string;
   conversationId?: string;
   input: string;
   attachments?: InvocationRequest["attachments"];
@@ -80,12 +79,10 @@ async function errorMessage(response: Response): Promise<string> {
 }
 
 function buildInvocationPayload(options: InvokeOptions): InvocationRequest {
-  if (!options.agentId === !options.project) {
-    throw new Error("exactly one of agentId and project is required");
-  }
-  const payload: InvocationRequest = { input: options.input };
-  if (options.agentId) payload.agent_id = options.agentId;
-  if (options.project) payload.project = options.project;
+	if (!options.agentId?.trim()) {
+		throw new Error("agentId is required");
+	}
+	const payload: InvocationRequest = { agent_id: options.agentId, input: options.input };
   if (options.conversationId) payload.conversation_id = options.conversationId;
   if (options.attachments?.length) payload.attachments = options.attachments;
   if (options.outputSchema) payload.output_schema = options.outputSchema;
@@ -304,18 +301,18 @@ export class AgentMuxClient {
 
   // -- messaging & usage ------------------------------------------------------
 
-  async send(options: {
-    text: string;
-    project?: string;
-    channelId?: string;
-    conversationKey?: string;
+	async send(options: {
+		text: string;
+		channelId: string;
+		conversationKey: string;
     images?: string[];
     files?: string[];
-  }): Promise<void> {
-    const body: Record<string, unknown> = { text: options.text };
-    if (options.project) body.project = options.project;
-    if (options.channelId) body.channel_id = options.channelId;
-    if (options.conversationKey) body.conversation_key = options.conversationKey;
+	}): Promise<void> {
+		const body: Record<string, unknown> = {
+			text: options.text,
+			channel_id: options.channelId,
+			conversation_key: options.conversationKey,
+		};
     if (options.images?.length) body.images = options.images;
     if (options.files?.length) body.files = options.files;
     await this.request("/api/v1/send", { method: "POST", body });
@@ -415,7 +412,7 @@ class OrchestrationsResource {
   constructor(private readonly client: AgentMuxClient) {}
 
   async create(
-    tasks: OrchestrationTask[],
+		tasks: OrchestrationTaskInput[],
     options: { name?: string; maxConcurrency?: number } = {},
   ): Promise<Orchestration> {
     const body: Record<string, unknown> = { tasks };

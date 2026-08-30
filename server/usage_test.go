@@ -15,7 +15,7 @@ func TestHandleUsageParsesInclusiveLocalDateRange(t *testing.T) {
 
 	var gotPeriod string
 	var gotSince, gotUntil time.Time
-	s := &Server{usageFn: func(_ context.Context, period string, since, until time.Time) (any, error) {
+	s := &Server{usageFn: func(_ context.Context, period string, since, until time.Time, _ *time.Location) (any, error) {
 		gotPeriod, gotSince, gotUntil = period, since, until
 		return map[string]bool{"ok": true}, nil
 	}}
@@ -39,7 +39,7 @@ func TestHandleUsageParsesInclusiveLocalDateRange(t *testing.T) {
 }
 
 func TestHandleUsageRejectsReversedDateRange(t *testing.T) {
-	s := &Server{usageFn: func(_ context.Context, _ string, _, _ time.Time) (any, error) {
+	s := &Server{usageFn: func(_ context.Context, _ string, _, _ time.Time, _ *time.Location) (any, error) {
 		t.Fatal("reporter should not be called")
 		return nil, nil
 	}}
@@ -50,5 +50,22 @@ func TestHandleUsageRejectsReversedDateRange(t *testing.T) {
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestHandleUsagePassesRequestedReportingTimezone(t *testing.T) {
+	var gotLocation *time.Location
+	s := &Server{usageFn: func(_ context.Context, _ string, _, _ time.Time, location *time.Location) (any, error) {
+		gotLocation = location
+		return map[string]bool{"ok": true}, nil
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?period=daily&from=2026-08-30&to=2026-08-30&timezone=Asia%2FShanghai", nil)
+	response := httptest.NewRecorder()
+	s.handleUsage(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if gotLocation == nil || gotLocation.String() != "Asia/Shanghai" {
+		t.Fatalf("location = %v", gotLocation)
 	}
 }

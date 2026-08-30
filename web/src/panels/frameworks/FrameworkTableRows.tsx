@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Download, ExternalLink, LogIn, Package, RefreshCw, X } from "lucide-react";
+import { CheckCircle2, Copy, Download, ExternalLink, LogIn, LogOut, Package, RefreshCw, Trash2, X } from "lucide-react";
 import type {
   Framework,
   FrameworkAuthStatus,
@@ -9,8 +9,10 @@ import { isDesktopApp, openExternalURL } from "../../api/desktop";
 import { OperationProgress as OperationProgressView } from "../../components/OperationProgress";
 import { useI18n } from "../../i18n";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
+import { TargetBadge } from "../../components/TargetBadge";
+import { frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
 
-export type FrameworkBusyAction = "install" | "update" | "check" | "auth" | "complete" | "cancel";
+export type FrameworkBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "logout" | "complete" | "cancel";
 
 export function FrameworkTableRows({
   item,
@@ -25,8 +27,9 @@ export function FrameworkTableRows({
   disabled,
   onCheck,
   onInstall,
+  onUninstall,
   onAuth,
-  onConfigureCredentials,
+  onLogout,
   onLoginCodeChange,
   onCompleteAuth,
   onCancelAuth,
@@ -45,8 +48,9 @@ export function FrameworkTableRows({
   disabled: boolean;
   onCheck?: () => void;
   onInstall?: (action: "install" | "update") => void;
+  onUninstall: () => void;
   onAuth: () => void;
-  onConfigureCredentials: () => void;
+  onLogout: () => void;
   onLoginCodeChange: (code: string) => void;
   onCompleteAuth: (sessionID: string) => void;
   onCancelAuth: (sessionID: string) => void;
@@ -55,83 +59,52 @@ export function FrameworkTableRows({
 }) {
   const { t } = useI18n();
   const { spec } = item;
-  const cli = spec.kind_type === "cli";
   const hasUpdate = Boolean(check?.update_available);
-  const action: "install" | "update" | "check" = item.installed ? (hasUpdate ? "update" : "check") : "install";
+  const action: "update" | "check" = hasUpdate ? "update" : "check";
   const updateStatus = frameworkUpdateStatusLabel(check, t);
   const updateStatusClass = check?.error || check?.update_available ? "warning" : "success";
-  const showAction = spec.supported && (item.installed ? spec.update_supported : spec.install_supported);
   const authActive = loginFlow?.state === "waiting";
-  const credentialEnvironment = auth?.detail === "credential environment is configured";
-  const showAuthStatus = cli && item.installed && (!auth || auth.login_supported || Boolean(spec.env_required?.length));
-  const loginPrimary = Boolean(auth?.login_supported && auth.state !== "authenticated");
-  const providerPrimary = Boolean(auth && auth.state !== "authenticated" && !auth.login_supported && spec.env_required?.length);
-  const authLabel = frameworkAuthStatusLabel(auth, spec.env_required ?? [], t);
-  const authClass = auth?.state === "authenticated" ? "success" : auth?.state === "unknown" || !auth ? "" : "warning";
+  const supportsLogin = frameworkSupportsLogin(spec, auth);
+  const authChecking = supportsLogin && !auth;
+  const authenticated = auth?.state === "authenticated";
+  const canLogout = Boolean(authenticated && auth?.logout_supported);
   const buttonLabel = busy === "check"
     ? t("tools.checkingUpdate")
-    : busy === "install" || busy === "update"
+    : busy === "update"
       ? t("frameworks.installing")
-      : action === "install"
-        ? t("frameworks.install")
-        : action === "update"
+      : action === "update"
           ? t("tools.update")
           : t("tools.checkUpdate");
 
   return (
     <>
-      <tr className={`catalog-row${item.installed ? " installed" : ""}`}>
+      <tr className="catalog-row framework-installed-row">
         <td className="catalog-primary-cell" data-label={t("common.name")}>
           <span className="provider-icon"><Package size={16} /></span>
           <span className="catalog-primary-copy">
             <strong>{spec.display}</strong>
-            {spec.internal_only && <span className="status-badge warning internal-only-badge">{t("tools.internalBadge")}</span>}
-            <small className="mono">{spec.kind}</small>
-            {spec.note && <small>{spec.note}</small>}
-            {cli && !item.installed && spec.bin && <small className="mono">{spec.bin}</small>}
+            <span className="framework-meta-tags">
+              <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
+              <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+              <TargetBadge target_id={item.target_id} target_name={item.target_name} />
+            </span>
           </span>
         </td>
-        <td data-label={t("common.type")}><span className="pill framework-type">{spec.kind_type.toUpperCase()}</span></td>
-        <td data-label={t("frameworks.requirements")}>
-          <span className="catalog-badge-list">
-            {auth?.login_supported && <span className="pill"><LogIn size={13} /> {t("frameworks.browserLogin")}</span>}
-            {spec.env_required?.map((env) => <span key={env} className="pill mono">{env}</span>)}
-            {!auth?.login_supported && !spec.env_required?.length && <span className="muted">—</span>}
-          </span>
-        </td>
-        <td data-label={t("common.status")}>
-          <span className="cli-status-stack">
-            {item.installed ? (
-              <span className="status-badge success">
-                <CheckCircle2 size={14} /> {t("frameworks.installed")}
-                {item.registered && <span className="muted"> · {t("frameworks.routable")}</span>}
+        <td data-label={t("frameworks.versionAndUpdate")}>
+          <span className="framework-version-copy">
+            <strong className="mono">{item.version ? `v${item.version}` : "—"}</strong>
+            {updateStatus ? (
+              <span className={`framework-update-state ${updateStatusClass}`} title={check?.error || undefined}>
+                {updateStatusClass === "success" && <CheckCircle2 size={13} />}{updateStatus}
               </span>
-            ) : !spec.supported ? (
-              <span className="status-badge">{t("frameworks.comingSoon")}</span>
-            ) : (
-              <span className="status-badge"><span className="status-dot" />{t("frameworks.notDetected")}</span>
-            )}
-            {item.installed && item.version && <span className="status-badge version-badge mono">{t("frameworks.currentVersion")} · v{item.version}</span>}
-            {item.installed && updateStatus && <span className={`status-badge ${updateStatusClass}`} title={check?.error || undefined}>{updateStatus}</span>}
-            {showAuthStatus && (
-              <span className={`status-badge ${authClass}`} title={auth?.detail}>
-                {auth?.state === "authenticated" ? <CheckCircle2 size={14} /> : <LogIn size={14} />}{authLabel}
-              </span>
-            )}
+            ) : <span className="framework-update-state">{t("tools.checkingUpdate")}</span>}
           </span>
         </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
-          <div className="catalog-action-stack">
-            {loginPrimary && (
-              <button className="action" disabled={Boolean(busy) || authActive} onClick={onAuth} type="button">
-                <LogIn className={busy === "auth" ? "spin" : ""} size={14} />
-                {frameworkAuthActionLabel(auth, loginFlow, busy, credentialEnvironment, t)}
-              </button>
-            )}
-            {providerPrimary && <button className="action" disabled={Boolean(busy)} onClick={onConfigureCredentials} type="button">{t("frameworks.configureCredentials")}</button>}
-            {showAction && (
+          <div className="framework-row-actions">
+            {spec.update_supported && (
               <button
-                className={loginPrimary || providerPrimary ? "ghost-action" : "action"}
+                className={hasUpdate ? "action" : "ghost-action"}
                 disabled={disabled || Boolean(busy) || authActive}
                 onClick={() => (action === "check" ? onCheck?.() : onInstall?.(action))}
                 type="button"
@@ -140,19 +113,44 @@ export function FrameworkTableRows({
                 {buttonLabel}
               </button>
             )}
-            {auth?.login_supported && auth.state === "authenticated" && (
-              <button className="ghost-action" disabled={Boolean(busy) || authActive} onClick={onAuth} type="button">
-                <LogIn className={busy === "auth" ? "spin" : ""} size={14} />
-                {frameworkAuthActionLabel(auth, loginFlow, busy, credentialEnvironment, t)}
+            {supportsLogin && (
+              <button
+                className={`ghost-action${authenticated ? " framework-authenticated-action" : ""}`}
+                disabled={Boolean(busy) || authActive || authChecking || Boolean(authenticated && !canLogout)}
+                onClick={canLogout ? onLogout : onAuth}
+                title={canLogout ? t("tools.authLogoutHint") : frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
+                type="button"
+              >
+                {authChecking || busy === "auth" || busy === "logout"
+                  ? <RefreshCw className="spin" size={14} />
+                  : authenticated
+                    ? <LogOut size={14} />
+                    : <LogIn size={14} />}
+                {busy === "logout"
+                  ? t("tools.authLoggingOut")
+                  : authenticated
+                    ? t("tools.authAuthenticated")
+                    : authChecking
+                      ? t("tools.authChecking")
+                      : t("tools.authLogin")}
               </button>
             )}
+            <button
+              className="ghost-action danger-action"
+              disabled={!spec.uninstall_supported || Boolean(busy) || authActive}
+              onClick={onUninstall}
+              title={!spec.uninstall_supported ? t("frameworks.uninstallUnsupported") : undefined}
+              type="button"
+            >
+              <Trash2 size={14} />{busy === "uninstall" ? t("frameworks.uninstalling") : t("frameworks.uninstall")}
+            </button>
           </div>
         </td>
       </tr>
-      {progress && <tr className="catalog-progress-row"><td colSpan={5}><OperationProgressView progress={progress} /></td></tr>}
+      {progress && <tr className="catalog-progress-row"><td colSpan={3}><OperationProgressView progress={progress} /></td></tr>}
       {loginFlow && (
         <tr className="catalog-progress-row framework-auth-row">
-          <td colSpan={5}>
+          <td colSpan={3}>
             <FrameworkAuthPrompt
               busy={busy}
               copiedCode={copiedCode}
@@ -271,20 +269,6 @@ function frameworkAuthStatusLabel(
   if (auth.login_supported) return auth.state === "unauthenticated" ? t("tools.authLoginRequired") : t("tools.authUnknown");
   if (envRequired.length > 0) return t("frameworks.authProviderRequired");
   return t("tools.authUnknown");
-}
-
-function frameworkAuthActionLabel(
-  auth: FrameworkAuthStatus | undefined,
-  flow: FrameworkLoginFlow | undefined,
-  busy: FrameworkBusyAction | undefined,
-  credentialEnvironment: boolean,
-  t: (key: string) => string,
-) {
-  if (busy === "auth") return t("tools.authStarting");
-  if (flow?.state === "waiting") return t("tools.authWaiting");
-  if (flow?.state === "failed" || flow?.state === "cancelled") return t("frameworks.authRetry");
-  if (auth?.state === "authenticated" && !credentialEnvironment) return t("tools.authAgain");
-  return t("tools.authLogin");
 }
 
 function frameworkUpdateStatusLabel(check: FrameworkUpdateCheck | undefined, t: (key: string) => string) {

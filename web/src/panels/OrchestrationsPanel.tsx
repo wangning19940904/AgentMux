@@ -5,6 +5,7 @@ import { useI18n } from "../i18n";
 import { usePolling } from "../hooks/usePolling";
 import { useAsync } from "../useAsync";
 import { parseOrchestrationTasksJSON } from "./orchestrationModel";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 const EXAMPLE_TASKS = JSON.stringify([
   { id: "research", agent_id: "agent-id", input: "Inspect the problem and gather evidence." },
@@ -23,18 +24,18 @@ export function OrchestrationsPanel() {
   const list = useAsync(() => api.orchestrations(), []);
   usePolling(list.reload, 3_000);
   const selectedSummary = useMemo(
-    () => (list.data ?? []).find((item) => item.id === selectedID) ?? (list.data ?? [])[0],
+    () => (list.data ?? []).find((item) => targetKey(item.target_id, item.id) === selectedID) ?? (list.data ?? [])[0],
     [list.data, selectedID],
   );
   const detail = useAsync(
-    () => selectedSummary ? api.orchestration(selectedSummary.id) : Promise.resolve(null),
-    [selectedSummary?.id],
+    () => selectedSummary ? api.orchestration(selectedSummary.id, selectedSummary.target_id) : Promise.resolve(null),
+    [selectedSummary?.id, selectedSummary?.target_id],
   );
   usePolling(detail.reload, 1_500, { enabled: Boolean(selectedSummary && ["queued", "running"].includes(selectedSummary.status)) });
 
   useEffect(() => {
-    if (selectedSummary) setSelectedID(selectedSummary.id);
-  }, [selectedSummary?.id]);
+    if (selectedSummary) setSelectedID(targetKey(selectedSummary.target_id, selectedSummary.id));
+  }, [selectedSummary?.id, selectedSummary?.target_id]);
 
   async function create() {
     setBusy("create");
@@ -43,7 +44,7 @@ export function OrchestrationsPanel() {
       const parsed = parseOrchestrationTasksJSON(tasksJSON);
       const created = await api.createOrchestration({ name, max_concurrency: workers, tasks: parsed });
       setCreating(false);
-      setSelectedID(created.id);
+      setSelectedID(targetKey(created.target_id, created.id));
       await list.reload();
     } catch (error) {
       setNotice(String(error));
@@ -56,7 +57,7 @@ export function OrchestrationsPanel() {
     if (!selectedSummary) return;
     setBusy("cancel");
     try {
-      await api.cancelOrchestration(selectedSummary.id);
+      await api.cancelOrchestration(selectedSummary.id, selectedSummary.target_id);
       await Promise.all([list.reload(), detail.reload()]);
     } catch (error) {
       setNotice(String(error));
@@ -79,10 +80,11 @@ export function OrchestrationsPanel() {
         <div className="orchestration-layout">
           <div className="orchestration-list">
             {(list.data ?? []).map((item) => (
-              <button key={item.id} className={selectedSummary?.id === item.id ? "active" : ""} onClick={() => setSelectedID(item.id)}>
+              <button key={targetKey(item.target_id, item.id)} className={selectedSummary && targetKey(selectedSummary.target_id, selectedSummary.id) === targetKey(item.target_id, item.id) ? "active" : ""} onClick={() => setSelectedID(targetKey(item.target_id, item.id))}>
                 <Workflow size={16} />
                 <span><strong>{item.name}</strong><small>{item.id}</small></span>
                 <span className={`status-badge status-${item.status}`}>{item.status}</span>
+                <TargetBadge target_id={item.target_id} target_name={item.target_name} />
               </button>
             ))}
             {!list.loading && (list.data ?? []).length === 0 && <div className="empty-state">{t("orchestrations.empty")}</div>}

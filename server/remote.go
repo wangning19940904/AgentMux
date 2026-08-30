@@ -17,6 +17,16 @@ import (
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
+	s.mux.HandleFunc("GET /api/v1/remote/fleet/targets", s.handleFleetTargets)
+	s.mux.HandleFunc("POST /api/v1/remote/fleet/query", s.handleFleetQuery)
+	s.mux.HandleFunc("POST /api/v1/remote/fleet/execute", s.handleFleetExecute)
+	s.mux.HandleFunc("POST /api/v1/remote/sync/preview", s.handleFleetSyncPreview)
+	s.mux.HandleFunc("POST /api/v1/remote/sync/apply", s.handleFleetSyncApply)
+	s.mux.HandleFunc("POST /api/v1/remote/sync/apply/stream", s.handleFleetSyncApplyStream)
+	s.mux.HandleFunc("GET /api/v1/fleet-sync/capabilities", s.handleFleetSyncCapabilities)
+	s.mux.HandleFunc("POST /api/v1/fleet-sync/export", s.handleFleetSyncExport)
+	s.mux.HandleFunc("POST /api/v1/fleet-sync/inspect", s.handleFleetSyncInspect)
+	s.mux.HandleFunc("POST /api/v1/fleet-sync/import", s.handleFleetSyncImport)
 	s.mux.HandleFunc("GET /api/v1/remote/meetings", s.handleMeetingAggregate)
 	s.mux.HandleFunc("GET /api/v1/remote/meetings/events", s.handleMeetingAggregateEvents)
 	s.mux.HandleFunc("GET /api/v1/remote/meetings/activity", s.handleRemoteMeetingActivity)

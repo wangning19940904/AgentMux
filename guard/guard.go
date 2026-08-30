@@ -1,6 +1,6 @@
 // Package guard implements AgentMux Guard: the permission-approval and
 // policy gate for tool calls. The default "policy" guard evaluates a tool
-// call against ordered rules stored in the SQLite SSOT and falls back to a
+// call against ordered rules stored in the PostgreSQL SSOT and falls back to a
 // configurable default decision (ask) when no rule matches.
 package guard
 
@@ -8,29 +8,22 @@ import (
 	"context"
 
 	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/store"
 )
 
-func init() {
-	core.RegisterGuard("policy", func(cfg map[string]any) (core.Guard, error) {
-		def := core.GuardAsk
-		if d, ok := cfg["default"].(string); ok && d != "" {
-			def = core.GuardDecision(d)
-		}
-		return &PolicyGuard{def: def}, nil
-	})
+type PolicyRepository interface {
+	ListGuardPolicies(context.Context) ([]core.GuardPolicy, error)
 }
 
 // PolicyGuard implements core.Guard against stored policy rules.
 type PolicyGuard struct {
-	st  *store.Store
+	st  PolicyRepository
 	def core.GuardDecision
 }
 
 var _ core.Guard = (*PolicyGuard)(nil)
 
 // New builds a store-backed policy guard with the given default decision.
-func New(st *store.Store, def core.GuardDecision) *PolicyGuard {
+func New(st PolicyRepository, def core.GuardDecision) *PolicyGuard {
 	if def == "" {
 		def = core.GuardAsk
 	}

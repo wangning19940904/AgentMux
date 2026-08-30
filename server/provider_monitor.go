@@ -37,9 +37,10 @@ type providerMonitorSettingStore interface {
 	SetSetting(ctx context.Context, key, value string) error
 }
 
-// ProviderMonitorConfig controls catalog refreshes and optional lightweight
-// inference probes. The monitor is opt-in because model probes can consume
-// provider quota even though each request asks for only one output token.
+// ProviderMonitorConfig controls scheduled catalog refreshes and lightweight
+// inference probes. ProbeModels remains in the persisted/API shape for
+// compatibility, but normalization keeps it enabled so the monitor always
+// checks both the model list and actual service availability.
 type ProviderMonitorConfig struct {
 	Enabled              bool `json:"enabled"`
 	IntervalMinutes      int  `json:"interval_minutes"`
@@ -120,7 +121,7 @@ type providerMonitor struct {
 
 func defaultProviderMonitorConfig() ProviderMonitorConfig {
 	return ProviderMonitorConfig{
-		Enabled:              false,
+		Enabled:              true,
 		IntervalMinutes:      6 * 60,
 		ProbeModels:          true,
 		MaxModelsPerProvider: 20,
@@ -129,6 +130,7 @@ func defaultProviderMonitorConfig() ProviderMonitorConfig {
 
 func normalizeProviderMonitorConfig(cfg ProviderMonitorConfig) (ProviderMonitorConfig, error) {
 	defaults := defaultProviderMonitorConfig()
+	cfg.ProbeModels = true
 	if cfg.IntervalMinutes == 0 {
 		cfg.IntervalMinutes = defaults.IntervalMinutes
 	}
@@ -356,6 +358,14 @@ func (m *providerMonitor) Run(ctx context.Context) {
 }
 
 func (m *providerMonitor) RunOnce(ctx context.Context) (ProviderMonitorSnapshot, error) {
+	return m.runOnce(ctx, false)
+}
+
+func (m *providerMonitor) RefreshCatalogs(ctx context.Context) (ProviderMonitorSnapshot, error) {
+	return m.runOnce(ctx, true)
+}
+
+func (m *providerMonitor) runOnce(ctx context.Context, catalogOnly bool) (ProviderMonitorSnapshot, error) {
 	if m == nil || m.provider == nil {
 		return ProviderMonitorSnapshot{}, fmt.Errorf("provider monitor unavailable")
 	}
@@ -368,7 +378,11 @@ func (m *providerMonitor) RunOnce(ctx context.Context) (ProviderMonitorSnapshot,
 	m.running = true
 	m.nextRunAt = time.Time{}
 	cfg := m.config
+	previousStatuses := cloneProviderMonitorStatuses(m.providers)
 	m.mu.Unlock()
+	if catalogOnly {
+		cfg.ProbeModels = false
+	}
 
 	providers, err := m.provider.List(ctx)
 	if err != nil {
@@ -385,7 +399,11 @@ func (m *providerMonitor) RunOnce(ctx context.Context) (ProviderMonitorSnapshot,
 			continue
 		}
 		seenProviders[provider.ID] = true
-		status, checkErr := m.checkProvider(ctx, cfg, provider, now)
+		previous := previousStatuses[provider.ID]
+		status, checkErr := m.checkProvider(ctx, cfg, provider, previous, now)
+		if catalogOnly && checkErr == nil {
+			status = preserveProviderModelHealth(status, previous)
+		}
 		statuses[provider.ID] = status
 		if checkErr != nil {
 			m.log.Warn("provider monitor check failed", "provider", provider.Name, "err", checkErr)
@@ -394,7 +412,9 @@ func (m *providerMonitor) RunOnce(ctx context.Context) (ProviderMonitorSnapshot,
 
 	m.mu.Lock()
 	m.providers = statuses
-	m.lastRunAt = now
+	if !catalogOnly {
+		m.lastRunAt = now
+	}
 	m.resolveMissingProviderAlertsLocked(seenProviders, now)
 	m.trimAlertsLocked()
 	m.mu.Unlock()
@@ -406,10 +426,25 @@ func (m *providerMonitor) RunOnce(ctx context.Context) (ProviderMonitorSnapshot,
 	return m.Snapshot(), persistErr
 }
 
+func preserveProviderModelHealth(refreshed, previous ProviderMonitorProviderStatus) ProviderMonitorProviderStatus {
+	if previous.CheckedModels == 0 {
+		return refreshed
+	}
+	refreshed.State = previous.State
+	refreshed.CheckedModels = previous.CheckedModels
+	refreshed.HealthyModels = previous.HealthyModels
+	refreshed.UnhealthyModels = previous.UnhealthyModels
+	refreshed.Models = append([]ProviderModelHealth(nil), previous.Models...)
+	refreshed.Message = previous.Message
+	refreshed.LastCheckedAt = previous.LastCheckedAt
+	return refreshed
+}
+
 func (m *providerMonitor) checkProvider(
 	ctx context.Context,
 	cfg ProviderMonitorConfig,
 	provider *core.Provider,
+	previous ProviderMonitorProviderStatus,
 	now time.Time,
 ) (ProviderMonitorProviderStatus, error) {
 	status := ProviderMonitorProviderStatus{
@@ -446,11 +481,10 @@ func (m *providerMonitor) checkProvider(
 		return status, err
 	}
 	status.CatalogCount = len(models)
-	status.AddedModels, status.RemovedModels = diffProviderModels(provider.Meta.SupportedModels, models)
 
 	// Re-read before saving so an operator edit made while the remote request
-	// was in flight is preserved. The monitor owns only supported_models and an
-	// otherwise-empty default model.
+	// was in flight is preserved. The monitor owns supported_models and replaces
+	// a default model only when a definitive availability check took it offline.
 	latest, err := m.provider.Get(ctx, provider.ID)
 	if err != nil {
 		status.State = "error"
@@ -461,31 +495,14 @@ func (m *providerMonitor) checkProvider(
 	if latest != nil {
 		provider = latest
 	}
-	provider.Meta.SupportedModels = append([]string(nil), models...)
-	if strings.TrimSpace(provider.Model) == "" && len(models) > 0 {
-		provider.Model = models[0]
-	}
-	if err := m.provider.Upsert(ctx, provider); err != nil {
-		status.State = "error"
-		status.Message = fmt.Sprintf("save refreshed catalog: %v", err)
-		m.setCatalogErrorAlert(provider, status.Message, now)
-		return status, err
-	}
-
-	m.mu.Lock()
-	m.resolveHealthAlertLocked(providerMonitorHealthAlertID("catalog_error", provider.ID, ""), now)
-	if len(status.AddedModels) > 0 {
-		m.addEventAlertLocked("new_models", "info", provider, "", status.AddedModels, "", now)
-	}
-	if len(status.RemovedModels) > 0 {
-		m.addEventAlertLocked("removed_models", "warning", provider, "", status.RemovedModels, "", now)
-	}
-	m.mu.Unlock()
 
 	if !cfg.ProbeModels {
-		status.State = "healthy"
-		status.Message = "model catalog refreshed; inference checks are disabled"
-		m.resolveProviderHealthAlerts(provider.ID, nil, now)
+		availableModels := availableProviderModels(models, nil, previous.Models)
+		if err := m.saveAvailableProviderModels(ctx, provider, availableModels, nil, previous.Models, &status, now); err != nil {
+			return status, err
+		}
+		status.State = "skipped"
+		status.Message = "model catalog refreshed; availability was not checked"
 		return status, nil
 	}
 
@@ -504,6 +521,10 @@ func (m *providerMonitor) checkProvider(
 		m.setModelErrorAlert(provider, model, now)
 	}
 	m.resolveProviderHealthAlerts(provider.ID, seenErrorIDs, now)
+	availableModels := availableProviderModels(models, status.Models, previous.Models)
+	if err := m.saveAvailableProviderModels(ctx, provider, availableModels, status.Models, previous.Models, &status, now); err != nil {
+		return status, err
+	}
 
 	switch {
 	case status.CheckedModels == 0:
@@ -519,6 +540,91 @@ func (m *providerMonitor) checkProvider(
 		status.Message = fmt.Sprintf("%d of %d checked models failed", status.UnhealthyModels, status.CheckedModels)
 	}
 	return status, nil
+}
+
+// availableProviderModels keeps the remote catalog as the discovery source,
+// but removes models whose inference endpoint definitively says they do not
+// exist. A successful later probe adds the model back automatically. Transient
+// failures such as timeouts, rate limits, and 5xx responses remain selectable.
+func availableProviderModels(catalog []string, current, previous []ProviderModelHealth) []string {
+	currentByModel := providerModelHealthByName(current)
+	previousByModel := providerModelHealthByName(previous)
+	available := make([]string, 0, len(catalog))
+	for _, model := range catalog {
+		health, ok := currentByModel[model]
+		if !ok {
+			health, ok = previousByModel[model]
+		}
+		if ok && shouldAutoOfflineProviderModel(health) {
+			continue
+		}
+		available = append(available, model)
+	}
+	return available
+}
+
+func providerModelHealthByName(models []ProviderModelHealth) map[string]ProviderModelHealth {
+	byName := make(map[string]ProviderModelHealth, len(models))
+	for _, health := range models {
+		if model := strings.TrimSpace(health.Model); model != "" {
+			byName[model] = health
+		}
+	}
+	return byName
+}
+
+func shouldAutoOfflineProviderModel(health ProviderModelHealth) bool {
+	if health.State == "healthy" {
+		return false
+	}
+	return health.StatusCode == http.StatusNotFound || health.StatusCode == http.StatusGone
+}
+
+func providerModelWasAutoOfflined(model string, current, previous []ProviderModelHealth) bool {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	if health, ok := providerModelHealthByName(current)[model]; ok {
+		return shouldAutoOfflineProviderModel(health)
+	}
+	health, ok := providerModelHealthByName(previous)[model]
+	return ok && shouldAutoOfflineProviderModel(health)
+}
+
+func (m *providerMonitor) saveAvailableProviderModels(
+	ctx context.Context,
+	provider *core.Provider,
+	models []string,
+	currentHealth, previousHealth []ProviderModelHealth,
+	status *ProviderMonitorProviderStatus,
+	now time.Time,
+) error {
+	status.AddedModels, status.RemovedModels = diffProviderModels(provider.Meta.SupportedModels, models)
+	provider.Meta.SupportedModels = append([]string(nil), models...)
+	if strings.TrimSpace(provider.Model) == "" || providerModelWasAutoOfflined(provider.Model, currentHealth, previousHealth) {
+		provider.Model = ""
+		if len(models) > 0 {
+			provider.Model = models[0]
+		}
+	}
+	if err := m.provider.Upsert(ctx, provider); err != nil {
+		status.State = "error"
+		status.Message = fmt.Sprintf("save refreshed catalog: %v", err)
+		m.setCatalogErrorAlert(provider, status.Message, now)
+		return err
+	}
+
+	m.mu.Lock()
+	m.resolveHealthAlertLocked(providerMonitorHealthAlertID("catalog_error", provider.ID, ""), now)
+	if len(status.AddedModels) > 0 {
+		m.addEventAlertLocked("new_models", "info", provider, "", status.AddedModels, "", now)
+	}
+	if len(status.RemovedModels) > 0 {
+		m.addEventAlertLocked("removed_models", "warning", provider, "", status.RemovedModels, "", now)
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 func discoverProviderCatalog(ctx context.Context, client *http.Client, provider *core.Provider, apiKey string) ([]string, error) {
@@ -1022,7 +1128,13 @@ func (s *Server) handleProviderMonitorRun(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusServiceUnavailable, "provider monitor unavailable")
 		return
 	}
-	snapshot, err := s.providerMonitor.RunOnce(r.Context())
+	var snapshot ProviderMonitorSnapshot
+	var err error
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("catalog_only")), "true") {
+		snapshot, err = s.providerMonitor.RefreshCatalogs(r.Context())
+	} else {
+		snapshot, err = s.providerMonitor.RunOnce(r.Context())
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error":    err.Error(),

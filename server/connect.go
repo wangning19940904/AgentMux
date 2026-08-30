@@ -19,8 +19,6 @@ import (
 
 // SetConnect attaches the channels/triggers runtime. Nil keeps the CRUD
 // endpoints working in persist-only mode (no live attach/scheduling).
-func (s *Server) SetConnect(svc *core.ConnectService) { s.connect = svc }
-
 // apiChannel is a channel plus live status and display enrichment.
 type apiChannel struct {
 	core.Channel

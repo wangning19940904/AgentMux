@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -26,6 +27,8 @@ import (
 
 type principalContextKey struct{}
 
+const tenantScopeHeader = "X-AgentMux-Tenant-Scope"
+
 // withPrincipal attaches the authenticated principal to a request context.
 func withPrincipal(ctx context.Context, principal *core.Principal) context.Context {
 	return context.WithValue(ctx, principalContextKey{}, principal)
@@ -48,19 +51,15 @@ func requestPrincipal(r *http.Request) *core.Principal {
 
 // tenantRoutePolicy lists the exact endpoints a tenant token may reach. The
 // value is the set of allowed methods; an empty set means every method.
-var tenantRoutePolicy = map[string][]string{
+var tenantConsoleRoutePolicy = map[string][]string{
 	// Discovery and handshake.
-	"/api/v1/status":       {http.MethodGet},
-	"/api/v1/capabilities": {http.MethodGet},
-	"/api/v1/platforms":    {http.MethodGet},
+	"/api/v1/platforms": {http.MethodGet},
 
 	// Agent instances (stable).
 	"/api/v1/agents":                     {http.MethodGet},
-	"/api/v1/agent-instances":            {http.MethodGet, http.MethodPost, http.MethodDelete},
 	"/api/v1/agent-instances/initialize": {http.MethodPost},
 
 	// Channels (stable).
-	"/api/v1/channels":          {http.MethodGet, http.MethodPost, http.MethodDelete},
 	"/api/v1/channels/validate": {http.MethodPost},
 	"/api/v1/channels/restart":  {http.MethodPost},
 
@@ -73,34 +72,23 @@ var tenantRoutePolicy = map[string][]string{
 	"/api/v1/setup/feishu/automation/poll":      {http.MethodPost},
 	"/api/v1/setup/feishu/automation/configure": {http.MethodPost},
 
-	// Triggers and orchestrations (beta).
-	"/api/v1/triggers":              {http.MethodGet, http.MethodPost, http.MethodDelete},
-	"/api/v1/triggers/run":          {http.MethodPost},
-	"/api/v1/orchestrations":        {http.MethodGet, http.MethodPost},
-	"/api/v1/orchestrations/cancel": {http.MethodPost},
-
-	// Execution and reporting (stable/beta).
-	"/api/v1/invocations":        {http.MethodPost},
-	"/api/v1/invocations/stream": {http.MethodPost},
-	"/api/v1/send":               {http.MethodPost},
-	"/api/v1/usage":              {http.MethodGet},
-
-	// Console embedding: a tenant mints a session scoped to itself.
-	"/api/v1/console/sessions": {http.MethodPost},
-
-	// Tenant self-service: read back its own identity, and register a new
-	// tenant without an admin approval step (names are unique, so this can
-	// only mint fresh identities, never take over an existing one).
-	"/api/v1/tenancy/self": {http.MethodGet},
-
 	// Read-only catalogues needed by the tenant Console. Provider results and
 	// active routes are narrowed to providers explicitly granted by the admin;
 	// the other catalogues describe host capabilities rather than tenant data.
-	"/api/v1/providers":        {http.MethodGet},
-	"/api/v1/providers/active": {http.MethodGet},
-	"/api/v1/tools":            {http.MethodGet},
-	"/api/v1/frameworks":       {http.MethodGet},
+	"/api/v1/providers":                   {http.MethodGet},
+	"/api/v1/providers/active":            {http.MethodGet},
+	"/api/v1/tools":                       {http.MethodGet},
+	"/api/v1/frameworks":                  {http.MethodGet},
+	"/api/v1/frameworks/runtime-settings": {http.MethodGet},
 }
+
+var tenantRoutePolicy = func() map[string][]string {
+	policy := publicTenantRoutePolicy()
+	for path, methods := range tenantConsoleRoutePolicy {
+		policy[path] = append(policy[path], methods...)
+	}
+	return policy
+}()
 
 // tenantRouteAllowed reports whether a tenant principal may call one route.
 func tenantRouteAllowed(method, path string) bool {
@@ -146,6 +134,33 @@ func (s *Server) resolvePrincipal(r *http.Request) *core.Principal {
 		return nil
 	}
 	return s.consoleSessionPrincipal(r)
+}
+
+// applyAdminTenantScope lets an authenticated administrator preview the
+// Console exactly as one active tenant. Tenant credentials cannot use this
+// header to move laterally or elevate themselves.
+func (s *Server) applyAdminTenantScope(r *http.Request, principal *core.Principal) (*core.Principal, error) {
+	if principal == nil || !principal.Admin {
+		return principal, nil
+	}
+	tenantID := strings.TrimSpace(r.Header.Get(tenantScopeHeader))
+	if tenantID == "" {
+		return principal, nil
+	}
+	if s.st == nil {
+		return nil, fmt.Errorf("tenant scope is unavailable")
+	}
+	tenant, err := s.st.GetTenant(r.Context(), tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if tenant == nil {
+		return nil, fmt.Errorf("unknown tenant scope %q", tenantID)
+	}
+	if tenant.Status == core.TenantStatusDisabled {
+		return nil, fmt.Errorf("tenant %q is disabled", tenant.Name)
+	}
+	return &core.Principal{TenantID: tenant.ID, TenantName: tenant.Name}, nil
 }
 
 func bearerToken(header string) (string, bool) {

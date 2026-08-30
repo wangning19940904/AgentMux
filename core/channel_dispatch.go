@@ -50,6 +50,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	}
 	data["agent_id"] = rt.workspace.AgentID
 	data["runtime_id"] = rt.workspace.RuntimeID
+	data["memory_scope"] = rt.workspace.MemoryScope
 	if rt.agent != nil {
 		data["agent_name"] = rt.agent.Name()
 	}

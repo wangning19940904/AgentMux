@@ -45,12 +45,24 @@ type IngestService struct {
 	spoolDir   string
 	keyPath    string
 	token      string
+	usageSink  core.UsageRecordSink
 
 	mu       sync.Mutex
 	listener net.Listener
 	traces   map[string]hookTraceContext
 	aliases  map[string]string
 	sessions map[string]sessionTraceContext
+}
+
+// SetUsageSink lets consented native hooks materialize request-level usage in
+// the same canonical ledger used by live AgentMux sessions.
+func (s *IngestService) SetUsageSink(sink core.UsageRecordSink) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.usageSink = sink
+	s.mu.Unlock()
 }
 
 func NewIngestService(log *slog.Logger, bus *core.ObservationBus, home, token string) *IngestService {
@@ -296,7 +308,17 @@ func (s *IngestService) ingestWire(ctx context.Context, wire []byte) error {
 	if err != nil {
 		return err
 	}
-	return s.bus.Publish(ctx, envelope)
+	publishErr := s.bus.Publish(ctx, envelope)
+	var usageErr error
+	if record, ok := cursorHookUsageRecord(message); ok {
+		s.mu.Lock()
+		sink := s.usageSink
+		s.mu.Unlock()
+		if sink != nil {
+			_, usageErr = sink(ctx, record)
+		}
+	}
+	return errors.Join(publishErr, usageErr)
 }
 
 func (s *IngestService) hookEnvelope(message hookrelay.Message) (core.ObservationEnvelope, error) {
@@ -304,8 +326,8 @@ func (s *IngestService) hookEnvelope(message hookrelay.Message) (core.Observatio
 	if err := json.Unmarshal(message.Payload, &payload); err != nil {
 		return core.ObservationEnvelope{}, err
 	}
-	event := firstMapString(payload, "hook_event_name", "event", "hookEventName", "type")
-	sessionID := firstMapString(payload, "session_id", "sessionId", "thread_id", "threadId")
+	event := canonicalHookEvent(firstMapString(payload, "hook_event_name", "event", "hookEventName", "type"))
+	sessionID := firstMapString(payload, "session_id", "sessionId", "conversation_id", "conversationId", "thread_id", "threadId")
 	if sessionID == "" {
 		sessionID = "unknown"
 	}
@@ -385,6 +407,110 @@ func (s *IngestService) hookEnvelope(message hookrelay.Message) (core.Observatio
 		Provenance: []string{"native_plugin", "hook"}, Quality: core.ObservationQualityPartial, Status: status,
 		Tool: tool, Attributes: safeHookAttributes(payload), Content: content,
 	}, nil
+}
+
+func canonicalHookEvent(event string) string {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(event), "_", "")) {
+	case "userpromptsubmit", "beforesubmitprompt":
+		return "UserPromptSubmit"
+	case "pretooluse":
+		return "PreToolUse"
+	case "posttooluse":
+		return "PostToolUse"
+	case "posttoolusefailure":
+		return "PostToolUseFailure"
+	case "permissionrequest":
+		return "PermissionRequest"
+	case "precompact":
+		return "PreCompact"
+	case "stop":
+		return "Stop"
+	case "subagentstart":
+		return "SubagentStart"
+	case "subagentstop":
+		return "SubagentStop"
+	case "sessionstart":
+		return "SessionStart"
+	case "sessionend":
+		return "SessionEnd"
+	default:
+		return event
+	}
+}
+
+func cursorHookUsageRecord(message hookrelay.Message) (core.UsageRecord, bool) {
+	if strings.ToLower(strings.TrimSpace(message.Source)) != "cursor" {
+		return core.UsageRecord{}, false
+	}
+	var payload map[string]any
+	if json.Unmarshal(message.Payload, &payload) != nil || canonicalHookEvent(firstMapString(payload, "hook_event_name", "event", "hookEventName", "type")) != "Stop" {
+		return core.UsageRecord{}, false
+	}
+	usage, _ := payload["usage"].(map[string]any)
+	input := firstMapInt64(payload, "input_tokens", "inputTokens")
+	output := firstMapInt64(payload, "output_tokens", "outputTokens")
+	cacheRead := firstMapInt64(payload, "cache_read_tokens", "cacheReadTokens")
+	cacheWrite := firstMapInt64(payload, "cache_write_tokens", "cacheWriteTokens")
+	if usage != nil {
+		if input == 0 {
+			input = firstMapInt64(usage, "input_tokens", "inputTokens")
+		}
+		if output == 0 {
+			output = firstMapInt64(usage, "output_tokens", "outputTokens")
+		}
+		if cacheRead == 0 {
+			cacheRead = firstMapInt64(usage, "cache_read_tokens", "cacheReadTokens")
+		}
+		if cacheWrite == 0 {
+			cacheWrite = firstMapInt64(usage, "cache_write_tokens", "cacheWriteTokens")
+		}
+	}
+	if input+output+cacheRead+cacheWrite <= 0 {
+		return core.UsageRecord{}, false
+	}
+	sessionID := firstMapString(payload, "session_id", "sessionId", "conversation_id", "conversationId")
+	requestID := firstMapString(payload, "generation_id", "generationId", "request_id", "requestId")
+	if sessionID == "" || requestID == "" {
+		return core.UsageRecord{}, false
+	}
+	project := ""
+	if roots, ok := payload["workspace_roots"].([]any); ok && len(roots) > 0 {
+		project, _ = roots[0].(string)
+	}
+	model := firstMapString(payload, "model_id", "modelId", "model")
+	if model == "" {
+		model = "cursor"
+	}
+	return core.UsageRecord{
+		Source: "cursor", RuntimeID: "cursor", SessionID: sessionID, ConversationID: sessionID,
+		RequestID: requestID, Project: project, Model: model, Timestamp: message.ReceivedAt,
+		InputTokens: input, OutputTokens: output, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite,
+		Provenance: "cursor.hook", ProvenanceRank: 30, TokenQuality: core.UsageTokenQualityExact, CostKind: core.UsageCostKindCalculated,
+	}, true
+}
+
+func firstMapInt64(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case float64:
+			if value > 0 {
+				return int64(value + 0.5)
+			}
+		case json.Number:
+			if parsed, err := value.Int64(); err == nil && parsed > 0 {
+				return parsed
+			}
+		case int64:
+			if value > 0 {
+				return value
+			}
+		case int:
+			if value > 0 {
+				return int64(value)
+			}
+		}
+	}
+	return 0
 }
 
 func (s *IngestService) HandleHTTP(w http.ResponseWriter, r *http.Request) {

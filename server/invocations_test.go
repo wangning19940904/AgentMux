@@ -76,7 +76,7 @@ func TestHandleInvocationMapsDomainErrors(t *testing.T) {
 			server, _ := newTestServer(t)
 			server.SetInvoker(&invocationTestService{err: test.err})
 			recorder := doJSON(t, server, http.MethodPost, "/api/v1/invocations", map[string]string{
-				"project": "demo", "input": "hello",
+				"agent_id": "agent-1", "input": "hello",
 			})
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d, body = %s", recorder.Code, test.want, recorder.Body.String())
@@ -92,7 +92,7 @@ func TestInvocationEndpointUsesBridgeBearerAuth(t *testing.T) {
 	server.SetInvoker(&invocationTestService{result: core.InvocationResult{
 		ID: "inv_1", ConversationID: "conv_1", Answer: "ok",
 	}})
-	body := []byte(`{"project":"demo","input":"hello"}`)
+	body := []byte(`{"agent_id":"agent-1","input":"hello"}`)
 
 	unauthorized := httptest.NewRecorder()
 	server.withAuth(server.mux).ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/v1/invocations", bytes.NewReader(body)))
@@ -112,7 +112,7 @@ func TestInvocationEndpointUsesBridgeBearerAuth(t *testing.T) {
 func TestHandleInvocationLimitsRequestBody(t *testing.T) {
 	server, _ := newTestServer(t)
 	server.SetInvoker(&invocationTestService{})
-	body := append([]byte(`{"project":"demo","input":"`), bytes.Repeat([]byte("x"), maxInvocationRequestBytes)...)
+	body := append([]byte(`{"agent_id":"agent-1","input":"`), bytes.Repeat([]byte("x"), maxInvocationRequestBytes)...)
 	body = append(body, []byte(`"}`)...)
 	recorder := httptest.NewRecorder()
 	server.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/invocations", bytes.NewReader(body)))

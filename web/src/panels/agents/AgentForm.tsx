@@ -2,6 +2,7 @@ import { Bot, Cable, CheckCircle2, ExternalLink, Eye, FolderOpen, Link2, LogIn, 
 import { useEffect, useMemo, useState } from "react";
 import {
   activeRemoteID,
+  activeMachineScope,
   api,
   isDesktopApp,
   openExternalURL,
@@ -10,6 +11,7 @@ import {
   type Channel,
   type FrameworkAuthStatus,
   type FrameworkLoginResult,
+  type FrameworkRuntimeSettings,
   type Provider,
   type ProviderRoute,
   type Trigger,
@@ -27,6 +29,7 @@ import {
   routeToolOptionsForRuntime,
   runtimeLabel,
   runtimeProviderOptions,
+  runtimeOptionValues,
   serviceTierLabel,
   workDirErrorMessage,
 } from "./agentUtils";
@@ -89,6 +92,9 @@ export function AgentForm({
   const [authStatus, setAuthStatus] = useState<FrameworkAuthStatus | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [authNotice, setAuthNotice] = useState("");
+	const [localRuntimeSettings, setLocalRuntimeSettings] = useState<FrameworkRuntimeSettings | null>(null);
+	const [localRuntimeSettingsBusy, setLocalRuntimeSettingsBusy] = useState(false);
+	const [localRuntimeSettingsError, setLocalRuntimeSettingsError] = useState("");
   const [loginBusy, setLoginBusy] = useState("");
   const [loginResult, setLoginResult] = useState<FrameworkLoginResult | null>(null);
   const [loginCode, setLoginCode] = useState("");
@@ -122,27 +128,46 @@ export function AgentForm({
   const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
+	const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
   const overrideProvider = compatibleProviders.find((provider) => provider.id === draft.provider_id);
   const routeProvider = activeRoute?.configured
     ? compatibleProviders.find((provider) => provider.id === activeRoute.provider_id)
     : undefined;
   const modelProvider = overrideProvider ?? routeProvider;
-  const modelOptions = providerModelOptions(modelProvider);
-  const reasoningOptions = runtimeProviderOptions(modelProvider, "supported_reasoning_efforts");
-  const serviceTierOptions = runtimeProviderOptions(modelProvider, "supported_service_tiers");
-  const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
+	const localCapabilities = localRuntimeSettings?.capabilities;
+	const modelOptions = modelProvider
+		? providerModelOptions(modelProvider)
+		: usingLocalLogin
+			? runtimeOptionValues(localCapabilities?.models)
+			: [];
+	const reasoningOptions = modelProvider
+		? runtimeProviderOptions(modelProvider, "supported_reasoning_efforts")
+		: usingLocalLogin
+			? runtimeOptionValues(localCapabilities?.reasoning_efforts)
+			: [];
+	const serviceTierOptions = modelProvider
+		? runtimeProviderOptions(modelProvider, "supported_service_tiers")
+		: usingLocalLogin
+			? runtimeOptionValues(localCapabilities?.service_tiers)
+			: [];
   const providerStatus = draft.provider_id
     ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
     : activeRouteProvider
       ? `${t("agents.activeRouteProvider")} ${runtimeLabel(selectedRouteTool)} -> ${activeRouteProvider}`
       : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}. ${t("agents.localLoginActive")}`;
   const defaultModelStatus =
-    modelOptions.length > 0
-      ? t("agents.defaultModelHelp")
+	localRuntimeSettingsBusy && usingLocalLogin
+		? t("agents.defaultModelLoading")
+		: localRuntimeSettingsError && usingLocalLogin
+			? localRuntimeSettingsError
+			: modelOptions.length > 0
+				? usingLocalLogin ? t("agents.defaultModelLocalLogin") : t("agents.defaultModelHelp")
       : modelProvider
         ? t("agents.defaultModelUnavailable")
         : usingLocalLogin
-          ? t("agents.defaultModelLocalLogin")
+					? authStatus?.state === "authenticated"
+						? t("agents.defaultModelRuntimeUnavailable")
+						: t("agents.defaultModelLoginRequired")
           : t("agents.defaultModelNoProvider");
 
   useEffect(() => {
@@ -153,10 +178,11 @@ export function AgentForm({
 
   useEffect(() => {
     if (readOnly || !draft.default_model) return;
+		if (usingLocalLogin && (localRuntimeSettingsBusy || localRuntimeSettings === null)) return;
     if (modelOptions.length === 0 || !modelOptions.includes(draft.default_model)) {
       onUpdate("default_model", "");
     }
-  }, [draft.default_model, modelOptions.join("\u0000"), onUpdate, readOnly]);
+  }, [draft.default_model, localRuntimeSettings, localRuntimeSettingsBusy, modelOptions.join("\u0000"), onUpdate, readOnly, usingLocalLogin]);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -168,7 +194,7 @@ export function AgentForm({
     let active = true;
     setDesktopThreadsBusy(true);
     setDesktopThreadsError("");
-    void api.codexDesktopThreads()
+    void api.codexDesktopThreads(draft.target_id)
       .then((items) => {
         if (active) setDesktopThreads(items ?? []);
       })
@@ -181,7 +207,7 @@ export function AgentForm({
     return () => {
       active = false;
     };
-  }, [desktopRuntime]);
+  }, [desktopRuntime, draft.target_id]);
 
   useEffect(() => {
     let active = true;
@@ -196,7 +222,7 @@ export function AgentForm({
       };
     }
     setAuthBusy(true);
-    void api.frameworkAuth(frameworkRuntimeID)
+    void api.frameworkAuth(frameworkRuntimeID, draft.target_id)
       .then((status) => {
         if (active) setAuthStatus(status);
       })
@@ -209,13 +235,39 @@ export function AgentForm({
     return () => {
       active = false;
     };
-  }, [frameworkRuntimeID, usingLocalLogin]);
+  }, [draft.target_id, frameworkRuntimeID, usingLocalLogin]);
+
+	useEffect(() => {
+		let active = true;
+		setLocalRuntimeSettings(null);
+		setLocalRuntimeSettingsError("");
+		if (!usingLocalLogin || !draft.runtime_id || authStatus?.state !== "authenticated") {
+			setLocalRuntimeSettingsBusy(false);
+			return () => {
+				active = false;
+			};
+		}
+		setLocalRuntimeSettingsBusy(true);
+		void api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", draft.target_id)
+			.then((settings) => {
+				if (active) setLocalRuntimeSettings(settings);
+			})
+			.catch((err) => {
+				if (active) setLocalRuntimeSettingsError(err instanceof Error ? err.message : String(err));
+			})
+			.finally(() => {
+				if (active) setLocalRuntimeSettingsBusy(false);
+			});
+		return () => {
+			active = false;
+		};
+	}, [authStatus?.state, draft.runtime_id, draft.target_id, usingLocalLogin]);
 
   useEffect(() => {
     if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
     let active = true;
     const interval = window.setInterval(() => {
-      void api.frameworkAuth(frameworkRuntimeID).then((status) => {
+      void api.frameworkAuth(frameworkRuntimeID, draft.target_id).then((status) => {
         if (!active) return;
         setAuthStatus(status);
         if (status.state === "authenticated") {
@@ -228,14 +280,14 @@ export function AgentForm({
       active = false;
       window.clearInterval(interval);
     };
-  }, [frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
+  }, [draft.target_id, frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
 
   async function refreshFrameworkAuth() {
     if (!frameworkRuntimeID) return;
     setAuthBusy(true);
     setAuthNotice("");
     try {
-      const status = await api.frameworkAuth(frameworkRuntimeID);
+      const status = await api.frameworkAuth(frameworkRuntimeID, draft.target_id);
       setAuthStatus(status);
       if (status.state === "authenticated") setAuthNotice(t("agents.loginComplete"));
     } catch (err) {
@@ -249,7 +301,7 @@ export function AgentForm({
     setDesktopThreadsBusy(true);
     setDesktopThreadsError("");
     try {
-      setDesktopThreads((await api.codexDesktopThreads()) ?? []);
+      setDesktopThreads((await api.codexDesktopThreads(draft.target_id)) ?? []);
     } catch (err) {
       setDesktopThreadsError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -270,7 +322,7 @@ export function AgentForm({
     setLoginResult(null);
     setLoginCode("");
     try {
-      setLoginResult(await api.startFrameworkLogin(frameworkRuntimeID));
+      setLoginResult(await api.startFrameworkLogin(frameworkRuntimeID, draft.target_id));
     } catch (err) {
       setAuthNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -283,7 +335,7 @@ export function AgentForm({
     setLoginBusy("complete");
     setAuthNotice("");
     try {
-      await api.completeFrameworkLogin(loginResult.session_id, loginCode.trim());
+      await api.completeFrameworkLogin(loginResult.session_id, loginCode.trim(), draft.target_id);
       setAuthNotice(t("agents.loginCodeSubmitted"));
     } catch (err) {
       setAuthNotice(err instanceof Error ? err.message : String(err));
@@ -294,8 +346,12 @@ export function AgentForm({
 
   async function selectWorkDir() {
     setDirectoryNotice("");
-    if (activeRemoteID()) {
+    if ((draft.target_id && draft.target_id !== "local") || activeRemoteID()) {
       setRemoteDirectoryPickerOpen(true);
+      return;
+    }
+    if (!draft.target_id && activeMachineScope() === "all") {
+      setDirectoryNotice(t("agents.bulkWorkDirHint"));
       return;
     }
     setDirectoryBusy("select");
@@ -317,6 +373,7 @@ export function AgentForm({
       {remoteDirectoryPickerOpen && (
         <RemoteDirectoryPicker
           initialPath={draft.work_dir ?? ""}
+          targetID={draft.target_id}
           onClose={() => setRemoteDirectoryPickerOpen(false)}
           onSelect={(path) => {
             onUpdate("work_dir", path);
@@ -583,7 +640,7 @@ export function AgentForm({
                       {loginBusy === "start" ? t("agents.loginStarting") : t("agents.loginFramework")}
                     </button>
                   )}
-                  <button className="ghost-action" onClick={() => { window.location.hash = "#providers"; }} type="button">
+                  <button className="ghost-action" onClick={() => { window.location.hash = "#gateway"; }} type="button">
                     {t("agents.configureProvider")}
                   </button>
                   <button className="ghost-action" disabled={authBusy} onClick={refreshFrameworkAuth} type="button">
@@ -634,11 +691,11 @@ export function AgentForm({
           <label className="field">
             <span>{t("agents.defaultModel")}</span>
             <select
-              disabled={readOnly || modelOptions.length === 0}
+				disabled={readOnly || localRuntimeSettingsBusy || modelOptions.length === 0}
               value={draft.default_model ?? ""}
               onChange={(event) => onUpdate("default_model", event.target.value)}
             >
-              <option value="">{t("agents.defaultModelPlaceholder")}</option>
+				<option value="">{t(usingLocalLogin ? "agents.defaultModelRuntimePlaceholder" : "agents.defaultModelPlaceholder")}</option>
               {modelOptions.map((model) => (
                 <option key={model} value={model}>
                   {model}

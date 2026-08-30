@@ -153,26 +153,17 @@ func (s *Store) DeleteMCPServer(ctx context.Context, name string) error {
 
 // --- Guard (AgentMux Guard) ---
 
-// GuardPolicy is a single stored policy rule.
-type GuardPolicy struct {
-	ID       string `json:"id"`
-	Tool     string `json:"tool"`
-	Action   string `json:"action,omitempty"`
-	Decision string `json:"decision"`
-	Priority int    `json:"priority"`
-}
-
 // ListGuardPolicies returns all policies ordered by descending priority.
-func (s *Store) ListGuardPolicies(ctx context.Context) ([]GuardPolicy, error) {
+func (s *Store) ListGuardPolicies(ctx context.Context) ([]core.GuardPolicy, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,tool,action,decision,priority
 		FROM guard_policies ORDER BY priority DESC, id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []GuardPolicy
+	var out []core.GuardPolicy
 	for rows.Next() {
-		var p GuardPolicy
+		var p core.GuardPolicy
 		var action sql.NullString
 		if err := rows.Scan(&p.ID, &p.Tool, &action, &p.Decision, &p.Priority); err != nil {
 			return nil, err
@@ -184,7 +175,7 @@ func (s *Store) ListGuardPolicies(ctx context.Context) ([]GuardPolicy, error) {
 }
 
 // UpsertGuardPolicy inserts or updates a guard policy.
-func (s *Store) UpsertGuardPolicy(ctx context.Context, p *GuardPolicy) error {
+func (s *Store) UpsertGuardPolicy(ctx context.Context, p *core.GuardPolicy) error {
 	_, err := s.writer.ExecContext(ctx, `INSERT INTO guard_policies
 		(id,tool,action,decision,priority) VALUES (?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET tool=excluded.tool,action=excluded.action,

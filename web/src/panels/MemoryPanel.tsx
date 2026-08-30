@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 export function MemoryPanel() {
   const { t, language } = useI18n();
@@ -24,8 +25,8 @@ export function MemoryPanel() {
     }
   }
 
-  async function remove(id: string) {
-    await api.deleteMemory(id);
+  async function remove(id: string, targetID?: string) {
+    await api.deleteMemory(id, targetID);
     entries.reload();
   }
 
@@ -74,20 +75,22 @@ export function MemoryPanel() {
               <tr>
                 <th>{t("memory.scope")}</th>
                 <th>{t("memory.content")}</th>
+                <th>{t("remote.currentMachine")}</th>
                 <th>{t("memory.updated")}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {(entries.data ?? []).map((entry) => (
-                <tr key={entry.id}>
+                <tr key={targetKey(entry.target_id, entry.id)}>
                   <td>
                     <span className="pill">{entry.scope}</span>
                   </td>
                   <td>{entry.content}</td>
+                  <td><TargetBadge target_id={entry.target_id} target_name={entry.target_name} /></td>
                   <td className="muted">{new Date(entry.updated_at).toLocaleString(language === "zh" ? "zh-CN" : "en-US")}</td>
                   <td>
-                    <button className="ghost-action" onClick={() => remove(entry.id)}>
+                    <button className="ghost-action" onClick={() => remove(entry.id, entry.target_id)}>
                       {t("common.delete")}
                     </button>
                   </td>
@@ -95,7 +98,7 @@ export function MemoryPanel() {
               ))}
               {entries.data?.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty-state">
+                  <td colSpan={5} className="empty-state">
                     {t("memory.empty")}
                   </td>
                 </tr>

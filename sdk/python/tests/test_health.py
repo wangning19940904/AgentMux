@@ -9,12 +9,11 @@ CAPABILITIES = {
     "ok": True,
     "product": "agentmux",
     "version": "v0.1.4",
-    "contract_version": "1.0",
+    "contract_version": "2.0",
     "features": ["invocations", "invocations.stream", "send", "console.session"],
-    "modules": {"connect": {"registered": True, "active": True}},
+    "modules": {"connect": {"configured": True, "runtime_active": True, "enforced": False}},
     "agents": {"count": 2, "runtimes": ["codex"]},
     "channels": {"count": 1},
-    "projects": 0,
     "auth": {"bridge_enabled": True},
 }
 
@@ -31,7 +30,7 @@ def test_ready_via_capabilities() -> None:
     report = make_client(handler).health()
     assert report.state is HealthState.READY
     assert report.version == "v0.1.4"
-    assert report.contract_version == "1.0"
+    assert report.contract_version == "2.0"
     assert report.capabilities is not None
     assert report.capabilities.supports("invocations.stream")
 
@@ -45,7 +44,7 @@ def test_unauthorized() -> None:
 
 
 def test_incompatible_contract_major() -> None:
-    payload = dict(CAPABILITIES, contract_version="2.0")
+    payload = dict(CAPABILITIES, contract_version="3.0")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)
@@ -69,7 +68,7 @@ def test_legacy_fallback_when_capabilities_missing() -> None:
         if path == "/api/v1/capabilities":
             return httpx.Response(404, text="not found")
         if path == "/api/v1/status":
-            return httpx.Response(200, json={"ok": True, "version": "v0.1.2", "projects": 0})
+            return httpx.Response(200, json={"ok": True, "version": "v0.1.2"})
         if path in ("/api/v1/agent-instances", "/api/v1/channels"):
             return httpx.Response(200, json=[])
         raise AssertionError(f"unexpected path {path}")

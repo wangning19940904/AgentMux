@@ -83,7 +83,7 @@ type transcriptFile struct {
 // transcriptFileState is the last-scanned fingerprint used to skip unchanged
 // files. Codex keeps hundreds of large rollout files (tens of GB total); without
 // this short-circuit every poll re-opened and re-hashed all of them, pinning a
-// CPU core and starving the shared SQLite connection.
+// CPU core and starving the persistence pool.
 type transcriptFileState struct {
 	ModTime time.Time
 	Size    int64

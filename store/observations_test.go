@@ -17,7 +17,7 @@ import (
 
 func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "observations.db")
-	store, err := Open(path)
+	store, err := OpenLegacySQLite(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestObservationRecorderEncryptsRedactsAndDeduplicates(t *testing.T) {
 }
 
 func TestConcurrentObservationReplayDoesNotLeakPayloads(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "concurrent-replay.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "concurrent-replay.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestConcurrentObservationReplayDoesNotLeakPayloads(t *testing.T) {
 }
 
 func TestObservationCleanupRemovesOrphansInBatches(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "orphan-cleanup.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "orphan-cleanup.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestObservationCleanupRemovesOrphansInBatches(t *testing.T) {
 }
 
 func TestObservationOrphanLookupUsesPayloadIndex(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "orphan-plan.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "orphan-plan.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestObservationOrphanLookupUsesPayloadIndex(t *testing.T) {
 }
 
 func TestObservationRecorderSanitizesExternalAttributesBeforeSQLite(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "attributes.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "attributes.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestObservationRecorderSanitizesExternalAttributesBeforeSQLite(t *testing.T
 }
 
 func TestObservationRecorderNeverPersistsHiddenReasoningContent(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "hidden-reasoning.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "hidden-reasoning.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestObservationRecorderNeverPersistsHiddenReasoningContent(t *testing.T) {
 }
 
 func TestObservationTraceListFilters(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "observations.db"))
+	store, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "observations.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestObservationTraceListFilters(t *testing.T) {
 }
 
 func TestObservationRetentionKeepsMetadataAfterContentExpiry(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "observations.db"))
+	store, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "observations.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestObservationRetentionKeepsMetadataAfterContentExpiry(t *testing.T) {
 }
 
 func TestBackfilledContentExpiresFromEventTimeAndExpiredContentIsDropped(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "backfill-retention.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "backfill-retention.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +453,7 @@ func TestBackfilledContentExpiresFromEventTimeAndExpiredContentIsDropped(t *test
 }
 
 func TestObservationPayloadIsCompressedAndEncryptedInChunks(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "chunks.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "chunks.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestObservationPayloadIsCompressedAndEncryptedInChunks(t *testing.T) {
 }
 
 func TestObservationTranscriptSourceReferenceAvoidsPayloadCopyAndStillRedacts(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "source-ref.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "source-ref.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func TestObservationTranscriptSourceReferenceAvoidsPayloadCopyAndStillRedacts(t 
 }
 
 func TestObservationMetadataOnlyNeverPersistsContent(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "observations.db"))
+	store, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "observations.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestRedactObservationContentJSONAndText(t *testing.T) {
 }
 
 func TestObservationOutboxInsightOwnershipAndLease(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "observations.db"))
+	store, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "observations.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

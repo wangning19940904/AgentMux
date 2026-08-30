@@ -58,12 +58,16 @@ func (s *Store) GetChannel(ctx context.Context, id string) (*core.Channel, error
 
 // UpsertChannel inserts or updates a channel.
 func (s *Store) UpsertChannel(ctx context.Context, ch *core.Channel) error {
+	return upsertChannel(ctx, s.writer, ch)
+}
+
+func upsertChannel(ctx context.Context, executor statementExecutor, ch *core.Channel) error {
 	cfg, _ := json.Marshal(ch.Config)
 	enabled := 0
 	if ch.Enabled {
 		enabled = 1
 	}
-	_, err := s.writer.ExecContext(ctx, `INSERT INTO channels
+	_, err := executor.ExecContext(ctx, `INSERT INTO channels
 		(id,name,type,agent_id,config,enabled,owner_tenant_id,visibility,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,

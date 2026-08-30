@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, MCPServer } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 const EMPTY: MCPServer = { name: "", transport: "stdio", command: "", enabled: true };
 
@@ -23,8 +24,8 @@ export function MCPPanel() {
     }
   }
 
-  async function remove(name: string) {
-    await api.deleteMCP(name);
+  async function remove(name: string, targetID?: string) {
+    await api.deleteMCP(name, targetID);
     servers.reload();
   }
 
@@ -83,12 +84,13 @@ export function MCPPanel() {
                 <th>{t("mcp.transport")}</th>
                 <th>{t("mcp.commandUrl")}</th>
                 <th>{t("common.status")}</th>
+                <th>{t("remote.currentMachine")}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {(servers.data ?? []).map((server) => (
-                <tr key={server.name}>
+                <tr key={targetKey(server.target_id, server.name)}>
                   <td>{server.name}</td>
                   <td>
                     <span className="pill">{server.transport}</span>
@@ -107,8 +109,9 @@ export function MCPPanel() {
                       </span>
                     )}
                   </td>
+                  <td><TargetBadge target_id={server.target_id} target_name={server.target_name} /></td>
                   <td>
-                    <button className="ghost-action" onClick={() => remove(server.name)}>
+                    <button className="ghost-action" onClick={() => remove(server.name, server.target_id)}>
                       {t("common.delete")}
                     </button>
                   </td>
@@ -116,7 +119,7 @@ export function MCPPanel() {
               ))}
               {servers.data?.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="empty-state">
+                  <td colSpan={6} className="empty-state">
                     {t("mcp.empty")}
                   </td>
                 </tr>

@@ -78,7 +78,7 @@ fi`)
 	if err := migrateRemoteSQLite(ctx, client, legacyPath, databaseURL); err != nil {
 		return err
 	}
-	if err := startRemoteServiceAt(ctx, client, remoteOS, host.RemoteAddr, databaseURL); err != nil {
+	if err := startRemoteServiceAt(ctx, client, remoteOS, host.RemoteAddr, databaseURL, host.APIToken); err != nil {
 		return err
 	}
 	return nil
@@ -273,7 +273,7 @@ func updateRemoteAgentMux(ctx context.Context, client remoteClient, host Host) (
 	if err := migrateRemoteSQLite(ctx, client, dataPath, databaseURL); err != nil {
 		return artifact, updateFailureWithBackup(err, backupPath)
 	}
-	if err := startRemoteServiceAt(ctx, client, remoteOS, host.RemoteAddr, databaseURL); err != nil {
+	if err := startRemoteServiceAt(ctx, client, remoteOS, host.RemoteAddr, databaseURL, host.APIToken); err != nil {
 		return artifact, updateFailureWithBackup(err, backupPath)
 	}
 	return artifact, nil
@@ -511,12 +511,18 @@ backup="$HOME/.agentmux/backups/agentmux-pre-postgres-$(date +%Y%m%d-%H%M%S).db"
 	return nil
 }
 
-func startRemoteServiceAt(ctx context.Context, client remoteClient, remoteOS, addr, databaseURL string) error {
+func startRemoteServiceAt(ctx context.Context, client remoteClient, remoteOS, addr, databaseURL, bridgeToken string) error {
 	serviceDatabaseURL := systemdQuoteArg(databaseURL)
 	shellDatabaseURL := shellQuote(databaseURL)
+	bridgeToken = strings.TrimSpace(bridgeToken)
+	bridgeShellEnvironment := remoteBridgeEnvironment(bridgeToken)
 	var command string
 	switch remoteOS {
 	case "linux":
+		bridgeServiceEnvironment := ""
+		if bridgeToken != "" {
+			bridgeServiceEnvironment = "Environment=" + systemdQuoteArg("AGENTMUX_BRIDGE_TOKEN="+bridgeToken) + "\n"
+		}
 		command = `set -eu
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.agentmux"
 cat > "$HOME/.config/systemd/user/agentmux.service" <<'AGENTMUX_UNIT'
@@ -525,20 +531,25 @@ Description=AgentMux
 After=network-online.target postgresql.service
 
 [Service]
-ExecStart=%h/.agentmux/bin/amux --database-url ` + serviceDatabaseURL + ` client --addr ` + systemdQuoteArg(addr) + ` --web
+` + bridgeServiceEnvironment + `ExecStart=%h/.agentmux/bin/amux --database-url ` + serviceDatabaseURL + ` client --addr ` + systemdQuoteArg(addr) + ` --web
 Restart=on-failure
 RestartSec=2
 
 [Install]
 WantedBy=default.target
 AGENTMUX_UNIT
+chmod 0600 "$HOME/.config/systemd/user/agentmux.service"
 if ! command -v systemctl >/dev/null 2>&1 ||
    ! systemctl --user daemon-reload >/dev/null 2>&1 ||
    ! systemctl --user enable agentmux.service >/dev/null 2>&1 ||
    ! systemctl --user restart agentmux.service >/dev/null 2>&1; then
-  nohup "$HOME/.agentmux/bin/amux" --database-url ` + shellDatabaseURL + ` client --addr ` + shellQuote(addr) + ` --web > "$HOME/.agentmux/agentmux.log" 2>&1 < /dev/null &
+  ` + bridgeShellEnvironment + `nohup "$HOME/.agentmux/bin/amux" --database-url ` + shellDatabaseURL + ` client --addr ` + shellQuote(addr) + ` --web > "$HOME/.agentmux/agentmux.log" 2>&1 < /dev/null &
 fi`
 	case "darwin":
+		launchEnvironment := ""
+		if bridgeToken != "" {
+			launchEnvironment = `<key>EnvironmentVariables</key><dict><key>AGENTMUX_BRIDGE_TOKEN</key><string>` + html.EscapeString(bridgeToken) + `</string></dict>`
+		}
 		launchCommand := `exec "$HOME/.agentmux/bin/amux" --database-url ` + shellDatabaseURL + ` client --addr ` + shellQuote(addr) + ` --web >> "$HOME/.agentmux/agentmux.log" 2>&1`
 		command = `set -eu
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.agentmux"
@@ -547,14 +558,16 @@ cat > "$HOME/Library/LaunchAgents/com.agentmux.client.plist" <<'AGENTMUX_PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>com.agentmux.client</string>
+` + launchEnvironment + `
 <key>ProgramArguments</key><array><string>/bin/sh</string><string>-lc</string><string>` + html.EscapeString(launchCommand) + `</string></array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 </dict></plist>
 AGENTMUX_PLIST
+chmod 0600 "$HOME/Library/LaunchAgents/com.agentmux.client.plist"
 uid=$(id -u)
 launchctl bootout "gui/$uid/com.agentmux.client" >/dev/null 2>&1 || true
 if ! launchctl bootstrap "gui/$uid" "$HOME/Library/LaunchAgents/com.agentmux.client.plist" >/dev/null 2>&1; then
-  nohup "$HOME/.agentmux/bin/amux" --database-url ` + shellDatabaseURL + ` client --addr ` + shellQuote(addr) + ` --web > "$HOME/.agentmux/agentmux.log" 2>&1 < /dev/null &
+  ` + bridgeShellEnvironment + `nohup "$HOME/.agentmux/bin/amux" --database-url ` + shellDatabaseURL + ` client --addr ` + shellQuote(addr) + ` --web > "$HOME/.agentmux/agentmux.log" 2>&1 < /dev/null &
 fi`
 	default:
 		return fmt.Errorf("unsupported remote platform %q", remoteOS)

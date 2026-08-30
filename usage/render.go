@@ -42,10 +42,10 @@ func RenderTable(r *Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Usage report (%s)\n", r.Period)
 	fmt.Fprintf(&b, "%s\n", strings.Repeat("-", 64))
-	fmt.Fprintf(&b, "Total: in %s / out %s / cache-r %s / cache-w %s  =  $%.2f  (%d records)\n\n",
+	fmt.Fprintf(&b, "Total: in %s / out %s / cache-r %s / cache-w %s  =  $%.2f  (%d model requests, %d sessions)\n\n",
 		humanTokens(r.Totals.InputTokens), humanTokens(r.Totals.OutputTokens),
 		humanTokens(r.Totals.CacheReadTokens), humanTokens(r.Totals.CacheWriteTokens),
-		r.Totals.CostUSD, r.Totals.Records)
+		r.Totals.CostUSD, r.Totals.Records, r.Totals.Sessions)
 
 	fmt.Fprintf(&b, "%-22s %12s %12s %10s\n", r.Period, "in", "out", "cost")
 	for _, bucket := range r.Buckets {

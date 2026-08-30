@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,6 +46,58 @@ func TestAgentsEndpointOnlyReturnsInstalledRuntimes(t *testing.T) {
 	}
 	if containsString(runtimes, "claudecode") {
 		t.Fatalf("runtimes = %v, missing claudecode must be filtered", runtimes)
+	}
+}
+
+func TestFrameworkRuntimeSettingsUsesSignedInCLICatalog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	bin := t.TempDir()
+	command := filepath.Join(bin, "cursor-agent")
+	script := `#!/bin/sh
+if [ "$1" = "--list-models" ]; then
+  cat <<'MODELS'
+Available models
+auto - Auto (current, default)
+gpt-5.6-sol[reasoning=high,fast=true]
+composer-2
+Tip: choose a model with --model
+MODELS
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	s, _ := newTestServer(t)
+	workDir := t.TempDir()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/frameworks/runtime-settings?kind=cursor&work_dir="+url.QueryEscape(workDir), nil)
+	s.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response frameworkRuntimeSettingsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Kind != "cursor" || response.Defaults.Model != "auto" {
+		t.Fatalf("runtime defaults = %+v", response)
+	}
+	models := make([]string, 0, len(response.Capabilities.Models))
+	for _, option := range response.Capabilities.Models {
+		models = append(models, option.Value)
+	}
+	if !containsString(models, "gpt-5.6-sol") || !containsString(models, "composer-2") {
+		t.Fatalf("runtime models = %v", models)
+	}
+	if len(response.Capabilities.ReasoningEfforts) == 0 || len(response.Capabilities.ServiceTiers) == 0 {
+		t.Fatalf("runtime capabilities = %+v", response.Capabilities)
 	}
 }
 

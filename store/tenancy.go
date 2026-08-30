@@ -86,6 +86,35 @@ func (s *Store) ListTenants(ctx context.Context) ([]core.Tenant, error) {
 	return out, rows.Err()
 }
 
+// CountOwnedResourcesByTenant returns the lightweight ownership totals used by
+// the tenant index. Keeping this aggregation beside the tenant query lets the
+// Console render counts without downloading every grantable resource first.
+func (s *Store) CountOwnedResourcesByTenant(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT tenant_id, COUNT(*) FROM (
+			SELECT owner_tenant_id AS tenant_id FROM agent_instances WHERE owner_tenant_id IS NOT NULL
+			UNION ALL
+			SELECT owner_tenant_id AS tenant_id FROM channels WHERE owner_tenant_id IS NOT NULL
+			UNION ALL
+			SELECT owner_tenant_id AS tenant_id FROM triggers WHERE owner_tenant_id IS NOT NULL
+		) owned
+		GROUP BY tenant_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var tenantID string
+		var count int
+		if err := rows.Scan(&tenantID, &count); err != nil {
+			return nil, err
+		}
+		counts[tenantID] = count
+	}
+	return counts, rows.Err()
+}
+
 // GetTenant returns one tenant or (nil,nil) if absent.
 func (s *Store) GetTenant(ctx context.Context, id string) (*core.Tenant, error) {
 	row := s.db.QueryRowContext(ctx,

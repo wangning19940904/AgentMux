@@ -70,6 +70,64 @@ func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc)
 	return updateCLIWithProgress(ctx, spec, check, progress)
 }
 
+// UninstallWithProgress removes a CLI only through a catalog-owned command and
+// verifies that the executable is no longer discoverable. Configuration and
+// session data are preserved whenever the upstream uninstaller supports it.
+func UninstallWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
+	res := InstallResult{Kind: kind, Action: "uninstall"}
+	reportProgress(progress, "preparing", "", 5)
+	spec, ok := Lookup(kind)
+	if !ok {
+		res.Error = fmt.Sprintf("unknown framework %q", kind)
+		return res
+	}
+	if spec.KindType != KindCLI || !spec.UninstallSupported {
+		res.Error = fmt.Sprintf("framework %q does not support automatic uninstall", kind)
+		return res
+	}
+	if status := Detect(spec, DetectPrereqs()); !status.Installed {
+		res.OK = true
+		res.Log = fmt.Sprintf("%s is already uninstalled", spec.Display)
+		return res
+	}
+	command := append([]string(nil), spec.UninstallCommand...)
+	if len(command) == 0 && spec.NPMPackage != "" {
+		command = []string{"npm", "uninstall", "-g", spec.NPMPackage}
+	}
+	if len(command) == 0 {
+		res.Error = fmt.Sprintf("framework %q has no uninstall command", kind)
+		return res
+	}
+	if _, err := exec.LookPath(command[0]); err != nil {
+		res.Error = fmt.Sprintf("%s not found on PATH", command[0])
+		return res
+	}
+	res.Command = strings.Join(command, " ")
+	reportProgress(progress, "uninstalling", res.Command, 30)
+
+	runCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
+		defer cancel()
+	}
+	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	res.Log = string(out)
+	if err != nil {
+		res.Error = fmt.Sprintf("uninstall failed: %v", err)
+		return res
+	}
+	reportProgress(progress, "verifying", "", 88)
+	if status := Detect(spec, DetectPrereqs()); status.Installed {
+		res.Error = "uninstall command completed but CLI is still available on PATH"
+		return res
+	}
+	res.OK = true
+	return res
+}
+
 func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: spec.Kind, Action: "update"}
 	command, err := resolvedCLIUpdateCommand(spec)

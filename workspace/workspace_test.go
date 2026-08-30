@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wangning19940904/AgentMux/skills"
+
 	"github.com/wangning19940904/AgentMux/core"
 )
 
@@ -45,6 +47,114 @@ func TestInitializeClaudeWorkspaceCreatesNativeStructure(t *testing.T) {
 	}
 	if meta.RuntimeID != "claudecode" || meta.AgentID != "agent-1" || len(meta.Skills) != 1 {
 		t.Fatalf("metadata = %+v", meta)
+	}
+}
+
+func TestDisabledSkillIsNotMaterialized(t *testing.T) {
+	skillRoot := t.TempDir()
+	skillDir := filepath.Join(skillRoot, "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: review\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := skills.New(skillRoot)
+	if err := manager.SetEnabled(context.Background(), "review", false); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	result, err := NewWithSkillManager(manager, skillRoot).InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+		AgentID: "agent-1", RuntimeID: "codex", WorkDir: workDir, Skills: []string{"review"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(workDir, ".agents", "skills", "review")); !os.IsNotExist(err) {
+		t.Fatalf("disabled skill was materialized: %v", err)
+	}
+	if len(result.Warnings) == 0 || !strings.Contains(strings.Join(result.Warnings, "\n"), "disabled") {
+		t.Fatalf("warnings = %+v", result.Warnings)
+	}
+}
+
+func TestDisablingSkillRemovesManagedWorkspaceLink(t *testing.T) {
+	skillRoot := t.TempDir()
+	skillDir := filepath.Join(skillRoot, "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: review\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := skills.New(skillRoot)
+	initializer := NewWithSkillManager(manager, skillRoot)
+	workDir := t.TempDir()
+	opts := core.WorkspaceInitOptions{AgentID: "agent-1", RuntimeID: "codex", WorkDir: workDir, Skills: []string{"review"}}
+	if _, err := initializer.InitializeWorkspace(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workDir, ".agents", "skills", "review")
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetEnabled(context.Background(), "review", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initializer.InitializeWorkspace(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("stale managed skill remains: %v", err)
+	}
+}
+
+func TestMCPConfigIsRenderedAndReconciled(t *testing.T) {
+	workDir := t.TempDir()
+	initializer := New(t.TempDir())
+	definition := core.MCPServer{
+		Name: "files", Transport: "stdio", Command: "npx",
+		Args: []string{"-y", "@modelcontextprotocol/server-filesystem"}, Enabled: true,
+	}
+	if _, err := initializer.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+		AgentID: "agent-1", RuntimeID: "claudecode", WorkDir: workDir,
+		MCPServers: []string{"files"}, MCPDefinitions: []core.MCPServer{definition},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workDir, ".mcp.json")
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"mcpServers"`) || !strings.Contains(string(data), `"command": "npx"`) {
+		t.Fatalf("mcp config = %s", data)
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mcp mode = %v err=%v", info.Mode(), err)
+	}
+	if _, err := initializer.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+		AgentID: "agent-1", RuntimeID: "claudecode", WorkDir: workDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("managed MCP config was not removed: %v", err)
+	}
+}
+
+func TestMCPConfigRefusesUnmanagedFile(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, ".mcp.json"), []byte("user-owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := New(t.TempDir()).InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+		AgentID: "agent-1", RuntimeID: "claudecode", WorkDir: workDir,
+		MCPDefinitions: []core.MCPServer{{Name: "files", Command: "npx", Enabled: true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unmanaged MCP config") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

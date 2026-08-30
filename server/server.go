@@ -17,6 +17,7 @@ import (
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/contract"
 	"github.com/wangning19940904/AgentMux/core"
+	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
@@ -26,66 +27,127 @@ import (
 
 // Server is the management/bridge HTTP server.
 type Server struct {
-	cfg                  *config.Config
-	version              string
-	log                  *slog.Logger
-	st                   *store.Store
-	provider             core.ProviderManager
-	proxySvc             *providerpkg.Service
-	usageFn              UsageReporter
-	sender               core.Sender
-	invoker              core.Invoker
-	openAIResponses      *openAIResponseRegistry
-	openAIFiles          *openAIFileRegistry
-	connect              *core.ConnectService
-	presets              any
-	memory               core.MemoryStore
-	skills               core.SkillManager
-	mcp                  core.MCPRegistry
-	guard                core.Guard
-	workspace            core.WorkspaceInitializer
-	sessions             *sessionstore.Service
-	obs                  *observabilityRuntime
-	providerMonitor      *providerMonitor
-	remote               *remotepkg.Manager
-	keepAwake            *keepAwakeManager
-	channelPeers         channelPeerClient
-	meetingPeers         meetingPeerClient
-	ttsModels            *ttspkg.Manager
-	channelClaimMu       sync.Mutex
-	orchestrationMu      sync.Mutex
-	orchestrationCancels map[string]context.CancelFunc
-	feishuAutomationMu   sync.Mutex
-	feishuAutomations    map[string]*feishuAutomationSession
-	consoleSessions      *consoleSessionManager
-	mux                  *http.ServeMux
-	httpSrv              *http.Server
+	cfg                *config.Config
+	version            string
+	log                *slog.Logger
+	st                 *store.Store
+	provider           core.ProviderManager
+	proxySvc           *providerpkg.Service
+	usageFn            UsageReporter
+	usageSources       UsageSourceManager
+	sender             core.ChannelDeliverySender
+	invoker            core.Invoker
+	openAIResponses    *openAIResponseRegistry
+	openAIFiles        *openAIFileRegistry
+	connect            *core.ConnectService
+	presets            any
+	memory             core.MemoryStore
+	skills             core.SkillManager
+	mcp                core.MCPRegistry
+	guard              core.Guard
+	moduleRuntime      map[string]ModuleRuntimeState
+	workspace          core.WorkspaceInitializer
+	sessions           *sessionstore.Service
+	obs                *observabilityRuntime
+	providerMonitor    *providerMonitor
+	remote             *remotepkg.Manager
+	keepAwake          *keepAwakeManager
+	channelPeers       channelPeerClient
+	meetingPeers       meetingPeerClient
+	ttsModels          *ttspkg.Manager
+	channelClaimMu     sync.Mutex
+	orchestrations     *orchestrationpkg.Service
+	feishuAutomationMu sync.Mutex
+	feishuAutomations  map[string]*feishuAutomationSession
+	consoleSessions    *consoleSessionManager
+	fleetSyncMu        sync.Mutex
+	fleetSyncPlans     map[string]*fleetSyncPlan
+	mux                *http.ServeMux
+	httpSrv            *http.Server
 }
 
 // UsageReporter produces an aggregated usage report for the API. until is an
 // exclusive upper bound.
-type UsageReporter func(ctx context.Context, period string, since, until time.Time) (any, error)
+type UsageReporter func(ctx context.Context, period string, since, until time.Time, location *time.Location) (any, error)
 
-// New builds a server.
-func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.ProviderManager, usageFn UsageReporter) *Server {
-	s := &Server{
-		cfg:                  cfg,
-		version:              "0.1.0",
-		log:                  log,
-		st:                   st,
-		provider:             pm,
-		usageFn:              usageFn,
-		sessions:             sessionstore.New(),
-		keepAwake:            newKeepAwakeManager(),
-		ttsModels:            ttspkg.NewManager("", log),
-		openAIResponses:      newOpenAIResponseRegistry(),
-		openAIFiles:          newOpenAIFileRegistry(),
-		orchestrationCancels: map[string]context.CancelFunc{},
-		feishuAutomations:    map[string]*feishuAutomationSession{},
-		consoleSessions:      newConsoleSessionManager(),
-		mux:                  http.NewServeMux(),
+// Dependencies contains the complete HTTP server dependency graph. Production
+// composition supplies this once rather than mutating a partially constructed
+// server through a sequence of setters.
+type Dependencies struct {
+	Config         *config.Config
+	Version        string
+	Log            *slog.Logger
+	Store          *store.Store
+	Provider       core.ProviderManager
+	ProviderSvc    *providerpkg.Service
+	Usage          UsageReporter
+	UsageSources   UsageSourceManager
+	Sender         core.ChannelDeliverySender
+	Invoker        core.Invoker
+	Connect        *core.ConnectService
+	Presets        any
+	Memory         core.MemoryStore
+	Skills         core.SkillManager
+	MCP            core.MCPRegistry
+	Guard          core.Guard
+	Workspace      core.WorkspaceInitializer
+	ModuleRuntime  map[string]ModuleRuntimeState
+	Orchestrations *orchestrationpkg.Service
+}
+
+type ModuleRuntimeState struct {
+	RuntimeActive bool
+	Enforced      bool
+}
+
+// New builds a server from one explicit dependency set.
+func New(deps Dependencies) *Server {
+	cfg, log, st := deps.Config, deps.Log, deps.Store
+	if log == nil {
+		log = slog.Default()
 	}
-	s.providerMonitor = newProviderMonitor(log, st, pm)
+	s := &Server{
+		cfg:               cfg,
+		version:           "0.1.0",
+		log:               log,
+		st:                st,
+		provider:          deps.Provider,
+		proxySvc:          deps.ProviderSvc,
+		usageFn:           deps.Usage,
+		usageSources:      deps.UsageSources,
+		sender:            deps.Sender,
+		invoker:           deps.Invoker,
+		connect:           deps.Connect,
+		presets:           deps.Presets,
+		memory:            deps.Memory,
+		skills:            deps.Skills,
+		mcp:               deps.MCP,
+		guard:             deps.Guard,
+		moduleRuntime:     deps.ModuleRuntime,
+		workspace:         deps.Workspace,
+		sessions:          sessionstore.New(),
+		keepAwake:         newKeepAwakeManager(),
+		ttsModels:         ttspkg.NewManager("", log),
+		openAIResponses:   newOpenAIResponseRegistry(),
+		openAIFiles:       newOpenAIFileRegistry(),
+		orchestrations:    deps.Orchestrations,
+		feishuAutomations: map[string]*feishuAutomationSession{},
+		consoleSessions:   newConsoleSessionManager(),
+		fleetSyncPlans:    map[string]*fleetSyncPlan{},
+		mux:               http.NewServeMux(),
+	}
+	if strings.TrimSpace(deps.Version) != "" {
+		s.version = strings.TrimSpace(deps.Version)
+	}
+	if deps.ProviderSvc != nil {
+		s.provider = deps.ProviderSvc
+	}
+	if s.orchestrations == nil && st != nil && deps.Invoker != nil {
+		s.orchestrations = orchestrationpkg.New(st, deps.Invoker)
+	}
+	if st != nil {
+		s.providerMonitor = newProviderMonitor(log, st, s.provider)
+	}
 	remoteManager, err := remotepkg.NewManager(
 		cfg.Remote.HostsFile,
 		time.Duration(cfg.Remote.ConnectTimeoutSeconds)*time.Second,
@@ -102,6 +164,9 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, pm core.Provider
 		s.meetingPeers = peer
 	}
 	s.routes()
+	if s.orchestrations != nil {
+		go s.orchestrations.Recover()
+	}
 	return s
 }
 
@@ -112,8 +177,10 @@ func (s *Server) SetVersion(value string) {
 	}
 }
 
-// SetSender attaches the engine as the bridge message sender.
-func (s *Server) SetSender(sender core.Sender) { s.sender = sender }
+// SetUsageSourceManager attaches consent-gated collectors such as Cursor.
+func (s *Server) SetUsageSourceManager(manager UsageSourceManager) {
+	s.usageSources = manager
+}
 
 // SetInvoker attaches the direct Agent execution service. It is separate from
 // Sender because an invocation runs an Agent and returns its result; it does
@@ -121,12 +188,10 @@ func (s *Server) SetSender(sender core.Sender) { s.sender = sender }
 func (s *Server) SetInvoker(invoker core.Invoker) {
 	s.invoker = invoker
 	if invoker != nil && s.st != nil {
-		go s.recoverOrchestrations()
+		s.orchestrations = orchestrationpkg.New(s.st, invoker)
+		go s.orchestrations.Recover()
 	}
 }
-
-// SetPresets attaches the provider presets list exposed by the API.
-func (s *Server) SetPresets(presets any) { s.presets = presets }
 
 // SetModules attaches the Memory, Skills, MCP Registry and Guard backends.
 // Any of them may be nil; their routes degrade gracefully.
@@ -142,146 +207,14 @@ func (s *Server) SetWorkspaceInitializer(initializer core.WorkspaceInitializer) 
 	s.workspace = initializer
 }
 
-// SetProviderService attaches the takeover-aware provider service (local
-// routing REST + hot-switch path).
-func (s *Server) SetProviderService(svc *providerpkg.Service) {
-	s.proxySvc = svc
-	if svc != nil {
-		s.provider = svc
-		if s.providerMonitor != nil {
-			s.providerMonitor.provider = svc
-		}
-	}
-}
-
-func (s *Server) routes() {
-	s.registerTenancyRoutes()
-	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
-	s.mux.HandleFunc("GET /api/v1/capabilities", s.handleCapabilities)
-	s.mux.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)
-	s.mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
-	s.mux.HandleFunc("GET /api/v1/agent-instances", s.handleAgentInstancesList)
-	s.mux.HandleFunc("POST /api/v1/agent-instances", s.handleAgentInstanceUpsert)
-	s.mux.HandleFunc("POST /api/v1/agent-instances/initialize", s.handleAgentInstanceInitialize)
-	s.mux.HandleFunc("DELETE /api/v1/agent-instances", s.handleAgentInstanceDelete)
-	s.mux.HandleFunc("GET /api/v1/tools", s.handleTools)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/install", s.handleCLIInstall)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/install/stream", s.handleCLIInstallStream)
-	s.mux.HandleFunc("POST /api/v1/tools/bundles/install", s.handleBundleInstall)
-	s.mux.HandleFunc("POST /api/v1/tools/bundles/install/stream", s.handleBundleInstallStream)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/check", s.handleCLICheck)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/skills/sync", s.handleCLISkillSync)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/skills/sync/stream", s.handleCLISkillSyncStream)
-	s.mux.HandleFunc("GET /api/v1/tools/cli/auth", s.handleCLIAuthStatus)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/auth/login", s.handleCLIAuthLogin)
-	s.mux.HandleFunc("GET /api/v1/tools/cli/auth/login", s.handleCLIAuthLoginStatus)
-	s.mux.HandleFunc("POST /api/v1/tools/cli/auth/login/cancel", s.handleCLIAuthLoginCancel)
-	s.mux.HandleFunc("GET /api/v1/providers", s.handleProvidersList)
-	s.mux.HandleFunc("POST /api/v1/providers", s.handleProviderUpsert)
-	s.mux.HandleFunc("DELETE /api/v1/providers", s.handleProviderDelete)
-	s.mux.HandleFunc("GET /api/v1/providers/active", s.handleProviderActiveRoutes)
-	s.mux.HandleFunc("DELETE /api/v1/providers/active", s.handleProviderClearRoute)
-	s.mux.HandleFunc("GET /api/v1/providers/presets", s.handleProviderPresets)
-	s.mux.HandleFunc("POST /api/v1/providers/probe", s.handleProviderProbe)
-	s.mux.HandleFunc("GET /api/v1/providers/monitor", s.handleProviderMonitorGet)
-	s.mux.HandleFunc("PUT /api/v1/providers/monitor", s.handleProviderMonitorPut)
-	s.mux.HandleFunc("POST /api/v1/providers/monitor/run", s.handleProviderMonitorRun)
-	s.mux.HandleFunc("DELETE /api/v1/providers/monitor/alerts", s.handleProviderMonitorAlertDismiss)
-	s.mux.HandleFunc("POST /api/v1/providers/switch", s.handleProviderSwitch)
-	s.mux.HandleFunc("POST /api/v1/providers/failover", s.handleProviderFailover)
-	s.mux.HandleFunc("GET /api/v1/proxy/status", s.handleProxyStatus)
-	s.mux.HandleFunc("GET /api/v1/proxy/traces", s.handleProxyTraces)
-	s.mux.HandleFunc("POST /api/v1/proxy/takeover", s.handleProxyTakeover)
-	s.mux.HandleFunc("POST /api/v1/proxy/config", s.handleProxyConfigUpdate)
-	s.mux.HandleFunc("GET /api/v1/system/claude-3p", s.handleClaude3PStatus)
-	s.mux.HandleFunc("POST /api/v1/system/claude-3p", s.handleClaude3PToggle)
-	s.mux.HandleFunc("GET /api/v1/system/directories", s.handleSystemDirectoryList)
-	s.mux.HandleFunc("POST /api/v1/system/directories", s.handleSystemDirectoryEnsure)
-	s.mux.HandleFunc("GET /api/v1/system/keep-awake", s.handleKeepAwakeGet)
-	s.mux.HandleFunc("PUT /api/v1/system/keep-awake", s.handleKeepAwakePut)
-	s.mux.HandleFunc("GET /api/v1/tts/models", s.handleTTSModels)
-	s.mux.HandleFunc("POST /api/v1/tts/models/download/stream", s.handleTTSModelDownload)
-	s.mux.HandleFunc("DELETE /api/v1/tts/models", s.handleTTSModelDelete)
-	s.mux.HandleFunc("GET /api/v1/frameworks", s.handleFrameworksList)
-	s.mux.HandleFunc("GET /api/v1/frameworks/auth", s.handleFrameworkAuthStatus)
-	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
-	s.mux.HandleFunc("POST /api/v1/frameworks/install/stream", s.handleFrameworkInstallStream)
-	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
-	s.mux.HandleFunc("GET /api/v1/frameworks/login", s.handleFrameworkLoginStatus)
-	s.mux.HandleFunc("POST /api/v1/frameworks/login", s.handleFrameworkLogin)
-	s.mux.HandleFunc("POST /api/v1/frameworks/login/cancel", s.handleFrameworkLoginCancel)
-	s.mux.HandleFunc("POST /api/v1/frameworks/login/complete", s.handleFrameworkLoginComplete)
-	s.mux.HandleFunc("GET /api/v1/sessions", s.handleSessionsList)
-	s.mux.HandleFunc("GET /api/v1/codex/desktop-threads", s.handleCodexDesktopThreads)
-	s.mux.HandleFunc("GET /api/v1/sessions/messages", s.handleSessionMessages)
-	s.mux.HandleFunc("POST /api/v1/sessions/messages", s.handleSessionMessageSend)
-	s.mux.HandleFunc("POST /api/v1/sessions/resume", s.handleSessionResume)
-	s.mux.HandleFunc("POST /api/v1/sessions/stop", s.handleSessionStop)
-	s.mux.HandleFunc("GET /api/v1/sessions/terminal", s.handleSessionTerminalGet)
-	s.mux.HandleFunc("POST /api/v1/sessions/terminal/input", s.handleSessionTerminalInput)
-	s.mux.HandleFunc("POST /api/v1/sessions/terminal/resize", s.handleSessionTerminalResize)
-	s.mux.HandleFunc("GET /api/v1/feedback", s.handleFeedbackList)
-	s.mux.HandleFunc("POST /api/v1/feedback/detail", s.handleFeedbackDetail)
-	s.mux.HandleFunc("DELETE /api/v1/sessions", s.handleSessionDelete)
-	s.mux.HandleFunc("GET /api/v1/usage", s.handleUsage)
-	s.mux.HandleFunc("GET /api/v1/menubar/settings", s.handleMenubarSettingsGet)
-	s.mux.HandleFunc("PUT /api/v1/menubar/settings", s.handleMenubarSettingsPut)
-	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
-	s.mux.HandleFunc("POST /api/v1/invocations", s.handleInvocation)
-	s.mux.HandleFunc("POST /api/v1/invocations/stream", s.handleInvocationStream)
-	s.mux.HandleFunc("GET /api/v1/orchestrations", s.handleOrchestrationsList)
-	s.mux.HandleFunc("POST /api/v1/orchestrations", s.handleOrchestrationCreate)
-	s.mux.HandleFunc("POST /api/v1/orchestrations/cancel", s.handleOrchestrationCancel)
-	s.mux.HandleFunc("POST /v1/responses", s.handleOpenAIResponse)
-	s.mux.HandleFunc("GET /v1/responses/{response_id}", s.handleOpenAIResponseGet)
-	s.mux.HandleFunc("DELETE /v1/responses/{response_id}", s.handleOpenAIResponseDelete)
-	s.mux.HandleFunc("POST /v1/responses/{response_id}/cancel", s.handleOpenAIResponseCancel)
-	s.mux.HandleFunc("GET /v1/responses/{response_id}/input_items", s.handleOpenAIResponseInputItems)
-	s.mux.HandleFunc("POST /v1/files", s.handleOpenAIFileCreate)
-	s.mux.HandleFunc("GET /v1/files", s.handleOpenAIFileList)
-	s.mux.HandleFunc("GET /v1/files/{file_id}", s.handleOpenAIFileGet)
-	s.mux.HandleFunc("DELETE /v1/files/{file_id}", s.handleOpenAIFileDelete)
-	s.mux.HandleFunc("GET /v1/files/{file_id}/content", s.handleOpenAIFileContent)
-	s.mux.HandleFunc("GET /api/v1/channels", s.handleChannelsList)
-	s.mux.HandleFunc("POST /api/v1/channels", s.handleChannelUpsert)
-	s.mux.HandleFunc("POST /api/v1/channels/validate", s.handleChannelValidate)
-	s.mux.HandleFunc("DELETE /api/v1/channels", s.handleChannelDelete)
-	s.mux.HandleFunc("POST /api/v1/channels/restart", s.handleChannelRestart)
-	s.mux.HandleFunc("GET /api/v1/channel-conversations", s.handleChannelConversations)
-	s.mux.HandleFunc("POST /api/v1/channel-conversations/bind", s.handleChannelConversationBind)
-	s.mux.HandleFunc("POST /api/v1/channel-conversations/open", s.handleChannelConversationOpen)
-	s.mux.HandleFunc("GET /api/v1/channel-tasks", s.handleChannelTasks)
-	s.mux.HandleFunc("GET /api/v1/channel-interactions", s.handleChannelInteractions)
-	s.mux.HandleFunc("POST /api/v1/channel-interactions/respond", s.handleChannelInteractionRespond)
-	s.mux.HandleFunc("GET /api/v1/meetings", s.handleMeetingSnapshot)
-	s.mux.HandleFunc("GET /api/v1/meetings/events", s.handleMeetingEvents)
-	s.mux.HandleFunc("GET /api/v1/meetings/activity", s.handleMeetingActivity)
-	s.mux.HandleFunc("POST /api/v1/meetings/messages", s.handleMeetingMessageSend)
-	s.mux.HandleFunc("POST /api/v1/meetings/questions", s.handleMeetingQuestion)
-	s.mux.HandleFunc("POST /api/v1/meetings/response-mode", s.handleMeetingResponseMode)
-	s.mux.HandleFunc("POST /api/v1/meetings/invitations/respond", s.handleMeetingInvitationRespond)
-	s.mux.HandleFunc("POST /api/v1/meetings/join", s.handleMeetingJoin)
-	s.mux.HandleFunc("POST /api/v1/setup/feishu/begin", s.handleFeishuSetupBegin)
-	s.mux.HandleFunc("POST /api/v1/setup/feishu/poll", s.handleFeishuSetupPoll)
-	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/begin", s.handleFeishuAutomationBegin)
-	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/poll", s.handleFeishuAutomationPoll)
-	s.mux.HandleFunc("POST /api/v1/setup/feishu/automation/configure", s.handleFeishuAutomationConfigure)
-	s.registerRemoteRoutes()
-	s.mux.HandleFunc("GET /api/v1/triggers", s.handleTriggersList)
-	s.mux.HandleFunc("POST /api/v1/triggers", s.handleTriggerUpsert)
-	s.mux.HandleFunc("DELETE /api/v1/triggers", s.handleTriggerDelete)
-	s.mux.HandleFunc("POST /api/v1/triggers/run", s.handleTriggerRun)
-	s.mux.HandleFunc("GET /channel-avatar", s.handleChannelAvatar)
-	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
-	s.mux.HandleFunc("POST "+consoleSessionEndpoint, s.handleConsoleSessionCreate)
-	s.mux.HandleFunc("GET "+consoleEnterPath, s.handleConsoleEnter)
-	s.registerModuleRoutes()
-	s.registerObservabilityRoutes()
-	s.registerWeb(s.mux)
-}
-
 // ListenAndServe starts the HTTP server until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	if s == nil || s.cfg == nil {
+		return fmt.Errorf("server config is required")
+	}
+	if err := s.cfg.ValidateListenSecurity(); err != nil {
+		return err
+	}
 	defer s.keepAwake.Stop()
 	if s.remote != nil {
 		defer s.remote.Close()
@@ -322,7 +255,13 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			// Observability carries agent transcripts and runs on its own
 			// credential model. It is Console-only, so a tenant credential is
 			// rejected outright rather than falling through to that model.
-			if principal := s.resolvePrincipal(r); principal.IsTenant() {
+			principal := s.resolvePrincipal(r)
+			principal, scopeErr := s.applyAdminTenantScope(r, principal)
+			if scopeErr != nil {
+				writeErr(w, http.StatusForbidden, scopeErr.Error())
+				return
+			}
+			if principal.IsTenant() {
 				denyTenantRoute(w, r, principal)
 				return
 			}
@@ -335,7 +274,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		if isBridgeAPIPath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Project, X-AgentMux-Console, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Console, X-AgentMux-Tenant-Scope, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -352,6 +291,17 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				}
 				return
 			}
+			// A remote tenant id belongs to the destination database. Keep the
+			// controller principal as admin and let the proxy forward the scope
+			// header so the destination validates and applies it exactly once.
+			if !isRemoteProxyPath(r.URL.Path) {
+				scopedPrincipal, err := s.applyAdminTenantScope(r, principal)
+				if err != nil {
+					writeErr(w, http.StatusForbidden, err.Error())
+					return
+				}
+				principal = scopedPrincipal
+			}
 			// Tenants reach only the endpoints AgentMux publishes to third
 			// parties; the Console-only management surface stays admin-owned.
 			if principal.IsTenant() && !tenantRouteAllowed(r.Method, r.URL.Path) {
@@ -362,6 +312,10 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isRemoteProxyPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/remote/proxy/")
 }
 
 // hasExplicitCredential distinguishes the bridge-disabled legacy mode from a
@@ -391,7 +345,6 @@ func isSelfAuthenticatingPath(path string) bool {
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
-		"projects":         len(s.cfg.Projects),
 		"version":          s.version,
 		"contract_version": contract.Version,
 	})
@@ -556,7 +509,6 @@ func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Project         string   `json:"project"`
 		ChannelID       string   `json:"channel_id"`
 		ConversationKey string   `json:"conversation_key"`
 		Text            string   `json:"text"`
@@ -570,59 +522,38 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "no sender wired")
 		return
 	}
-	channelDelivery := strings.TrimSpace(req.ChannelID) != "" || strings.TrimSpace(req.ConversationKey) != "" || len(req.Images) > 0 || len(req.Files) > 0
-	if channelDelivery {
-		if !isLoopbackRequest(r) {
-			writeErr(w, http.StatusForbidden, "channel delivery is only available on loopback")
-			return
-		}
-		if strings.TrimSpace(req.ChannelID) == "" || strings.TrimSpace(req.ConversationKey) == "" {
-			writeErr(w, http.StatusBadRequest, "channel_id and conversation_key are required")
-			return
-		}
-		if s.st != nil {
-			if _, authorized := s.authorizeChannel(w, r, req.ChannelID, core.GrantLevelUse); !authorized {
-				return
-			}
-		}
-		deliverySender, ok := s.sender.(core.ChannelDeliverySender)
-		if !ok {
-			writeErr(w, http.StatusServiceUnavailable, "channel delivery is unavailable")
-			return
-		}
-		images, err := readChannelDeliveryFiles(req.Images, 10<<20)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, "invalid image: "+err.Error())
-			return
-		}
-		files, err := readChannelDeliveryFiles(req.Files, 30<<20)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, "invalid file: "+err.Error())
-			return
-		}
-		delivery := core.ChannelDelivery{
-			ChannelID:       req.ChannelID,
-			ConversationKey: req.ConversationKey,
-			Text:            req.Text,
-			Images:          images,
-			Files:           files,
-		}
-		if err := deliverySender.SendToChannel(r.Context(), delivery); err != nil {
-			writeErr(w, http.StatusConflict, err.Error())
-			return
-		}
-		writeOK(w)
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "channel delivery is only available on loopback")
 		return
 	}
-	// Project fan-out reaches every channel a config.toml project owns, so it
-	// stays with the administrator.
-	if requestPrincipal(r).IsTenant() {
-		writeErr(w, http.StatusForbidden,
-			"project fan-out is managed by the AgentMux administrator; send with a channel_id instead")
+	if strings.TrimSpace(req.ChannelID) == "" || strings.TrimSpace(req.ConversationKey) == "" {
+		writeErr(w, http.StatusBadRequest, "channel_id and conversation_key are required")
 		return
 	}
-	if err := s.sender.SendToProject(r.Context(), req.Project, req.Text); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if s.st != nil {
+		if _, authorized := s.authorizeChannel(w, r, req.ChannelID, core.GrantLevelUse); !authorized {
+			return
+		}
+	}
+	images, err := readChannelDeliveryFiles(req.Images, 10<<20)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid image: "+err.Error())
+		return
+	}
+	files, err := readChannelDeliveryFiles(req.Files, 30<<20)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid file: "+err.Error())
+		return
+	}
+	delivery := core.ChannelDelivery{
+		ChannelID:       req.ChannelID,
+		ConversationKey: req.ConversationKey,
+		Text:            req.Text,
+		Images:          images,
+		Files:           files,
+	}
+	if err := s.sender.SendToChannel(r.Context(), delivery); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	writeOK(w)
@@ -662,12 +593,21 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if period == "" {
 		period = "daily"
 	}
-	since, err := parseUsageDate(r.URL.Query().Get("from"), false)
+	location := time.Local
+	if timezone := strings.TrimSpace(r.URL.Query().Get("timezone")); timezone != "" {
+		var err error
+		location, err = time.LoadLocation(timezone)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid usage timezone")
+			return
+		}
+	}
+	since, err := parseUsageDateInLocation(r.URL.Query().Get("from"), false, location)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	until, err := parseUsageDate(r.URL.Query().Get("to"), true)
+	until, err := parseUsageDateInLocation(r.URL.Query().Get("to"), true, location)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -680,7 +620,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
-	rep, err := s.usageFn(r.Context(), period, since, until)
+	rep, err := s.usageFn(r.Context(), period, since, until, location)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -693,11 +633,14 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rep)
 }
 
-func parseUsageDate(value string, inclusiveEnd bool) (time.Time, error) {
+func parseUsageDateInLocation(value string, inclusiveEnd bool, location *time.Location) (time.Time, error) {
 	if value == "" {
 		return time.Time{}, nil
 	}
-	parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+	if location == nil {
+		location = time.Local
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", value, location)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid usage date %q; expected YYYY-MM-DD", value)
 	}

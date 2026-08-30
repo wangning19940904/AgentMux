@@ -1,20 +1,16 @@
 package bootstrap
 
 import (
-	"context"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 
-	"github.com/wangning19940904/AgentMux/config"
-	"github.com/wangning19940904/AgentMux/server"
+	"github.com/wangning19940904/AgentMux/framework"
 )
 
-func TestAttachRuntimePreparesUserExecutablePath(t *testing.T) {
+func TestPrepareRuntimeEnvironmentFindsUserExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix executable layout test")
 	}
@@ -35,13 +31,7 @@ func TestAttachRuntimePreparesUserExecutablePath(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("PATH", t.TempDir())
 
-	cfg := config.Default()
-	cfg.Observability.Enabled = false
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := &server.Server{}
-	if _, _, err := AttachRuntime(context.Background(), log, cfg, nil, srv, nil, nil, false); err != nil {
-		t.Fatal(err)
-	}
+	framework.PrepareRuntimeEnvironment()
 
 	path, err := exec.LookPath("codex")
 	if err != nil {

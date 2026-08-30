@@ -26,14 +26,19 @@ type Store struct {
 	dialect Dialect
 }
 
+type statementExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // DefaultPath returns ~/.agentmux/agentmux.db.
 func DefaultPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".agentmux", "agentmux.db")
 }
 
-// Open opens (and migrates) the database at path.
-func Open(path string) (*Store, error) {
+// OpenLegacySQLite opens the retired SQLite store for offline migration and
+// isolated compatibility tests. Daemon code must use OpenPostgres.
+func OpenLegacySQLite(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
@@ -180,6 +185,10 @@ CREATE TABLE IF NOT EXISTS usage_records (
 	tool TEXT,
 	cost_usd REAL,
 	host TEXT,
+	provenance TEXT,
+	provenance_rank INTEGER DEFAULT 0,
+	token_quality TEXT DEFAULT 'exact',
+	cost_kind TEXT DEFAULT 'calculated',
 	PRIMARY KEY (source, session_id, timestamp, host)
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -211,6 +220,11 @@ CREATE TABLE IF NOT EXISTS guard_policies (
 	action TEXT,
 	decision TEXT NOT NULL,
 	priority INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS skill_states (
+	name TEXT PRIMARY KEY,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS agent_instances (
 	id TEXT PRIMARY KEY,
@@ -584,6 +598,10 @@ func (s *Store) migrateSQLite() error {
 		{"turn_id", "TEXT"},
 		{"request_id", "TEXT"},
 		{"runtime_id", "TEXT"},
+		{"provenance", "TEXT"},
+		{"provenance_rank", "INTEGER DEFAULT 0"},
+		{"token_quality", "TEXT DEFAULT 'exact'"},
+		{"cost_kind", "TEXT DEFAULT 'calculated'"},
 	} {
 		if err := s.ensureColumn("usage_records", col.name, col.def); err != nil {
 			return err
@@ -674,27 +692,62 @@ func (s *Store) GetSetting(ctx context.Context, key string) (value string, ok bo
 	}
 }
 
-// UpsertUsage inserts usage records, ignoring duplicates by primary key.
+// UpsertUsage inserts usage records. Request-addressable records may be
+// upgraded by a higher-ranked source (for example Cursor dashboard data
+// replacing a local estimate); legacy transcript identities remain immutable.
 func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error {
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	stmt, err := tx.PrepareContext(ctx, `
+	requestStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO usage_records
 		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
-		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host,provenance,provenance_rank,token_quality,cost_kind)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>'' DO UPDATE SET
+		 session_id=CASE WHEN excluded.session_id<>'' THEN excluded.session_id ELSE usage_records.session_id END,
+		 conversation_id=CASE WHEN excluded.conversation_id<>'' THEN excluded.conversation_id ELSE usage_records.conversation_id END,
+		 trace_id=CASE WHEN excluded.trace_id<>'' THEN excluded.trace_id ELSE usage_records.trace_id END,
+		 turn_id=CASE WHEN excluded.turn_id<>'' THEN excluded.turn_id ELSE usage_records.turn_id END,
+		 runtime_id=CASE WHEN excluded.runtime_id<>'' THEN excluded.runtime_id ELSE usage_records.runtime_id END,
+		 project=CASE WHEN excluded.project<>'' THEN excluded.project ELSE usage_records.project END,
+		 model=CASE WHEN excluded.model<>'' THEN excluded.model ELSE usage_records.model END,
+		 timestamp=excluded.timestamp,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,
+		 cache_read_tokens=excluded.cache_read_tokens,cache_write_tokens=excluded.cache_write_tokens,
+		 tool=excluded.tool,cost_usd=excluded.cost_usd,provenance=excluded.provenance,
+		 provenance_rank=excluded.provenance_rank,token_quality=excluded.token_quality,cost_kind=excluded.cost_kind
+		WHERE usage_records.provenance_rank<=excluded.provenance_rank`)
+	if err != nil {
+		return err
+	}
+	defer requestStmt.Close()
+	legacyStmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO usage_records
+		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
+		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host,provenance,provenance_rank,token_quality,cost_kind)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT DO NOTHING`)
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer legacyStmt.Close()
 	for _, r := range recs {
+		if r.TokenQuality == "" {
+			r.TokenQuality = core.UsageTokenQualityExact
+		}
+		if r.CostKind == "" {
+			r.CostKind = core.UsageCostKindCalculated
+		}
+		stmt := legacyStmt
+		if strings.TrimSpace(r.RequestID) != "" {
+			stmt = requestStmt
+		}
 		if _, err := stmt.ExecContext(ctx, r.Source, r.SessionID, r.ConversationID, r.TraceID, r.TurnID, r.RequestID, r.RuntimeID, r.Project, r.Model,
 			r.Timestamp.UTC().Format(time.RFC3339Nano), r.InputTokens, r.OutputTokens,
-			r.CacheReadTokens, r.CacheWriteTokens, r.Tool, r.CostUSD, r.Host); err != nil {
+			r.CacheReadTokens, r.CacheWriteTokens, r.Tool, r.CostUSD, r.Host,
+			r.Provenance, r.ProvenanceRank, r.TokenQuality, r.CostKind); err != nil {
 			return err
 		}
 	}
@@ -706,10 +759,49 @@ func (s *Store) QueryUsage(ctx context.Context, since time.Time) ([]core.UsageRe
 	return s.QueryUsageRange(ctx, since, time.Time{})
 }
 
+const usageRecordSelectColumns = `COALESCE(source,''),COALESCE(session_id,''),COALESCE(conversation_id,''),
+	COALESCE(trace_id,''),COALESCE(turn_id,''),COALESCE(request_id,''),COALESCE(runtime_id,''),
+	COALESCE(project,''),COALESCE(model,''),COALESCE(timestamp,''),COALESCE(input_tokens,0),
+	COALESCE(output_tokens,0),COALESCE(cache_read_tokens,0),COALESCE(cache_write_tokens,0),
+	COALESCE(tool,''),COALESCE(cost_usd,0),COALESCE(host,''),COALESCE(provenance,''),
+	COALESCE(provenance_rank,0),COALESCE(token_quality,'exact'),COALESCE(cost_kind,'calculated')`
+
+// QueryUsageRequestIndex returns request-addressable records for one source.
+// Cursor cloud reconciliation uses this to enrich exact API events with the
+// local conversation and project without reading message content.
+func (s *Store) QueryUsageRequestIndex(ctx context.Context, source string, since time.Time) (map[string]core.UsageRecord, error) {
+	query := `SELECT ` + usageRecordSelectColumns + `
+		FROM usage_records WHERE source=? AND request_id IS NOT NULL AND request_id<>''`
+	args := []any{source}
+	if !since.IsZero() {
+		query += ` AND timestamp>=?`
+		args = append(args, since.UTC().Format(time.RFC3339Nano))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]core.UsageRecord{}
+	for rows.Next() {
+		var record core.UsageRecord
+		var timestamp string
+		if err := rows.Scan(&record.Source, &record.SessionID, &record.ConversationID, &record.TraceID, &record.TurnID,
+			&record.RequestID, &record.RuntimeID, &record.Project, &record.Model, &timestamp,
+			&record.InputTokens, &record.OutputTokens, &record.CacheReadTokens, &record.CacheWriteTokens,
+			&record.Tool, &record.CostUSD, &record.Host, &record.Provenance, &record.ProvenanceRank,
+			&record.TokenQuality, &record.CostKind); err != nil {
+			return nil, err
+		}
+		record.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
+		result[record.RequestID] = record
+	}
+	return result, rows.Err()
+}
+
 // QueryUsageRange returns canonical usage records inside [since, until).
 func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]core.UsageRecord, error) {
-	q := `SELECT source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
-		cache_read_tokens,cache_write_tokens,tool,cost_usd,host FROM usage_records`
+	q := `SELECT ` + usageRecordSelectColumns + ` FROM usage_records`
 	args := []any{}
 	var filters []string
 	if !since.IsZero() {
@@ -735,7 +827,7 @@ func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]
 		var ts string
 		if err := rows.Scan(&r.Source, &r.SessionID, &r.ConversationID, &r.TraceID, &r.TurnID, &r.RequestID, &r.RuntimeID, &r.Project, &r.Model, &ts,
 			&r.InputTokens, &r.OutputTokens, &r.CacheReadTokens, &r.CacheWriteTokens,
-			&r.Tool, &r.CostUSD, &r.Host); err != nil {
+			&r.Tool, &r.CostUSD, &r.Host, &r.Provenance, &r.ProvenanceRank, &r.TokenQuality, &r.CostKind); err != nil {
 			return nil, err
 		}
 		r.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)

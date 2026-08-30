@@ -128,6 +128,6 @@ describe("ownership fields", () => {
       ]),
     });
     const agents = (await client.agents.list()) as AgentInstance[];
-    expect(agents[0]?.some_future_field).toBe(42);
+		expect((agents[0] as unknown as Record<string, unknown>)?.some_future_field).toBe(42);
   });
 });

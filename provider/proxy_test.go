@@ -19,7 +19,7 @@ import (
 
 func newTestProxy(t *testing.T) (*ProxyServer, *store.Store) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

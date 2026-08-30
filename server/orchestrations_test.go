@@ -22,7 +22,7 @@ func TestOrchestrationRunsDependenciesAndPassesOutputs(t *testing.T) {
 		"tasks": []map[string]any{
 			{"id": "research", "agent_id": "agent-a", "input": "research code"},
 			{"id": "test", "agent_id": "agent-b", "input": "run tests"},
-			{"id": "synthesize", "project": "lead", "input": "make decision", "depends_on": []string{"research", "test"}},
+			{"id": "synthesize", "agent_id": "agent-lead", "input": "make decision", "depends_on": []string{"research", "test"}},
 		},
 	})
 	if recorder.Code != http.StatusAccepted {

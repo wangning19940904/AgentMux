@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/migration/configimport"
 	"github.com/wangning19940904/AgentMux/store"
 )
 
@@ -18,6 +19,36 @@ func databaseCmd() *cobra.Command {
 	command := &cobra.Command{Use: "database", Short: "Set up and migrate the PostgreSQL runtime store"}
 	command.AddCommand(databaseSetupCmd())
 	command.AddCommand(databaseMigrateSQLiteCmd())
+	command.AddCommand(databaseImportConfigCmd())
+	return command
+}
+
+func databaseImportConfigCmd() *cobra.Command {
+	var dryRun, apply bool
+	command := &cobra.Command{
+		Use:   "import-config",
+		Short: "Import legacy config.toml projects and hooks into PostgreSQL",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun == apply {
+				return fmt.Errorf("choose exactly one of --dry-run or --apply")
+			}
+			cfg, path, err := loadConfig(true)
+			if err != nil {
+				return err
+			}
+			st, err := openRuntimeStore(cfg)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			report, importErr := configimport.Import(cmd.Context(), st, cfg, dryRun)
+			encoded, _ := json.MarshalIndent(map[string]any{"source": path, "report": report}, "", "  ")
+			cmd.Println(string(encoded))
+			return importErr
+		},
+	}
+	command.Flags().BoolVar(&dryRun, "dry-run", false, "show creates, unchanged resources, and conflicts without writing")
+	command.Flags().BoolVar(&apply, "apply", false, "atomically write the imported resources")
 	return command
 }
 

@@ -44,10 +44,6 @@
       "omitempty": true,
       "type": "string"
     },
-    "project": {
-      "omitempty": true,
-      "type": "string"
-    },
     "started_at": {
       "omitempty": true,
       "type": "datetime"

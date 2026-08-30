@@ -6,7 +6,9 @@ package usage
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ type Engine struct {
 	st     *store.Store
 	log    *slog.Logger
 	pricer *pricing.Pricer
+	cursor *CursorUsageManager
 
 	collectMu sync.Mutex
 }
@@ -35,12 +38,16 @@ func NewEngine(cfg *config.Config, st *store.Store, log *slog.Logger) *Engine {
 		log = slog.Default()
 	}
 	cacheDir := cfg.Usage.CacheDir
-	return &Engine{
+	engine := &Engine{
 		cfg:    cfg,
 		st:     st,
 		log:    log,
 		pricer: pricing.New(cacheDir, cfg.Usage.Offline),
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		engine.cursor = NewCursorUsageManager(st, log, home, engine.recordBatch)
+	}
+	return engine
 }
 
 // Collect runs all configured local collectors and persists priced records.
@@ -48,6 +55,11 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 	e.collectMu.Lock()
 	defer e.collectMu.Unlock()
 	for _, src := range e.cfg.Usage.Sources {
+		// Cursor reads credentials and local message metadata only after the
+		// explicit Connect action. Its manager owns that consent-gated path.
+		if src == "cursor" {
+			continue
+		}
 		col, err := parser.NewCollector(src, "")
 		if err != nil {
 			e.log.Warn("skip source", "source", src, "err", err)
@@ -74,9 +86,19 @@ func (e *Engine) Record(ctx context.Context, record core.UsageRecord) (float64, 
 	if record.Timestamp.IsZero() {
 		record.Timestamp = time.Now().UTC()
 	}
-	record.CostUSD = e.pricer.Cost(record.Model,
-		record.InputTokens, record.OutputTokens,
-		record.CacheReadTokens, record.CacheWriteTokens)
+	if record.CostKind != core.UsageCostKindRecorded {
+		record.CostKind = core.UsageCostKindCalculated
+		record.CostUSD = e.pricer.Cost(record.Model,
+			record.InputTokens, record.OutputTokens,
+			record.CacheReadTokens, record.CacheWriteTokens)
+	}
+	if record.TokenQuality == "" {
+		record.TokenQuality = core.UsageTokenQualityExact
+	}
+	if record.Provenance == "" {
+		record.Provenance = "agentmux.internal"
+		record.ProvenanceRank = 100
+	}
 	if err := e.st.UpsertUsage(ctx, []core.UsageRecord{record}); err != nil {
 		return record.CostUSD, err
 	}
@@ -132,6 +154,9 @@ const usageCollectCheckpointKey = "usage:last_collect_at"
 // full backfill cost. Subsequent restarts collect just what changed while the
 // daemon was down.
 func (e *Engine) Start(ctx context.Context, backfill time.Duration) {
+	if e.cursor != nil {
+		go e.cursor.Start(ctx)
+	}
 	if backfill <= 0 {
 		backfill = 30 * 24 * time.Hour
 	}
@@ -194,6 +219,13 @@ func (e *Engine) saveCollectCheckpoint(ctx context.Context) {
 
 func (e *Engine) price(recs []core.UsageRecord) {
 	for i := range recs {
+		if recs[i].TokenQuality == "" {
+			recs[i].TokenQuality = core.UsageTokenQualityExact
+		}
+		if recs[i].CostKind == core.UsageCostKindRecorded {
+			continue
+		}
+		recs[i].CostKind = core.UsageCostKindCalculated
 		if recs[i].CostUSD != 0 {
 			continue
 		}
@@ -201,6 +233,30 @@ func (e *Engine) price(recs []core.UsageRecord) {
 			recs[i].InputTokens, recs[i].OutputTokens,
 			recs[i].CacheReadTokens, recs[i].CacheWriteTokens)
 	}
+}
+
+func (e *Engine) recordBatch(ctx context.Context, records []core.UsageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	e.price(records)
+	return e.st.UpsertUsage(ctx, records)
+}
+
+// UsageSources exposes consent-gated usage collectors to the management API.
+func (e *Engine) UsageSources(ctx context.Context) []CursorUsageSourceStatus {
+	if e == nil || e.cursor == nil {
+		return []CursorUsageSourceStatus{}
+	}
+	return []CursorUsageSourceStatus{e.cursor.Status(ctx)}
+}
+
+// UsageSourceAction applies a management action to a named usage source.
+func (e *Engine) UsageSourceAction(ctx context.Context, source, action string) (CursorUsageActionResult, error) {
+	if e == nil || e.cursor == nil || strings.ToLower(strings.TrimSpace(source)) != "cursor" {
+		return CursorUsageActionResult{}, fmt.Errorf("unsupported usage source %q", source)
+	}
+	return e.cursor.Action(ctx, action)
 }
 
 // Report aggregates canonical usage records from since onward.
@@ -216,27 +272,41 @@ func (e *Engine) Report(ctx context.Context, period string, since time.Time) (*R
 // Costs are recalculated for every report with one pricing snapshot so rows
 // imported under an old fallback price cannot make a mixed-price total.
 func (e *Engine) ReportRange(ctx context.Context, period string, since, until time.Time) (*Report, error) {
+	return e.ReportRangeInLocation(ctx, period, since, until, time.Local)
+}
+
+// ReportRangeInLocation aggregates usage in the caller-selected reporting
+// timezone. Query bounds remain absolute instants while bucket labels and the
+// reported date range use location, so fleet reports align across hosts whose
+// process-local timezone differs.
+func (e *Engine) ReportRangeInLocation(ctx context.Context, period string, since, until time.Time, location *time.Location) (*Report, error) {
+	if location == nil {
+		location = time.Local
+	}
 	recs, err := e.st.QueryUsageRange(ctx, since, until)
 	if err != nil {
 		return nil, err
 	}
 	e.reprice(recs)
 	for i := range recs {
-		recs[i].Timestamp = recs[i].Timestamp.In(time.Local)
+		recs[i].Timestamp = recs[i].Timestamp.In(location)
 	}
 	report := Aggregate(period, recs)
 	if !since.IsZero() {
-		report.From = since.In(time.Local).Format("2006-01-02")
+		report.From = since.In(location).Format("2006-01-02")
 	}
 	if !until.IsZero() {
-		report.To = until.In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+		report.To = until.In(location).AddDate(0, 0, -1).Format("2006-01-02")
 	}
-	report.Timezone = time.Local.String()
+	report.Timezone = location.String()
 	return report, nil
 }
 
 func (e *Engine) reprice(recs []core.UsageRecord) {
 	for i := range recs {
+		if recs[i].CostKind == core.UsageCostKindRecorded {
+			continue
+		}
 		recs[i].CostUSD = e.pricer.Cost(recs[i].Model,
 			recs[i].InputTokens, recs[i].OutputTokens,
 			recs[i].CacheReadTokens, recs[i].CacheWriteTokens)

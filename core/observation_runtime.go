@@ -229,15 +229,16 @@ func (e *Engine) observeHookRun(run HookRun) {
 }
 
 // observeSend is the common AgentSession.Send decorator used by project,
-// dynamic channel, cron, webhook and config-backed executions.
+// dynamic channel, cron, webhook and direct API executions.
 func (e *Engine) observeSend(ctx context.Context, sess AgentSession, text string, data map[string]string) (<-chan *Event, error) {
+	text = e.withMemoryContext(ctx, text, data)
 	return e.observeSendWith(ctx, sess, text, data, func(sendCtx context.Context) (<-chan *Event, error) {
 		return sess.Send(sendCtx, text)
 	})
 }
 
 func (e *Engine) observeSendInput(ctx context.Context, sess AgentSession, input AgentTurnInput, data map[string]string) (<-chan *Event, error) {
-	prompt := input.Text
+	prompt := e.withMemoryContext(ctx, input.Text, data)
 	rich, supportsRichInput := sess.(RichAgentSession)
 	prompt = promptWithAttachmentReferences(prompt, input.Attachments, !supportsRichInput)
 	input.Text = prompt

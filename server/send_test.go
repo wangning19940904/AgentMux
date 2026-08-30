@@ -17,8 +17,6 @@ type channelDeliveryTestSender struct {
 	delivery core.ChannelDelivery
 }
 
-func (s *channelDeliveryTestSender) SendToProject(context.Context, string, string) error { return nil }
-
 func (s *channelDeliveryTestSender) SendToChannel(_ context.Context, delivery core.ChannelDelivery) error {
 	s.delivery = delivery
 	return nil

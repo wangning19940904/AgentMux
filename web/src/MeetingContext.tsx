@@ -18,6 +18,13 @@ export function MeetingProvider({ children }: { children: ReactNode }) {
   const [overview, setOverview] = useState<MeetingOverview>(EMPTY_OVERVIEW);
   const [lastEvent, setLastEvent] = useState<MeetingStreamEvent | null>(null);
   const [error, setError] = useState("");
+  const [scopeVersion, setScopeVersion] = useState(0);
+
+  useEffect(() => {
+    const changed = () => setScopeVersion((version) => version + 1);
+    window.addEventListener("agentmux:machine-scope-changed", changed);
+    return () => window.removeEventListener("agentmux:machine-scope-changed", changed);
+  }, []);
 
   const refresh = useCallback(async (silent = true) => {
     try {
@@ -54,7 +61,7 @@ export function MeetingProvider({ children }: { children: ReactNode }) {
     };
     void stream();
     return () => { active = false; controller.abort(); window.clearTimeout(reconnectTimer); };
-  }, [refresh]);
+  }, [refresh, scopeVersion]);
 
   const value = useMemo(() => ({ overview, lastEvent, refresh, error }), [overview, lastEvent, refresh, error]);
   return <MeetingContext.Provider value={value}>{children}</MeetingContext.Provider>;

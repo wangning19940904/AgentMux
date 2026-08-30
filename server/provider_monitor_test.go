@@ -53,7 +53,7 @@ func TestProviderMonitorRefreshesCatalogAndTracksModelHealth(t *testing.T) {
 	defer upstream.Close()
 
 	t.Setenv("AGENTMUX_TEST_MONITOR_KEY", "monitor-secret")
-	st, err := store.Open(filepath.Join(t.TempDir(), "provider-monitor.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "provider-monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,23 +127,196 @@ func TestProviderMonitorRefreshesCatalogAndTracksModelHealth(t *testing.T) {
 	}
 }
 
+func TestProviderMonitorRefreshesCatalogWithoutRunningModelProbes(t *testing.T) {
+	var probeRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"data": []map[string]string{{"id": "model-a"}, {"id": "model-b"}},
+			})
+		case "/v1/messages":
+			probeRequests.Add(1)
+			writeJSON(w, http.StatusOK, map[string]any{"content": []map[string]string{{"type": "text", "text": "ok"}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv("AGENTMUX_TEST_CATALOG_KEY", "catalog-secret")
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "provider-catalog-refresh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	manager := providerpkg.NewManager(st)
+	if err := manager.Upsert(context.Background(), &core.Provider{
+		ID:        "relay",
+		Name:      "Relay",
+		BaseURL:   upstream.URL,
+		APIKeyEnv: "AGENTMUX_TEST_CATALOG_KEY",
+		Model:     "model-a",
+		Meta: core.ProviderMeta{
+			APIFormat:       "anthropic",
+			SupportedModels: []string{"model-a"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	monitor := newProviderMonitor(nil, st, manager)
+	snapshot, err := monitor.RefreshCatalogs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probeRequests.Load() != 0 {
+		t.Fatalf("model probe requests = %d, want 0", probeRequests.Load())
+	}
+	if !snapshot.LastRunAt.IsZero() {
+		t.Fatalf("catalog refresh changed last health check time: %v", snapshot.LastRunAt)
+	}
+	if len(snapshot.Providers) != 1 || snapshot.Providers[0].State != "skipped" {
+		t.Fatalf("catalog-only status = %+v", snapshot.Providers)
+	}
+	saved, err := manager.Get(context.Background(), "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Meta.SupportedModels) != 2 || saved.Meta.SupportedModels[1] != "model-b" {
+		t.Fatalf("saved catalog = %v", saved.Meta.SupportedModels)
+	}
+}
+
+func TestProviderMonitorAutoOfflinesMissingModelAndRestoresItAfterRecovery(t *testing.T) {
+	var missing atomic.Bool
+	missing.Store(true)
+	var probeRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"data": []map[string]string{{"id": "model-a"}, {"id": "model-b"}},
+			})
+		case "/v1/messages":
+			probeRequests.Add(1)
+			var payload struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if payload.Model == "model-b" && missing.Load() {
+				writeJSON(w, http.StatusNotFound, map[string]any{
+					"error": map[string]string{"message": "no provider serves model model-b"},
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"content": []map[string]string{{"type": "text", "text": "ok"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv("AGENTMUX_TEST_AUTO_OFFLINE_KEY", "monitor-secret")
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "provider-auto-offline.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	manager := providerpkg.NewManager(st)
+	if err := manager.Upsert(context.Background(), &core.Provider{
+		ID:        "relay",
+		Name:      "Relay",
+		BaseURL:   upstream.URL,
+		APIKeyEnv: "AGENTMUX_TEST_AUTO_OFFLINE_KEY",
+		Model:     "model-b",
+		Meta: core.ProviderMeta{
+			APIFormat:       "anthropic",
+			SupportedModels: []string{"model-a", "model-b"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	monitor := newProviderMonitor(nil, st, manager)
+	first, err := monitor.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Providers) != 1 || first.Providers[0].State != "warning" {
+		t.Fatalf("first status = %+v", first.Providers)
+	}
+	if got := first.Providers[0].RemovedModels; len(got) != 1 || got[0] != "model-b" {
+		t.Fatalf("removed models = %v", got)
+	}
+	saved, err := manager.Get(context.Background(), "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Model != "model-a" || len(saved.Meta.SupportedModels) != 1 || saved.Meta.SupportedModels[0] != "model-a" {
+		t.Fatalf("provider after auto-offline = %+v", saved)
+	}
+
+	probesBeforeRefresh := probeRequests.Load()
+	refreshed, err := monitor.RefreshCatalogs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probeRequests.Load() != probesBeforeRefresh {
+		t.Fatalf("catalog refresh ran model probes: before=%d after=%d", probesBeforeRefresh, probeRequests.Load())
+	}
+	if len(refreshed.Providers) != 1 || refreshed.Providers[0].State != "warning" {
+		t.Fatalf("preserved status = %+v", refreshed.Providers)
+	}
+	saved, err = manager.Get(context.Background(), "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Meta.SupportedModels) != 1 || saved.Meta.SupportedModels[0] != "model-a" {
+		t.Fatalf("catalog refresh restored missing model: %v", saved.Meta.SupportedModels)
+	}
+
+	missing.Store(false)
+	recovered, err := monitor.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Providers[0].State != "healthy" || recovered.Providers[0].HealthyModels != 2 {
+		t.Fatalf("recovered status = %+v", recovered.Providers[0])
+	}
+	saved, err = manager.Get(context.Background(), "relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Meta.SupportedModels) != 2 || saved.Meta.SupportedModels[1] != "model-b" {
+		t.Fatalf("recovered models = %v", saved.Meta.SupportedModels)
+	}
+}
+
 func TestProviderMonitorConfigPersists(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "provider-monitor-config.db"))
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "provider-monitor-config.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 
 	monitor := newProviderMonitor(nil, st, nil)
-	want := ProviderMonitorConfig{
+	requested := ProviderMonitorConfig{
 		Enabled:              true,
 		IntervalMinutes:      90,
 		ProbeModels:          false,
 		MaxModelsPerProvider: 7,
 	}
-	if _, err := monitor.UpdateConfig(context.Background(), want); err != nil {
+	if _, err := monitor.UpdateConfig(context.Background(), requested); err != nil {
 		t.Fatal(err)
 	}
+	want := requested
+	want.ProbeModels = true
 	reloaded := newProviderMonitor(nil, st, nil)
 	if got := reloaded.Snapshot().Config; got != want {
 		t.Fatalf("reloaded config = %+v, want %+v", got, want)
@@ -153,6 +326,19 @@ func TestProviderMonitorConfigPersists(t *testing.T) {
 		MaxModelsPerProvider: 7,
 	}); err == nil {
 		t.Fatal("expected short interval validation error")
+	}
+}
+
+func TestProviderMonitorDefaultsToAutomaticChecks(t *testing.T) {
+	config := newProviderMonitor(nil, nil, nil).Snapshot().Config
+	if !config.Enabled {
+		t.Fatal("provider monitoring should be enabled by default")
+	}
+	if config.IntervalMinutes != 6*60 {
+		t.Fatalf("default interval = %d, want 360", config.IntervalMinutes)
+	}
+	if !config.ProbeModels {
+		t.Fatal("model availability probes should be enabled by default")
 	}
 }
 

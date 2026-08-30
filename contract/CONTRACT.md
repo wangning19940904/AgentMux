@@ -17,7 +17,7 @@
 
 ## 契约版本（contract_version）
 
-当前契约版本：**`1.3`**（常量定义于 [`contract.go`](contract.go)，由
+当前契约版本：**`2.0`**（常量定义于 [`contract.go`](contract.go)，由
 `GET /api/v1/capabilities` 与 `GET /api/v1/status` 返回）。
 
 `1.1` 新增多租户：Agent 实例与渠道新增可选归属字段、`/api/v1/tenancy/*`
@@ -29,14 +29,19 @@ tenant 自助注册。新 tenant 默认没有任何既有资源，访问权由�
 `1.3` 新增 Provider 资源授权：租户只能列出管理员显式授权的
 Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 Agent 或调用。
 
+`2.0` 将 PostgreSQL 设为运行资源唯一事实来源：Invocation 与 Orchestration Task
+只接受 `agent_id`，移除 `project` 字段、`X-AgentMux-Project` 和 model→project fallback；
+`/api/v1/send` 只发送到明确的 Channel conversation。旧 config 项目先通过
+`amux database import-config --dry-run|--apply` 迁移。
+
 `contract_version` 与二进制版本**相互独立**：
 
-- **minor 递增**（`1.0 → 1.1`）：向后兼容的新增——新端点、响应新增字段、新的
+- **minor 递增**（`2.0 → 2.1`）：向后兼容的新增——新端点、响应新增字段、新的
   `features` 项。旧 SDK 继续工作。
-- **major 递增**（`1.x → 2.0`）：破坏性变更——删除/改名字段、修改语义、移除端点。
+- **major 递增**（`2.x → 3.0`）：破坏性变更——删除/改名字段、修改语义、移除端点。
   必须提前一个 minor 版本在本文档声明弃用。
 
-SDK 声明其支持的契约区间（当前 `>=1.0,<2.0`）。握手时服务端 major 不在区间内，
+SDK 声明其支持的契约区间（当前 `>=2.0,<3.0`）。握手时服务端 major 不在区间内，
 SDK 报告 `incompatible` 状态并拒绝继续。
 
 ## 稳定性分级
@@ -49,7 +54,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `GET /api/v1/status` | 轻量存活检查 |
 | `POST /api/v1/invocations` | 同步运行 Agent |
 | `POST /api/v1/invocations/stream` | SSE 流式运行 Agent |
-| `POST /api/v1/send` | 向渠道/项目发送出站消息（不运行 Agent） |
+| `POST /api/v1/send` | 向活动 Channel conversation 发送出站消息（不运行 Agent） |
 | `GET/POST/DELETE /api/v1/agent-instances` | Agent 实例读写 |
 | `GET/POST/DELETE /api/v1/channels` | 渠道读写 |
 | `POST /api/v1/console/sessions` + `GET /console/enter` | Console 会话嵌入 |
@@ -67,7 +72,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 ### OpenAI 兼容层
 
 `/v1/responses` 与 `/v1/files` 遵循 [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses)
-语义，差异（额外 Header `X-AgentMux-Agent-ID` / `X-AgentMux-Project`、内存存储限制等）
+语义，差异（额外 Header `X-AgentMux-Agent-ID`、内存存储限制等）
 记录在仓库 README「OpenAI Responses 兼容 API」章节。本契约不重复定义其 schema；
 兼容层的稳定性跟随 OpenAI 规范 + README 声明。
 
@@ -77,6 +82,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 frameworks、sessions、meetings、setup 自动化、tts、menubar、memory、skills、
 mcp、guard、`/api/v1/tenancy/*` 的管理端点等）是 Console 专用管理面。第三方
 **不应**依赖它们；如确有需要，请提 issue 将其提升到 beta/stable。
+`/api/v1/usage/sources*` 同样属于 Console internal API，不出现在公开 OpenAPI。
 
 **自 `1.1` 起这一分级是强制执行的**：租户凭证只能访问上面 stable / beta 两层
 （外加若干只读目录：按授权过滤的 `providers`、`providers/active`，

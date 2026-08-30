@@ -6,15 +6,12 @@ export function formatUsageCost(
   cnyRate: number,
   language: "en" | "zh",
 ) {
-  const code = currency === "cny" ? "CNY" : "USD";
   const value = currency === "cny" ? costUSD * validCNYRate(cnyRate) : costUSD;
-  return new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
-    style: "currency",
-    currency: code,
-    currencyDisplay: "symbol",
+  const formattedValue = new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
+  return `${currency === "cny" ? "¥" : "$"}${formattedValue}`;
 }
 
 export function validCNYRate(value: number) {

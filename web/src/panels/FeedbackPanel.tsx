@@ -4,6 +4,7 @@ import { api, type ChannelFeedback } from "../api";
 import { useI18n } from "../i18n";
 import { usePolling } from "../hooks/usePolling";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 export function FeedbackPanel() {
   const { t, language } = useI18n();
@@ -20,10 +21,10 @@ export function FeedbackPanel() {
     () => (report.data?.items ?? []).filter((item) => !semantic || item.semantic === semantic),
     [report.data, semantic],
   );
-  const selected = (report.data?.items ?? []).find((item) => item.id === selectedID);
+  const selected = (report.data?.items ?? []).find((item) => targetKey(item.target_id, item.id) === selectedID);
 
   function select(item: ChannelFeedback) {
-    setSelectedID(item.id);
+    setSelectedID(targetKey(item.target_id, item.id));
     setReason(item.reason ?? "");
     setComment(item.comment ?? "");
     setNotice("");
@@ -34,7 +35,7 @@ export function FeedbackPanel() {
     setSaving(true);
     setNotice("");
     try {
-      await api.updateFeedbackDetail({ id: selected.id, reason, comment });
+      await api.updateFeedbackDetail({ id: selected.id, reason, comment, target_id: selected.target_id });
       await report.reload();
       setNotice(t("feedback.saved"));
     } catch (error) {
@@ -78,10 +79,11 @@ export function FeedbackPanel() {
         <div className="feedback-layout">
           <div className="feedback-list">
             {items.map((item) => (
-              <button key={item.id} className={selectedID === item.id ? "active" : ""} onClick={() => select(item)}>
+              <button key={targetKey(item.target_id, item.id)} className={selectedID === targetKey(item.target_id, item.id) ? "active" : ""} onClick={() => select(item)}>
                 <span className={`feedback-semantic ${item.semantic}`}>{feedbackLabel(item.semantic, t)}</span>
                 <strong>{item.task_id}</strong>
                 <span>{item.channel_id} · {item.user_id}</span>
+                <TargetBadge target_id={item.target_id} target_name={item.target_name} />
                 <time>{new Date(item.updated_at).toLocaleString(language === "zh" ? "zh-CN" : "en-US")}</time>
               </button>
             ))}

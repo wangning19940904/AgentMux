@@ -69,6 +69,10 @@ func (s *Store) GetAgentInstance(ctx context.Context, id string) (*core.AgentIns
 
 // UpsertAgentInstance inserts or updates a product-level Agent instance.
 func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) error {
+	return upsertAgentInstance(ctx, s.writer, a)
+}
+
+func upsertAgentInstance(ctx context.Context, executor statementExecutor, a *core.AgentInstance) error {
 	env, _ := json.Marshal(a.Env)
 	channels, _ := json.Marshal(a.ChannelBindings)
 	schedules, _ := json.Marshal(a.Schedules)
@@ -79,7 +83,7 @@ func (s *Store) UpsertAgentInstance(ctx context.Context, a *core.AgentInstance) 
 	if a.Enabled {
 		enabled = 1
 	}
-	_, err := s.writer.ExecContext(ctx, `INSERT INTO agent_instances
+	_, err := executor.ExecContext(ctx, `INSERT INTO agent_instances
 		(id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,provider_tool,provider_id,memory_scope,
 		 default_model,default_reasoning_effort,default_service_tier,default_approval_mode,env,channel_bindings,schedules,mcp_servers,skills,clis,enabled,source,
 		 owner_tenant_id,visibility,created_at,updated_at)

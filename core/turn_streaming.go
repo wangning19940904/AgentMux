@@ -34,6 +34,9 @@ func (e *Engine) consumeTurn(ctx context.Context, sess AgentSession, events <-ch
 		e.updateRemoteTaskFromEvent(data, ev)
 		switch ev.Type {
 		case EventPermission:
+			if e.resolveGuardInteraction(ctx, sess, ev, data) {
+				continue
+			}
 			if !e.dispatchAgentInteraction(ctx, ev, data) {
 				e.declineAgentInteraction(ctx, sess, ev)
 			}

@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -14,11 +15,13 @@ import (
 
 // Config is the top-level configuration.
 type Config struct {
-	DisplayMode   string              `toml:"display_mode"`
-	Server        ServerConfig        `toml:"server"`
-	Database      DatabaseConfig      `toml:"database"`
-	Bridge        BridgeConfig        `toml:"bridge"`
-	Remote        RemoteConfig        `toml:"remote"`
+	DisplayMode string         `toml:"display_mode"`
+	Server      ServerConfig   `toml:"server"`
+	Database    DatabaseConfig `toml:"database"`
+	Bridge      BridgeConfig   `toml:"bridge"`
+	Remote      RemoteConfig   `toml:"remote"`
+	// Projects and Hooks are parsed only for `amux database import-config`.
+	// Daemon startup rejects them so PostgreSQL remains the sole runtime source.
 	Projects      []ProjectConfig     `toml:"projects"`
 	Hooks         []HookConfig        `toml:"hooks"`
 	Provider      ProviderConfig      `toml:"provider"`
@@ -168,6 +171,9 @@ func (c *Config) validate() error {
 	if c.Bridge.Enabled && c.Bridge.Token == "" {
 		return fmt.Errorf("bridge enabled but no token set (refusing to start: security)")
 	}
+	if err := c.ValidateListenSecurity(); err != nil {
+		return err
+	}
 	if c.Remote.ConnectTimeoutSeconds < 1 || c.Remote.ConnectTimeoutSeconds > 120 {
 		return fmt.Errorf("remote.connect_timeout_seconds must be between 1 and 120")
 	}
@@ -208,6 +214,32 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// ValidateListenSecurity prevents the unauthenticated management API from
+// being exposed on a non-loopback interface. Callers that override Server.Addr
+// after loading config must call this method again before starting the server.
+func (c *Config) ValidateListenSecurity() error {
+	if c == nil {
+		return fmt.Errorf("config is required")
+	}
+	addr := strings.TrimSpace(c.Server.Addr)
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("server.addr %q must be host:port: %w", addr, err)
+	}
+	if c.Bridge.Enabled {
+		return nil
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("server.addr %q is not loopback; enable bridge authentication before exposing the management API", addr)
+}
+
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = "127.0.0.1:8765"
@@ -220,6 +252,14 @@ func (c *Config) applyDefaults() {
 	}
 	if value := os.Getenv("AGENTMUX_DATABASE_URL"); value != "" {
 		c.Database.URL = value
+	}
+	// Headless and remotely managed AgentMux services receive their bridge
+	// credential through the process environment. Treat it as an explicit
+	// override so a service can enable bridge authentication without writing
+	// the secret into config.toml.
+	if value := strings.TrimSpace(os.Getenv("AGENTMUX_BRIDGE_TOKEN")); value != "" {
+		c.Bridge.Enabled = true
+		c.Bridge.Token = value
 	}
 	if c.Database.URL == "" {
 		c.Database.URL = "postgresql:///agentmux?host=/tmp&sslmode=disable"

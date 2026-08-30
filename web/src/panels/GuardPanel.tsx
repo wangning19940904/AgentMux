@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { TargetBadge, targetKey } from "../components/TargetBadge";
 
 export function GuardPanel() {
   const { t } = useI18n();
@@ -71,22 +72,24 @@ export function GuardPanel() {
                 <th>{t("guard.tool")}</th>
                 <th>{t("guard.action")}</th>
                 <th>{t("overview.decision")}</th>
+                <th>{t("remote.currentMachine")}</th>
               </tr>
             </thead>
             <tbody>
               {(policies.data ?? []).map((policy) => (
-                <tr key={policy.id}>
+                <tr key={targetKey(policy.target_id, policy.id)}>
                   <td>{policy.priority}</td>
                   <td>
                     <span className="pill">{policy.tool}</span>
                   </td>
                   <td className="muted">{policy.action || "*"}</td>
                   <td>{badge(policy.decision)}</td>
+                  <td><TargetBadge target_id={policy.target_id} target_name={policy.target_name} /></td>
                 </tr>
               ))}
               {policies.data?.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="empty-state">
+                  <td colSpan={5} className="empty-state">
                     {t("guard.empty")}
                   </td>
                 </tr>

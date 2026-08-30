@@ -7,12 +7,11 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// cursorCollector is a declared-but-inert source: Cursor's local state
-// database (state.vscdb) does not expose a stable per-call token schema
-// across versions, so rather than emit misleading numbers this collector
-// yields nothing. It exists so "cursor" stays a valid configured source and
-// version-specific extraction can be added without touching the collector
-// contract.
+// cursorCollector remains inert by design because Cursor collection requires
+// explicit user consent before reading its local login state. The usage-level
+// CursorUsageManager owns the read-only SQLite, native hook, API enrichment,
+// quality labeling and checkpointing workflow; keeping this adapter registered
+// preserves configuration compatibility without bypassing that consent gate.
 type cursorCollector struct {
 	root string
 }

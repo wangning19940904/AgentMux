@@ -20,6 +20,7 @@ type ConnectService struct {
 	store    ConnectStore
 	sched    *Scheduler
 	cliNotes CLINoteResolver
+	mcp      MCPRegistry
 
 	mu                sync.Mutex
 	ctx               context.Context
@@ -36,6 +37,8 @@ type CLINoteResolver func(ids []string) []CLINote
 func (c *ConnectService) SetCLINoteResolver(resolver CLINoteResolver) {
 	c.cliNotes = resolver
 }
+
+func (c *ConnectService) SetMCPRegistry(registry MCPRegistry) { c.mcp = registry }
 
 // NewConnectService wires the service onto an engine and store. It registers
 // an additive lifecycle subscription; construct it before Engine.Start.
@@ -457,9 +460,26 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		WorkDir:         inst.WorkDir,
 		WorkspaceMode:   inst.WorkspaceMode,
 		WorktreeBaseRef: inst.WorktreeBaseRef,
+		MemoryScope:     inst.MemoryScope,
 		Skills:          append([]string(nil), inst.Skills...),
 		MCPServers:      append([]string(nil), inst.MCPServers...),
 		RuntimeDefaults: runtimeDefaults,
+	}
+	if c.mcp != nil && len(inst.MCPServers) > 0 {
+		definitions, listErr := c.mcp.List(ctx)
+		if listErr != nil {
+			c.log.Warn("mcp definitions unavailable", "agent_id", inst.ID, "err", listErr)
+		} else {
+			selected := make(map[string]bool, len(inst.MCPServers))
+			for _, name := range inst.MCPServers {
+				selected[name] = true
+			}
+			for _, definition := range definitions {
+				if selected[definition.Name] && definition.Enabled {
+					workspace.MCPDefinitions = append(workspace.MCPDefinitions, definition)
+				}
+			}
+		}
 	}
 	cfg := map[string]any{
 		"work_dir":         inst.WorkDir,

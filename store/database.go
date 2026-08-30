@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -150,13 +149,6 @@ func (t *dbTx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, err
 
 // rebindPostgres replaces parameter markers outside quoted SQL literals.
 func rebindPostgres(query string) string {
-	query = strings.ReplaceAll(query, "LIMIT -1 OFFSET", "OFFSET")
-	query = postgresScalarMinMax.ReplaceAllStringFunc(query, func(value string) string {
-		if strings.HasPrefix(value, "MIN(") {
-			return "LEAST(" + strings.TrimPrefix(value, "MIN(")
-		}
-		return "GREATEST(" + strings.TrimPrefix(value, "MAX(")
-	})
 	var out strings.Builder
 	out.Grow(len(query) + 16)
 	parameter := 1
@@ -189,5 +181,3 @@ func rebindPostgres(query string) string {
 	}
 	return out.String()
 }
-
-var postgresScalarMinMax = regexp.MustCompile(`\b(?:MIN|MAX)\([A-Za-z0-9_.]+,[A-Za-z0-9_.]+\)`)

@@ -66,7 +66,7 @@ func (s *Store) TrimObservationExportQueue(ctx context.Context, exporter string,
 	_, err := s.observe.ExecContext(ctx, `UPDATE observation_export_outbox SET status='discarded',
 		last_error='export queue capacity exceeded',updated_at=? WHERE id IN (
 			SELECT id FROM observation_export_outbox WHERE exporter=? AND status IN ('pending','retry')
-			ORDER BY created_at DESC,id DESC LIMIT -1 OFFSET ?
+			ORDER BY created_at DESC,id DESC LIMIT 9223372036854775807 OFFSET ?
 		)`, observationTime(time.Now().UTC()), exporter, maximum)
 	return err
 }

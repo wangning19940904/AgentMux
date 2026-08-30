@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 # Contract range this SDK speaks; servers outside it report `incompatible`.
-SUPPORTED_CONTRACT_MAJOR = 1
+SUPPORTED_CONTRACT_MAJOR = 2
 
 
 class HealthState(StrEnum):
@@ -45,6 +45,21 @@ def contract_major(contract_version: str | None) -> int | None:
 
 
 @dataclass(frozen=True)
+class ModuleState:
+    configured: bool
+    runtime_active: bool
+    enforced: bool
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ModuleState":
+        return cls(
+            configured=bool(data.get("configured")),
+            runtime_active=bool(data.get("runtime_active")),
+            enforced=bool(data.get("enforced")),
+        )
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """Response of GET /api/v1/capabilities."""
 
@@ -53,10 +68,9 @@ class Capabilities:
     version: str
     contract_version: str
     features: tuple[str, ...]
-    modules: dict[str, Any]
+    modules: dict[str, ModuleState]
     agents: dict[str, Any]
     channels: dict[str, Any]
-    projects: int
     bridge_enabled: bool
     # Tenancy (contract 1.1): "admin" when the credential sees the whole
     # instance, "tenant" when it is confined to one application. Older servers
@@ -75,10 +89,13 @@ class Capabilities:
             version=str(data.get("version") or ""),
             contract_version=str(data.get("contract_version") or ""),
             features=tuple(data.get("features") or ()),
-            modules=dict(data.get("modules") or {}),
+            modules={
+                str(name): ModuleState.from_dict(state)
+                for name, state in (data.get("modules") or {}).items()
+                if isinstance(state, dict)
+            },
             agents=dict(data.get("agents") or {}),
             channels=dict(data.get("channels") or {}),
-            projects=int(data.get("projects") or 0),
             bridge_enabled=bool(auth.get("bridge_enabled")),
             scope=str(auth.get("scope") or "admin"),
             tenant=auth.get("tenant"),
@@ -135,6 +152,56 @@ class Attachment:
 
 
 @dataclass(frozen=True)
+class InvocationRequest:
+    """Wire request for POST /api/v1/invocations."""
+
+    agent_id: str
+    input: str
+    conversation_id: str | None = None
+    attachments: tuple[Attachment, ...] = ()
+    output_schema: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class TurnUsage:
+    """Per-turn token usage using the contract's legacy wire names."""
+
+    model: str = ""
+    request_id: str = ""
+    requested_model: str = ""
+    resolved_model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    cumulative: bool = False
+    attempt: int = 0
+    ttft_ms: int = 0
+    duration_ms: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TurnUsage":
+        return cls(
+            model=str(data.get("Model") or ""),
+            request_id=str(data.get("RequestID") or ""),
+            requested_model=str(data.get("RequestedModel") or ""),
+            resolved_model=str(data.get("ResolvedModel") or ""),
+            input_tokens=int(data.get("InputTokens") or 0),
+            output_tokens=int(data.get("OutputTokens") or 0),
+            cache_read_tokens=int(data.get("CacheReadTokens") or 0),
+            cache_write_tokens=int(data.get("CacheWriteTokens") or 0),
+            reasoning_tokens=int(data.get("ReasoningTokens") or 0),
+            total_tokens=int(data.get("TotalTokens") or 0),
+            cumulative=bool(data.get("Cumulative")),
+            attempt=int(data.get("Attempt") or 0),
+            ttft_ms=int(data.get("TTFTMs") or 0),
+            duration_ms=int(data.get("DurationMs") or 0),
+        )
+
+
+@dataclass(frozen=True)
 class InvocationResult:
     """Response of POST /api/v1/invocations (also completed.result in SSE)."""
 
@@ -143,9 +210,8 @@ class InvocationResult:
     answer: str
     duration_ms: int
     agent_id: str | None = None
-    project: str | None = None
     session_id: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: TurnUsage | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -156,9 +222,8 @@ class InvocationResult:
             answer=str(data.get("answer") or ""),
             duration_ms=int(data.get("duration_ms") or 0),
             agent_id=data.get("agent_id"),
-            project=data.get("project"),
             session_id=data.get("session_id"),
-            usage=data.get("usage"),
+            usage=TurnUsage.from_dict(data["usage"]) if isinstance(data.get("usage"), dict) else None,
             raw=data,
         )
 
@@ -187,7 +252,7 @@ class InvocationEvent:
     tool_input: str | None = None
     tool_result: str | None = None
     interaction: dict[str, Any] | None = None
-    usage: dict[str, Any] | None = None
+    usage: TurnUsage | None = None
     metadata: dict[str, str] | None = None
     error: str | None = None
     result: InvocationResult | None = None
@@ -213,7 +278,7 @@ class InvocationEvent:
             tool_input=data.get("tool_input"),
             tool_result=data.get("tool_result"),
             interaction=data.get("interaction"),
-            usage=data.get("usage"),
+            usage=TurnUsage.from_dict(data["usage"]) if isinstance(data.get("usage"), dict) else None,
             metadata=data.get("metadata"),
             error=data.get("error"),
             result=InvocationResult.from_dict(result) if isinstance(result, dict) else None,
@@ -223,23 +288,38 @@ class InvocationEvent:
 
 @dataclass(frozen=True)
 class AgentInstance:
-    """Console-managed Agent (subset aligned with contract/schemas/agent_instance.json)."""
+    """Console-managed Agent (contract/schemas/agent_instance.json)."""
 
     id: str
     name: str
     runtime_id: str
     enabled: bool
+    desktop_thread_id: str | None = None
     work_dir: str | None = None
+    workspace_mode: str | None = None
+    worktree_base_ref: str | None = None
+    session_backend: str | None = None
     system_prompt: str | None = None
     provider_tool: str | None = None
+    provider_id: str | None = None
+    provider_name: str | None = None
     default_model: str | None = None
     default_reasoning_effort: str | None = None
     default_service_tier: str | None = None
     default_approval_mode: str | None = None
+    memory_scope: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+    channel_bindings: tuple[dict[str, Any], ...] = ()
+    schedules: tuple[dict[str, Any], ...] = ()
+    mcp_servers: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
+    clis: tuple[str, ...] = ()
     source: str | None = None
     owner_tenant_id: str | None = None
     owner_tenant_name: str | None = None
     visibility: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -249,17 +329,32 @@ class AgentInstance:
             name=str(data.get("name") or ""),
             runtime_id=str(data.get("runtime_id") or ""),
             enabled=bool(data.get("enabled")),
+            desktop_thread_id=data.get("desktop_thread_id"),
             work_dir=data.get("work_dir"),
+            workspace_mode=data.get("workspace_mode"),
+            worktree_base_ref=data.get("worktree_base_ref"),
+            session_backend=data.get("session_backend"),
             system_prompt=data.get("system_prompt"),
             provider_tool=data.get("provider_tool"),
+            provider_id=data.get("provider_id"),
+            provider_name=data.get("provider_name"),
             default_model=data.get("default_model"),
             default_reasoning_effort=data.get("default_reasoning_effort"),
             default_service_tier=data.get("default_service_tier"),
             default_approval_mode=data.get("default_approval_mode"),
+            memory_scope=data.get("memory_scope"),
+            env=dict(data.get("env") or {}),
+            channel_bindings=tuple(data.get("channel_bindings") or ()),
+            schedules=tuple(data.get("schedules") or ()),
+            mcp_servers=tuple(data.get("mcp_servers") or ()),
+            skills=tuple(data.get("skills") or ()),
+            clis=tuple(data.get("clis") or ()),
             source=data.get("source"),
             owner_tenant_id=data.get("owner_tenant_id"),
             owner_tenant_name=data.get("owner_tenant_name"),
             visibility=data.get("visibility"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 
@@ -275,15 +370,31 @@ class AgentInstance:
         )
         for key, value in (
             ("work_dir", self.work_dir),
+            ("desktop_thread_id", self.desktop_thread_id),
+            ("workspace_mode", self.workspace_mode),
+            ("worktree_base_ref", self.worktree_base_ref),
+            ("session_backend", self.session_backend),
             ("system_prompt", self.system_prompt),
             ("provider_tool", self.provider_tool),
+            ("provider_id", self.provider_id),
             ("default_model", self.default_model),
             ("default_reasoning_effort", self.default_reasoning_effort),
             ("default_service_tier", self.default_service_tier),
             ("default_approval_mode", self.default_approval_mode),
+            ("memory_scope", self.memory_scope),
             ("source", self.source),
         ):
             if value is not None:
+                payload[key] = value
+        for key, value in (
+            ("env", self.env),
+            ("channel_bindings", list(self.channel_bindings)),
+            ("schedules", list(self.schedules)),
+            ("mcp_servers", list(self.mcp_servers)),
+            ("skills", list(self.skills)),
+            ("clis", list(self.clis)),
+        ):
+            if value:
                 payload[key] = value
         # Ownership is assigned by the server from the calling credential, so
         # it is deliberately not echoed back on writes.
@@ -305,6 +416,8 @@ class Channel:
     owner_tenant_id: str | None = None
     owner_tenant_name: str | None = None
     visibility: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -319,6 +432,8 @@ class Channel:
             owner_tenant_id=data.get("owner_tenant_id"),
             owner_tenant_name=data.get("owner_tenant_name"),
             visibility=data.get("visibility"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 
@@ -346,11 +461,20 @@ class Trigger:
     enabled: bool
     agent_id: str | None = None
     channel_id: str | None = None
+    chat_id: str | None = None
     cron_expr: str | None = None
     prompt: str | None = None
     event: str | None = None
+    action_type: str | None = None
+    action_target: str | None = None
+    token: str | None = None
+    session_mode: str | None = None
+    last_run: str | None = None
     last_status: str | None = None
     last_error: str | None = None
+    owner_tenant_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -362,11 +486,20 @@ class Trigger:
             enabled=bool(data.get("enabled")),
             agent_id=data.get("agent_id"),
             channel_id=data.get("channel_id"),
+            chat_id=data.get("chat_id"),
             cron_expr=data.get("cron_expr"),
             prompt=data.get("prompt"),
             event=data.get("event"),
+            action_type=data.get("action_type"),
+            action_target=data.get("action_target"),
+            token=data.get("token"),
+            session_mode=data.get("session_mode"),
+            last_run=data.get("last_run"),
             last_status=data.get("last_status"),
             last_error=data.get("last_error"),
+            owner_tenant_id=data.get("owner_tenant_id"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 
@@ -378,9 +511,14 @@ class Trigger:
         for key, value in (
             ("agent_id", self.agent_id),
             ("channel_id", self.channel_id),
+            ("chat_id", self.chat_id),
             ("cron_expr", self.cron_expr),
             ("prompt", self.prompt),
             ("event", self.event),
+            ("action_type", self.action_type),
+            ("action_target", self.action_target),
+            ("token", self.token),
+            ("session_mode", self.session_mode),
         ):
             if value is not None:
                 payload[key] = value
@@ -393,14 +531,18 @@ class OrchestrationTask:
 
     id: str
     input: str
-    agent_id: str | None = None
-    project: str | None = None
+    agent_id: str
+    orchestration_id: str | None = None
     depends_on: tuple[str, ...] = ()
     status: str | None = None
     output: str | None = None
     error: str | None = None
     invocation_id: str | None = None
     conversation_id: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -408,14 +550,18 @@ class OrchestrationTask:
         return cls(
             id=str(data.get("id") or ""),
             input=str(data.get("input") or ""),
-            agent_id=data.get("agent_id"),
-            project=data.get("project"),
+            agent_id=str(data.get("agent_id") or ""),
+            orchestration_id=data.get("orchestration_id"),
             depends_on=tuple(data.get("depends_on") or ()),
             status=data.get("status"),
             output=data.get("output"),
             error=data.get("error"),
             invocation_id=data.get("invocation_id"),
             conversation_id=data.get("conversation_id"),
+            created_at=data.get("created_at"),
+            started_at=data.get("started_at"),
+            finished_at=data.get("finished_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 
@@ -423,8 +569,6 @@ class OrchestrationTask:
         payload: dict[str, Any] = {"id": self.id, "input": self.input}
         if self.agent_id:
             payload["agent_id"] = self.agent_id
-        if self.project:
-            payload["project"] = self.project
         if self.depends_on:
             payload["depends_on"] = list(self.depends_on)
         return payload
@@ -440,6 +584,11 @@ class Orchestration:
     name: str | None = None
     error: str | None = None
     tasks: tuple[OrchestrationTask, ...] = ()
+    owner_tenant_id: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -455,6 +604,11 @@ class Orchestration:
                 for task in data.get("tasks") or ()
                 if isinstance(task, dict)
             ),
+            owner_tenant_id=data.get("owner_tenant_id"),
+            created_at=data.get("created_at"),
+            started_at=data.get("started_at"),
+            finished_at=data.get("finished_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 
@@ -510,6 +664,8 @@ class Tenant:
     status: str
     kind: str | None = None
     note: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -520,6 +676,8 @@ class Tenant:
             status=str(data.get("status") or ""),
             kind=data.get("kind"),
             note=data.get("note"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
             raw=data,
         )
 

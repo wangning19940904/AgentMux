@@ -147,10 +147,6 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if strings.HasPrefix(id, "config:") {
-		writeErr(w, http.StatusBadRequest, "config-managed agents must be edited in config.toml")
-		return
-	}
 	if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
 		return
 	}
@@ -171,9 +167,8 @@ func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, erro
 	return s.scopedAgentInstances(ctx, core.AdminPrincipal())
 }
 
-// scopedAgentInstances lists the Agent instances a principal may see. The
-// admin additionally gets the synthetic config.toml agents, which are host
-// infrastructure without an owner and therefore not shared with tenants.
+// scopedAgentInstances lists the PostgreSQL-backed Agent instances a principal
+// may see.
 func (s *Server) scopedAgentInstances(ctx context.Context, principal *core.Principal) ([]core.AgentInstance, error) {
 	items := make([]core.AgentInstance, 0)
 	if s.st != nil {
@@ -188,17 +183,6 @@ func (s *Server) scopedAgentInstances(ctx context.Context, principal *core.Princ
 			return nil, err
 		}
 		items = append(items, stored...)
-	}
-	if !principal.IsTenant() {
-		seen := map[string]bool{}
-		for _, item := range items {
-			seen[item.ID] = true
-		}
-		for _, item := range s.configAgentInstances() {
-			if !seen[item.ID] {
-				items = append(items, item)
-			}
-		}
 	}
 	s.enrichAgentProviders(ctx, items, principal)
 	s.labelAgentOwners(ctx, items)
@@ -272,6 +256,9 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 			return fmt.Errorf("tmux session backend requires a CLI runtime")
 		}
 	}
+	if err := s.validateAgentMCPServers(ctx, a); err != nil {
+		return err
+	}
 	newRecord := strings.TrimSpace(a.ID) == ""
 	creatingRecord := newRecord
 	if !newRecord && s.st != nil {
@@ -289,9 +276,6 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	}
 	if newRecord {
 		a.ID = "agent-" + randHex(6)
-	}
-	if strings.HasPrefix(a.ID, "config:") {
-		return fmt.Errorf("config-managed agent ids are read-only")
 	}
 	now := time.Now()
 	if !newRecord && a.CreatedAt.IsZero() && s.st != nil {
@@ -312,9 +296,6 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	if a.MemoryScope == "" {
 		a.MemoryScope = "agent:" + a.ID
 	}
-	if a.Source == "config.toml" {
-		a.Source = "manual"
-	}
 	if a.Source == "" {
 		if newRecord {
 			a.Source = "manual"
@@ -324,6 +305,42 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	}
 	if newRecord && len(a.ChannelBindings) == 0 {
 		a.ChannelBindings = []core.AgentChannelBinding{}
+	}
+	return nil
+}
+
+func (s *Server) validateAgentMCPServers(ctx context.Context, agent *core.AgentInstance) error {
+	if agent == nil || len(agent.MCPServers) == 0 {
+		return nil
+	}
+	if agent.RuntimeID != "claudecode" && agent.RuntimeID != "codex" {
+		return fmt.Errorf("runtime %q does not support AgentMux-managed MCP configuration", agent.RuntimeID)
+	}
+	if s.mcp == nil {
+		return fmt.Errorf("mcp registry is unavailable")
+	}
+	definitions, err := s.mcp.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list mcp servers: %w", err)
+	}
+	available := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		available[definition.Name] = definition.Enabled
+	}
+	seen := map[string]bool{}
+	for _, name := range agent.MCPServers {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return fmt.Errorf("mcp server names must be non-empty and unique")
+		}
+		seen[name] = true
+		enabled, exists := available[name]
+		if !exists {
+			return fmt.Errorf("mcp server %q is not registered", name)
+		}
+		if !enabled {
+			return fmt.Errorf("mcp server %q is disabled", name)
+		}
 	}
 	return nil
 }
@@ -376,66 +393,6 @@ func (s *Server) normalizeCodexDesktopAgent(ctx context.Context, a *core.AgentIn
 		}
 	}
 	return nil
-}
-
-func (s *Server) configAgentInstances() []core.AgentInstance {
-	if s.cfg == nil {
-		return nil
-	}
-	out := make([]core.AgentInstance, 0, len(s.cfg.Projects))
-	for projectIndex, p := range s.cfg.Projects {
-		id := configAgentInstanceID(p.Name, projectIndex)
-		channels := make([]core.AgentChannelBinding, 0, len(p.Platforms))
-		for i, raw := range p.Platforms {
-			typ, _ := raw["type"].(string)
-			if typ == "" {
-				typ = "platform"
-			}
-			channels = append(channels, core.AgentChannelBinding{
-				ID:     id + ":channel:" + strconv.Itoa(i),
-				Type:   typ,
-				Name:   typ,
-				Status: "configured",
-				Config: redactAnyMap(raw),
-			})
-		}
-		out = append(out, core.AgentInstance{
-			ID:              id,
-			Name:            p.Name,
-			RuntimeID:       p.Agent,
-			WorkDir:         p.WorkDir,
-			WorkspaceMode:   firstAgentWorkspaceMode(p.WorkspaceMode),
-			WorktreeBaseRef: p.WorktreeBaseRef,
-			SessionBackend:  firstAgentSessionBackend(p.SessionBackend),
-			SystemPrompt:    p.SystemPrompt,
-			ProviderTool:    p.Agent,
-			DefaultModel:    p.DefaultModel,
-			MemoryScope:     "project:" + p.Name,
-			Env:             redactStringMap(p.Env),
-			ChannelBindings: channels,
-			Enabled:         true,
-			Source:          "config.toml",
-		})
-	}
-	return out
-}
-
-func firstAgentWorkspaceMode(value string) string {
-	if strings.EqualFold(strings.TrimSpace(value), "worktree") {
-		return "worktree"
-	}
-	return "shared"
-}
-
-func firstAgentSessionBackend(value string) string {
-	if strings.EqualFold(strings.TrimSpace(value), "tmux") {
-		return "tmux"
-	}
-	return "structured"
-}
-
-func configAgentInstanceID(projectName string, projectIndex int) string {
-	return "config:" + slugID(projectName) + "-" + strconv.Itoa(projectIndex+1)
 }
 
 func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *core.AgentInstance) error {
@@ -578,29 +535,6 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func slugID(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
-		if ok {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" {
-		return "agent"
-	}
-	return out
-}
-
 func redactStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
@@ -611,31 +545,6 @@ func redactStringMap(in map[string]string) map[string]string {
 			out[k] = "<redacted>"
 		} else {
 			out[k] = v
-		}
-	}
-	return out
-}
-
-func redactAnyMap(in map[string]any) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := map[string]string{}
-	for k, v := range in {
-		if isSecretish(k) {
-			out[k] = "<redacted>"
-			continue
-		}
-		switch x := v.(type) {
-		case string:
-			out[k] = x
-		case fmt.Stringer:
-			out[k] = x.String()
-		default:
-			b, err := json.Marshal(x)
-			if err == nil {
-				out[k] = string(b)
-			}
 		}
 	}
 	return out

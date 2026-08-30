@@ -47,9 +47,9 @@ for await (const event of client.invokeStream({ agentId: "agent-abc", input: "an
 await client.agents.list();
 await client.channels.list();
 await client.triggers.run("trigger-id");
-await client.orchestrations.create([{ id: "t1", input: "..." }]);
+await client.orchestrations.create([{ id: "t1", agent_id: "agent-abc", input: "..." }]);
 await client.usage({ period: "daily" });
-await client.send({ project: "myproj", text: "deploy finished" });
+await client.send({ channelId: "channel-id", conversationKey: "root:message-id", text: "deploy finished" });
 ```
 
 ## Build a native host integration page
@@ -107,7 +107,7 @@ Agents and channels carry `owner_tenant_id`, `owner_tenant_name` and
 
 ## Contract
 
-This SDK speaks contract major `1` as defined in
+This SDK speaks contract major `2` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
-Tenancy needs a server on contract `1.1` or later; feature-detect it with
+Feature-detect tenancy with
 `capabilities.features.includes("tenancy")`.

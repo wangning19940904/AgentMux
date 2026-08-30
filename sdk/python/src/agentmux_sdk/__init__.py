@@ -37,13 +37,16 @@ from .models import (
     HealthReport,
     HealthState,
     InvocationEvent,
+    InvocationRequest,
     InvocationResult,
     IntegrationSnapshot,
+    ModuleState,
     Orchestration,
     OrchestrationTask,
     TenancySelf,
     Tenant,
     Trigger,
+    TurnUsage,
     version_key,
 )
 from .release import (
@@ -55,8 +58,7 @@ from .release import (
     latest_release,
 )
 
-# 0.1.5 adds tenancy (contract 1.1): client.tenancy and ownership
-# fields on agents and channels. Unreleased until the next tag.
+# 0.1.5-dev speaks the pre-release Contract 2.0 surface.
 __version__ = "0.1.5.dev0"
 
 __all__ = [
@@ -82,14 +84,17 @@ __all__ = [
     "HealthReport",
     "HealthState",
     "InvocationEvent",
+    "InvocationRequest",
     "InvocationResult",
     "IntegrationSnapshot",
+    "ModuleState",
     "Orchestration",
     "OrchestrationTask",
     "Release",
     "TenancySelf",
     "Tenant",
     "Trigger",
+    "TurnUsage",
     "fetch_checksums",
     "is_newer",
     "latest_release",

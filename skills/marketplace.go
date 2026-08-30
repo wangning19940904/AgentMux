@@ -192,6 +192,11 @@ func (m *FSManager) InstallMarketplace(ctx context.Context, req InstallRequest) 
 	}
 	s.Source = "github:" + repo
 	s.Enabled = true
+	if m.state != nil {
+		if err := m.state.SetSkillEnabled(ctx, s.Name, true); err != nil {
+			return nil, err
+		}
+	}
 	return &s, nil
 }
 

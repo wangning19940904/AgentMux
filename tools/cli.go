@@ -42,9 +42,11 @@ type CLISpec struct {
 	InstallCommand     []string             `json:"install_command,omitempty"`
 	PostInstallCommand []string             `json:"post_install_command,omitempty"`
 	UpdateCommand      []string             `json:"update_command,omitempty"`
+	UninstallCommand   []string             `json:"-"`
 	LatestVersionURL   string               `json:"-"`
 	LinkedSkills       []CLILinkedSkillSpec `json:"linked_skills,omitempty"`
 	LoginSupported     bool                 `json:"login_supported,omitempty"`
+	UninstallSupported bool                 `json:"uninstall_supported"`
 	InternalOnly       bool                 `json:"internal_only,omitempty"`
 	Note               string               `json:"note,omitempty"`
 }
@@ -118,37 +120,42 @@ type CLIInstallOptions struct {
 var cliCatalog = []CLISpec{
 	{
 		ID: "lark-cli", Name: "Lark CLI", Bin: "lark-cli", Package: "@larksuite/cli",
-		InstallCommand: []string{"npm", "install", "-g", "@larksuite/cli@latest"},
-		UpdateCommand:  []string{"lark-cli", "update"},
-		LoginSupported: true,
-		Note:           "Feishu/Lark Open Platform CLI and official skills updater.",
+		InstallCommand:     []string{"npm", "install", "-g", "@larksuite/cli@latest"},
+		UpdateCommand:      []string{"lark-cli", "update"},
+		LoginSupported:     true,
+		UninstallSupported: true,
+		Note:               "Feishu/Lark Open Platform CLI and official skills updater.",
 	},
 	{
 		ID: "bytedcli", Name: "bytedcli", Bin: "bytedcli", Package: "@bytedance-dev/bytedcli",
-		Registry:       "https://bnpm.byted.org/",
-		InstallCommand: []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
-		UpdateCommand:  []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
-		InternalOnly:   true,
-		Note:           "ByteDance internal developer CLI.",
+		Registry:           "https://bnpm.byted.org/",
+		InstallCommand:     []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
+		UpdateCommand:      []string{"npm", "install", "-g", "@bytedance-dev/bytedcli@latest", "--registry=https://bnpm.byted.org/"},
+		UninstallSupported: true,
+		InternalOnly:       true,
+		Note:               "ByteDance internal developer CLI.",
 	},
 	{
 		ID: "opencli", Name: "OpenCLI", Bin: "opencli", Package: "@jackwener/opencli",
-		InstallCommand: []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
-		UpdateCommand:  []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
-		Note:           "AI-native runtime and CLI hub that turns websites and browser sessions into command-line tools.",
+		InstallCommand:     []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
+		UpdateCommand:      []string{"npm", "install", "-g", "@jackwener/opencli@latest"},
+		UninstallSupported: true,
+		Note:               "AI-native runtime and CLI hub that turns websites and browser sessions into command-line tools.",
 	},
 	{
 		ID: "agent-browser", Name: "agent-browser", Bin: "agent-browser", Package: "agent-browser",
 		InstallCommand:     []string{"npm", "install", "-g", "agent-browser@latest"},
 		PostInstallCommand: []string{"agent-browser", "install"},
 		UpdateCommand:      []string{"agent-browser", "upgrade"},
+		UninstallSupported: true,
 		Note:               "Fast browser automation CLI for AI agents with version-matched bundled skills.",
 	},
 	{
 		ID: "cis-cli", Name: "CIS CLI", Bin: "cis-cli", Package: "@byted/cis-cli",
-		Registry:       "https://bnpm.byted.org/",
-		InstallCommand: []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
-		UpdateCommand:  []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
+		Registry:           "https://bnpm.byted.org/",
+		InstallCommand:     []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
+		UpdateCommand:      []string{"npm", "install", "-g", "@byted/cis-cli@latest", "--registry=https://bnpm.byted.org/"},
+		UninstallSupported: true,
 		LinkedSkills: []CLILinkedSkillSpec{
 			{
 				ID: "cis-cli", Name: "cis-cli Skill", Source: "skills.byted.org/default/public/cis-cli",
@@ -163,11 +170,13 @@ var cliCatalog = []CLISpec{
 	},
 	{
 		ID: "github-cli", Name: "GitHub CLI", Bin: "gh", Package: "gh",
-		InstallCommand:   []string{"brew", "install", "gh"},
-		UpdateCommand:    []string{"brew", "upgrade", "gh"},
-		LatestVersionURL: "https://api.github.com/repos/cli/cli/releases/latest",
-		LoginSupported:   true,
-		Note:             "GitHub's official CLI for pull requests, issues, Actions, and repositories.",
+		InstallCommand:     []string{"brew", "install", "gh"},
+		UpdateCommand:      []string{"brew", "upgrade", "gh"},
+		UninstallCommand:   []string{"brew", "uninstall", "gh"},
+		LatestVersionURL:   "https://api.github.com/repos/cli/cli/releases/latest",
+		LoginSupported:     true,
+		UninstallSupported: true,
+		Note:               "GitHub's official CLI for pull requests, issues, Actions, and repositories.",
 	},
 }
 
@@ -256,9 +265,12 @@ func InstallCLIWithProgressOptions(ctx context.Context, id, action string, optio
 		res.Error = fmt.Sprintf("unknown CLI %q", id)
 		return res
 	}
-	if action != "install" && action != "update" {
-		res.Error = "action must be install or update"
+	if action != "install" && action != "update" && action != "uninstall" {
+		res.Error = "action must be install, update, or uninstall"
 		return res
+	}
+	if action == "uninstall" {
+		return uninstallCLIWithProgress(ctx, spec, progress)
 	}
 	if action == "install" && spec.InternalOnly && !options.AcknowledgeInternal {
 		res.Error = fmt.Sprintf("CLI %q is only available inside ByteDance; explicit acknowledgement is required", id)
@@ -331,6 +343,98 @@ func InstallCLIWithProgressOptions(ctx context.Context, id, action string, optio
 		}
 	}
 	return syncAfterCLIChange(ctx, spec, res, progress)
+}
+
+// uninstallCLIWithProgress removes a managed CLI using a catalog-owned command,
+// verifies that the executable disappeared, and only then removes any linked
+// skills managed as part of the same lifecycle unit. User configuration and
+// caches are intentionally left untouched.
+func uninstallCLIWithProgress(ctx context.Context, spec CLISpec, progress ProgressFunc) CLIInstallResult {
+	res := CLIInstallResult{ID: spec.ID, Action: "uninstall"}
+	reportProgress(progress, "preparing", "", 5)
+	if !spec.UninstallSupported {
+		res.Error = fmt.Sprintf("CLI %q does not support automatic uninstall", spec.ID)
+		return res
+	}
+
+	status := DetectCLI(ctx, spec)
+	if status.Installed {
+		command := append([]string(nil), spec.UninstallCommand...)
+		if len(command) == 0 && spec.Package != "" {
+			command = []string{"npm", "uninstall", "-g", spec.Package}
+		}
+		if len(command) == 0 {
+			res.Error = fmt.Sprintf("CLI %q has no uninstall command", spec.ID)
+			return res
+		}
+		res.Command = strings.Join(command, " ")
+		reportProgress(progress, "uninstalling", res.Command, 30)
+
+		runCtx := ctx
+		if _, ok := ctx.Deadline(); !ok {
+			var cancel context.CancelFunc
+			runCtx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+			defer cancel()
+		}
+		logOutput, err := runCLICommandsWithProgress(runCtx, spec, [][]string{command}, progress, "uninstalling", 30, 74)
+		res.Log = appendLog(res.Log, logOutput)
+		if err != nil {
+			res.Error = fmt.Sprintf("uninstall failed: %v", err)
+			return res
+		}
+		reportProgress(progress, "verifying", "", 78)
+		if after := DetectCLI(ctx, spec); after.Installed {
+			res.Error = "uninstall command completed but CLI is still available on PATH"
+			return res
+		}
+	} else {
+		res.Log = fmt.Sprintf("%s is already uninstalled", spec.Name)
+	}
+
+	linkedResults, err := removeLinkedSkills(spec.LinkedSkills, progress)
+	res.LinkedSkills = linkedResults
+	if err != nil {
+		res.Error = fmt.Sprintf("CLI was removed, but linked Skills could not be fully removed: %v", err)
+		return res
+	}
+	res.OK = true
+	return res
+}
+
+func removeLinkedSkills(linkedSkills []CLILinkedSkillSpec, progress ProgressFunc) ([]CLILinkedSkillResult, error) {
+	if len(linkedSkills) == 0 {
+		return nil, nil
+	}
+	root, err := agentMuxSkillsDir()
+	if err != nil {
+		return nil, err
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve managed Skill root: %w", err)
+	}
+	results := make([]CLILinkedSkillResult, 0, len(linkedSkills))
+	for index, linked := range linkedSkills {
+		reportProgress(progress, "uninstalling", linked.Name, 86+index*10/max(1, len(linkedSkills)))
+		result := CLILinkedSkillResult{ID: linked.ID}
+		candidate := filepath.Join(root, linked.ID)
+		relative, relErr := filepath.Rel(root, candidate)
+		if relErr != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			result.Error = "linked Skill path escapes the managed Skill root"
+			results = append(results, result)
+			return results, fmt.Errorf("%s: %s", linked.Name, result.Error)
+		}
+		result.Path = filepath.Join(candidate, "SKILL.md")
+		if removeErr := os.RemoveAll(candidate); removeErr != nil {
+			result.Error = removeErr.Error()
+			results = append(results, result)
+			return results, fmt.Errorf("%s: %w", linked.Name, removeErr)
+		}
+		result.OK = true
+		result.Log = "removed linked Skill from the AgentMux library"
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 // SyncCLILinkedSkills repairs or refreshes the skills managed by a CLI without

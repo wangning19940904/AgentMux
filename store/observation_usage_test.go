@@ -11,7 +11,7 @@ import (
 )
 
 func TestQueryObservationUsageSelectsHighestPrioritySourceWithoutDroppingAttempts(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "usage.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "usage.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestQueryObservationUsageSelectsHighestPrioritySourceWithoutDroppingAttempt
 }
 
 func TestObservationTraceSummaryDeduplicatesSourcesPerRequest(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "trace-summary.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "trace-summary.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestObservationTraceSummaryDeduplicatesSourcesPerRequest(t *testing.T) {
 }
 
 func TestDailyUsageSurvivesDetailedTraceRetention(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "daily.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "daily.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 func TestOrchestrationPersistence(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "orchestrations.db"))
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "orchestrations.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func TestOrchestrationPersistence(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 		Tasks: []core.OrchestrationTask{
 			{ID: "research", AgentID: "agent-one", Input: "research", Status: core.OrchestrationQueued, CreatedAt: now, UpdatedAt: now},
-			{ID: "review", Project: "reviewer", Input: "review", DependsOn: []string{"research"}, Status: core.OrchestrationQueued, CreatedAt: now, UpdatedAt: now},
+			{ID: "review", AgentID: "reviewer", Input: "review", DependsOn: []string{"research"}, Status: core.OrchestrationQueued, CreatedAt: now, UpdatedAt: now},
 		},
 	}
 	if err := st.CreateOrchestration(context.Background(), orchestration); err != nil {

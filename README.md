@@ -23,12 +23,12 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | MCP 管理 | **AgentMux MCP Registry** | `mcp/` |
 | 权限审批 | **AgentMux Guard** | `guard/` |
 | Web 控制台 | **AgentMux Console** | `web/` + `server/` |
-| 多 Agent 编排 | **AgentMux Orchestrations** | `server/orchestrations.go` + `store/orchestrations.go` |
+| 多 Agent 编排 | **AgentMux Orchestrations** | `orchestration/` + `store/orchestrations.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
 - **Router** — 支持 Claude Code、Codex CLI、Codex Desktop Thread、Cursor、Gemini、Qoder、OpenCode、TRAE CLI、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移；Codex Desktop Agent 会校验并固定恢复由 Desktop 创建的原生 Thread。TRAE CLI、bytedcli 与 CIS CLI 可通过 Console 或 `amux tools bundle install bytedance-internal` 一键安装，且仅适用于字节内部环境。
 - **渠道 & 触发** — 渠道是绑定 Agent 的实时 IM 连接(飞书/Telegram/钉钉/Slack/Discord/Webhook),控制台可增删改与启停/重启并显示运行状态;触发统一承载三类自动化:定时任务(robfig/cron,标准 5 段表达式)、入站 Webhook(`POST /hook/{id}`,自带 token 鉴权)、生命周期事件回调(`message.received`/`cron.triggered`/`error` 等 → Shell 或 HTTP)。定时/Webhook 触发把 Prompt 发给绑定 Agent 并将结果推回渠道会话,支持 `reuse`/`new_per_run` 会话模式。
-- **Ledger** — 读取 Claude/Codex/Cursor/Gemini 的本地会话日志,基于 LiteLLM 价格数据计费,按天/周/月/会话/5 小时块出账,并能通过 SSH 采集远程机器用量。
+- **Ledger** — 读取 Claude/Codex/Gemini 的本地会话日志；Cursor 在用户显式连接后通过原生 Hook、本地只读 SQLite 与 Cursor 用量 API 混合采集。Ledger 基于 LiteLLM 价格数据计费，按小时/天/周/月/会话/5 小时块出账，并能通过 SSH 采集远程机器用量。
 - **Observability** — 用统一 Trace 串联 Agent Turn、模型请求、重试、工具、Hook 与渠道回复；融合内部事件、Claude/Codex 原生 OTel、Proxy 和增量 Transcript，并生成只读优化建议。
 - **Memory** — 跨 Agent 与跨会话的统一记忆层(检索、写入、共享上下文)。
 - **Skills** — 统一发现、安装与管理 Agent Skills。
@@ -60,13 +60,12 @@ clients (CLI / WebUI / Wails / menubar)
    ├── skills/      Skills:Agent Skills 发现与管理
    ├── mcp/         MCP Registry:MCP server 注册与下发
    ├── guard/       Guard:权限审批与策略
+   ├── orchestration/ persistent DAG application service
    ├── store/       PostgreSQL SSOT + asynchronous observation batches
-   └── server/      Console API + embedded WebUI (go:embed)
+   └── server/      thin Console/OpenAI HTTP transport + embedded WebUI
 ```
 
-`core` 不导入任何适配器包(`platform/`、`agent/`、`provider/`、`usage/`、`tools/`、`memory/`、`skills/`、`mcp/`、`guard/`):各适配器在自身 `init()` 中通过 registry 自注册,CLI 目录探测等能力由 `bootstrap/` 以接口注入。
-
-Memory/Skills/MCP/Guard 四个模块当前为 **Console 管理层实现**(PostgreSQL 记忆层、SKILL.md 磁盘发现、MCP server 注册表、策略闸门),通过 `/api/v1` 提供 CRUD 与评估接口,但尚未接入 Agent 对话回路:Memory 不会自动检索注入上下文、Guard 不拦截运行中的工具调用、MCP 配置不会下发生成到各 Agent 的原生配置文件、Skills 的启用状态仅保存在内存中。
+`core` 不导入任何适配器包；Agent 与 Platform 适配器通过 registry 自注册。Memory、Skills、MCP 与 Guard 是显式注入的单例模块：Memory 在每个 Turn 注入 global + Agent scope 的最近记忆，Skills 启用状态持久化并与工作区对账，MCP 为 Claude/Codex 生成受 AgentMux 所有权保护的原生配置，Guard 在原生权限请求上执行 allow/deny/ask。
 
 ## 快速开始
 
@@ -127,6 +126,8 @@ make release
 ./amux client --web
 ```
 
+Cursor 用量默认不读取。请在 Console 的「用量账本 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
+
 ## 配置
 
 复制 `config.example.toml` 为 `config.toml`,或直接运行
@@ -140,9 +141,8 @@ make release
 
 要点:
 
-- `[[projects]]` 把一个 `agent` 与一个或多个 `[[projects.platforms]]` 配对。
-- `workspace_mode = "worktree"` 会为每个渠道话题/API conversation 创建确定性的同级 Git worktree 与 `agentmux/*` 分支；默认 `shared` 继续让所有会话使用 `work_dir`。可用 `worktree_base_ref` 指定新 worktree 的基准引用。
-- `session_backend = "tmux"` 启用持久交互式 CLI，会话使用真实 tmux 进程并可跨 daemon 重启恢复；默认 `structured` 保留当前原生 JSON/app-server 事件流。
+- Agent、Channel、Trigger 和四个控制模块均以 PostgreSQL 为唯一事实来源，在 Console/API 中管理；`workspace_mode`、`session_backend` 等是 Agent 资源字段。
+- 旧版 `[[projects]]`、`[[projects.platforms]]` 与 `[[hooks]]` 只可用于一次性迁移：先运行 `amux database import-config --dry-run`，确认后运行 `--apply`，再从配置文件删除这些 section。
 - 飞书渠道扫码取得 App ID/Secret 后，Console 可继续执行“补全开放平台配置”：二次扫码建立仅内存 Web session，自动导入消息/CardKit/会议权限、配置长连接事件与卡片回调，并按明确选择的可见范围发布版本。该能力使用飞书开放平台 Console 接口，接口变化时会 fail closed 并返回具体失败步骤。
 - 开启 `[bridge]` 可用 Bearer Token 保护 HTTP send 与 Agent Invocation API；**启用时必须设置 token**。
 - `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
@@ -159,13 +159,14 @@ amux client [--web] [--open] [--addr 127.0.0.1:8765]
 amux serve                       # IM gateway + management API
 amux web [--no-open]             # serve + open Console
 amux config init|path            # create or inspect config.toml
+amux database import-config --dry-run|--apply
 amux tools list|check|install|update <id>
 amux tools bundle list
 amux tools bundle install bytedance-internal [--yes]
 amux usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 amux usage statusline            # compact one-liner for status bars/hooks
 amux provider list|presets|import <id>|switch <id> --tool <tool>
-amux send --text "..." --project <name> [--token <bridge-token>]
+amux send --channel-id <id> --conversation-key <key> --text "..."
 ```
 
 ## HTTP API(节选)
@@ -196,6 +197,12 @@ GET  /api/v1/guard/policies          # Guard 策略列表
 POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
 
 GET    /api/v1/remote/hosts                    # 本机保存的 SSH 机器（敏感字段脱敏）
+GET    /api/v1/remote/fleet/targets            # 本机 + 已配置 SSH 机器的在线状态
+POST   /api/v1/remote/fleet/query              # 对选定机器批量执行只读 Console 查询
+POST   /api/v1/remote/fleet/execute            # 对选定机器逐机执行管理操作
+POST   /api/v1/remote/sync/preview             # 生成只新增配置同步预览（15 分钟有效）
+POST   /api/v1/remote/sync/apply               # 应用同步计划并返回逐机/逐资源结果
+POST   /api/v1/remote/sync/apply/stream        # SSE 返回同步开始、完成与最终结果
 GET    /api/v1/remote/discovered-hosts         # 从 ~/.ssh/config 发现可导入的 Host 别名
 POST   /api/v1/remote/hosts                    # 新建/更新 SSH 机器
 POST   /api/v1/remote/hosts/import             # 验证 SSH、探测/安装 AgentMux 后导入
@@ -230,7 +237,7 @@ POST /api/v1/observability/integrations/{host}/{preview|install|repair|uninstall
 
 ### OpenAI Responses 兼容 API
 
-其他服务可以把 AgentMux 直接配置成 OpenAI SDK 的 `base_url`，然后通过标准 `responses.create` 调用。`model` 默认作为 Agent ID；如果没有同名 Agent，服务端会再尝试把它作为 `config.toml` 的 project 名称：
+其他服务可以把 AgentMux 直接配置成 OpenAI SDK 的 `base_url`，然后通过标准 `responses.create` 调用。`model` 作为 Agent ID：
 
 ```python
 import os
@@ -274,7 +281,7 @@ next_response = client.responses.create(
 )
 ```
 
-如果希望 `model` 保持业务自己的名称，可通过额外 Header 显式选择 AgentMux 目标；两个 Header 不能同时设置：
+如果希望 `model` 保持业务自己的名称，可通过额外 Header 显式选择 AgentMux 目标：
 
 ```python
 # 指定 Agent ID
@@ -284,12 +291,6 @@ client.responses.create(
     extra_headers={"X-AgentMux-Agent-ID": "agent-abc123"},
 )
 
-# 指定 config.toml project
-client.responses.create(
-    model="my-service-agent",
-    input="...",
-    extra_headers={"X-AgentMux-Project": "demo"},
-)
 ```
 
 支持请求级 function tools，并返回标准 `function_call` output item；调用方执行函数后，再提交 `function_call_output`：
@@ -391,7 +392,7 @@ while response.status in {"queued", "in_progress"}:
 `/api/v1/send` 仍只负责向已有渠道发送出站消息，不会运行 Agent；需要 Agent 产出结果时使用 `/api/v1/invocations`。即使只监听 `127.0.0.1`，服务间调用也建议开启 `[bridge]` Bearer Token 鉴权。
 
 ```bash
-# 任意 Agent（含 config.toml 项目）：agent_id 来自 GET /api/v1/agent-instances
+# agent_id 来自 GET /api/v1/agent-instances
 curl -sS http://127.0.0.1:8765/api/v1/invocations \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $BRIDGE_TOKEN" \
@@ -400,11 +401,6 @@ curl -sS http://127.0.0.1:8765/api/v1/invocations \
     "input": "检查当前项目并运行测试"
   }'
 
-# config.toml 中的 [[projects]]：使用 project 名称
-curl -sS http://127.0.0.1:8765/api/v1/invocations \
-  -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $BRIDGE_TOKEN" \
-  -d '{"project":"demo","input":"总结最近的改动"}'
 ```
 
 成功响应：
@@ -443,9 +439,9 @@ data: {"type":"completed","final":true,"result":{"answer":"最终答案..."}}
 
 事件类型包括 `started`、`thinking`、`tool_use`、`output`、`final`、`permission`、`model_request`、`model_response`、`compaction`、`completed` 和 `error`。`output`/`thinking` 的 `text` 是当前完整快照，客户端应替换已有显示内容，不要逐条追加；`completed.result` 与同步接口响应结构一致。服务端每 15 秒发送 SSE keepalive 注释，客户端应忽略以 `:` 开头的行。
 
-`agent_id` 与 `project` 必须且只能提供一个。首次调用可省略 `conversation_id`；要继续同一段上下文，把 `started` 事件或最终响应中的 `conversation_id` 原样传给后续请求。同步调用请让上游 HTTP 客户端设置足够长的超时；同一目标、同一 `conversation_id` 同时只能运行一个请求，冲突返回 `409`。请求体上限为 1 MiB。
+`agent_id` 必填。首次调用可省略 `conversation_id`；要继续同一段上下文，把 `started` 事件或最终响应中的 `conversation_id` 原样传给后续请求。同步调用请让上游 HTTP 客户端设置足够长的超时；同一目标、同一 `conversation_id` 同时只能运行一个请求，冲突返回 `409`。请求体上限为 1 MiB。
 
-Invocation API 没有消息渠道可承载交互式审批；如果 Agent 在执行中请求人工审批，当前调用会安全地拒绝该请求。服务化 Agent 应按自身安全策略配置适合无人值守执行的 approval mode。
+Invocation API 会先执行 Guard 策略：allow/deny 自动回传给支持原生 Interaction 的 Runtime，ask 在没有可用交互渠道时安全拒绝。服务化 Agent 应按自身安全策略配置明确的 Guard 规则与 approval mode。
 
 ### 渠道命令
 
@@ -542,7 +538,9 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
 - SSH 远程控制优先使用私钥/`ssh-agent`；从 SSH Config 导入的主机也可回退到系统 OpenSSH 的非交互认证（例如 GSSAPI），且不保存 SSH 密码。首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
-- 自动安装的远程 AgentMux 使用独立的 `~/.agentmux/agentmux.db` SQLite 存储，无需在目标机安装 PostgreSQL；本机与常规服务端仍默认使用 PostgreSQL。
+- Console 的机器范围默认是“全部机器”，汇总本机与所有已信任 SSH 主机；列表记录携带来源机器，单台不可达只产生局部告警。批量管理请求逐机执行并保留成功结果，不承诺跨机器事务。
+- **LLM Provider → Provider 同步** 支持把单个 Provider 从本机或 SSH 主机同步到一台或多台目标机器；添加 Provider 时也可从其他机器选择并导入。同步先生成 15 分钟有效的预览，只新增缺失项，不覆盖已有配置或复制机器本地的活跃路由。API Key 默认不复制；显式启用时仅经已认证的 SSH 隧道在内存中传输。
+- 自动安装的远程 AgentMux 会安装/连接 PostgreSQL 16+，并在发现旧 SQLite 数据时先生成备份再迁移；本机与远程运行时均只使用 PostgreSQL。
 - Provider API key 在 PostgreSQL 中只保存 **环境变量名**(`api_key_env`),不明文落库;macOS 上保存时写入 Keychain,启动/读取 provider 时自动恢复到进程环境。非 macOS 环境仍可直接提供对应环境变量。
 - SSH 采集器为本地工具便利使用 `InsecureIgnoreHostKey`;在不可信网络中使用前请固定 host key。
 - Observability 内容不会明文写入 PostgreSQL：已知 Secret、Authorization、Cookie、API Key 与隐藏 reasoning 在持久化前删除；macOS 主密钥位于 Keychain，其他平台未显式配置安全密钥时自动退化为 metadata-only。

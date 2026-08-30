@@ -355,6 +355,30 @@ func TestRuntimeSettingsPickerCardCarriesScopeAndControls(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsPickerKeepsModelAutoSeparateFromApprovalAuto(t *testing.T) {
+	selection := core.NewRuntimeSettingsSelection(
+		core.RuntimeSettings{Model: "auto", ApprovalMode: core.ApprovalModeAuto},
+		core.RuntimeSettingsCapabilities{
+			Models:        core.RuntimeOptions([]string{"auto", "gpt-5.3-codex"}),
+			ApprovalModes: core.RuntimeOptions([]string{core.ApprovalModeManual, core.ApprovalModeAuto}),
+		},
+	)
+	card := buildRuntimeSettingsPickerCard(&core.Message{ChatID: "oc_1"}, core.RuntimeSettingsPickerState{
+		Scope:           core.RuntimeSettingsScopeConversation,
+		Settings:        selection.CurrentRuntimeSettings(),
+		RuntimeDefaults: selection.DefaultRuntimeSettings(),
+		Capabilities:    selection.RuntimeSettingsCapabilities(),
+	})
+	for _, want := range []string{`"content":"auto（默认）"`, `"content":"智能自动审批（默认）"`} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("runtime settings card missing scoped label %q: %s", want, card)
+		}
+	}
+	if strings.Count(card, `"content":"智能自动审批（默认）"`) != 1 {
+		t.Fatalf("approval label leaked into another setting: %s", card)
+	}
+}
+
 func TestRuntimeSettingsPickerHidesUnsupportedControls(t *testing.T) {
 	card := buildRuntimeSettingsPickerCard(&core.Message{ChatID: "oc_1"}, core.RuntimeSettingsPickerState{
 		Scope:    core.RuntimeSettingsScopeConversation,

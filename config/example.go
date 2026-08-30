@@ -22,25 +22,9 @@ enabled = false
 connect_timeout_seconds = 10
 # hosts_file = "~/.config/agentmux/remote-hosts.json"
 
-# Define projects here, or add channels and agent instances from the WebUI.
-# Keep the starter config runnable without credentials.
-#
-# [[projects]]
-# name = "demo"
-# agent = "claudecode"
-# work_dir = "."
-# workspace_mode = "shared" # shared | worktree
-# worktree_base_ref = "main" # optional; worktree mode defaults to HEAD
-# session_backend = "structured" # structured | tmux (persistent interactive CLI)
-# system_prompt = "You are a helpful coding assistant."
-# default_model = "sonnet"
-#
-#   [projects.env]
-#   ANTHROPIC_API_KEY = "${MY_KEY}"
-#
-#   [[projects.platforms]]
-#   type = "telegram"
-#   token = "${TELEGRAM_BOT_TOKEN}"
+# Runtime Agents, Channels, and Triggers are PostgreSQL resources managed by
+# the Console/API. Import a legacy project config with:
+#   amux database import-config --apply
 
 [provider]
 failover = true

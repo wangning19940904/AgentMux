@@ -70,21 +70,25 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"contract_version": contract.Version,
 		"features":         features,
 		"modules": map[string]any{
-			"connect": moduleState(len(core.RegisteredPlatforms()) > 0, s.connect != nil),
-			"router":  moduleState(len(core.RegisteredAgents()) > 0, s.invoker != nil),
-			"ledger":  moduleState(true, s.usageFn != nil),
-			"memory":  moduleState(len(core.RegisteredMemories()) > 0, s.memory != nil),
-			"skills":  moduleState(len(core.RegisteredSkillManagers()) > 0, s.skills != nil),
-			"mcp":     moduleState(len(core.RegisteredMCPRegistries()) > 0, s.mcp != nil),
-			"guard":   moduleState(len(core.RegisteredGuards()) > 0, s.guard != nil),
+			"connect": moduleState(len(core.RegisteredPlatforms()) > 0, s.connect != nil, false),
+			"router":  moduleState(len(core.RegisteredAgents()) > 0, s.invoker != nil, false),
+			"ledger":  moduleState(true, s.usageFn != nil, false),
+			"memory":  s.controlModuleState("memory", s.memory != nil),
+			"skills":  s.controlModuleState("skills", s.skills != nil),
+			"mcp":     s.controlModuleState("mcp", s.mcp != nil),
+			"guard":   s.controlModuleState("guard", s.guard != nil),
 		},
 		"agents":   agents,
 		"channels": channels,
-		"projects": len(s.cfg.Projects),
 		"auth":     auth,
 	})
 }
 
-func moduleState(registered, active bool) map[string]bool {
-	return map[string]bool{"registered": registered, "active": active}
+func (s *Server) controlModuleState(name string, configured bool) map[string]bool {
+	state := s.moduleRuntime[name]
+	return moduleState(configured, configured && state.RuntimeActive, configured && state.Enforced)
+}
+
+func moduleState(configured, runtimeActive, enforced bool) map[string]bool {
+	return map[string]bool{"configured": configured, "runtime_active": runtimeActive, "enforced": enforced}
 }

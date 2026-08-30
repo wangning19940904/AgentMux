@@ -91,6 +91,17 @@ amux database migrate-sqlite --source ~/.agentmux/agentmux.db \
 
 The migration creates a consistent timestamped SQLite backup before copying.
 
+Contract 2.0 also moves legacy `[[projects]]`, platform bindings, and `[[hooks]]`
+from config.toml into PostgreSQL resources:
+
+```bash
+amux database import-config --dry-run
+amux database import-config --apply
+```
+
+After a successful import, remove those legacy sections. Daemon startup fails
+closed while they remain, preventing an ambiguous dual source of truth.
+
 ## Linux headless client
 
 AgentMux does not require a desktop shell on Linux. Use the same `amux`

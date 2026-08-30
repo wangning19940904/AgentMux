@@ -1,14 +1,18 @@
-import { Bot, Pencil, Plus, RefreshCw, X } from "lucide-react";
+import { Bot, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type AgentInstance } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
+import { TargetBadge, targetKey } from "../../components/TargetBadge";
 import {
   EMPTY_AGENT,
-  agentProviderSummary,
+  agentRegistryMetrics,
+  agentRouteModel,
   agentSourceClass,
   agentSourceDetailKey,
   agentSourceLabelKey,
+  boundChannelsForAgent,
+  cliCatalogForAgent,
   copyAgent,
   isConfigManaged,
   newAgent,
@@ -19,8 +23,8 @@ import {
   toggleID,
   type DrawerMode,
 } from "./agentUtils";
-import { Summary } from "./widgets";
 import { AgentForm } from "./AgentForm";
+import { ChannelLogoGroup } from "./ChannelLogo";
 
 
 export function AgentsPanel() {
@@ -40,6 +44,8 @@ export function AgentsPanel() {
   const [selectedTriggerIDs, setSelectedTriggerIDs] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const [rowBusy, setRowBusy] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<AgentInstance | null>(null);
 
   const items = agents.data ?? [];
   const runtimeOptions = runtimes.data ?? [];
@@ -69,16 +75,20 @@ export function AgentsPanel() {
 
   // The unified translation layer lets any provider back any tool, so every
   // provider is a compatible choice regardless of the selected runtime.
-  const compatibleProviders = providerOptions;
+  const draftTargetID = draft.target_id;
+  const sameTarget = <T extends { target_id?: string }>(item: T) => !draftTargetID || item.target_id === draftTargetID;
+  const compatibleProviders = providerOptions.filter(sameTarget);
+  const draftRoutes = activeRouteItems.filter(sameTarget);
+  const draftChannels = channelItems.filter(sameTarget);
+  const draftTriggers = triggerItems.filter(sameTarget);
+  const draftMCPOptions = mcpOptions.filter(sameTarget);
+  const draftSkillOptions = skillOptions.filter(sameTarget);
+  const draftCLICatalog = cliCatalogForAgent(cliCatalog, draftTargetID);
 
-  const metrics = useMemo(() => {
-    const manualCount = items.filter((item) => item.source === "manual").length;
-    const configCount = items.filter((item) => item.source === "config.toml" || item.id.startsWith("config:")).length;
-    const consoleCount = items.length - manualCount - configCount;
-    const channelCount = channelItems.length;
-    const scheduleCount = triggerItems.length;
-    return { channelCount, consoleCount, manualCount, scheduleCount };
-  }, [items, channelItems, triggerItems]);
+  const registryMetrics = useMemo(
+    () => agentRegistryMetrics(items, activeRouteItems, providerOptions, channelItems),
+    [items, activeRouteItems, providerOptions, channelItems],
+  );
 
   function startNew() {
     setDrawerMode("create");
@@ -91,8 +101,8 @@ export function AgentsPanel() {
   function editAgent(agent: AgentInstance) {
     setDrawerMode("edit");
     setDrawerDraft(copyAgent(agent));
-    setSelectedChannelIDs(channelItems.filter((channel) => channel.agent_id === agent.id).map((channel) => channel.id));
-    setSelectedTriggerIDs(triggerItems.filter((trigger) => trigger.agent_id === agent.id).map((trigger) => trigger.id));
+    setSelectedChannelIDs(channelItems.filter((channel) => channel.target_id === agent.target_id && channel.agent_id === agent.id).map((channel) => channel.id));
+    setSelectedTriggerIDs(triggerItems.filter((trigger) => trigger.target_id === agent.target_id && trigger.agent_id === agent.id).map((trigger) => trigger.id));
     setNotice("");
   }
 
@@ -139,7 +149,7 @@ export function AgentsPanel() {
     setNotice("");
     try {
       const installedCLIIDs = tools.data
-        ? new Set(cliCatalog.filter((tool) => tool.installed).map((tool) => tool.spec.id))
+        ? new Set(draftCLICatalog.filter((tool) => tool.installed).map((tool) => tool.spec.id))
         : null;
       const saved = await api.upsertAgentInstance({
         ...drawerDraft,
@@ -150,7 +160,7 @@ export function AgentsPanel() {
         provider_tool: drawerDraft.provider_tool || drawerDraft.runtime_id,
         memory_scope: drawerDraft.memory_scope || `agent:${drawerDraft.id || "new"}`,
       });
-      await syncAgentConnectBindings(saved.id, selectedChannelIDs, selectedTriggerIDs, channelItems, triggerItems);
+      await syncAgentConnectBindings(saved.id, selectedChannelIDs, selectedTriggerIDs, channelItems.filter((item) => item.target_id === saved.target_id), triggerItems.filter((item) => item.target_id === saved.target_id));
       await agents.reload();
       await activeRoutes.reload();
       await channels.reload();
@@ -172,15 +182,48 @@ export function AgentsPanel() {
     setBusy("delete");
     setNotice("");
     try {
-      await api.deleteAgentInstance(drawerDraft.id);
+      await api.deleteAgentInstance(drawerDraft.id, drawerDraft.target_id);
       setDrawerMode(null);
       setDrawerDraft(null);
       setNotice(t("agents.deleted"));
-      await agents.reload();
+      await Promise.all([agents.reload(), channels.reload()]);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy("");
+    }
+  }
+
+  async function toggleAgentEnabled(agent: AgentInstance) {
+    if (isConfigManaged(agent) || rowBusy) return;
+    const operation = `toggle:${targetKey(agent.target_id, agent.id)}`;
+    setRowBusy(operation);
+    setNotice("");
+    try {
+      await api.upsertAgentInstance({ ...copyAgent(agent), enabled: !agent.enabled });
+      await Promise.all([agents.reload(), channels.reload()]);
+      setNotice(t(agent.enabled ? "agents.disabled" : "agents.enabled"));
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRowBusy("");
+    }
+  }
+
+  async function removeAgentFromRow(agent: AgentInstance) {
+    if (isConfigManaged(agent) || rowBusy) return;
+    const operation = `delete:${targetKey(agent.target_id, agent.id)}`;
+    setRowBusy(operation);
+    setNotice("");
+    try {
+      await api.deleteAgentInstance(agent.id, agent.target_id);
+      await Promise.all([agents.reload(), channels.reload()]);
+      setDeleteCandidate(null);
+      setNotice(t("agents.deleted"));
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRowBusy("");
     }
   }
 
@@ -233,9 +276,9 @@ export function AgentsPanel() {
               {readOnly && <div className="session-notice">{t("agents.readOnlyNotice")}</div>}
               <AgentForm
                 canSave={canSave}
-                activeRoutes={activeRouteItems}
-                channelOptions={channelItems}
-                cliOptions={cliCatalog.map((tool) => ({
+                activeRoutes={draftRoutes}
+                channelOptions={draftChannels}
+                cliOptions={draftCLICatalog.map((tool) => ({
                   id: tool.spec.id,
                   name: tool.spec.name,
                   note: tool.spec.note,
@@ -243,13 +286,13 @@ export function AgentsPanel() {
                 }))}
                 compatibleProviders={compatibleProviders}
                 draft={draft}
-                mcpOptions={mcpOptions.map((server) => server.name)}
+                mcpOptions={draftMCPOptions.map((server) => server.name)}
                 readOnly={readOnly}
                 runtimeOptions={runtimeOptions}
                 selectedChannelIDs={selectedChannelIDs}
                 selectedTriggerIDs={selectedTriggerIDs}
-                skillOptions={skillOptions.map((skill) => skill.name)}
-                triggerOptions={triggerItems}
+                skillOptions={draftSkillOptions.map((skill) => skill.name)}
+                triggerOptions={draftTriggers}
                 busy={busy}
                 drawerMode={drawerMode}
                 onDelete={remove}
@@ -265,23 +308,43 @@ export function AgentsPanel() {
         </div>
       )}
 
+      {deleteCandidate && (
+        <DeleteAgentDialog
+          agent={deleteCandidate}
+          busy={rowBusy === `delete:${targetKey(deleteCandidate.target_id, deleteCandidate.id)}`}
+          error={notice}
+          onClose={() => {
+            if (!rowBusy) {
+              setDeleteCandidate(null);
+              setNotice("");
+            }
+          }}
+          onConfirm={() => removeAgentFromRow(deleteCandidate)}
+        />
+      )}
+
       <section className="surface agent-registry-surface">
         <div className="surface-header">
-          <div>
+          <div className="agent-registry-heading">
             <h2>{t("agents.registry")}</h2>
-            <p className="subtle-copy">{t("agents.registrySubtitle")}</p>
+            <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
+              <span>{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
+              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
+              <span>{t("agents.metricProviders", { count: registryMetrics.providerCount })}</span>
+              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
+              <span>{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
+              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
+              <span>{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
+            </div>
           </div>
           <div className="table-actions">
-            <span className="pill">
-              {items.length} {t("agents.registryCount")}
-            </span>
             <button className="ghost-action" onClick={agents.reload} title={t("common.refresh")}>
               <RefreshCw size={15} />
               {t("common.refresh")}
             </button>
             <button className="action" onClick={startNew}>
               <Plus size={16} />
-              {t("agents.new")}
+              {t("agents.newShort")}
             </button>
           </div>
         </div>
@@ -291,60 +354,138 @@ export function AgentsPanel() {
           {agents.error && <div className="empty-state error">{String(agents.error)}</div>}
           {!agents.loading && !agents.error && items.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
           {items.map((item) => {
-            const channelCount = channelItems.filter((ch) => ch.agent_id === item.id).length;
+            const itemChannels = boundChannelsForAgent(item, channelItems);
+            const routeModel = agentRouteModel(item, activeRouteItems, providerOptions);
+            const model = routeModel.model || t("agents.defaultModelShort");
+            const routeModelLabel = t(
+              routeModel.mode === "provider" ? "agents.customRouteModel" : "agents.accountLoginModel",
+              { model },
+            );
+            const itemReadOnly = isConfigManaged(item);
+            const itemKey = targetKey(item.target_id, item.id);
+            const toggleOperation = `toggle:${itemKey}`;
+            const deleteOperation = `delete:${itemKey}`;
             return (
               <article
                 className="agent-registry-row"
-                key={item.id}
+                key={itemKey}
                 onDoubleClick={() => editAgent(item)}
-                title={t("agents.doubleClickToEdit")}
               >
                 <div className="agent-list-main">
                   <span className="provider-icon">
                     <Bot size={15} />
                   </span>
                   <span>
-                    <strong>{item.name}</strong>
+                    <span className="agent-list-title-row">
+                      <strong>{item.name}</strong>
+                      <button
+                        className={`agent-status-switch${item.enabled ? " enabled" : ""}`}
+                        type="button"
+                        role="switch"
+                        aria-checked={item.enabled}
+                        aria-label={t(item.enabled ? "agents.disableAction" : "agents.enableAction", { name: item.name })}
+                        title={itemReadOnly ? t("agents.readOnlyNotice") : t(item.enabled ? "common.enabled" : "common.disabled")}
+                        disabled={itemReadOnly || Boolean(rowBusy)}
+                        onClick={() => void toggleAgentEnabled(item)}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                      >
+                        <span className="agent-status-switch-thumb">
+                          {rowBusy === toggleOperation && <RefreshCw className="spin" size={9} />}
+                        </span>
+                      </button>
+                      {itemReadOnly && <span className="source-badge config compact">{t("agents.sourceConfig")}</span>}
+                    </span>
                     <small>{item.runtime_id ? runtimeLabel(item.runtime_id) : t("agents.noRuntime")}</small>
                   </span>
                 </div>
                 <div className="agent-list-meta">
-                  <span className={`status-badge ${item.enabled ? "success" : "warning"}`}>
-                    <span className="status-dot" />
-                    {item.enabled ? t("common.enabled") : t("common.disabled")}
-                  </span>
-                  <span className={`source-badge ${agentSourceClass(item)}`}>{t(agentSourceLabelKey(item))}</span>
-                <OwnerBadge resource={item} />
-                  <span className="pill">{agentProviderSummary(item, activeRouteItems, t)}</span>
-                  {item.default_model && <span className="pill">{item.default_model}</span>}
-                  <span className="pill">
-                    {channelCount} {t("agents.channelCount")}
-                  </span>
+                  <TargetBadge target_id={item.target_id} target_name={item.target_name} />
+                  <OwnerBadge resource={item} />
+                  <span className="pill agent-route-model-pill">{routeModelLabel}</span>
+                  <ChannelLogoGroup
+                    channels={itemChannels}
+                    emptyLabel={t("agents.noBoundChannels")}
+                    label={t("agents.boundChannelsShort")}
+                  />
                 </div>
-                <button className="ghost-action" onClick={() => editAgent(item)}>
-                  <Pencil size={15} />
-                  {t("common.edit")}
-                </button>
+                <div className="agent-row-actions">
+                  <button className="ghost-action" onClick={() => editAgent(item)} onDoubleClick={(event) => event.stopPropagation()}>
+                    <Pencil size={15} />
+                    {t("common.edit")}
+                  </button>
+                  <button
+                    className="ghost-action danger-action"
+                    disabled={itemReadOnly || Boolean(rowBusy)}
+                    onClick={() => {
+                      setNotice("");
+                      setDeleteCandidate(copyAgent(item));
+                    }}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                    title={itemReadOnly ? t("agents.readOnlyNotice") : t("common.delete")}
+                  >
+                    {rowBusy === deleteOperation ? <RefreshCw className="spin" size={15} /> : <Trash2 size={15} />}
+                    {t("common.delete")}
+                  </button>
+                </div>
               </article>
             );
           })}
         </div>
       </section>
+    </div>
+  );
+}
 
-      <section className="surface">
-        <div className="surface-header">
-          <div>
-            <h2>{t("agents.title")}</h2>
-            <p className="subtle-copy">{t("agents.subtitle")}</p>
-          </div>
+function DeleteAgentDialog({
+  agent,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  agent: AgentInstance;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="meeting-dialog-layer" role="presentation">
+      <button
+        aria-label={t("common.cancel")}
+        className="meeting-dialog-backdrop internal-dialog-backdrop"
+        disabled={busy}
+        onClick={onClose}
+        type="button"
+      />
+      <section
+        aria-labelledby="agent-delete-title"
+        aria-modal="true"
+        className="surface meeting-dialog tenant-delete-dialog"
+        role="alertdialog"
+      >
+        <div className="meeting-dialog-icon tenant-delete-dialog-icon">
+          <Trash2 size={22} />
         </div>
-        <div className="surface-body agent-metrics">
-          <Summary label={t("agents.total")} value={items.length} />
-          <Summary label={t("agents.manualManaged")} value={metrics.manualCount} />
-          <Summary label={t("agents.consoleManaged")} value={metrics.consoleCount} />
-          <Summary label={t("agents.runtimes")} value={runtimeOptions.length} />
-          <Summary label={t("agents.channels")} value={metrics.channelCount} />
-          <Summary label={t("agents.schedules")} value={metrics.scheduleCount} />
+        <div className="meeting-dialog-heading">
+          <h2 id="agent-delete-title">{t("agents.deleteTitle", { name: agent.name })}</h2>
+          <p>{t("agents.deleteConfirm", { name: agent.name })}</p>
+        </div>
+        {error && <div className="session-notice error">{error}</div>}
+        <div className="meeting-dialog-actions">
+          <button className="ghost-action" disabled={busy} onClick={onClose} type="button">
+            {t("common.cancel")}
+          </button>
+          <button
+            className="ghost-action danger-action"
+            disabled={busy}
+            onClick={() => void onConfirm()}
+            type="button"
+          >
+            {busy ? <RefreshCw className="spin" size={14} /> : <Trash2 size={14} />}
+            {busy ? t("agents.deleting") : t("common.delete")}
+          </button>
         </div>
       </section>
     </div>
