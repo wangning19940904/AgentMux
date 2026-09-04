@@ -1,8 +1,9 @@
-export const PRIMARY_SIDEBAR_WIDTH = { default: 208, min: 184, max: 320 } as const;
-export const SECONDARY_SIDEBAR_WIDTH = { default: 184, min: 152, max: 300 } as const;
+// The two navigation levels add up to Multica's 247px reference sidebar.
+export const PRIMARY_SIDEBAR_WIDTH = { default: 64, min: 60, max: 84 } as const;
+export const SECONDARY_SIDEBAR_WIDTH = { default: 183, min: 164, max: 240 } as const;
 
-export const PRIMARY_SIDEBAR_STORAGE_KEY = "agentmux:primary-sidebar-width";
-export const SECONDARY_SIDEBAR_STORAGE_KEY = "agentmux:secondary-sidebar-width";
+export const PRIMARY_SIDEBAR_STORAGE_KEY = "agentmux:primary-sidebar-width-v3";
+export const SECONDARY_SIDEBAR_STORAGE_KEY = "agentmux:secondary-sidebar-width-v2";
 
 export function clampSidebarWidth(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
