@@ -1,10 +1,12 @@
 import { lazy } from "react";
 import type { ComponentType, LazyExoticComponent } from "react";
 import type { NavigationTabID } from "./navigationSearchAliases";
+import type { AgentsPanelProps } from "./panels/agents/AgentsPanel";
+
+const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel })));
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
-  agents: lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel }))),
   orchestrations: lazy(() => import("./panels/OrchestrationsPanel").then((module) => ({ default: module.OrchestrationsPanel }))),
   frameworks: lazy(() => import("./panels/FrameworksPanel").then((module) => ({ default: module.FrameworksPanel }))),
   gateway: lazy(() => import("./panels/GatewayPanel").then((module) => ({ default: module.GatewayPanel }))),
@@ -20,7 +22,8 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
 };
 
-export function RegisteredPanel({ tab }: { tab: NavigationTabID }) {
+export function RegisteredPanel({ tab, ...agentProps }: { tab: NavigationTabID } & AgentsPanelProps) {
+  if (tab === "agents") return <AgentsPanel {...agentProps} />;
   const Panel = STATIC_PANELS[tab];
   return Panel ? <Panel /> : null;
 }

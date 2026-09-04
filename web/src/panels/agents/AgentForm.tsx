@@ -194,7 +194,8 @@ export function AgentForm({
     let active = true;
     setDesktopThreadsBusy(true);
     setDesktopThreadsError("");
-    void api.codexDesktopThreads(draft.target_id)
+    void Promise.resolve()
+      .then(() => api.codexDesktopThreads(draft.target_id))
       .then((items) => {
         if (active) setDesktopThreads(items ?? []);
       })
@@ -222,7 +223,8 @@ export function AgentForm({
       };
     }
     setAuthBusy(true);
-    void api.frameworkAuth(frameworkRuntimeID, draft.target_id)
+    void Promise.resolve()
+      .then(() => api.frameworkAuth(frameworkRuntimeID, draft.target_id))
       .then((status) => {
         if (active) setAuthStatus(status);
       })
@@ -248,7 +250,8 @@ export function AgentForm({
 			};
 		}
 		setLocalRuntimeSettingsBusy(true);
-		void api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", draft.target_id)
+		void Promise.resolve()
+			.then(() => api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", draft.target_id))
 			.then((settings) => {
 				if (active) setLocalRuntimeSettings(settings);
 			})
@@ -267,14 +270,17 @@ export function AgentForm({
     if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
     let active = true;
     const interval = window.setInterval(() => {
-      void api.frameworkAuth(frameworkRuntimeID, draft.target_id).then((status) => {
-        if (!active) return;
-        setAuthStatus(status);
-        if (status.state === "authenticated") {
-          setAuthNotice(t("agents.loginComplete"));
-          window.clearInterval(interval);
-        }
-      }).catch(() => undefined);
+      void Promise.resolve()
+        .then(() => api.frameworkAuth(frameworkRuntimeID, draft.target_id))
+        .then((status) => {
+          if (!active) return;
+          setAuthStatus(status);
+          if (status.state === "authenticated") {
+            setAuthNotice(t("agents.loginComplete"));
+            window.clearInterval(interval);
+          }
+        })
+        .catch(() => undefined);
     }, 2000);
     return () => {
       active = false;

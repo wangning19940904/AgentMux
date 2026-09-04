@@ -1,5 +1,5 @@
-import { Bot, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Bot, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AgentInstance } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
@@ -27,7 +27,12 @@ import { AgentForm } from "./AgentForm";
 import { ChannelLogoGroup } from "./ChannelLogo";
 
 
-export function AgentsPanel() {
+export type AgentsPanelProps = {
+  createRequested?: boolean;
+  onCreateRequestHandled?: () => void;
+};
+
+export function AgentsPanel({ createRequested = false, onCreateRequestHandled }: AgentsPanelProps = {}) {
   const { t } = useI18n();
   const agents = useAsync(() => api.agentInstances(), []);
   const runtimes = useAsync(() => api.agents(), []);
@@ -46,6 +51,8 @@ export function AgentsPanel() {
   const [busy, setBusy] = useState("");
   const [rowBusy, setRowBusy] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<AgentInstance | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const createRequestHandled = useRef(false);
 
   const items = agents.data ?? [];
   const runtimeOptions = runtimes.data ?? [];
@@ -89,14 +96,35 @@ export function AgentsPanel() {
     () => agentRegistryMetrics(items, activeRouteItems, providerOptions, channelItems),
     [items, activeRouteItems, providerOptions, channelItems],
   );
+  const visibleItems = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return items;
+    return items.filter((item) =>
+      [item.name, item.id, item.runtime_id, item.provider_id]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase().includes(query)),
+    );
+  }, [items, searchQuery]);
 
-  function startNew() {
+  const startNew = useCallback(() => {
     setDrawerMode("create");
     setDrawerDraft(newAgent(runtimeOptions));
     setSelectedChannelIDs([]);
     setSelectedTriggerIDs([]);
     setNotice("");
-  }
+  }, [runtimeOptions]);
+
+  useEffect(() => {
+    if (!createRequested) {
+      createRequestHandled.current = false;
+      return;
+    }
+    // StrictMode or a runtime-list refresh must not reset an open draft.
+    if (createRequestHandled.current) return;
+    createRequestHandled.current = true;
+    startNew();
+    onCreateRequestHandled?.();
+  }, [createRequested, onCreateRequestHandled, startNew]);
 
   function editAgent(agent: AgentInstance) {
     setDrawerMode("edit");
@@ -325,26 +353,26 @@ export function AgentsPanel() {
 
       <section className="surface agent-registry-surface">
         <div className="surface-header">
-          <div className="agent-registry-heading">
-            <h2>{t("agents.registry")}</h2>
-            <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
-              <span>{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
-              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
-              <span>{t("agents.metricProviders", { count: registryMetrics.providerCount })}</span>
-              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
-              <span>{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
-              <span className="agent-registry-summary-separator" aria-hidden="true">·</span>
-              <span>{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
-            </div>
+          <label className="agent-registry-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              type="search"
+              value={searchQuery}
+              placeholder={t("agents.searchPlaceholder")}
+              aria-label={t("agents.searchPlaceholder")}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+          </label>
+          <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
+            <span className="agent-filter-chip active">{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
+            <span className="agent-filter-chip">{t("agents.metricProviders", { count: registryMetrics.providerCount })}</span>
+            <span className="agent-filter-chip">{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
+            <span className="agent-filter-chip">{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
           </div>
           <div className="table-actions">
             <button className="ghost-action" onClick={agents.reload} title={t("common.refresh")}>
               <RefreshCw size={15} />
               {t("common.refresh")}
-            </button>
-            <button className="action" onClick={startNew}>
-              <Plus size={16} />
-              {t("agents.newShort")}
             </button>
           </div>
         </div>
@@ -352,8 +380,8 @@ export function AgentsPanel() {
         <div className="surface-body agent-registry-list">
           {agents.loading && <div className="empty-state">{t("common.loading")}</div>}
           {agents.error && <div className="empty-state error">{String(agents.error)}</div>}
-          {!agents.loading && !agents.error && items.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
-          {items.map((item) => {
+          {!agents.loading && !agents.error && visibleItems.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
+          {visibleItems.map((item) => {
             const itemChannels = boundChannelsForAgent(item, channelItems);
             const routeModel = agentRouteModel(item, activeRouteItems, providerOptions);
             const model = routeModel.model || t("agents.defaultModelShort");

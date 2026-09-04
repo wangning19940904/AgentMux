@@ -10,7 +10,6 @@ import {
   Cable,
   CalendarClock,
   ChevronDown,
-  ChevronLeft,
   Coffee,
   ExternalLink,
   Gauge,
@@ -19,6 +18,7 @@ import {
   Moon,
   PanelLeft,
   PanelTop,
+  Plus,
   Search,
   ServerCog,
   MessageSquareText,
@@ -34,6 +34,7 @@ import { RemoteTargetSelector } from "./RemoteTargetSelector";
 import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
 import { RegisteredPanel } from "./panelRegistry";
+import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
 
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
@@ -56,12 +57,15 @@ import {
   type Tenant,
   type TenancySelf,
 } from "./api";
-import { resolveTenancyGateWithRetry, type TenancyGateState } from "./tenancyGate";
+import {
+  resolveTenancyGateWithRetry,
+  tenancyNavigationLocked,
+  type TenancyGateState,
+} from "./tenancyGate";
 import {
   navigationGroupForTab,
   primaryGroupDestination,
   searchNavigationItems,
-  secondaryNavigationForTab,
 } from "./navigationModel";
 import {
   NAVIGATION_GROUP_SEARCH_ALIASES,
@@ -78,6 +82,9 @@ import {
 } from "./sidebarSizing";
 
 type Tab = NavigationTabID;
+
+const SIDEBAR_LAYOUT_VERSION_KEY = "agentmux:sidebar-layout-version";
+const SIDEBAR_LAYOUT_VERSION = "two-level-sidebar-v1";
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
@@ -291,8 +298,8 @@ function Shell({
   const identityName = selectedTenant?.name ?? (identityIsAdmin
     ? t("app.admin")
     : tenantIdentity?.tenant || t("app.tenant"));
-  const navigationLocked = tenantGate.state !== "ready";
-  const visibleTab = tenantGate.state === "required" ? "tenants" : tab;
+  const navigationLocked = tenancyNavigationLocked(tenantGate.state, nativeDesktopAdmin);
+  const visibleTab = navigationLocked && tenantGate.state === "required" ? "tenants" : tab;
   const active = useMemo(
     () => TABS.find((item) => item.id === visibleTab) ?? TABS[0],
     [visibleTab],
@@ -301,18 +308,21 @@ function Shell({
     () => navigationGroupForTab(NAV_GROUPS, visibleTab),
     [visibleTab],
   );
-  const initialSecondaryNavigation = secondaryNavigationForTab(NAV_GROUPS, tab, "overview");
-  const [secondaryGroupID, setSecondaryGroupID] = useState<string | null>(initialSecondaryNavigation.groupID);
-  const [secondaryOpen, setSecondaryOpen] = useState(initialSecondaryNavigation.open);
-  const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() =>
-    readSidebarWidth(
+  const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() => {
+    if (localStorage.getItem(SIDEBAR_LAYOUT_VERSION_KEY) !== SIDEBAR_LAYOUT_VERSION) {
+      localStorage.setItem(SIDEBAR_LAYOUT_VERSION_KEY, SIDEBAR_LAYOUT_VERSION);
+      localStorage.setItem(PRIMARY_SIDEBAR_STORAGE_KEY, String(PRIMARY_SIDEBAR_WIDTH.default));
+      localStorage.setItem(SECONDARY_SIDEBAR_STORAGE_KEY, String(SECONDARY_SIDEBAR_WIDTH.default));
+      return PRIMARY_SIDEBAR_WIDTH.default;
+    }
+    return readSidebarWidth(
       localStorage,
       PRIMARY_SIDEBAR_STORAGE_KEY,
       PRIMARY_SIDEBAR_WIDTH.default,
       PRIMARY_SIDEBAR_WIDTH.min,
       PRIMARY_SIDEBAR_WIDTH.max,
-    ),
-  );
+    );
+  });
   const [secondarySidebarWidth, setSecondarySidebarWidth] = useState(() =>
     readSidebarWidth(
       localStorage,
@@ -326,17 +336,21 @@ function Shell({
   const [fleetWarnings, setFleetWarnings] = useState<string[]>([]);
   const [machineScopeVersion, setMachineScopeVersion] = useState(0);
   const [remoteAddRequest, setRemoteAddRequest] = useState(0);
+  const [createAgentRequested, setCreateAgentRequested] = useState(false);
+  const handleCreateAgentRequest = useCallback(() => setCreateAgentRequested(false), []);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const searchAnchorRef = useRef<HTMLDivElement>(null);
+  const closeSearchResults = useCallback(() => setSearchOpen(false), []);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const preferencesButtonRef = useRef<HTMLButtonElement>(null);
   const preferencesPanelRef = useRef<HTMLDivElement>(null);
   const desktop = isDesktopApp();
-  const secondaryGroup = NAV_GROUPS.find((group) => group.id === secondaryGroupID) ?? activeGroup;
   const ActiveIcon = active.icon;
-  const SecondaryIcon = secondaryGroup?.icon ?? LayoutGrid;
+  const SecondaryIcon = activeGroup?.icon ?? LayoutGrid;
+  const secondaryItems = activeGroup?.items ?? [OVERVIEW_ITEM];
   const tenantPanelOptions = useMemo(() => {
     const machineScope = activeMachineScope();
     return machineScope === "all"
@@ -392,21 +406,10 @@ function Shell({
   }, [tenantIdentity]);
 
   useEffect(() => {
-    if (visibleTab === "overview") {
-      setSecondaryOpen(false);
-      return;
-    }
-    if (activeGroup) {
-      setSecondaryGroupID(activeGroup.id);
-      setSecondaryOpen(true);
-    }
-  }, [activeGroup, visibleTab]);
-
-  useEffect(() => {
-    if (tenantGate.state === "required" && tab !== "tenants") {
+    if (navigationLocked && tenantGate.state === "required" && tab !== "tenants") {
       setTab("tenants");
     }
-  }, [setTab, tab, tenantGate.state]);
+  }, [navigationLocked, setTab, tab, tenantGate.state]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -516,16 +519,18 @@ function Shell({
     return () => window.removeEventListener("agentmux:machine-scope-changed", refreshScope);
   }, []);
 
-  function selectGroup(group: NavGroup) {
-    const destination = primaryGroupDestination(group, visibleTab);
-    setSecondaryGroupID(group.id);
-    setSecondaryOpen(true);
-    if (destination) setTab(destination);
+  function selectOverview() {
+    setTab("overview");
   }
 
-  function selectOverview() {
-    setSecondaryOpen(false);
-    setTab("overview");
+  function requestNewAgent() {
+    setCreateAgentRequested(true);
+    setTab("agents");
+  }
+
+  function selectGroup(group: NavGroup) {
+    const destination = primaryGroupDestination(group, visibleTab);
+    if (destination) setTab(destination);
   }
 
   function openWebUI() {
@@ -570,7 +575,7 @@ function Shell({
 
   return (
     <div
-      className={`app-shell${secondaryOpen && secondaryGroup ? " secondary-open" : ""}${desktop ? " native-desktop" : ""}`}
+      className={`app-shell secondary-open${desktop ? " native-desktop" : ""}`}
       style={shellStyle}
     >
       <aside className="sidebar">
@@ -625,23 +630,86 @@ function Shell({
           </div>
         </div>
 
+        <nav className="nav primary-nav" aria-label={t("nav.primary")}>
+          <button
+            className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
+            onClick={selectOverview}
+            title={t(OVERVIEW_ITEM.labelKey)}
+            disabled={navigationLocked}
+          >
+            <LayoutGrid size={18} />
+            <span>{t(OVERVIEW_ITEM.labelKey)}</span>
+          </button>
+
+          {NAV_GROUPS.map((group) => {
+            const GroupIcon = group.icon;
+            const hasActive = group.items.some((item) => item.id === visibleTab);
+            const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
+            return (
+              <button
+                key={group.id}
+                className={`nav-item nav-primary-item${hasActive ? " active" : ""}`}
+                onClick={() => selectGroup(group)}
+                aria-expanded={hasActive}
+                title={t(group.labelKey)}
+                disabled={navigationLocked && !canOpenWhileLocked}
+              >
+                <GroupIcon size={18} />
+                <span>{t(group.labelKey)}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <nav className="mobile-flat-nav" aria-label={t("nav.primary")}>
+          {TABS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={`nav-item${visibleTab === item.id ? " active" : ""}`}
+                onClick={() => setTab(item.id)}
+                title={t(item.labelKey)}
+                disabled={navigationLocked && item.id !== "tenants"}
+              >
+                <Icon size={18} />
+                <span>{t(item.labelKey)}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <SidebarResizeHandle
+          label={t("nav.resizePrimary")}
+          value={primarySidebarWidth}
+          limits={PRIMARY_SIDEBAR_WIDTH}
+          onChange={setPrimarySidebarWidth}
+        />
+      </aside>
+
+      <aside className="secondary-sidebar">
+        <header className="secondary-sidebar-header">
+          <span className="secondary-sidebar-title">
+            <SecondaryIcon size={16} />
+            <strong>{activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}</strong>
+          </span>
+        </header>
+
         <div
-          className="sidebar-search-container"
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) setSearchOpen(false);
-          }}
+          ref={searchAnchorRef}
+          className="sidebar-search-container secondary-search-container"
         >
           <div className="sidebar-search search-box">
-            <Search size={17} aria-hidden="true" />
+            <Search size={15} aria-hidden="true" />
             <input
               type="search"
               role="combobox"
               aria-label={t("app.search")}
               aria-autocomplete="list"
-              aria-controls="sidebar-search-results"
+              aria-controls="secondary-sidebar-search-results"
               aria-expanded={showSearchResults}
               aria-activedescendant={showSearchResults && searchResults.length
-                ? `sidebar-search-result-${searchResults[activeSearchIndex]?.id ?? searchResults[0].id}`
+                ? `secondary-sidebar-search-result-${searchResults[activeSearchIndex]?.id ?? searchResults[0].id}`
                 : undefined}
               autoComplete="off"
               placeholder={t("app.search")}
@@ -671,17 +739,18 @@ function Shell({
             )}
           </div>
           {showSearchResults && (
-            <div
-              id="sidebar-search-results"
-              className="sidebar-search-results"
-              role="listbox"
+            <SidebarSearchPopover
+              anchorRef={searchAnchorRef}
+              layoutKey={`${primarySidebarWidth}:${secondarySidebarWidth}`}
+              onClose={closeSearchResults}
+              id="secondary-sidebar-search-results"
               aria-label={t("app.searchResults")}
             >
               {searchResults.length ? searchResults.map((item, index) => {
                 const Icon = item.icon;
                 return (
                   <button
-                    id={`sidebar-search-result-${item.id}`}
+                    id={`secondary-sidebar-search-result-${item.id}`}
                     key={item.id}
                     className={index === activeSearchIndex ? "active" : ""}
                     type="button"
@@ -690,7 +759,7 @@ function Shell({
                     onMouseEnter={() => setActiveSearchIndex(index)}
                     onClick={() => selectSearchResult(item)}
                   >
-                    <Icon size={17} aria-hidden="true" />
+                    <Icon size={16} aria-hidden="true" />
                     <span>
                       <strong>{item.label}</strong>
                       {item.groupLabel && <small>{item.groupLabel}</small>}
@@ -700,61 +769,39 @@ function Shell({
               }) : (
                 <div className="sidebar-search-empty" role="status">{t("app.searchEmpty")}</div>
               )}
-            </div>
+            </SidebarSearchPopover>
           )}
         </div>
+
+        <button
+          className="sidebar-create-shortcut secondary-create-shortcut"
+          type="button"
+          disabled={navigationLocked}
+          onClick={requestNewAgent}
+        >
+          <Bot size={15} />
+          <span>{language === "zh" ? "新建 Agent" : "New agent"}</span>
+        </button>
         {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
 
-        <nav className="nav primary-nav" aria-label={t("nav.primary")}>
-          <button
-            className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
-            onClick={selectOverview}
-            title={t(OVERVIEW_ITEM.labelKey)}
-            disabled={navigationLocked}
-          >
-            <LayoutGrid size={18} />
-            <span>{t(OVERVIEW_ITEM.labelKey)}</span>
-          </button>
-
-          {NAV_GROUPS.map((group) => {
-            const GroupIcon = group.icon;
-            const hasActive = group.items.some((item) => item.id === visibleTab);
-            const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
-            return (
-              <button
-                key={group.id}
-                className={`nav-item nav-primary-item${hasActive ? " active" : ""}`}
-                onClick={() => selectGroup(group)}
-                aria-expanded={secondaryOpen && secondaryGroup?.id === group.id}
-                title={t(group.labelKey)}
-                disabled={navigationLocked && !canOpenWhileLocked}
-              >
-                <GroupIcon size={18} />
-                <span>{t(group.labelKey)}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        <nav className="mobile-flat-nav" aria-label={t("nav.primary")}>
-          {TABS.map((item) => {
+        <nav className="secondary-nav" aria-label={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>
+          {secondaryItems.map((item) => {
             const Icon = item.icon;
             return (
               <button
                 key={item.id}
-                className={`nav-item${visibleTab === item.id ? " active" : ""}`}
+                className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
                 onClick={() => setTab(item.id)}
-                title={t(item.labelKey)}
                 disabled={navigationLocked && item.id !== "tenants"}
               >
-                <Icon size={18} />
+                <Icon size={16} />
                 <span>{t(item.labelKey)}</span>
               </button>
             );
           })}
         </nav>
 
-        <div className={`account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`}>
+        <div className={`account secondary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`}>
           {identityIsAdmin && activeTenantOptions.length > 0 ? (
             <>
               <select
@@ -786,80 +833,62 @@ function Shell({
             <strong>{identityName}</strong>
           )}
         </div>
+
         <SidebarResizeHandle
-          label={t("nav.resizePrimary")}
-          value={primarySidebarWidth}
-          limits={PRIMARY_SIDEBAR_WIDTH}
-          onChange={setPrimarySidebarWidth}
+          label={t("nav.resizeSecondary")}
+          value={secondarySidebarWidth}
+          limits={SECONDARY_SIDEBAR_WIDTH}
+          onChange={setSecondarySidebarWidth}
         />
       </aside>
 
-      {secondaryOpen && secondaryGroup && (
-        <aside className="secondary-sidebar">
-          <header className="secondary-sidebar-header">
-            <span className="secondary-sidebar-title">
-              <SecondaryIcon size={18} />
-              <strong>{t(secondaryGroup.labelKey)}</strong>
-            </span>
-            <button
-              type="button"
-              className="secondary-collapse"
-              onClick={() => setSecondaryOpen(false)}
-              title={t("nav.collapse")}
-              aria-label={t("nav.collapse")}
-            >
-              <ChevronLeft size={18} />
-            </button>
-          </header>
-          <nav className="secondary-nav" aria-label={t(secondaryGroup.labelKey)}>
-            {secondaryGroup.items.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
-                  onClick={() => setTab(item.id)}
-                  disabled={navigationLocked && item.id !== "tenants"}
-                >
-                  <Icon size={18} />
-                  <span>{t(item.labelKey)}</span>
-                </button>
-              );
-            })}
-          </nav>
-          <SidebarResizeHandle
-            label={t("nav.resizeSecondary")}
-            value={secondarySidebarWidth}
-            limits={SECONDARY_SIDEBAR_WIDTH}
-            onChange={setSecondarySidebarWidth}
-          />
-        </aside>
-      )}
-
       <div className="workspace">
-        <header className="workspace-header">
+        <div className="desktop-tabbar" aria-label={t("nav.primary")}>
+          <div className="desktop-tab active">
+            <ActiveIcon size={14} />
+            <span>{t(active.labelKey)}</span>
+          </div>
+          <button type="button" className="desktop-new-tab" title={t("nav.overview")} onClick={selectOverview}>+</button>
+        </div>
+        <div className="workspace-canvas">
+          <header className="workspace-header">
           <div className="title-row">
             <ActiveIcon size={20} />
             <h1>{t(active.labelKey)}</h1>
+            {visibleTab === "agents" && (
+              <span className="workspace-header-description">{t("agents.subtitle")}</span>
+            )}
             <span className="system-pill">
               <span className="status-dot" />
               {t("app.status")}
             </span>
           </div>
-		  {identityIsAdmin && (
-			<RemoteTargetSelector
-				allowedTargetID={selectedTenantTargetID}
-				onAddMachine={selectedTenant ? undefined : () => {
+		    <div className="workspace-header-actions">
+		      {identityIsAdmin && (
+			    <RemoteTargetSelector
+				  allowedTargetID={selectedTenantTargetID}
+				  onAddMachine={selectedTenant ? undefined : () => {
                   setRemoteAddRequest((request) => request + 1);
                   setTab("machines");
                 }}
-			/>
-		  )}
-        </header>
+			    />
+		      )}
+              {visibleTab === "agents" && (
+                <button
+                  className="action workspace-create-action"
+                  type="button"
+                  onClick={requestNewAgent}
+                >
+                  <Plus size={14} />
+                  {t("agents.new")}
+                </button>
+              )}
+		    </div>
+          </header>
 
         <MeetingInvitationOverlay />
 
-        <main className="main">
+        <main className={`main main-${visibleTab}`}>
           {fleetWarnings.length > 0 && (
             <div className="session-notice warning" role="status">
               <strong>{t("remote.partialFleetWarning")}</strong>
@@ -879,7 +908,7 @@ function Shell({
                 <div className="empty-state">{t("tenants.checking")}</div>
               ) : (
                 <>
-				  <RegisteredPanel tab={visibleTab} />
+				  <RegisteredPanel tab={visibleTab} createRequested={createAgentRequested} onCreateRequestHandled={handleCreateAgentRequest} />
 				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
@@ -913,7 +942,8 @@ function Shell({
               )}
             </Suspense>
           </PanelErrorBoundary>
-        </main>
+          </main>
+        </div>
       </div>
     </div>
   );
