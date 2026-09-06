@@ -31,11 +31,12 @@ func (c *claudeCollector) base() string {
 
 // claudeLine is the subset of a transcript line we care about.
 type claudeLine struct {
-	Type      string `json:"type"`
-	Timestamp string `json:"timestamp"`
-	SessionID string `json:"sessionId"`
-	Cwd       string `json:"cwd"`
-	Message   struct {
+	Type       string `json:"type"`
+	Timestamp  string `json:"timestamp"`
+	SessionID  string `json:"sessionId"`
+	Cwd        string `json:"cwd"`
+	Entrypoint string `json:"entrypoint"`
+	Message    struct {
 		Model string `json:"model"`
 		Usage struct {
 			InputTokens              int64 `json:"input_tokens"`
@@ -82,12 +83,16 @@ func (c *claudeCollector) parseFile(path string, since time.Time) []core.UsageRe
 	defer f.Close()
 	project := filepath.Base(filepath.Dir(path))
 	var out []core.UsageRecord
+	runtime := ClaudeRuntime("")
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
 		var l claudeLine
 		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
 			continue
+		}
+		if l.Entrypoint != "" {
+			runtime = ClaudeRuntime(l.Entrypoint)
 		}
 		if l.Type != "assistant" || l.Message.Model == "" {
 			continue
@@ -103,6 +108,7 @@ func (c *claudeCollector) parseFile(path string, since time.Time) []core.UsageRe
 		}
 		out = append(out, core.UsageRecord{
 			Source:           "claude",
+			RuntimeID:        runtime,
 			SessionID:        l.SessionID,
 			Project:          project,
 			Model:            l.Message.Model,

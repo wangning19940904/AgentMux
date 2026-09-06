@@ -346,13 +346,14 @@ function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label:
 }
 
 function FrameworkRank({ rank, runtime, tokens, share }: { rank: number; runtime: string; tokens: number; share: number }) {
+	const { t } = useI18n();
   const RuntimeIcon = runtimeIcon(runtime);
   return (
     <div className="framework-rank-row">
       <span className={`framework-rank-number rank-${rank}`}>{rank}</span>
       <span className="framework-rank-icon"><RuntimeIcon size={17} /></span>
       <span className="framework-rank-copy">
-        <strong>{runtimeLabel(runtime)}</strong>
+        <strong>{runtimeLabel(runtime, t)}</strong>
         <span>{fmt(tokens)} tokens</span>
       </span>
       <span className="framework-rank-share">{Math.round(share * 100)}%</span>
@@ -364,6 +365,8 @@ function runtimeIcon(runtime: string) {
   switch (runtime.trim().toLowerCase()) {
     case "claude":
     case "claudecode":
+    case "claude-desktop":
+    case "claude-unknown":
       return Sparkles;
     case "codex":
     case "codex-app":
@@ -425,7 +428,7 @@ function buildFrameworkTrendSeries(
   const hidden = new Set(ordered.slice(5).map((runtime) => runtime.runtime));
   const series = visible.map((runtime) => ({
     id: runtime.runtime,
-    label: runtimeLabel(runtime.runtime),
+    label: runtimeLabel(runtime.runtime, t),
     tokens: runtime.tokens,
     values: buckets.map((bucket) => bucket.by_runtime?.find((item) => item.runtime === runtime.runtime)?.tokens ?? 0),
   }));

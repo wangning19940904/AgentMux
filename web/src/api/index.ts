@@ -423,7 +423,9 @@ export const api = {
 
   // Tenancy. Everything except tenancySelf is administrator-only and returns
   // 403 when the Console runs inside a tenant-scoped session.
-  tenancySelf: () => get<TenancySelf>("/api/v1/tenancy/self"),
+  // Login identity belongs to the Console's origin, independent of the last
+  // selected SSH machine or administrator tenant preview.
+  tenancySelf: () => getLocal<TenancySelf>("/api/v1/tenancy/self"),
   registerTenant: (payload: { name: string; kind?: TenantKind; target_id?: string }) => {
     const body = { ...payload }; delete body.target_id;
     return fleetCall<{ tenant: Tenant; token: string; prefix: string }>({ key: "tenant", method: "POST", path: "/api/v1/tenancy/register", body }, writeTargetIDs(payload.target_id)).then((result) => result.first);

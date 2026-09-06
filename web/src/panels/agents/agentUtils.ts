@@ -131,13 +131,19 @@ export function routeToolOptionsForRuntime(runtime: string): string[] {
   return tool ? [tool] : [];
 }
 
-export function runtimeLabel(runtime: string): string {
+export function runtimeLabel(runtime: string, t?: (key: string) => string): string {
   switch (runtime) {
     case "claude":
     case "claudecode":
       return "Claude Code CLI";
     case "codex":
       return "Codex CLI";
+    case "claude-unknown":
+      return `Claude Code · ${t?.("usage.unknownClient") ?? "Unknown client"}`;
+    case "codex-unknown":
+      return `Codex · ${t?.("usage.unknownClient") ?? "Unknown client"}`;
+    case "codex-vscode":
+      return "Codex IDE";
     case "cursor":
       return "Cursor";
     case "gemini":

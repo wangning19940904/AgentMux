@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/internal/consolelogin"
 	"github.com/wangning19940904/AgentMux/store"
 
 	// Register all adapters via blank imports (plugin pattern).
@@ -112,9 +113,15 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 		cmd.Println("AgentMux client:", cfg.Server.Addr, "(Ctrl-C to stop)")
 	}
 	if opts.printWebUI || opts.openWebUI {
-		url := "http://" + cfg.Server.Addr
+		url := consolelogin.TargetURL(cfg.Server.Addr).String()
+		url, err = consolelogin.EntryURL(ctx, url, cfg.Bridge.Token)
+		if err != nil {
+			return err
+		}
 		if opts.openWebUI {
-			time.Sleep(300 * time.Millisecond)
+			if cfg.Bridge.Token == "" {
+				time.Sleep(300 * time.Millisecond)
+			}
 			if err := openBrowser(url); err != nil {
 				logger.Warn("open browser failed", "err", err)
 			}

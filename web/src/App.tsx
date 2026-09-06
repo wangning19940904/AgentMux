@@ -10,6 +10,8 @@ import {
   Cable,
   CalendarClock,
   ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
   Coffee,
   ExternalLink,
   Gauge,
@@ -17,6 +19,8 @@ import {
   LayoutGrid,
   Moon,
   PanelLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelTop,
   RefreshCw,
   Plus,
@@ -77,9 +81,12 @@ import {
 } from "./navigationSearchAliases";
 import {
   clampSidebarWidth,
+  PRIMARY_SIDEBAR_COLLAPSED_KEY,
+  PRIMARY_SIDEBAR_COLLAPSED_WIDTH,
   PRIMARY_SIDEBAR_STORAGE_KEY,
   PRIMARY_SIDEBAR_WIDTH,
   readSidebarWidth,
+  SECONDARY_SIDEBAR_COLLAPSED_KEY,
   SECONDARY_SIDEBAR_STORAGE_KEY,
   SECONDARY_SIDEBAR_WIDTH,
 } from "./sidebarSizing";
@@ -90,7 +97,7 @@ const SIDEBAR_LAYOUT_VERSION_KEY = "agentmux:sidebar-layout-version";
 const SIDEBAR_LAYOUT_VERSION = "two-level-sidebar-v1";
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
-type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
+type NavGroup = { id: string; labelKey: string; shortLabelKey?: string; icon: typeof LayoutGrid; items: NavItem[] };
 
 const OVERVIEW_ITEM: NavItem = { id: "overview", labelKey: "nav.overview", icon: LayoutGrid };
 
@@ -112,6 +119,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "connectivity",
     labelKey: "nav.group.connectivity",
+    shortLabelKey: "nav.short.connectivity",
     icon: Cable,
     items: [
       { id: "channels", labelKey: "nav.channels", icon: Cable },
@@ -123,6 +131,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "operations",
     labelKey: "nav.group.operations",
+    shortLabelKey: "nav.short.operations",
     icon: Activity,
     items: [
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
@@ -342,6 +351,12 @@ function Shell({
       SECONDARY_SIDEBAR_WIDTH.max,
     ),
   );
+  const [primaryCollapsed, setPrimaryCollapsed] = useState(() =>
+    localStorage.getItem(PRIMARY_SIDEBAR_COLLAPSED_KEY) === "true",
+  );
+  const [secondaryCollapsed, setSecondaryCollapsed] = useState(() =>
+    localStorage.getItem(SECONDARY_SIDEBAR_COLLAPSED_KEY) === "true",
+  );
   const [quickActionError, setQuickActionError] = useState("");
   const [fleetWarnings, setFleetWarnings] = useState<string[]>(currentFleetWarnings);
   const [dismissedFleetWarnings, setDismissedFleetWarnings] = useState("");
@@ -370,7 +385,7 @@ function Shell({
       : tenantOptions.filter((tenant) => (tenant.target_id || "local") === machineScope);
   }, [machineScopeVersion, tenantOptions]);
   const shellStyle = {
-    "--primary-sidebar-width": `${primarySidebarWidth}px`,
+    "--primary-sidebar-width": `${primaryCollapsed ? PRIMARY_SIDEBAR_COLLAPSED_WIDTH : primarySidebarWidth}px`,
     "--secondary-sidebar-width": `${secondarySidebarWidth}px`,
   } as CSSProperties;
   const searchResults = useMemo(() => {
@@ -401,12 +416,15 @@ function Shell({
       Math.max(viewportPadding, rect.left),
       Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding),
     );
-    const top = rect.bottom + panelGap;
+    const spaceBelow = window.innerHeight - rect.bottom - panelGap - viewportPadding;
+    const openAbove = spaceBelow < 360 && rect.top > window.innerHeight / 2;
     setPreferencesPanelStyle({
-      top,
+      ...(openAbove
+        ? { bottom: window.innerHeight - rect.top + panelGap }
+        : { top: rect.bottom + panelGap }),
       left,
       width: panelWidth,
-      maxHeight: Math.max(120, window.innerHeight - top - viewportPadding),
+      maxHeight: Math.max(120, openAbove ? rect.top - panelGap - viewportPadding : spaceBelow),
     });
   }, []);
 
@@ -487,6 +505,15 @@ function Shell({
   }, [secondarySidebarWidth]);
 
   useEffect(() => {
+    localStorage.setItem(PRIMARY_SIDEBAR_COLLAPSED_KEY, String(primaryCollapsed));
+  }, [primaryCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(SECONDARY_SIDEBAR_COLLAPSED_KEY, String(secondaryCollapsed));
+    if (secondaryCollapsed) setSearchOpen(false);
+  }, [secondaryCollapsed]);
+
+  useEffect(() => {
     setActiveSearchIndex((current) => Math.min(current, Math.max(0, searchResults.length - 1)));
   }, [searchResults.length]);
 
@@ -511,7 +538,7 @@ function Shell({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [preferencesOpen, positionPreferencesPanel, primarySidebarWidth]);
+  }, [preferencesOpen, positionPreferencesPanel, primarySidebarWidth, primaryCollapsed]);
 
   useEffect(() => {
     const receiveWarnings = (event: Event) => {
@@ -546,6 +573,7 @@ function Shell({
   }
 
   function selectGroup(group: NavGroup) {
+    setSecondaryCollapsed(false);
     const destination = primaryGroupDestination(group, visibleTab);
     if (destination) setTab(destination);
   }
@@ -592,7 +620,7 @@ function Shell({
 
   return (
     <div
-      className={`app-shell secondary-open${desktop ? " native-desktop" : ""}`}
+      className={`app-shell${secondaryCollapsed ? "" : " secondary-open"}${primaryCollapsed ? " primary-collapsed" : ""}${desktop ? " native-desktop" : ""}`}
       style={shellStyle}
     >
       <aside className="sidebar">
@@ -609,6 +637,7 @@ function Shell({
             onClick={() => setPreferencesOpen((open) => !open)}
           >
             <Settings size={17} />
+            <span>{t("app.settings")}</span>
           </button>
           {preferencesOpen && createPortal(
             <div
@@ -637,8 +666,21 @@ function Shell({
               onClick={openWebUI}
             >
               <ExternalLink size={17} />
+              <span>{t("nav.openWeb")}</span>
             </button>
           )}
+          <button
+            className="brand-action-button primary-collapse"
+            type="button"
+            title={t(primaryCollapsed ? "nav.expandPrimary" : "nav.collapsePrimary")}
+            aria-label={t(primaryCollapsed ? "nav.expandPrimary" : "nav.collapsePrimary")}
+            aria-expanded={!primaryCollapsed}
+            aria-controls="primary-navigation"
+            onClick={() => setPrimaryCollapsed((collapsed) => !collapsed)}
+          >
+            {primaryCollapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}
+            <span>{t("nav.collapsePrimary")}</span>
+          </button>
         </div>
         <div className="brand">
           <img className="brand-logo" src="/agentmux-logo.png" alt="" aria-hidden="true" />
@@ -647,11 +689,13 @@ function Shell({
           </div>
         </div>
 
-        <nav className="nav primary-nav" aria-label={t("nav.primary")}>
+        <nav id="primary-navigation" className="nav primary-nav" aria-label={t("nav.primary")}>
           <button
             className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
             onClick={selectOverview}
             title={t(OVERVIEW_ITEM.labelKey)}
+            aria-label={t(OVERVIEW_ITEM.labelKey)}
+            aria-current={visibleTab === OVERVIEW_ITEM.id ? "page" : undefined}
             disabled={navigationLocked}
           >
             <LayoutGrid size={18} />
@@ -667,12 +711,15 @@ function Shell({
                 key={group.id}
                 className={`nav-item nav-primary-item${hasActive ? " active" : ""}`}
                 onClick={() => selectGroup(group)}
-                aria-expanded={hasActive}
+                aria-expanded={hasActive && !secondaryCollapsed}
+                aria-controls="secondary-navigation"
+                aria-label={t(group.labelKey)}
+                aria-current={hasActive ? "true" : undefined}
                 title={t(group.labelKey)}
                 disabled={navigationLocked && !canOpenWhileLocked}
               >
                 <GroupIcon size={18} />
-                <span>{t(group.labelKey)}</span>
+                <span>{t(group.shortLabelKey ?? group.labelKey)}</span>
               </button>
             );
           })}
@@ -696,20 +743,31 @@ function Shell({
           })}
         </nav>
 
-        <SidebarResizeHandle
+        {!primaryCollapsed && <SidebarResizeHandle
           label={t("nav.resizePrimary")}
           value={primarySidebarWidth}
           limits={PRIMARY_SIDEBAR_WIDTH}
           onChange={setPrimarySidebarWidth}
-        />
+        />}
       </aside>
 
-      <aside className="secondary-sidebar">
+      <aside id="secondary-navigation" className="secondary-sidebar" hidden={secondaryCollapsed}>
         <header className="secondary-sidebar-header">
           <span className="secondary-sidebar-title">
             <SecondaryIcon size={16} />
-            <strong>{activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}</strong>
+            <strong title={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>{activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}</strong>
           </span>
+          <button
+            className="secondary-collapse"
+            type="button"
+            title={t("nav.collapse")}
+            aria-label={t("nav.collapse")}
+            aria-expanded="true"
+            aria-controls="secondary-navigation"
+            onClick={() => setSecondaryCollapsed(true)}
+          >
+            <PanelLeftClose size={16} />
+          </button>
         </header>
 
         <div
@@ -755,10 +813,10 @@ function Shell({
               </button>
             )}
           </div>
-          {showSearchResults && (
+          {showSearchResults && !secondaryCollapsed && (
             <SidebarSearchPopover
               anchorRef={searchAnchorRef}
-              layoutKey={`${primarySidebarWidth}:${secondarySidebarWidth}`}
+              layoutKey={`${primarySidebarWidth}:${secondarySidebarWidth}:${primaryCollapsed}`}
               onClose={closeSearchResults}
               id="secondary-sidebar-search-results"
               aria-label={t("app.searchResults")}
@@ -789,17 +847,6 @@ function Shell({
             </SidebarSearchPopover>
           )}
         </div>
-
-        <button
-          className="sidebar-create-shortcut secondary-create-shortcut"
-          type="button"
-          disabled={navigationLocked}
-          onClick={requestNewAgent}
-        >
-          <Bot size={15} />
-          <span>{language === "zh" ? "新建 Agent" : "New agent"}</span>
-        </button>
-        {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
 
         <nav className="secondary-nav" aria-label={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>
           {secondaryItems.map((item) => {
@@ -860,16 +907,22 @@ function Shell({
       </aside>
 
       <div className="workspace">
-        <div className="desktop-tabbar" aria-label={t("nav.primary")}>
-          <div className="desktop-tab active">
-            <ActiveIcon size={14} />
-            <span>{t(active.labelKey)}</span>
-          </div>
-          <button type="button" className="desktop-new-tab" title={t("nav.overview")} onClick={selectOverview}>+</button>
-        </div>
         <div className="workspace-canvas">
           <header className="workspace-header">
           <div className="title-row">
+            {secondaryCollapsed && (
+              <button
+                className="secondary-collapse secondary-expand"
+                type="button"
+                title={t("nav.expand")}
+                aria-label={t("nav.expand")}
+                aria-expanded="false"
+                aria-controls="secondary-navigation"
+                onClick={() => setSecondaryCollapsed(false)}
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+            )}
             <ActiveIcon size={20} />
             <h1>{t(active.labelKey)}</h1>
             {visibleTab === "agents" && (
@@ -908,6 +961,7 @@ function Shell({
         <MeetingInvitationOverlay />
 
         <main className={`main main-${visibleTab}`}>
+          {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
           {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && (
             <div className="session-notice warning" role="status">
               <strong>{t("remote.partialFleetWarning")}</strong>

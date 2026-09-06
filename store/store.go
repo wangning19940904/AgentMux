@@ -697,7 +697,8 @@ func (s *Store) GetSetting(ctx context.Context, key string) (value string, ok bo
 
 // UpsertUsage inserts usage records. Request-addressable records may be
 // upgraded by a higher-ranked source (for example Cursor dashboard data
-// replacing a local estimate); legacy transcript identities remain immutable.
+// replacing a local estimate); legacy transcript amounts and identities remain
+// immutable, but newly identified clients may fill missing runtime metadata.
 func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error {
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -731,7 +732,10 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host,provenance,provenance_rank,token_quality,cost_kind)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT DO NOTHING`)
+		ON CONFLICT(source,session_id,timestamp,host) DO UPDATE SET runtime_id=excluded.runtime_id
+		WHERE COALESCE(usage_records.request_id,'')=''
+		AND COALESCE(usage_records.runtime_id,'') IN ('','claude-unknown','codex-unknown')
+		AND excluded.runtime_id<>''`)
 	if err != nil {
 		return err
 	}

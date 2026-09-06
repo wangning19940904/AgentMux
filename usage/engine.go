@@ -29,7 +29,8 @@ type Engine struct {
 	pricer *pricing.Pricer
 	cursor *CursorUsageManager
 
-	collectMu sync.Mutex
+	collectMu         sync.Mutex
+	runtimeBackfilled map[string]bool // guarded by collectMu
 }
 
 // NewEngine builds a usage Engine.
@@ -65,6 +66,9 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 			e.log.Warn("skip source", "source", src, "err", err)
 			continue
 		}
+		if err := e.backfillUsageRuntimes(ctx, src, "", ""); err != nil {
+			e.log.Warn("backfill usage clients", "source", src, "err", err)
+		}
 		recs, err := col.Collect(ctx, since)
 		if err != nil {
 			e.log.Warn("collect failed", "source", src, "err", err)
@@ -76,6 +80,28 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 		}
 		e.log.Debug("collected", "source", src, "records", len(recs))
 	}
+	return nil
+}
+
+// Run once per source and host on startup, independently of the collection
+// checkpoint. Old records need client metadata even when their logs have not
+// changed since the last collection. Failed scans are retried on the next tick.
+func (e *Engine) backfillUsageRuntimes(ctx context.Context, source, root, host string) error {
+	key := source + "\x00" + host + "\x00" + root
+	if e.runtimeBackfilled[key] {
+		return nil
+	}
+	sessions, err := parser.SessionRuntimes(ctx, source, root)
+	if err != nil {
+		return err
+	}
+	if err := e.st.BackfillUsageRuntimes(ctx, source, host, sessions); err != nil {
+		return err
+	}
+	if e.runtimeBackfilled == nil {
+		e.runtimeBackfilled = map[string]bool{}
+	}
+	e.runtimeBackfilled[key] = true
 	return nil
 }
 

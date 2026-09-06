@@ -21,7 +21,6 @@ import (
 	"embed"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -34,6 +33,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wangning19940904/AgentMux/internal/consolelogin"
 )
 
 //go:embed all:frontend/dist
@@ -153,11 +153,16 @@ func (a *App) setAPIToken(token string) {
 // OpenLocalWebUI opens the in-process daemon's Web UI in the user's default
 // browser. The target follows the configured server address and is normalized
 // to loopback when the daemon listens on a wildcard interface.
-func (a *App) OpenLocalWebUI() {
+func (a *App) OpenLocalWebUI() error {
 	if a.ctx == nil {
-		return
+		return fmt.Errorf("desktop app is not ready")
 	}
-	wailsruntime.BrowserOpenURL(a.ctx, a.localWebUIURL())
+	entryURL, err := a.localWebUIEntryURL(a.ctx)
+	if err != nil {
+		return err
+	}
+	wailsruntime.BrowserOpenURL(a.ctx, entryURL)
+	return nil
 }
 
 // OpenExternalURL opens a validated web link in the user's default browser.
@@ -187,14 +192,10 @@ func (a *App) localWebUIURL() string {
 	return a.apiTarget.Load().(*url.URL).String()
 }
 
+func (a *App) localWebUIEntryURL(ctx context.Context) (string, error) {
+	return consolelogin.EntryURL(ctx, a.localWebUIURL(), a.apiToken.Load().(string))
+}
+
 func desktopAPITarget(addr string) *url.URL {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
-	if err != nil || port == "" {
-		host, port = "127.0.0.1", "8765"
-	}
-	switch strings.Trim(host, "[]") {
-	case "", "0.0.0.0", "::":
-		host = "127.0.0.1"
-	}
-	return &url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}
+	return consolelogin.TargetURL(addr)
 }

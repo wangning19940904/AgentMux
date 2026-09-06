@@ -31,7 +31,7 @@ func TestAggregateDailyAndModel(t *testing.T) {
 	if len(r.Buckets) != 2 {
 		t.Fatalf("buckets = %d, want 2", len(r.Buckets))
 	}
-	if len(r.Buckets[0].ByRuntime) != 1 || r.Buckets[0].ByRuntime[0].Runtime != "claude" || r.Buckets[0].ByRuntime[0].Tokens != 360 {
+	if len(r.Buckets[0].ByRuntime) != 1 || r.Buckets[0].ByRuntime[0].Runtime != "claude-unknown" || r.Buckets[0].ByRuntime[0].Tokens != 360 {
 		t.Fatalf("bucket runtime breakdown = %+v", r.Buckets[0].ByRuntime)
 	}
 	if r.Buckets[0].Key != "2026-01-01" || r.Buckets[0].Totals.Records != 2 || r.Buckets[0].Totals.Sessions != 1 {

@@ -39,11 +39,13 @@ type codexLine struct {
 	Model      string             `json:"model"`
 	TokenCount *codexUsageNumbers `json:"token_count"`
 	Payload    struct {
-		Type  string `json:"type"`
-		ID    string `json:"id"`
-		Model string `json:"model"`
-		Cwd   string `json:"cwd"`
-		Info  *struct {
+		Type       string          `json:"type"`
+		ID         string          `json:"id"`
+		Model      string          `json:"model"`
+		Cwd        string          `json:"cwd"`
+		Originator string          `json:"originator"`
+		Source     json.RawMessage `json:"source"`
+		Info       *struct {
 			TotalTokenUsage codexUsageNumbers `json:"total_token_usage"`
 			LastTokenUsage  codexUsageNumbers `json:"last_token_usage"`
 		} `json:"info"`
@@ -97,6 +99,7 @@ func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRec
 	var project string
 	var previous codexUsageNumbers
 	var havePrevious bool
+	runtime := CodexRuntime("", nil)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -107,8 +110,11 @@ func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRec
 		if l.Model != "" {
 			model = l.Model
 		}
-		if l.Payload.ID != "" && l.Type == "session_meta" {
-			sessionID = l.Payload.ID
+		if l.Type == "session_meta" {
+			if l.Payload.ID != "" {
+				sessionID = l.Payload.ID
+			}
+			runtime = CodexRuntime(l.Payload.Originator, l.Payload.Source)
 		}
 		if l.Payload.Model != "" {
 			model = l.Payload.Model
@@ -122,7 +128,9 @@ func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRec
 			if !sinceOK(ts, since) || l.TokenCount.isZero() {
 				continue
 			}
-			out = append(out, codexUsageRecord(sessionID, project, model, ts, *l.TokenCount))
+			record := codexUsageRecord(sessionID, project, model, ts, *l.TokenCount)
+			record.RuntimeID = runtime
+			out = append(out, record)
 			continue
 		}
 		if l.Type != "event_msg" || l.Payload.Type != "token_count" || l.Payload.Info == nil {
@@ -145,7 +153,9 @@ func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRec
 		if !sinceOK(ts, since) {
 			continue
 		}
-		out = append(out, codexUsageRecord(sessionID, project, model, ts, delta))
+		record := codexUsageRecord(sessionID, project, model, ts, delta)
+		record.RuntimeID = runtime
+		out = append(out, record)
 	}
 	return out
 }
