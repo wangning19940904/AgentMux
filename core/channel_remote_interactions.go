@@ -174,7 +174,7 @@ func (e *Engine) resolveRemoteInteraction(ctx context.Context, rt *channelRuntim
 	if !local && record.MessageID != "" && msg.InteractionMessageID != record.MessageID {
 		return fmt.Errorf("interaction callback does not match the original card")
 	}
-	if !local && msg.UserID != record.ControllerID && !rt.isAdmin(msg.UserID) {
+	if !local && msg.UserID != record.ControllerID && !rt.isChatManager(ctx, msg) {
 		return fmt.Errorf("only the task controller or an administrator may respond")
 	}
 	for _, question := range record.Request.Questions {

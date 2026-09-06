@@ -127,8 +127,8 @@ func (e *Engine) handleDirectStop(ctx context.Context, rt *channelRuntime, msg *
 	turn := rt.directTurn(ResolveConversationKey(msg))
 	if turn == nil {
 		_ = rt.platform.Reply(ctx, msg, "当前没有活动任务。")
-	} else if turn.controllerID != "" && turn.controllerID != msg.UserID && !rt.isAdmin(msg.UserID) {
-		_ = rt.platform.Reply(ctx, msg, "只有当前任务发起人或渠道管理员可以停止任务。")
+	} else if turn.controllerID != "" && turn.controllerID != msg.UserID && !rt.isChatManager(ctx, msg) {
+		_ = rt.platform.Reply(ctx, msg, "只有当前任务发起人、群主或群管理员可以停止任务。")
 	} else {
 		rt.controlMu.Lock()
 		turn.stopRequested = true
@@ -146,6 +146,7 @@ func (e *Engine) handleDirectTaskAction(ctx context.Context, rt *channelRuntime,
 		return
 	}
 	key := ResolveConversationKey(msg)
+	manager := rt.isChatManager(ctx, msg)
 	rt.controlMu.Lock()
 	turn := rt.directTurns[key]
 	if turn == nil || turn.task == nil || turn.task.ID != action.TaskID {
@@ -153,9 +154,9 @@ func (e *Engine) handleDirectTaskAction(ctx context.Context, rt *channelRuntime,
 		_ = rt.platform.Reply(ctx, msg, "该任务已结束或卡片已过期。")
 		return
 	}
-	if turn.controllerID != "" && turn.controllerID != msg.UserID && !rt.isAdmin(msg.UserID) {
+	if turn.controllerID != "" && turn.controllerID != msg.UserID && !manager {
 		rt.controlMu.Unlock()
-		_ = rt.platform.Reply(ctx, msg, "只有当前任务发起人或渠道管理员可以停止任务。")
+		_ = rt.platform.Reply(ctx, msg, "只有当前任务发起人、群主或群管理员可以停止任务。")
 		return
 	}
 	turn.stopRequested = true

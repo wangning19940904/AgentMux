@@ -147,6 +147,36 @@ func TestQueuePermissionsAndStaleTarget(t *testing.T) {
 		t.Fatal("cancel failed")
 	}
 }
+
+func TestQueueUsesPlatformGroupPermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		manager     bool
+		err         error
+		wantAllowed bool
+	}{
+		{name: "legacy admin has no platform role"},
+		{name: "platform manager", manager: true, wantAllowed: true},
+		{name: "platform lookup fails", manager: true, err: errors.New("platform unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, rt, _, _, msg := queueFixture(t, nil)
+			item, err := e.enqueueRemoteTask(context.Background(), rt, msg, msg.Text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt.channel.Config["admin_user_ids"] = "old-admin"
+			rt.platform = &modeTestPlatform{fakePlatform: newFakePlatform("feishu"), admin: tc.manager, permissionErr: tc.err}
+			actor := *msg
+			actor.UserID = "old-admin"
+			actor.ChatType = "group"
+			err = e.controlQueuedTask(context.Background(), rt, &actor, ChannelTaskAction{TaskID: item.task.ID, Action: ChannelTaskActionCancel})
+			if (err == nil) != tc.wantAllowed {
+				t.Fatalf("allowed = %t, want %t (error: %v)", err == nil, tc.wantAllowed, err)
+			}
+		})
+	}
+}
 func TestQueueCompletingDuringSteerDoesNotStartAnotherTurn(t *testing.T) {
 	e, rt, state, s, msg := queueFixture(t, nil)
 	s.entered = make(chan struct{})

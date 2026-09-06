@@ -7,16 +7,17 @@ import (
 
 type modeTestPlatform struct {
 	*fakePlatform
-	topic, admin bool
-	groups       int
-	groupErr     error
+	topic, admin  bool
+	groups        int
+	groupErr      error
+	permissionErr error
 }
 
 func (p *modeTestPlatform) ConversationChat(context.Context, string) (ConversationChatInfo, error) {
 	return ConversationChatInfo{Topic: p.topic}, nil
 }
 func (p *modeTestPlatform) CanManageConversationChat(context.Context, string, string) (bool, error) {
-	return p.admin, nil
+	return p.admin, p.permissionErr
 }
 func (p *modeTestPlatform) CreateConversationGroup(context.Context, string, string, string) (string, error) {
 	p.groups++
@@ -97,6 +98,7 @@ func TestModeChangesRequireGroupManager(t *testing.T) {
 	if mode != "chat-topic" {
 		t.Fatal("member changed group mode")
 	}
+	rt.platform.(*modeTestPlatform).admin = true
 	msg.UserID = "admin"
 	e.handleConversationMode(context.Background(), rt, msg)
 	mode, _ = rt.conversationMode(context.Background(), msg)

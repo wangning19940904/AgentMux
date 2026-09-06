@@ -83,6 +83,7 @@ func (e *Engine) refreshQueueCards(rt *channelRuntime, changed *runtimeChannelTa
 
 func (e *Engine) controlQueuedTask(ctx context.Context, rt *channelRuntime, msg *Message, action ChannelTaskAction) error {
 	key := ResolveConversationKey(msg)
+	manager := rt.isChatManager(ctx, msg)
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(key)
 	var item *runtimeChannelTask
@@ -102,9 +103,9 @@ func (e *Engine) controlQueuedTask(ctx context.Context, rt *channelRuntime, msg 
 		rt.controlMu.Unlock()
 		return fmt.Errorf("无效的任务操作")
 	}
-	if item.task.UserID != msg.UserID && !rt.isAdmin(msg.UserID) {
+	if item.task.UserID != msg.UserID && !manager {
 		rt.controlMu.Unlock()
-		return fmt.Errorf("只有消息发起人或渠道管理员可以操作此排队项")
+		return fmt.Errorf("只有消息发起人、群主或群管理员可以操作此排队项")
 	}
 	if action.Action == ChannelTaskActionCancel {
 		previous := item.task
@@ -130,9 +131,9 @@ func (e *Engine) controlQueuedTask(ctx context.Context, rt *channelRuntime, msg 
 		rt.controlMu.Unlock()
 		return fmt.Errorf("原任务已结束，消息保留排队，不会追加到其他任务")
 	}
-	if active.task.ControllerID != msg.UserID && !rt.isAdmin(msg.UserID) {
+	if active.task.ControllerID != msg.UserID && !manager {
 		rt.controlMu.Unlock()
-		return fmt.Errorf("只有当前任务发起人或渠道管理员可以调整方向")
+		return fmt.Errorf("只有当前任务发起人、群主或群管理员可以调整方向")
 	}
 	session, ok := active.session.(InteractiveAgentSession)
 	if !ok || (active.generation != nil && active.generation.retired.Load()) {

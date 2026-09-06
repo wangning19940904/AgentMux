@@ -1633,7 +1633,6 @@ func TestCodexRemoteControlForcesOneFeishuStatusCard(t *testing.T) {
 		Config: map[string]string{
 			ChannelConfigReplyMode:           ReplyModeStreamMessage,
 			ChannelConfigCodexControlEnabled: "true",
-			ChannelConfigAllowedUserIDs:      "member",
 		},
 	}
 	if err := eng.AttachChannel(ctx, ch, &remoteControlTestAgent{}, t.TempDir(),

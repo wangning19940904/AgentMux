@@ -701,19 +701,19 @@ func TestCodexRemoteControlChannelValidation(t *testing.T) {
 		},
 	}
 	rec := doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "allowed or admin") {
-		t.Fatalf("missing whitelist: code=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("channel without access lists: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	channel.AgentID = "agent-other"
-	channel.Config[core.ChannelConfigAllowedUserIDs] = "ou_member"
+	channel.Config["allowed_user_ids"] = "ou_member"
 	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("generic runtime: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	channel.AgentID = "agent-codex"
-	channel.Config[core.ChannelConfigAdminUserIDs] = "ou_admin"
+	channel.Config["admin_user_ids"] = "ou_admin"
 	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("valid remote control channel: code=%d body=%s", rec.Code, rec.Body.String())
@@ -721,6 +721,11 @@ func TestCodexRemoteControlChannelValidation(t *testing.T) {
 	var saved core.Channel
 	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
 		t.Fatal(err)
+	}
+	for _, key := range []string{"allowed_user_ids", "admin_user_ids"} {
+		if _, exists := saved.Config[key]; exists {
+			t.Fatalf("legacy access list %s was persisted", key)
+		}
 	}
 	if saved.Config[core.ChannelConfigCodexMaxQueue] != "20" ||
 		saved.Config[core.ChannelConfigCodexTurnTimeout] != "20" {

@@ -76,8 +76,6 @@ func newRemoteControlTestRuntime(engine *Engine) (*channelRuntime, *fakePlatform
 			ID: "channel-1", Type: "feishu",
 			Config: map[string]string{
 				ChannelConfigCodexControlEnabled: "true",
-				ChannelConfigAllowedUserIDs:      "member,other,admin",
-				ChannelConfigAdminUserIDs:        "admin",
 			},
 		},
 		platform:     platform,
@@ -132,8 +130,9 @@ func TestRemoteTaskTakeoverRequiresAdminAndIsAudited(t *testing.T) {
 		t.Fatalf("non-admin changed controller to %q", state.active.task.ControllerID)
 	}
 
+	runtime.platform = &modeTestPlatform{fakePlatform: runtime.platform.(*fakePlatform), admin: true}
 	engine.takeOverRemoteTask(context.Background(), runtime,
-		&Message{ChatID: "one", ConversationKey: "chat:one", UserID: "admin"}, map[string]string{})
+		&Message{ChatID: "one", ChatType: "group", ConversationKey: "chat:one", UserID: "admin"}, map[string]string{})
 	if state.active.task.ControllerID != "admin" {
 		t.Fatalf("controller = %q, want admin", state.active.task.ControllerID)
 	}
@@ -331,18 +330,66 @@ func TestOpenRemoteThreadUsesNativeOpener(t *testing.T) {
 	}
 }
 
-func TestRemoteControlRejectsUnauthorizedUserBeforeSessionCreation(t *testing.T) {
+func TestChannelMessagesRespectReplyScopeWithoutAccessLists(t *testing.T) {
+	for _, tc := range []struct {
+		name, scope, chatType            string
+		mentioned, mentionAll, wantReply bool
+	}{
+		{name: "ordinary group", chatType: "group"},
+		{name: "ordinary topic group", chatType: "topic_group"},
+		{name: "mention everyone", chatType: "group", mentionAll: true},
+		{name: "bot mention", chatType: "group", mentioned: true, wantReply: true},
+		{name: "private chat", chatType: "p2p", wantReply: true},
+		{name: "all group messages", scope: ReplyScopeAll, chatType: "group", wantReply: true},
+		{name: "mentions only group", scope: ReplyScopeMentionsOnly, chatType: "group"},
+		{name: "mentions only private", scope: ReplyScopeMentionsOnly, chatType: "p2p"},
+		{name: "mentions only bot mention", scope: ReplyScopeMentionsOnly, chatType: "group", mentioned: true, wantReply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := NewEngine(nil, NewHookRunner(nil, nil))
+			runtime, platform := newRemoteControlTestRuntime(engine)
+			runtime.channel.Config[ChannelConfigReplyScope] = tc.scope
+			// Legacy values cannot restrict users delivered by the platform.
+			runtime.channel.Config["allowed_user_ids"] = "old-owner"
+			runtime.channel.Config["admin_user_ids"] = "old-owner"
+			msg := &Message{
+				ID: "message", ChannelID: runtime.channel.ID, Platform: "feishu",
+				ChatID: "chat", ChatType: tc.chatType, UserID: "new-user", Text: "/status",
+				MentionedBot: tc.mentioned, MentionAll: tc.mentionAll,
+			}
+
+			engine.handle(context.Background(), msg)
+
+			wantReplies := 0
+			if tc.wantReply {
+				wantReplies = 1
+			}
+			if len(platform.replies) != wantReplies {
+				t.Fatalf("replies = %#v, want %d", platform.replies, wantReplies)
+			}
+			if tc.wantReply && !strings.Contains(platform.replies[0], "任务状态：空闲") {
+				t.Fatalf("reply = %q", platform.replies[0])
+			}
+
+		})
+	}
+}
+
+func TestNewChannelUserCanQueueTaskWithLegacyAccessLists(t *testing.T) {
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
 	runtime, _ := newRemoteControlTestRuntime(engine)
-	agent := runtime.agent.(*remoteControlTestAgent)
-
-	engine.handleChannelMessage(context.Background(), &Message{
-		ChannelID: "channel-1", ChatID: "one", ConversationKey: "chat:one",
-		UserID: "intruder", Text: "show project files",
-	}, map[string]string{"channel_id": "channel-1", "conversation_key": "chat:one"})
-
-	if agent.starts != 0 {
-		t.Fatalf("unauthorized user created %d sessions", agent.starts)
+	runtime.channel.Config["allowed_user_ids"] = "old-owner"
+	runtime.channel.Config["admin_user_ids"] = "old-owner"
+	state := runtime.controlStateLocked("chat:one")
+	state.active = &runtimeChannelTask{task: ChannelTask{
+		ID: "active", ConversationKey: "chat:one", ControllerID: "old-owner", Status: ChannelTaskRunning,
+	}}
+	engine.handle(context.Background(), &Message{
+		ID: "new-message", ChannelID: runtime.channel.ID, ChatID: "one", ChatType: "group",
+		UserID: "new-user", Text: "help with this task", MentionedBot: true,
+	})
+	if len(state.queue) != 1 || state.queue[0].task.UserID != "new-user" || state.queue[0].task.Prompt != "help with this task" {
+		t.Fatalf("new user's task was not admitted: %+v", state.queue)
 	}
 }
 

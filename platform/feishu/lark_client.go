@@ -56,7 +56,7 @@ type larkClient struct {
 	meetingNotify    func(core.MeetingEvent)
 	agentName        string
 	channelName      string
-	meetingUsers     []string
+	meetingDiscovery sync.Map
 	meetingWakeWords []string
 
 	chatInfo        sync.Map
@@ -82,7 +82,6 @@ func newLarkClient(
 	meetingGreeting string,
 	agentName string,
 	channelName string,
-	meetingUsers []string,
 	meetingWakeWords []string,
 	meetingNotify func(core.MeetingEvent),
 ) (clientAPI, error) {
@@ -96,7 +95,6 @@ func newLarkClient(
 		meetingNotify:    meetingNotify,
 		agentName:        strings.TrimSpace(agentName),
 		channelName:      strings.TrimSpace(channelName),
-		meetingUsers:     append([]string(nil), meetingUsers...),
 		meetingWakeWords: append([]string(nil), meetingWakeWords...),
 	}
 	client.meetingInvites = newMeetingInviteController(client)
@@ -116,7 +114,6 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 	botOpenID := c.loadBotOpenID(ctx)
 	if c.meetingActivity != nil {
 		c.meetingActivity.SetInbound(project, inbound)
-		go c.meetingActivity.BootstrapActiveMeetings(ctx, c.meetingUsers)
 	}
 	handler := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
@@ -162,6 +159,11 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
 			mentionedBot, mentionAll := mentionState(msg, botOpenID, text)
+			if c.meetingActivity != nil && userID != "" && (chatType == "p2p" || mentionedBot) {
+				if _, loaded := c.meetingDiscovery.LoadOrStore(userID, struct{}{}); !loaded {
+					go c.meetingActivity.BootstrapActiveMeetings(ctx, []string{userID})
+				}
+			}
 			c.markInbound()
 			inbound <- &core.Message{
 				ID:           messageID,

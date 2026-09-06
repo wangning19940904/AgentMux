@@ -305,14 +305,9 @@ func (e *Engine) handleConversationMode(ctx context.Context, rt *channelRuntime,
 		if !ValidConversationMode(private, mode) {
 			notice = "不支持的模式。"
 		} else {
-			allowed := private || rt.isAdmin(msg.UserID)
+			allowed := private || rt.isChatManager(ctx, msg)
 			if !allowed {
-				if p, ok := rt.platform.(ConversationPlatform); ok {
-					allowed, _ = p.CanManageConversationChat(ctx, msg.ChatID, msg.UserID)
-				}
-			}
-			if !allowed {
-				notice = "只有群主、群管理员或渠道管理员可以切换群模式。"
+				notice = "只有群主或群管理员可以切换群模式。"
 			} else if msg.ChatMode == "topic" {
 				notice = "话题群始终按话题隔离。"
 			} else if err := rt.setChatState(ctx, "mode:"+msg.ChatID, mode); err != nil {

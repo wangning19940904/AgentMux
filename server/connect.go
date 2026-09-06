@@ -649,12 +649,10 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 			return fmt.Errorf("bound Agent %q was not found", ch.AgentID)
 		}
 	}
-	// Existing access lists remain authoritative across all runtimes.
-	ch.Config[core.ChannelConfigAllowedUserIDs] = cleanIDList(ch.Config[core.ChannelConfigAllowedUserIDs])
-	ch.Config[core.ChannelConfigAdminUserIDs] = cleanIDList(ch.Config[core.ChannelConfigAdminUserIDs])
-	if core.CodexRemoteControlEnabled(*ch) && ch.Config[core.ChannelConfigAllowedUserIDs] == "" && ch.Config[core.ChannelConfigAdminUserIDs] == "" {
-		return fmt.Errorf("task control requires at least one allowed or admin user ID")
-	}
+
+	// Channel access is controlled by the messaging platform. Discard legacy lists.
+	delete(ch.Config, "allowed_user_ids")
+	delete(ch.Config, "admin_user_ids")
 
 	if ch.CreatedAt.IsZero() {
 		ch.CreatedAt = now
@@ -865,22 +863,6 @@ func cleanCommaList(raw string) string {
 	for _, part := range parts {
 		if item := strings.TrimSpace(part); item != "" {
 			cleaned = append(cleaned, item)
-		}
-	}
-	return strings.Join(cleaned, ",")
-}
-
-func cleanIDList(raw string) string {
-	values := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ';' || r == '\n' || r == '\t' || r == ' '
-	})
-	seen := map[string]bool{}
-	cleaned := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" && !seen[value] {
-			seen[value] = true
-			cleaned = append(cleaned, value)
 		}
 	}
 	return strings.Join(cleaned, ",")

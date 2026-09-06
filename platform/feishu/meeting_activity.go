@@ -845,9 +845,9 @@ func (m *meetingActivityManager) Recover(ctx context.Context) {
 
 // BootstrapActiveMeetings restores in-memory state after a process restart.
 // The VC API does not offer a tenant-wide "meetings joined by this bot"
-// endpoint, but it can return meetings where a configured user and the bot are
-// simultaneously present. Allowed/admin users are stable app-scoped open_ids,
-// so they provide a bounded, read-only startup discovery path without polling.
+// endpoint, but it can return meetings where a user and the bot are
+// simultaneously present. Discovery uses identities received from the platform
+// when users interact with the bot, without a configured user list or polling.
 func (m *meetingActivityManager) BootstrapActiveMeetings(ctx context.Context, userIDs []string) {
 	seenUsers := map[string]struct{}{}
 	meetings := map[string]core.ActiveMeeting{}

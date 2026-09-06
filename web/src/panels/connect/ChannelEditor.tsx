@@ -465,22 +465,6 @@ export function FeishuChannelOptions({
         </label>
         {codexAgent && <div className="field"><span>{t("connect.codexCapability")}</span><small>{controlCapability?.error || (controlCapability?.state === "ready" ? t("connect.codexCapabilityReady") : t("connect.codexCapabilityPending"))}</small></div>}
             <label className="field">
-              <span>{t("connect.codexAllowedUsers")}</span>
-              <input
-                value={configValue(config, "allowed_user_ids", FEISHU_DEFAULTS.allowed_user_ids)}
-                onChange={(e) => updateConfig("allowed_user_ids", e.target.value)}
-                placeholder="ou_xxx, ou_yyy"
-              />
-            </label>
-            <label className="field">
-              <span>{t("connect.codexAdminUsers")}</span>
-              <input
-                value={configValue(config, "admin_user_ids", FEISHU_DEFAULTS.admin_user_ids)}
-                onChange={(e) => updateConfig("admin_user_ids", e.target.value)}
-                placeholder="ou_xxx"
-              />
-            </label>
-            <label className="field">
               <span>{t("connect.codexMaxQueue")}</span>
               <input
                 type="number"
