@@ -115,6 +115,27 @@ func TestLocalWebUIURLFollowsConfiguredDesktopTarget(t *testing.T) {
 	}
 }
 
+func TestLocalWebUIEntryCreatesBrowserSession(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/console/sessions" || r.Header.Get("Authorization") != "Bearer admin-secret" {
+			t.Errorf("unexpected session request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"enter_url":"http://`+r.Host+`/console/enter?nonce=single-use"}`)
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := newApp()
+	app.apiTarget.Store(target)
+	app.setAPIToken("admin-secret")
+	entry, err := app.localWebUIEntryURL(context.Background())
+	if err != nil || entry != upstream.URL+"/console/enter?nonce=single-use" {
+		t.Fatalf("browser entry = %q, %v", entry, err)
+	}
+}
+
 func TestExternalBrowserURLOnlyAllowsWebLinks(t *testing.T) {
 	got, err := externalBrowserURL(" https://auth.example.test/device?code=one ")
 	if err != nil || got != "https://auth.example.test/device?code=one" {

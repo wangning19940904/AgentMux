@@ -1,13 +1,65 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/wangning19940904/AgentMux/internal/consolelogin"
 )
+
+func TestNativeConsoleLoginResolvesBrowserIdentity(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.cfg.Bridge.Enabled = true
+	srv.cfg.Bridge.Token = "bridge-secret"
+	host := httptest.NewServer(srv.withAuth(srv.mux))
+	defer host.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	// A stale browser cookie must be replaced by the native entry flow.
+	base, _ := url.Parse(host.URL)
+	jar.SetCookies(base, []*http.Cookie{{Name: consoleSessionCookie, Value: "expired", Path: "/"}})
+	checkIdentity := func(wantStatus int) {
+		t.Helper()
+		request, _ := http.NewRequest(http.MethodGet, host.URL+"/api/v1/tenancy/self", nil)
+		request.Header.Set(consoleCSRFHeader, "1")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != wantStatus {
+			t.Fatalf("identity status = %d, want %d", response.StatusCode, wantStatus)
+		}
+		if wantStatus == http.StatusOK {
+			var identity struct {
+				Admin bool `json:"admin"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&identity); err != nil || !identity.Admin {
+				t.Fatalf("browser identity = %+v, %v", identity, err)
+			}
+		}
+	}
+	checkIdentity(http.StatusUnauthorized)
+	entry, err := consolelogin.EntryURL(context.Background(), host.URL, srv.cfg.Bridge.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	checkIdentity(http.StatusOK)
+}
 
 func TestConsoleSessionFlow(t *testing.T) {
 	srv, _ := newTestServer(t)

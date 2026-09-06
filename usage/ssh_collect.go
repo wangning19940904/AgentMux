@@ -12,6 +12,8 @@ import (
 // into a local staging directory, then runs the same parsers over them. This
 // satisfies requirement 2.4: token statistics for SSH-based usage.
 func (e *Engine) CollectSSH(ctx context.Context, since time.Time) error {
+	e.collectMu.Lock()
+	defer e.collectMu.Unlock()
 	for _, tgt := range e.cfg.Usage.SSHTargets {
 		e.log.Info("ssh collect", "target", tgt.Name, "host", tgt.Host)
 		staging, err := ssh.Sync(ctx, ssh.Target{
@@ -35,6 +37,9 @@ func (e *Engine) CollectSSH(ctx context.Context, since time.Time) error {
 			col, err := parser.NewCollector(src, root)
 			if err != nil {
 				continue
+			}
+			if err := e.backfillUsageRuntimes(ctx, src, root, tgt.Name); err != nil {
+				e.log.Warn("backfill ssh usage clients", "source", src, "target", tgt.Name, "err", err)
 			}
 			recs, err := col.Collect(ctx, since)
 			if err != nil {

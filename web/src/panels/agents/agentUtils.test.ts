@@ -82,8 +82,15 @@ describe("agent form model", () => {
 		])).toEqual(["gpt-5.6-sol", "composer-2"]);
 	});
 
-	it("labels legacy Claude usage as the Claude Code framework", () => {
+	it("distinguishes usage clients without changing registered CLI runtimes", () => {
 		expect(runtimeLabel("claude")).toBe("Claude Code CLI");
+		expect(runtimeLabel("claudecode")).toBe("Claude Code CLI");
+		expect(runtimeLabel("claude-desktop")).toBe("Claude Desktop");
+		expect(runtimeLabel("codex")).toBe("Codex CLI");
+		expect(runtimeLabel("codex-app")).toBe("Codex Desktop");
+		expect(runtimeLabel("codex-vscode")).toBe("Codex IDE");
+		expect(runtimeLabel("codex-unknown")).toBe("Codex · Unknown client");
+		expect(runtimeLabel("claude-unknown", () => "来源未知")).toBe("Claude Code · 来源未知");
 	});
 
   it("resolves effective Providers on the same machine and ignores local login", () => {

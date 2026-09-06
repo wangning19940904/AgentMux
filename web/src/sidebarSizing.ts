@@ -1,9 +1,11 @@
-// The two navigation levels add up to Multica's 247px reference sidebar.
-export const PRIMARY_SIDEBAR_WIDTH = { default: 64, min: 60, max: 84 } as const;
+export const PRIMARY_SIDEBAR_WIDTH = { default: 144, min: 128, max: 200 } as const;
+export const PRIMARY_SIDEBAR_COLLAPSED_WIDTH = 64;
 export const SECONDARY_SIDEBAR_WIDTH = { default: 183, min: 164, max: 240 } as const;
 
-export const PRIMARY_SIDEBAR_STORAGE_KEY = "agentmux:primary-sidebar-width-v3";
+export const PRIMARY_SIDEBAR_STORAGE_KEY = "agentmux:primary-sidebar-width-v4";
 export const SECONDARY_SIDEBAR_STORAGE_KEY = "agentmux:secondary-sidebar-width-v2";
+export const PRIMARY_SIDEBAR_COLLAPSED_KEY = "agentmux:primary-sidebar-collapsed";
+export const SECONDARY_SIDEBAR_COLLAPSED_KEY = "agentmux:secondary-sidebar-collapsed";
 
 export function clampSidebarWidth(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;

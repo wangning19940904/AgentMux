@@ -87,17 +87,20 @@ button {
 }
 
 /* Window shell */
-.app-shell,
-.app-shell.secondary-open {
+.app-shell {
   display: grid;
-  grid-template-columns:
-    var(--primary-sidebar-width, 64px)
-    var(--secondary-sidebar-width, 183px)
-    minmax(0, 1fr);
+  grid-template-columns: var(--primary-sidebar-width, 144px) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
   background: var(--app-shell);
+}
+
+.app-shell.secondary-open {
+  grid-template-columns:
+    var(--primary-sidebar-width, 144px)
+    var(--secondary-sidebar-width, 183px)
+    minmax(0, 1fr);
 }
 
 .sidebar {
@@ -121,10 +124,10 @@ button {
 .brand {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 34px;
   gap: 8px;
-  padding: 0;
+  padding: 0 8px;
 }
 
 .app-shell:not(.native-desktop) .brand {
@@ -144,7 +147,7 @@ button {
 }
 
 .brand-copy {
-  display: none;
+  display: block;
 }
 
 .brand-copy strong {
@@ -156,12 +159,16 @@ button {
 }
 
 .brand-actions {
+  position: static;
+  order: 2;
+  flex: 0 0 auto;
+  align-items: stretch;
   top: auto;
-  right: 50%;
-  bottom: 10px;
+  right: auto;
+  bottom: auto;
   flex-direction: column;
   gap: 2px;
-  transform: translateX(50%);
+  transform: none;
 }
 
 .native-desktop .brand-actions {
@@ -169,12 +176,46 @@ button {
 }
 
 .brand-action-button {
-  width: 27px;
-  height: 27px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 32px;
+  gap: 10px;
+  padding: 0 8px;
   color: var(--muted);
   background: transparent;
   border-color: transparent;
   border-radius: 6px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.brand-action-button > svg {
+  flex: 0 0 auto;
+}
+
+.brand-action-button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-collapsed .brand {
+  justify-content: center;
+  padding: 0;
+}
+
+.primary-collapsed .brand-copy,
+.primary-collapsed .brand-action-button > span {
+  display: none;
+}
+
+.primary-collapsed .brand-action-button {
+  justify-content: center;
+  width: 44px;
+  margin: 0 auto;
+  padding: 0;
 }
 
 .brand-action-button:hover,
@@ -242,39 +283,13 @@ button {
   min-height: 39px;
 }
 
-.sidebar-create-shortcut {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 30px;
-  gap: 8px;
-  padding: 0 8px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  font-size: 12.5px;
-  text-align: left;
-}
-
-.sidebar-create-shortcut:hover {
-  color: var(--text-soft);
-  background: color-mix(in srgb, var(--accent-soft) 68%, transparent);
-}
-
-.sidebar-create-shortcut > svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-}
-
 .primary-nav {
   display: grid;
   flex: 1 1 auto;
   align-content: start;
   min-height: 0;
   gap: 6px;
-  padding: 12px 0 72px;
+  padding: 12px 0;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -314,11 +329,11 @@ button {
 }
 
 .primary-nav .nav-primary-item {
-  justify-content: center;
-  width: 44px;
+  justify-content: flex-start;
+  width: 100%;
   min-height: 42px !important;
   margin: 0 auto;
-  padding: 0;
+  padding: 0 8px;
   border-radius: 8px;
 }
 
@@ -328,6 +343,18 @@ button {
 }
 
 .primary-nav .nav-primary-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-collapsed .primary-nav .nav-primary-item {
+  justify-content: center;
+  width: 44px;
+  padding: 0;
+}
+
+.primary-collapsed .primary-nav .nav-primary-item > span {
   display: none;
 }
 
@@ -426,8 +453,7 @@ button {
   box-shadow: none;
 }
 
-/* Two-level navigation. The 64px group rail and 183px section rail total
- * the 247px sidebar width measured in the local Multica reference. */
+/* Both navigation levels can be collapsed independently. */
 .secondary-sidebar {
   position: relative;
   top: auto;
@@ -444,6 +470,10 @@ button {
 
 .native-desktop .secondary-sidebar {
   padding-top: 52px;
+}
+
+.secondary-sidebar[hidden] {
+  display: none;
 }
 
 .secondary-sidebar-header {
@@ -509,12 +539,6 @@ button {
   font-size: 11.5px;
 }
 
-.secondary-create-shortcut {
-  width: auto;
-  min-height: 30px;
-  margin: 0 8px 5px;
-}
-
 .secondary-nav {
   display: grid;
   gap: 1px;
@@ -573,7 +597,7 @@ button {
   right: -2px;
 }
 
-/* Tab strip and inset canvas */
+/* Inset page canvas */
 .workspace {
   display: flex;
   min-width: 0;
@@ -583,74 +607,13 @@ button {
   background: var(--app-shell);
 }
 
-.desktop-tabbar {
-  position: relative;
-  display: flex;
-  flex: 0 0 48px;
-  align-items: flex-end;
-  gap: 3px;
-  padding-left: 20px;
-  --wails-draggable: drag;
-}
-
-.desktop-tab {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 154px;
-  min-width: 0;
-  height: 36px;
-  padding: 0 13px;
-  color: var(--text-soft);
-  border-radius: 10px 10px 0 0;
-  font-size: 12px;
-  font-weight: 620;
-}
-
-.desktop-tab.active {
-  color: var(--text);
-  background: var(--page-canvas);
-  box-shadow: 0 -1px 0 var(--border-strong), -1px 0 0 var(--border-strong), 1px 0 0 var(--border-strong);
-}
-
-.desktop-tab > svg {
-  color: var(--muted);
-}
-
-.desktop-tab span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desktop-new-tab {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  margin: 0 0 4px 4px;
-  padding: 0;
-  place-items: center;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  font-size: 18px;
-  font-weight: 300;
-  --wails-draggable: no-drag;
-}
-
-.desktop-new-tab:hover {
-  color: var(--text-soft);
-  background: var(--accent-soft);
-}
-
 .workspace-canvas {
   position: relative;
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  margin: 0 8px 8px 2px;
+  margin: 8px 8px 8px 2px;
   overflow: hidden;
   flex-direction: column;
   background: var(--page-canvas);
@@ -674,6 +637,10 @@ button {
 
 .workspace-header .title-row {
   gap: 7px;
+}
+
+.native-desktop.primary-collapsed:not(.secondary-open) .workspace-header {
+  padding-left: 42px;
 }
 
 .workspace-header .title-row > svg {
@@ -1205,11 +1172,8 @@ dialog.surface {
     background: var(--page-canvas);
   }
 
-  .desktop-tabbar {
-    display: none;
-  }
-
-  .secondary-sidebar {
+  .secondary-sidebar,
+  .secondary-expand {
     display: none;
   }
 
@@ -1242,11 +1206,14 @@ dialog.surface {
   .sidebar .brand,
   .sidebar .brand-actions,
   .sidebar .sidebar-search-container,
-  .sidebar .sidebar-create-shortcut,
   .sidebar .primary-nav,
   .sidebar .account,
   .sidebar .sidebar-resize-handle {
     display: none;
+  }
+
+  .native-desktop .sidebar {
+    padding: 5px;
   }
 
   .sidebar .mobile-flat-nav {

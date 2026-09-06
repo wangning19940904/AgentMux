@@ -38,6 +38,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Console login identity", () => {
+  it.each([
+    ["all", ""],
+    ["local", ""],
+    ["offline-ssh", ""],
+    ["all", tenantScopeKey("ten_remote", "offline-ssh")],
+  ])("checks the current session with machine %s and preview %s", async (machine, preview) => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? preview : machine });
+    const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => path === "/api/v1/tenancy/self"
+      ? new Response(JSON.stringify({ admin: false, tenant_id: "ten_current", status: "active" }))
+      : new Response("remote unavailable", { status: 502 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.tenancySelf()).resolves.toEqual({ admin: false, tenant_id: "ten_current", status: "active" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("X-AgentMux-Console")).toBe("1");
+    expect(headers.has("X-AgentMux-Tenant-Scope")).toBe(false);
+  });
+});
+
 describe("fleet warning recovery", () => {
   it("deduplicates the same host timeout across tunnel and request errors", () => {
     beginFleetWarningUpdate("frameworks")([fleetWarningMessage("lemon_claw", "remote lemon_claw: open SSH tunnel to 127.0.0.1:8765: context deadline exceeded")]);
