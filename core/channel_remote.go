@@ -604,10 +604,3 @@ func (e *Engine) recoverRemoteTasks(rt *channelRuntime) {
 	}
 
 }
-
-func storedRootMessageID(key string) string {
-	if strings.HasPrefix(key, "root:") {
-		return strings.TrimPrefix(key, "root:")
-	}
-	return ""
-}

@@ -295,10 +295,6 @@ func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSessi
 	return s, conv, true, generation, release, nil
 }
 
-func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
-	rt.applyRuntimeDefaultsFrom(sess, rt.runtimeDefaults())
-}
-
 func (rt *channelRuntime) applyRuntimeDefaultsFrom(sess AgentSession, defaults RuntimeSettings) {
 	settings, ok := RuntimeSettingsForSession(sess)
 	if !ok {

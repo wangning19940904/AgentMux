@@ -112,7 +112,11 @@ func retryableSSHError(err error) bool {
 		}
 	}
 	var network net.Error
-	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) {
+	if errors.As(err, &network) && network.Timeout() {
+		return true
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) && dns.IsTemporary {
 		return true
 	}
 	message := strings.ToLower(err.Error())

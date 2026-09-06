@@ -24,6 +24,24 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestSSHRetryClassifiesDNSErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  *net.DNSError
+		want bool
+	}{
+		{"temporary resolver failure", &net.DNSError{IsTemporary: true}, true},
+		{"resolver timeout", &net.DNSError{IsTimeout: true}, true},
+		{"missing hostname", &net.DNSError{IsNotFound: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := retryableSSHError(fmt.Errorf("resolve SSH host: %w", tc.err)); got != tc.want {
+				t.Fatalf("retryable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSSHRetryRecoversAndStopsAtThreeAttempts(t *testing.T) {
 	for _, recover := range []bool{true, false} {
 		t.Run(fmt.Sprint(recover), func(t *testing.T) {
