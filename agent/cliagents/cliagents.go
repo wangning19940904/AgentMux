@@ -18,6 +18,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/agent/cliagent"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/internal/traeauth"
 )
 
 func register(name, binary string, supportsModel bool, defaultApproval string,
@@ -67,14 +68,16 @@ func init() {
 
 func registerTrae() {
 	core.RegisterAgent("traecli", func(cfg map[string]any) (core.Agent, error) {
-		return cliagent.New(cliagent.Spec{
+		legacy := cliagent.New(cliagent.Spec{
 			Name: "traecli", Binary: "traecli",
-			Args: traeArgs, ResumeArgs: traeResumeArgs,
+			EnsureAuth: traeauth.Ensure,
+			Args:       traeArgs, ResumeArgs: traeResumeArgs,
 			SessionIDFromLine: traeSessionID,
 			EventMapper:       traeStreamEvents, FinalFromLast: true, SupportsModel: true,
 			ApprovalModes: core.ApprovalModeValuesForRuntime("traecli"), DefaultApprovalMode: core.ApprovalModeManual,
 			ModelCatalogArgs: []string{"models", "--json"}, ParseModelCatalog: parseTraeModelCatalog,
-		}, cfg), nil
+		}, cfg)
+		return newTraeAppAgent(cfg, legacy), nil
 	})
 }
 

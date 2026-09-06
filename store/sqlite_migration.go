@@ -43,7 +43,7 @@ type SQLiteMigrationReport struct {
 var sqliteMigrationTables = []string{
 	"providers", "active_provider", "usage_records", "settings", "memory_entries", "mcp_servers",
 	"guard_policies", "skill_states", "agent_instances", "proxy_config", "proxy_live_backup", "proxy_traces",
-	"channels", "triggers", "conversations", "channel_tasks", "channel_interactions",
+	"channels", "triggers", "conversations", "channel_tasks", "channel_chat_state", "channel_interactions",
 	"observation_traces", "observation_spans", "observation_events", "observation_data_keys",
 	"observation_payloads", "observation_payload_chunks", "observation_daily_usage",
 	"observation_ingest_cursors", "observation_export_outbox", "observation_insights",

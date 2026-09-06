@@ -66,9 +66,12 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 			opts.WorkDir = fallbackWorkDir
 		}
 	}
-	if rt != nil && rt.agent != nil {
-		agent, workDir = rt.agent, rt.workDir
-		opts = rt.workspace
+	if rt != nil {
+		currentAgent, currentWorkDir, currentWorkspace := rt.agentSnapshot()
+		if currentAgent != nil {
+			agent, workDir = currentAgent, currentWorkDir
+			opts = currentWorkspace
+		}
 		if opts.WorkDir == "" {
 			opts.WorkDir = workDir
 		}
@@ -84,18 +87,24 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 
 	// Reuse the channel's per-chat session unless the trigger asks for a
 	// fresh one (cc-connect session_mode semantics).
-	reuse := tr.SessionMode != SessionModeNewPerRun && rt != nil && rt.agent != nil && tr.ChatID != ""
+	currentAgent, _, _ := rt.agentSnapshot()
+	reuse := tr.SessionMode != SessionModeNewPerRun && rt != nil && currentAgent != nil && tr.ChatID != ""
 	var sess AgentSession
 	var conv *Conversation
 	var created bool
+	var sessionGeneration *channelAgentGeneration
+	var releaseSession func()
 	var err error
 	if reuse {
-		sess, conv, created, err = rt.session(ctx, &Message{
+		sess, conv, created, sessionGeneration, releaseSession, err = rt.session(ctx, &Message{
 			ChatID:          tr.ChatID,
 			ConversationKey: "chat:" + tr.ChatID,
 			ChannelID:       tr.ChannelID,
 			Origin:          OriginCron,
 		})
+		if releaseSession != nil {
+			defer releaseSession()
+		}
 	} else {
 		workDir, err = e.initializeWorkspace(ctx, opts, workDir)
 		if err != nil {
@@ -115,6 +124,13 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 		return "", fmt.Errorf("start session: %w", err)
 	}
 	data["session_id"] = sessionObservationID(sess)
+	if sessionGeneration != nil {
+		data["runtime_id"] = sessionGeneration.workspace.RuntimeID
+		data["memory_scope"] = sessionGeneration.workspace.MemoryScope
+		if sessionGeneration.agent != nil {
+			data["agent_name"] = sessionGeneration.agent.Name()
+		}
+	}
 	if conv != nil {
 		data["conversation_id"] = conv.ID
 	}

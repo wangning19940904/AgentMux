@@ -174,9 +174,10 @@ func (e *Engine) MeetingSnapshot() MeetingSnapshot {
 			continue
 		}
 		status := rt.status()
+		_, _, workspace := rt.agentSnapshot()
 		channel := MeetingChannel{
 			ChannelID: rt.channel.ID, ChannelName: rt.channel.Name, Platform: rt.channel.Type,
-			AgentName: rt.workspace.AgentName, ResponseMode: rt.currentMeetingResponseMode(),
+			AgentName: workspace.AgentName, ResponseMode: rt.currentMeetingResponseMode(),
 			State: status.State, Connected: status.Connected, Error: status.Error,
 		}
 		snapshot.Channels = append(snapshot.Channels, channel)
@@ -191,7 +192,7 @@ func (e *Engine) MeetingSnapshot() MeetingSnapshot {
 				meeting.ChannelID = rt.channel.ID
 				meeting.ChannelName = rt.channel.Name
 				meeting.Platform = rt.channel.Type
-				meeting.AgentName = rt.workspace.AgentName
+				meeting.AgentName = workspace.AgentName
 				meeting.ResponseMode = rt.currentMeetingResponseMode()
 				snapshot.Meetings = append(snapshot.Meetings, meeting)
 			}
@@ -278,7 +279,8 @@ func (e *Engine) MeetingActivity(channelID, meetingID string) (MeetingDetail, er
 	detail.Meeting.ChannelID = rt.channel.ID
 	detail.Meeting.ChannelName = rt.channel.Name
 	detail.Meeting.Platform = rt.channel.Type
-	detail.Meeting.AgentName = rt.workspace.AgentName
+	_, _, workspace := rt.agentSnapshot()
+	detail.Meeting.AgentName = workspace.AgentName
 	detail.Meeting.ResponseMode = rt.currentMeetingResponseMode()
 	return detail, nil
 }

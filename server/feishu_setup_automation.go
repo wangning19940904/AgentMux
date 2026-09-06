@@ -41,6 +41,7 @@ var agentMuxFeishuScopes = []string{
 	"im:message", "im:message:readonly", "im:message:send_as_bot",
 	"im:message.group_at_msg:readonly", "im:message.p2p_msg:readonly", "im:resource",
 	"im:message.reactions:write_only", "cardkit:card:write",
+	"im:chat:read", "im:chat:create", "im:message.group_msg",
 	"vc:meeting.bot.join:write", "vc:meeting.bot.realtime:write", "vc:meeting.meetingevent:read", "vc:meeting.message:write",
 }
 

@@ -35,12 +35,20 @@ const (
 	ChannelTaskInterrupted  ChannelTaskStatus = "interrupted"
 )
 
-const ChannelTaskActionStop = "stop"
+const (
+	ChannelTaskActionStop                     = "stop"
+	ChannelTaskActionSteer                    = "steer"
+	ChannelTaskActionCancel                   = "cancel"
+	ChannelTaskSteering     ChannelTaskStatus = "steering"
+	ChannelTaskSteered      ChannelTaskStatus = "steered"
+	ChannelTaskSteerUnknown ChannelTaskStatus = "steer_unknown"
+)
 
 // ChannelTaskAction is an id-scoped control submitted by an interactive task
 // card. Keeping the task ID separate from a plain /stop command prevents a
 // delayed click on an old card from interrupting a newer task.
 type ChannelTaskAction struct {
+	Nonce  string
 	TaskID string
 	Action string
 }
@@ -64,6 +72,14 @@ const (
 // ChannelTask is the durable, prompt-redacted task summary exposed to the
 // console. Prompt is only populated internally while the task is queued.
 type ChannelTask struct {
+	SourceMessageID  string            `json:"-"`
+	ChatMode         string            `json:"-"`
+	ReplyInThread    bool              `json:"-"`
+	ControlCardID    string            `json:"control_card_id,omitempty"`
+	ControlNonce     string            `json:"-"`
+	TargetTaskID     string            `json:"target_task_id,omitempty"`
+	QueuePosition    int               `json:"queue_position,omitempty"`
+	CanSteer         bool              `json:"can_steer"`
 	ID               string            `json:"id"`
 	ChannelID        string            `json:"channel_id"`
 	ConversationID   string            `json:"conversation_id,omitempty"`
@@ -186,7 +202,11 @@ func ChannelAdminUsers(ch Channel) map[string]bool {
 }
 
 func ChannelCodexMaxQueue(ch Channel) int {
-	n, _ := strconv.Atoi(strings.TrimSpace(ch.Config[ChannelConfigCodexMaxQueue]))
+	raw := ch.Config["max_queue"]
+	if raw == "" {
+		raw = ch.Config[ChannelConfigCodexMaxQueue]
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(raw))
 	if n <= 0 {
 		return DefaultCodexMaxQueue
 	}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeMachineScope, resolveMachineScope, resolveTenantScope, tenantScopeHeaders, tenantScopeKey } from "./client";
+import { activeMachineScope, fleetQuery, resolveMachineScope, resolveTenantScope, tenantScopeHeaders, tenantScopeKey } from "./client";
+import { beginFleetWarningUpdate, currentFleetWarnings, fleetWarningMessage, fleetWarningResourceKey, resetFleetWarnings } from "./fleetWarnings";
 import { api, mergeFleetObservationOverview, mergeFleetUsage } from "./index";
 import { fleetAdminReadArray, fleetCall, fleetReadArray } from "./fleet";
 import type { FleetBatchResult, ObservationOverview, UsageReport } from "./types";
@@ -32,7 +33,66 @@ describe("machine scope", () => {
 	});
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  resetFleetWarnings();
+  vi.unstubAllGlobals();
+});
+
+describe("fleet warning recovery", () => {
+  it("deduplicates the same host timeout across tunnel and request errors", () => {
+    beginFleetWarningUpdate("frameworks")([fleetWarningMessage("lemon_claw", "remote lemon_claw: open SSH tunnel to 127.0.0.1:8765: context deadline exceeded")]);
+    beginFleetWarningUpdate("auth")([fleetWarningMessage("lemon_claw", "remote lemon_claw: context deadline exceeded")]);
+    expect(currentFleetWarnings()).toEqual(["lemon_claw: request timed out"]);
+    beginFleetWarningUpdate("frameworks")([]);
+    expect(currentFleetWarnings()).toHaveLength(1);
+    beginFleetWarningUpdate("auth")([]);
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("distinguishes CLI identities but keeps date refreshes in the same read", () => {
+    expect(fleetWarningResourceKey("/api/v1/frameworks/auth?kind=codex"))
+      .not.toBe(fleetWarningResourceKey("/api/v1/frameworks/auth?kind=claude"));
+    expect(fleetWarningResourceKey("/api/v1/usage?from=yesterday"))
+      .toBe(fleetWarningResourceKey("/api/v1/usage?from=today"));
+  });
+  it("reports total failure and clears it only when the same read recovers", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "", setItem: () => undefined });
+    let failure = true;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      targets: [target("ssh-1", "Remote", "data", failure ? undefined : [], failure ? "Host key verification failed" : undefined)],
+    }), { status: 200 })));
+
+    await expect(fleetReadArray("/api/v1/agents")).rejects.toThrow("Host key verification failed");
+    expect(currentFleetWarnings()).toEqual(["Remote: Host key verification failed"]);
+    failure = false;
+    await fleetQuery([{ key: "data", path: "/api/v1/usage?from=today" }]);
+    expect(currentFleetWarnings()).toEqual(["Remote: Host key verification failed"]);
+    await fleetReadArray("/api/v1/agents");
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("tracks transport failures and recovery even for raw fleet queries", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new Error("Connection lost"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ targets: [target("ssh-1", "Remote", "usage", {})] }), { status: 200 })));
+    await expect(fleetQuery([{ key: "usage", path: "/api/v1/usage?from=yesterday" }])).rejects.toThrow("Connection lost");
+    expect(currentFleetWarnings()).toEqual(["Connection lost"]);
+    await fleetQuery([{ key: "usage", path: "/api/v1/usage?from=today" }]);
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("ignores out-of-order results and requests from a previous machine scope", () => {
+    const old = beginFleetWarningUpdate("agents");
+    const current = beginFleetWarningUpdate("agents");
+    current([]);
+    old(["stale failure"]);
+    expect(currentFleetWarnings()).toEqual([]);
+    const pending = beginFleetWarningUpdate("usage");
+    resetFleetWarnings();
+    pending(["previous scope failure"]);
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+});
 
 describe("fleet array responses", () => {
   it("treats a successful null list as empty rather than unavailable", async () => {

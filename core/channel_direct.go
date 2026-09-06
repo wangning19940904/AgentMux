@@ -11,6 +11,7 @@ import (
 // follow-up messages from spawning overlapping CLI agents while an earlier
 // subprocess is still active.
 type directChannelTurn struct {
+	ctx           context.Context
 	controllerID  string
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -20,12 +21,12 @@ type directChannelTurn struct {
 	runErr        string
 }
 
-func (rt *channelRuntime) beginDirectTurn(key, controllerID string, cancel context.CancelFunc) (*directChannelTurn, bool) {
+func (rt *channelRuntime) beginDirectTurn(ctx context.Context, key, controllerID string, cancel context.CancelFunc) (*directChannelTurn, bool) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		key = "default"
 	}
-	turn := &directChannelTurn{controllerID: controllerID, cancel: cancel, done: make(chan struct{})}
+	turn := &directChannelTurn{ctx: ctx, controllerID: controllerID, cancel: cancel, done: make(chan struct{})}
 	rt.controlMu.Lock()
 	defer rt.controlMu.Unlock()
 	if rt.directTurns == nil {
@@ -63,6 +64,9 @@ func (rt *channelRuntime) finishDirectTurn(key string, turn *directChannelTurn) 
 				if turn.task.Error == "" {
 					turn.task.Error = "interrupted by task controller"
 				}
+			case turn.ctx != nil && turn.ctx.Err() != nil:
+				turn.task.Status = ChannelTaskInterrupted
+				turn.task.Error = turn.ctx.Err().Error()
 			case turn.runErr != "":
 				turn.task.Status = ChannelTaskFailed
 				turn.task.Error = turn.runErr
@@ -79,6 +83,17 @@ func (rt *channelRuntime) finishDirectTurn(key string, turn *directChannelTurn) 
 		_ = rt.owner.updateRemoteTask(context.Background(), *completed)
 		rt.owner.emit(context.Background(), HookTaskCompleted, withTaskData(eventData(turn.msg), *completed, string(completed.Status)))
 	}
+	if rt.owner != nil {
+		rt.controlMu.Lock()
+		state := rt.controlStateLocked(key)
+		next := rt.owner.startNextRemoteLocked(rt, state)
+		rt.controlMu.Unlock()
+		if next != nil {
+			rt.owner.refreshQueueCards(rt, next)
+			go rt.owner.runRemoteTask(rt.runCtx, rt, next, eventData(next.msg))
+		}
+	}
+
 }
 
 func (rt *channelRuntime) attachDirectTask(key string, turn *directChannelTurn, task ChannelTask, msg *Message) bool {

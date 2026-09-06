@@ -1,0 +1,9 @@
+=== RUN   TestGitHubCLILiveReleaseInstall
+    release_download_test.go:26: downloading 30% gh_2.100.0_linux_amd64.tar.gz
+    release_download_test.go:26: downloading 40% gh_2.100.0_linux_amd64.tar.gz: 5242880 / 15152253 bytes
+    release_download_test.go:26: downloading 50% gh_2.100.0_linux_amd64.tar.gz: 10223616 / 15152253 bytes
+    release_download_test.go:26: downloading 60% gh_2.100.0_linux_amd64.tar.gz: 15152253 / 15152253 bytes
+    release_download_test.go:33: gh version 2.100.0 (2026-09-03)
+        https://github.com/cli/cli/releases/tag/v2.100.0
+--- PASS: TestGitHubCLILiveReleaseInstall (146.28s)
+PASS

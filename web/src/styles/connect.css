@@ -1509,6 +1509,30 @@
   min-width: 118px;
 }
 
+.framework-catalog-header,
+.unified-tools-header,
+.catalog-bulk-actions {
+  flex-wrap: wrap;
+}
+
+.catalog-bulk-actions > button {
+  white-space: nowrap;
+}
+
+.bulk-update-results {
+  display: grid;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+
+.bulk-update-results summary {
+  cursor: pointer;
+}
+
+.tools-bulk-hint {
+  margin: 12px 14px;
+}
+
 .framework-warning {
   margin: 12px 14px 0;
 }

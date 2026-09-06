@@ -375,6 +375,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 	ended_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_scope ON conversations(scope);
+CREATE TABLE IF NOT EXISTS channel_chat_state (channel_id TEXT NOT NULL,state_key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(channel_id,state_key));
 CREATE TABLE IF NOT EXISTS channel_tasks (
 	id TEXT PRIMARY KEY,
 	channel_id TEXT NOT NULL,
@@ -565,6 +566,8 @@ func (s *Store) migrateSQLite() error {
 		{"delivery_error", "TEXT"},
 		{"delivered_at", "TEXT"},
 		{"feedback_nonce", "TEXT"},
+		{"control_json", "TEXT"},
+		{"source_message_id", "TEXT"},
 	} {
 		if err := s.ensureColumn("channel_tasks", column.name, column.def); err != nil {
 			return err

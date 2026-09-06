@@ -1377,3 +1377,9 @@
   border-bottom: 1px solid color-mix(in srgb, var(--green) 22%, var(--border));
 }
 
+.session-notice.warning {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 25%, var(--border));
+  overflow-wrap: anywhere;
+}

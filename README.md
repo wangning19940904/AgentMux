@@ -128,6 +128,10 @@ make release
 
 Cursor 用量默认不读取。请在 Console 的「用量账本 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
 
+TRAE CLI 的账户登录会自动维护：运行中的 AgentMux 每 5 分钟检查已启用的 TRAE Agent，在凭证到期前 15 分钟尝试通过 TRAE 原生接口续期，开始会话和每次发送消息前也会检查。同一登录的并发刷新会合并，失败后退避重试；凭证仍有效时，临时网络故障不阻断对话。Token 的刷新和保存由 TRAE CLI 完成，不进入 AgentMux 数据库。如果 SSO 或刷新凭证已失效，框架页面会显示需要登录，调用也会给出明确提示；此时仍需在对应机器的「框架 → TRAE CLI」重新授权。后台维护随 AgentMux 停止而停止，不自动打开浏览器。
+
+AgentMux 在 Linux/macOS 启动时会从用户的交互式登录 shell 导入 `http_proxy`、`https_proxy`、`all_proxy`、`no_proxy`（包括大写形式），供后台服务和所有 Agent 子进程共同使用。服务启动环境中显式设置的变量优先，同名变量的大小写形式按一组处理；单个 Agent 的环境配置仍可覆盖全局设置。只读取已导出的代理变量，不导入其他 shell 环境变量；读取最多等待 5 秒，失败时沿用服务原有环境。修改 shell 代理配置后需要重启 AgentMux。
+
 ## 配置
 
 复制 `config.example.toml` 为 `config.toml`,或直接运行
@@ -456,7 +460,31 @@ Invocation API 会先执行 Guard 策略：allow/deny 自动回传给支持原�
 | `/fast` | 查看或切换快速模式 |
 | `/approval` | 查看或切换审批模式 |
 
-启用 Codex 远程控制的渠道还会展示 `/status`、`/stop`、`/queue`、`/sessions`、`/bind`、`/open` 和 `/takeover`。
+控制台管理的渠道支持 `/status`、`/stop`、`/queue`、`/steer <内容>`、`/queue cancel <任务ID>` 和 `/takeover`。支持原生会话列表的运行时还可使用 `/sessions`、`/bind`、`/open`。
+
+任务运行中收到的新消息默认进入当前会话的等待队列。飞书/Lark 会显示消息摘要与位置，用户可以点击 **调整方向** 把该消息追加到原任务，或点击 **取消**；也可用 `/steer-task <任务ID>` 操作一项等待任务。调整方向仅允许当前任务发起人或渠道管理员；取消仅允许该消息发起人或管理员。旧卡片不会操作下一任务。运行时明确拒绝追加时保留排队；结果不确定时标记待确认，不会自动重放。
+
+每个会话同时运行一个任务，不同会话可并行，包括共用工作目录；仍可使用 Agent 自身的 worktree 配置选择文件隔离。队列默认最多等待 20 项，渠道配置 `max_queue` 可设 1～100，旧 `codex_max_queue` 继续兼容。停止当前任务后，后续排队项继续执行；需要取消等待项时使用取消按钮或 `/queue clear`。
+
+### 私聊与群聊模式
+
+飞书/Lark 的渠道编辑页设置默认模式，聊天内 `/mode` 打开选择卡或 `/mode <模式>` 直接切换。私聊设置只影响本人，群模式由群主、群管理员或渠道管理员修改。新旧渠道统一采用下表默认规则；历史会话不合并、不删除，模式变更只影响之后的消息，已有任务和控制卡保留原关联。
+
+| 场景 | 模式 | 行为 |
+| --- | --- | --- |
+| 私聊 | `chat`（默认） | 连续会话，共享上下文 |
+| 私聊 | `thread` | 每条顶层消息独立，话题内回复继续原会话 |
+| 私聊 | `group` | 每条顶层消息创建用户与机器人的专属会话群 |
+| 普通群 | `chat-topic`（默认） | 顶层连续，原生话题独立 |
+| 普通群 | `chat` | 群内消息共用上下文 |
+| 普通群 | `new-topic` | 每条顶层消息创建独立话题会话 |
+| 话题群 | 固定话题模式 | 每个话题独立 |
+
+渠道配置键为 `private_chat_mode` 与 `group_chat_mode`，聊天覆盖设置持久化保存。专属会话群内可直接发送消息，无需逐条 @机器人。建群使用稳定 UUID 重试；明确失败时退回私聊独立话题，结果不确定时可使用提示中的 `/retry-group <消息ID>` 重试同一请求。
+
+已有飞书应用需要在开放平台配置并发布 `im:chat:read`（群类型及管理角色）、`im:chat:create`（建群）和 `im:message.group_msg`（接收群内非 @ 消息）权限；新的自动配置流程已包含这些权限。不会自动修改已有线上应用的权限。
+
+Codex 已使用 app-server；TRAE CLI 也优先使用 `traecli app-server --listen stdio://`，支持原生调整方向、审批及会话恢复。旧 TRAE 版本明确不支持 app-server 时回退 exec/resume，保留排队但不提供调整方向。`control_capability` 为通用能力字段，旧 `codex_control_capability` 仍保留兼容。
 
 ### 渠道审批命令
 
@@ -475,7 +503,7 @@ Invocation API 会先执行 Guard 策略：allow/deny 自动回传给支持原�
 
 不同 Agent runtime 支持的模式不同；不支持的命令会返回该 runtime 的可用模式列表。
 
-运行时设置卡里的“当前会话”会立即生效；“Agent 默认”只影响之后创建的新会话，不会反向修改已经存在的会话。Codex app-server 能原生挂起权限请求，启用渠道 Codex 远程控制后会发送带“允许一次 / 本会话允许 / 拒绝”的审批卡片。Cursor、Claude Code 等 print-mode CLI 不能在渠道中暂停后继续接收逐次审批；它们的手动模式会直接拦截工具，请改用运行时支持的自动审批或 `/yolo on`。
+运行时设置卡里的“当前会话”会立即生效；“Agent 默认”只影响之后创建的新会话，不会反向修改已经存在的会话。Codex/TRAE app-server 能原生挂起权限请求，渠道会发送带“允许一次 / 本会话允许 / 拒绝”的审批卡片。Cursor、Claude Code 等 print-mode CLI 不能在渠道中暂停后继续接收逐次审批；它们的手动模式会直接拦截工具，请改用运行时支持的自动审批或 `/yolo on`。
 
 ## 集成（契约与 SDK）
 

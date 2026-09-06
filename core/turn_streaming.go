@@ -191,10 +191,31 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 	var answer, completedAnswer, thinking, rendered string
 	var failed bool
 	var answerAfterLastTool bool
+	var modelRetrying bool
+	clearModelRetry := func() {
+		if modelRetrying {
+			thinking = ""
+		}
+		modelRetrying = false
+	}
 	var tools toolProgress
 	for ev := range events {
 		e.updateRemoteTaskFromEvent(data, ev)
 		switch ev.Type {
+		case EventModelResponse:
+			if ev.Err != nil && ev.Metadata["will_retry"] == "true" {
+				modelRetrying = true
+				thinking = "模型服务请求失败，正在重试…"
+				body := tools.render(thinking, answer, false)
+				if body != rendered {
+					if err := stream.Update(ctx, body, false, false); err != nil {
+						e.log.Error("stream update", "err", err)
+					}
+					rendered = body
+				}
+			} else if ev.Err == nil {
+				clearModelRetry()
+			}
 		case EventPermission:
 			if !e.dispatchAgentInteraction(ctx, ev, data) {
 				e.declineAgentInteraction(ctx, sess, ev)
@@ -209,6 +230,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				}
 			}
 		case EventThinking:
+			clearModelRetry()
 			if ev.Text == "" {
 				continue
 			}
@@ -221,6 +243,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				rendered = body
 			}
 		case EventToolUse:
+			clearModelRetry()
 			answerAfterLastTool = false
 			completedAnswer = ""
 			// Native adapters provide ToolCallID, allowing parallel and
@@ -238,6 +261,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				rendered = body
 			}
 		case EventFinal, EventOutput:
+			clearModelRetry()
 			if ev.Text == "" || ev.Text == "NO_REPLY" {
 				continue
 			}
@@ -291,7 +315,10 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 		tools = toolProgress{}
 		failed = false
 	} else if ctx.Err() == context.DeadlineExceeded {
-		answer = "任务执行超时，已自动终止。需要扫码、授权、验证码或人工确认时，请让命令在后台运行，并使用 request_user_input 暂停等待用户，不要让 shell 前台阻塞。"
+		answer = "任务执行超时，已自动终止。可能是模型服务连接异常或任务耗时过长，请稍后重试；如反复出现，请检查该机器的网络、代理配置和运行日志。"
+		if modelRetrying {
+			answer = "任务执行超时，已自动终止。模型服务请求持续失败，请检查该机器的网络、代理配置或模型服务状态后重试。"
+		}
 		thinking = ""
 		failed = true
 	}

@@ -1107,6 +1107,12 @@ h2 {
   background: currentColor;
 }
 
+.system-pill.warning {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 25%, var(--border));
+}
+
 .search-box {
   display: flex;
   flex: 0 1 360px;

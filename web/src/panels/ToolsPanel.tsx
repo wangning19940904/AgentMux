@@ -10,7 +10,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   activeMachineScope,
   api,
@@ -24,6 +24,8 @@ import {
 } from "../api";
 import { isDesktopApp, openExternalURL } from "../api/desktop";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
+import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
+import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
 import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
 import { OperationProgress as OperationProgressView } from "../components/OperationProgress";
 import { TargetBadge } from "../components/TargetBadge";
@@ -35,6 +37,7 @@ import {
   InstalledToolRow,
   normalizeToolTargets,
   ToolInstallCandidate,
+  toolUpdateCandidates,
 } from "./tools/toolCatalogModel";
 
 type ToolBusyAction = "install" | "update" | "uninstall" | "check" | "auth";
@@ -56,6 +59,9 @@ export function ToolsPanel() {
   const [installerOpen, setInstallerOpen] = useState(false);
   const [installSelections, setInstallSelections] = useState<Record<string, string[]>>({});
   const [internalTarget, setInternalTarget] = useState<InternalInstallTarget | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<BulkUpdateProgress | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkUpdateResult<InstalledToolRow>[]>([]);
+  const bulkRunning = useRef(false);
 
   const scope = activeMachineScope();
   const allScope = scope === "all";
@@ -87,13 +93,17 @@ export function ToolsPanel() {
   );
   const pagination = useCatalogPagination(rows);
   const installTarget = cliInstallTarget();
+  const updateCandidates = toolUpdateCandidates(rows, checks);
+  const updateAllBlocked = tools.loading || Boolean(tools.error) || Boolean(bulkProgress)
+    || Object.keys(busy).length > 0 || Boolean(activeAuthSessionKey);
 
   useEffect(() => {
+    if (bulkRunning.current) return;
     rows.forEach((row) => {
       if (!row.cli || checks[row.key] || busy[row.key]) return;
       void checkCLIUpdate(row, true);
     });
-  }, [rows, checks, busy]);
+  }, [rows, checks, busy, bulkProgress]);
 
   useEffect(() => {
     const loginRows = rows.filter((row) => row.cli?.spec.login_supported);
@@ -232,6 +242,7 @@ export function ToolsPanel() {
     beginProgress(row.key, action === "update" ? "checking" : "preparing");
     showNotice("");
     setResult(null);
+    setBulkResults([]);
     try {
       const response = await api.installCLI(
         row.cli.spec.id,
@@ -249,6 +260,38 @@ export function ToolsPanel() {
     } finally {
       clearProgress(row.key);
       clearToolBusy(row.key);
+    }
+  }
+
+  async function updateAllTools() {
+    if (bulkRunning.current || updateAllBlocked || updateCandidates.length === 0) return;
+    const candidates = [...updateCandidates];
+    bulkRunning.current = true;
+    setBulkProgress({ completed: 0, total: candidates.length });
+    setBulkResults([]);
+    showNotice("");
+    setResult(null);
+    try {
+      await runBulkUpdates(candidates, async (row) => {
+        setToolBusy(row.key, "update");
+        beginProgress(row.key, "checking");
+        try {
+          const response = await api.installCLI(
+            row.cli!.spec.id, "update", (update) => updateProgress(row.key, update), false, [row.targetID],
+          );
+          return response.first;
+        } finally {
+          clearProgress(row.key);
+          clearToolBusy(row.key);
+        }
+      }, (entry, completed) => {
+        setBulkResults((current) => [...current, entry]);
+        setBulkProgress({ completed, total: candidates.length });
+      });
+      await refreshAll();
+    } finally {
+      bulkRunning.current = false;
+      setBulkProgress(null);
     }
   }
 
@@ -377,13 +420,24 @@ export function ToolsPanel() {
       <p className="subtle-copy">{t("tools.unifiedSubtitle")}</p>
       {(tools.data?.warnings ?? []).map((warning) => <div className="session-notice" key={warning}>{warning}</div>)}
       {tools.error && <div className="surface-body error">{tools.error}</div>}
-      {notice && <div className={`session-notice${noticeError ? " error" : ""}`}>{notice}</div>}
+      {notice && <div className={`session-notice${noticeError ? " error" : ""}`} role="status">{notice}</div>}
+
+      <BulkUpdateResults progress={bulkProgress} results={bulkResults.map(({ item, result }) => ({
+        key: item.key,
+        label: `${item.name} · ${item.targetName}`,
+        result,
+      }))} />
 
       <section className="surface unified-tools-surface">
         <div className="surface-header unified-tools-header">
           <div><h2>{t("tools.installedDirectory")}</h2><span className="pill on">{rows.length}</span></div>
-          <button className="action" onClick={() => setInstallerOpen(true)} type="button"><Plus size={15} />{t("tools.installTools")}</button>
+          <div className="catalog-bulk-actions">
+            <BulkUpdateButton count={updateCandidates.length} progress={bulkProgress} disabled={updateAllBlocked}
+              hint={t("tools.updateAllHint")} onClick={() => void updateAllTools()} />
+            <button className="action" disabled={Boolean(bulkProgress)} onClick={() => setInstallerOpen(true)} type="button"><Plus size={15} />{t("tools.installTools")}</button>
+          </div>
         </div>
+        {rows.some((row) => row.skill) && <p className="subtle-copy tools-bulk-hint">{t("tools.updateAllSkillHint")}</p>}
         <div className="catalog-table-wrap">
           <table className="catalog-table unified-tools-table">
             <thead><tr><th>{t("common.name")}</th><th>{t("common.description")}</th><th>{t("common.actions")}</th></tr></thead>
@@ -393,6 +447,7 @@ export function ToolsPanel() {
                   key={row.key}
                   row={row}
                   busy={busy[row.key]}
+                  bulkUpdating={Boolean(bulkProgress)}
                   progress={progress[row.key]}
                   check={checks[row.key]}
                   authSession={authSessions[row.key]}
@@ -449,10 +504,11 @@ export function ToolsPanel() {
 }
 
 function InstalledToolRows({
-  row, busy, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, t,
+  row, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, t,
 }: {
   row: InstalledToolRow;
   busy?: ToolBusyAction;
+  bulkUpdating: boolean;
   progress?: OperationProgress;
   check?: CLIUpdateCheck;
   authSession?: CLIAuthSession;
@@ -465,7 +521,7 @@ function InstalledToolRows({
 }) {
   const hasUpdate = Boolean(check?.update_available) || row.needsRepair;
   const authActive = Boolean(authSession && !cliAuthSessionTerminal(authSession.state));
-  const disabled = Boolean(busy) || authActive;
+  const disabled = bulkUpdating || Boolean(busy) || authActive;
   const linkedSpecs = row.cli?.spec.linked_skills ?? [];
   return (
     <>

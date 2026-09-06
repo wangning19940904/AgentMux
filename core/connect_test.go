@@ -556,11 +556,172 @@ func TestRestartChannelsForAgentRefreshesChangedRuntime(t *testing.T) {
 	}
 
 	after := eng.channelRuntime("channel-1")
-	if after == nil || after == before {
-		t.Fatalf("channel runtime was not replaced: before=%p after=%p", before, after)
+	if after == nil || after != before {
+		t.Fatalf("channel runtime should be preserved: before=%p after=%p", before, after)
 	}
-	if after.agent == nil || after.agent.Name() != newRuntime || after.workspace.RuntimeID != newRuntime {
-		t.Fatalf("refreshed channel still uses stale runtime: agent=%v workspace=%+v", after.agent, after.workspace)
+	currentAgent, _, currentWorkspace := after.agentSnapshot()
+	if currentAgent == nil || currentAgent.Name() != newRuntime || currentWorkspace.RuntimeID != newRuntime {
+		t.Fatalf("refreshed channel still uses stale runtime: agent=%v workspace=%+v", currentAgent, currentWorkspace)
+	}
+}
+
+type rollingGenerationTestAgent struct {
+	mu        sync.Mutex
+	name      string
+	freshID   string
+	resumeIDs []string
+	stops     int
+}
+
+func (a *rollingGenerationTestAgent) Name() string { return a.name }
+func (a *rollingGenerationTestAgent) StartSession(context.Context, string) (AgentSession, error) {
+	return &rollingGenerationTestSession{id: a.freshID}, nil
+}
+func (a *rollingGenerationTestAgent) StartSessionResume(_ context.Context, _ string, resumeID string) (AgentSession, error) {
+	a.mu.Lock()
+	a.resumeIDs = append(a.resumeIDs, resumeID)
+	a.mu.Unlock()
+	return &rollingGenerationTestSession{id: resumeID}, nil
+}
+func (a *rollingGenerationTestAgent) ListSessions(context.Context) ([]string, error) { return nil, nil }
+func (a *rollingGenerationTestAgent) Stop(context.Context) error {
+	a.mu.Lock()
+	a.stops++
+	a.mu.Unlock()
+	return nil
+}
+func (a *rollingGenerationTestAgent) stopCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stops
+}
+func (a *rollingGenerationTestAgent) resumedIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.resumeIDs...)
+}
+
+type rollingGenerationTestSession struct{ id string }
+
+func (s *rollingGenerationTestSession) ID() string              { return s.id }
+func (s *rollingGenerationTestSession) NativeSessionID() string { return s.id }
+func (s *rollingGenerationTestSession) Send(context.Context, string) (<-chan *Event, error) {
+	out := make(chan *Event)
+	close(out)
+	return out, nil
+}
+func (s *rollingGenerationTestSession) RespondPermission(context.Context, bool) error { return nil }
+func (s *rollingGenerationTestSession) Close(context.Context) error                   { return nil }
+
+func TestRestartChannelsForAgentRollsGenerationAndResumesContext(t *testing.T) {
+	const (
+		platformName = "fake-agent-rolling-refresh"
+		oldRuntime   = "fake-runtime-rolling-old"
+		newRuntime   = "fake-runtime-rolling-new"
+	)
+	restorePlatform := stubPlatformFactoryFunc(t, platformName, func(map[string]any) (Platform, error) {
+		return newFakePlatform(platformName), nil
+	})
+	defer restorePlatform()
+	var oldAgent *rollingGenerationTestAgent
+	restoreOld := stubAgentFactory(t, oldRuntime, func(map[string]any) (Agent, error) {
+		oldAgent = &rollingGenerationTestAgent{name: oldRuntime, freshID: "thread-context"}
+		return oldAgent, nil
+	})
+	defer restoreOld()
+	var newAgent *rollingGenerationTestAgent
+	restoreNew := stubAgentFactory(t, newRuntime, func(map[string]any) (Agent, error) {
+		newAgent = &rollingGenerationTestAgent{name: newRuntime, freshID: "unused-fresh-thread"}
+		return newAgent, nil
+	})
+	defer restoreNew()
+
+	now := time.Now()
+	store := &fakeStore{
+		channels: []Channel{{
+			ID: "channel-rolling", Name: "bot", Type: platformName, AgentID: "agent-rolling", Enabled: true, UpdatedAt: now,
+		}},
+		agents: map[string]AgentInstance{
+			"agent-rolling": {ID: "agent-rolling", Name: "Agent", RuntimeID: oldRuntime, WorkDir: t.TempDir(), Enabled: true, UpdatedAt: now},
+		},
+	}
+	eng := NewEngine(nil, NewHookRunner(nil, nil))
+	conversations := &senderConversationStore{}
+	eng.SetConversationStore(conversations)
+	connect := NewConnectService(nil, eng, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := connect.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := eng.channelRuntime("channel-rolling")
+	if before == nil || before.agent == nil || before.agent.Name() != oldRuntime {
+		t.Fatalf("initial channel runtime = %#v", before)
+	}
+	message := &Message{ChatID: "chat-rolling", ChatType: "group", ConversationKey: "chat:rolling"}
+	oldSession, _, created, _, releaseOld, err := before.session(ctx, message)
+	if err != nil || !created || oldSession.(NativeSessioned).NativeSessionID() != "thread-context" {
+		t.Fatalf("old session=%v created=%t err=%v", oldSession, created, err)
+	}
+
+	store.mu.Lock()
+	agent := store.agents["agent-rolling"]
+	agent.RuntimeID = newRuntime
+	agent.Skills = []string{"new-skill"}
+	agent.UpdatedAt = now.Add(time.Second)
+	store.agents["agent-rolling"] = agent
+	store.mu.Unlock()
+	if err := connect.RestartChannelsForAgent(ctx, "agent-rolling"); err != nil {
+		t.Fatal(err)
+	}
+	if current := eng.channelRuntime("channel-rolling"); current != before {
+		t.Fatalf("platform runtime was replaced: before=%p current=%p", before, current)
+	}
+	currentAgent, _, currentWorkspace := before.agentSnapshot()
+	if currentAgent != newAgent {
+		t.Fatalf("current Agent = %p, want new generation %p", currentAgent, newAgent)
+	}
+	if len(currentWorkspace.Skills) != 1 || currentWorkspace.Skills[0] != "new-skill" {
+		t.Fatalf("current Agent skills = %#v", currentWorkspace.Skills)
+	}
+	if oldAgent.stopCount() != 0 {
+		t.Fatal("old Agent stopped while its turn lease was active")
+	}
+	type sessionResult struct {
+		session AgentSession
+		created bool
+		release func()
+		err     error
+	}
+	newSessionResult := make(chan sessionResult, 1)
+	go func() {
+		session, _, created, _, release, err := before.session(ctx, message)
+		newSessionResult <- sessionResult{session: session, created: created, release: release, err: err}
+	}()
+	select {
+	case result := <-newSessionResult:
+		if result.release != nil {
+			result.release()
+		}
+		t.Fatal("new generation resumed the same context before the old turn finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseOld()
+	waitFor(t, "retired Agent cleanup", func() bool { return oldAgent.stopCount() == 1 })
+	var result sessionResult
+	select {
+	case result = <-newSessionResult:
+	case <-time.After(2 * time.Second):
+		t.Fatal("new generation did not resume after the old turn finished")
+	}
+	newSession, created, releaseNew, err := result.session, result.created, result.release, result.err
+	if err != nil || !created {
+		t.Fatalf("new session=%v created=%t err=%v", newSession, created, err)
+	}
+	defer releaseNew()
+	if got := newAgent.resumedIDs(); len(got) != 1 || got[0] != "thread-context" {
+		t.Fatalf("resumed native thread IDs = %#v", got)
 	}
 }
 

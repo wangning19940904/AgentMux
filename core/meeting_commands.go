@@ -332,7 +332,7 @@ func (e *Engine) AskMeeting(channelID, meetingID, question, source, userID strin
 		base = context.Background()
 	}
 	turnCtx, cancel := context.WithTimeout(base, ChannelTurnTimeout(rt.channel))
-	guard, started := rt.beginDirectTurn("meeting:"+meetingID, userID, cancel)
+	guard, started := rt.beginDirectTurn(turnCtx, "meeting:"+meetingID, userID, cancel)
 	if !started {
 		cancel()
 		return MeetingTurn{}, ErrMeetingBusy
@@ -356,11 +356,12 @@ func (e *Engine) runMeetingTurn(ctx context.Context, cancel context.CancelFunc, 
 		activity.UpsertMeetingTurn(turn)
 	}
 	msg := &Message{ID: turn.ID, ChatID: "meeting:" + meeting.ID, ChatType: "meeting", ConversationKey: "meeting:" + meeting.ID, UserID: userID, Text: turn.Question, Platform: rt.channel.Type, ChannelID: rt.channel.ID, Origin: OriginAPI, MeetingID: meeting.ID, MeetingNumber: meeting.MeetingNumber, MeetingTopic: meeting.Topic}
-	sess, conv, _, err := rt.session(ctx, msg)
+	sess, conv, _, generation, releaseSession, err := rt.session(ctx, msg)
 	if err != nil {
 		finish("failed", err)
 		return
 	}
+	defer releaseSession()
 	defer e.persistConversationTurn(context.Background(), conv, sess)
 	responseMode := rt.currentMeetingResponseMode()
 	var speech SpeechReply
@@ -376,9 +377,9 @@ func (e *Engine) runMeetingTurn(ctx context.Context, cancel context.CancelFunc, 
 	}
 	prompt := meetingTurnPrompt(activity.MeetingPromptContext(meeting.ID), meeting, turn.Question)
 	data := eventData(msg)
-	data["agent_id"] = rt.workspace.AgentID
-	data["runtime_id"] = rt.workspace.RuntimeID
-	data["memory_scope"] = rt.workspace.MemoryScope
+	data["agent_id"] = generation.workspace.AgentID
+	data["runtime_id"] = generation.workspace.RuntimeID
+	data["memory_scope"] = generation.workspace.MemoryScope
 	data["meeting_id"] = meeting.ID
 	data["meeting_turn_id"] = turn.ID
 	replyMode := MeetingReplyModeStream

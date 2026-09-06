@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { SetStateAction } from "react";
 import type { Framework, FrameworkAuthStatus } from "../../api";
 import { api } from "../../api";
 import { isDesktopApp, openExternalURL } from "../../api/desktop";
@@ -26,7 +26,7 @@ export function useFrameworkAuth({
   currentMachine: string;
   markBusy: (key: string, action: FrameworkBusyAction) => void;
   clearBusy: (key: string) => void;
-  setNotice: Dispatch<SetStateAction<string>>;
+  setNotice: (value: SetStateAction<string>, error?: boolean) => void;
 }) {
   const { t } = useI18n();
   const [auth, setAuth] = useState<Record<string, FrameworkAuthStatus>>({});
@@ -152,7 +152,7 @@ export function useFrameworkAuth({
       setAuth((current) => ({ ...current, [key]: status }));
       return status;
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(error instanceof Error ? error.message : String(error), true);
       return null;
     }
   }
@@ -170,7 +170,7 @@ export function useFrameworkAuth({
       }));
       if (session.login_url && isDesktopApp()) await openExternalURL(session.login_url);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(error instanceof Error ? error.message : String(error), true);
     } finally {
       clearBusy(key);
     }
@@ -185,7 +185,7 @@ export function useFrameworkAuth({
       setAuth((current) => ({ ...current, [key]: status }));
       setNotice(t("tools.authLoggedOut"));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(error instanceof Error ? error.message : String(error), true);
     } finally {
       clearBusy(key);
     }
@@ -204,7 +204,7 @@ export function useFrameworkAuth({
         : current);
       setNotice(t("frameworks.authCodeSubmitted"));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(error instanceof Error ? error.message : String(error), true);
     } finally {
       clearBusy(key);
     }
@@ -222,7 +222,7 @@ export function useFrameworkAuth({
       setNotice(t("tools.authCancelled"));
       void refreshAuth(item);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(error instanceof Error ? error.message : String(error), true);
     } finally {
       clearBusy(key);
     }
@@ -235,7 +235,7 @@ export function useFrameworkAuth({
       setCopiedCode(key);
       window.setTimeout(() => setCopiedCode((current) => current === key ? "" : current), 1_600);
     } catch {
-      setNotice(t("frameworks.authCopyFailed"));
+      setNotice(t("frameworks.authCopyFailed"), true);
     }
   }
 

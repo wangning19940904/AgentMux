@@ -95,10 +95,10 @@ func formatInteractionFallback(interaction ChannelInteraction) string {
 	if request.Kind == AgentInteractionUserInput {
 		for _, question := range request.Questions {
 			if question.Secret {
-				return "Codex 需要敏感输入。请在本机 AgentMux 控制台处理；该内容不会显示或接收于渠道。"
+				return "Agent 需要敏感输入。请在本机 AgentMux 控制台处理；该内容不会显示或接收于渠道。"
 			}
 		}
-		return "Codex 正等待补充信息，请在支持交互卡片的客户端或本机控制台处理。"
+		return "Agent 正等待补充信息，请在支持交互卡片的客户端或本机控制台处理。"
 	}
 	detail := request.Command
 	if detail == "" {
@@ -239,10 +239,10 @@ func (e *Engine) resolveRemoteInteraction(ctx context.Context, rt *channelRuntim
 	record.ResolvedAt = time.Now().UTC()
 	if updater, ok := rt.platform.(AgentInteractionUpdateReplier); ok && msg.InteractionMessageID != "" {
 		if err := updater.UpdateAgentInteraction(ctx, msg, *record, outcome); err != nil {
-			_ = rt.platform.Reply(ctx, msg, "Codex 交互已处理。")
+			_ = rt.platform.Reply(ctx, msg, "Agent 交互已处理。")
 		}
 	} else {
-		_ = rt.platform.Reply(ctx, msg, "Codex 交互已处理。")
+		_ = rt.platform.Reply(ctx, msg, "Agent 交互已处理。")
 	}
 	return nil
 }

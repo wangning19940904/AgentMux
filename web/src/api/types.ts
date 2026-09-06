@@ -539,6 +539,7 @@ export interface Channel {
   last_heartbeat_at?: string;
   last_event_at?: string;
   last_inbound_at?: string;
+  control_capability?: { state: string; error?: string; steer: boolean; interrupt: boolean; threads: boolean; interactions: boolean };
   codex_control_capability?: {
     state: string;
     error?: string;
@@ -613,6 +614,10 @@ export interface TenancySelf {
 }
 
 export interface ChannelTask {
+  queue_position?: number;
+  can_steer?: boolean;
+  target_task_id?: string;
+  control_card_id?: string;
   id: string;
   channel_id: string;
   conversation_id?: string;
@@ -995,6 +1000,8 @@ export interface FrameworkAuthStatus {
   login_supported: boolean;
   logout_supported?: boolean;
   detail?: string;
+  auto_refresh_supported?: boolean;
+  expires_at?: string;
 }
 
 export interface FrameworkLoginResult {

@@ -638,6 +638,11 @@ export function AgentForm({
                       ? t("agents.runtimeProviderRequired")
                       : t("agents.runtimeAuthUnknown")}
               </span>
+              {authStatus?.auto_refresh_supported && authStatus.expires_at && (
+                <span>
+                  {t("agents.loginAutoRefresh")} {t("agents.loginExpiresAt")} {new Date(authStatus.expires_at).toLocaleString()}
+                </span>
+              )}
               {authStatus?.state !== "authenticated" && (
                 <div className="agent-route-actions">
                   {authStatus?.login_supported && (

@@ -776,6 +776,9 @@ export const api = {
 
   // AgentMux Connect: channels & triggers
   channels: () => fleetMode() ? fleetReadArray<Channel>("/api/v1/channels") : get<Channel[] | null>("/api/v1/channels"),
+  channelHealth: () => fleetMode()
+    ? fleetReadArray<Channel>("/api/v1/channels?view=health")
+    : get<Channel[] | null>("/api/v1/channels?view=health"),
   upsertChannel: async (ch: Partial<Channel>) => {
     const targetID = ch.target_id || activeRemoteID();
     const channel = { ...ch };
@@ -819,10 +822,10 @@ export const api = {
     fleetCall<{ ok: boolean; thread_id: string; command?: string; opened?: boolean; status_message?: string }>({
       key: "open", method: "POST", path: "/api/v1/channel-conversations/open", body: { thread_id: threadID },
     }, writeTargetIDs(targetID)).then((result) => result.first),
-  channelTasks: (channelID = "", conversationID = "") =>
-    get<ChannelTask[] | null>(
-      `/api/v1/channel-tasks?channel_id=${encodeURIComponent(channelID)}&conversation_id=${encodeURIComponent(conversationID)}`
-    ),
+  channelTasks: (channelID = "", conversationID = "", targetID?: string) => {
+    const path = `/api/v1/channel-tasks?channel_id=${encodeURIComponent(channelID)}&conversation_id=${encodeURIComponent(conversationID)}`;
+    return targetID ? fleetGet<ChannelTask[] | null>(path, targetID) : get<ChannelTask[] | null>(path);
+  },
   channelInteractions: (channelID = "", conversationID = "", targetID?: string) => {
     const path = `/api/v1/channel-interactions?channel_id=${encodeURIComponent(channelID)}&conversation_id=${encodeURIComponent(conversationID)}`;
     return targetID ? fleetGet<ChannelInteraction[] | null>(path, targetID) : get<ChannelInteraction[] | null>(path);

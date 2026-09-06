@@ -1,5 +1,6 @@
 import type {
   CLIManagedTool,
+  CLIUpdateCheck,
   CLILinkedSkillStatus,
   MachineTarget,
   MarketplaceSkill,
@@ -33,6 +34,11 @@ export interface ToolInstallCandidate {
   cli?: CLIManagedTool;
   skill?: MarketplaceSkill;
   missingTargetIDs: string[];
+}
+
+export function toolUpdateCandidates(rows: InstalledToolRow[], checks: Record<string, CLIUpdateCheck>) {
+  return rows.filter((row) => row.cli?.installed
+    && (row.needsRepair || Boolean(checks[row.key]?.update_available && !checks[row.key]?.error)));
 }
 
 export function normalizeToolTargets<T extends TargetMetadata>(

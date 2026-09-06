@@ -322,8 +322,8 @@ func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {
 	target := &url.URL{Scheme: "http", Host: host.RemoteAddr}
 	transport := &http.Transport{
 		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return s.remote.DialContext(ctx, id, network)
+		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+			return s.remote.DialContext(r.Context(), id, network)
 		},
 	}
 	defer transport.CloseIdleConnections()

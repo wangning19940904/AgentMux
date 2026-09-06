@@ -122,6 +122,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/triggers", s.handleTriggerDelete)
 	s.mux.HandleFunc("POST /api/v1/triggers/run", s.handleTriggerRun)
 	s.mux.HandleFunc("GET /channel-avatar", s.handleChannelAvatar)
+	s.mux.HandleFunc("GET /api/v1/channel-avatar", s.handleChannelAvatar)
 	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
 	s.mux.HandleFunc("POST "+consoleSessionEndpoint, s.handleConsoleSessionCreate)
 	s.mux.HandleFunc("GET "+consoleEnterPath, s.handleConsoleEnter)

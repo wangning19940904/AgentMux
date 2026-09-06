@@ -116,7 +116,7 @@ export function FrameworkTableRows({
             {supportsLogin && (
               <button
                 className={`ghost-action${authenticated ? " framework-authenticated-action" : ""}`}
-                disabled={Boolean(busy) || authActive || authChecking || Boolean(authenticated && !canLogout)}
+                disabled={disabled || Boolean(busy) || authActive || authChecking || Boolean(authenticated && !canLogout)}
                 onClick={canLogout ? onLogout : onAuth}
                 title={canLogout ? t("tools.authLogoutHint") : frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
                 type="button"
@@ -137,7 +137,7 @@ export function FrameworkTableRows({
             )}
             <button
               className="ghost-action danger-action"
-              disabled={!spec.uninstall_supported || Boolean(busy) || authActive}
+              disabled={disabled || !spec.uninstall_supported || Boolean(busy) || authActive}
               onClick={onUninstall}
               title={!spec.uninstall_supported ? t("frameworks.uninstallUnsupported") : undefined}
               type="button"

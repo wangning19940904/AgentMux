@@ -4,15 +4,64 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
+	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
+
+func TestFleetSSHRetryUsesRequestDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var accepted atomic.Int32
+	closed := make(chan struct{}, 4)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			go func() { defer conn.Close(); _, _ = io.Copy(io.Discard, conn); closed <- struct{}{} }()
+		}
+	}()
+	server := newRemoteTestServer(t)
+	saved, err := server.remote.Upsert(remotepkg.Host{Name: "deadline", Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, User: "tester", KeyPath: filepath.Join(t.TempDir(), "missing"), HostKeyFingerprint: "test-pin"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, _, err = server.executeRemoteFleetOperation(ctx, saved.ID, fleetOperation{Key: "status", Method: "GET", Path: "/api/v1/status"})
+	if err == nil || time.Since(started) > 1500*time.Millisecond {
+		t.Fatalf("elapsed=%s error=%v", time.Since(started), err)
+	}
+	// Without the original request context, http.Transport gives SSH a
+	// detached dial context and spends the entire request on the first try.
+	if n := accepted.Load(); n < 2 || n > 3 {
+		t.Fatalf("SSH connections=%d; deadline did not leave room for bounded retry", n)
+	}
+	for range accepted.Load() {
+		select {
+		case <-closed:
+		case <-time.After(300 * time.Millisecond):
+			t.Fatal("request left a handshake running")
+		}
+	}
+}
 
 func TestFleetQueryIncludesLocalTarget(t *testing.T) {
 	server := newRemoteTestServer(t)

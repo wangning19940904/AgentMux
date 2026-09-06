@@ -1,0 +1,78 @@
+{
+  "build_dir": "/var/folders/9k/dn93qqs10jd9y5y25jlf0nkr0000gn/T/agentmux-trae-refresh-build-w41a6xzo",
+  "source_commit": "e70ad440c965ec8490c595705120b1985592f0f3",
+  "files": [
+    "README.md",
+    "agent/cliagent/cliagent.go",
+    "agent/cliagent/session.go",
+    "agent/cliagent/auth_test.go",
+    "agent/cliagents/cliagents.go",
+    "bootstrap/runtime.go",
+    "bootstrap/auth_refresh.go",
+    "bootstrap/auth_refresh_test.go",
+    "framework/auth.go",
+    "framework/framework_test.go",
+    "framework/auth_refresh_test.go",
+    "web/src/api/types.ts",
+    "web/src/panels/agents/AgentForm.tsx",
+    "internal/traeauth/auth_test.go",
+    "internal/traeauth/auth.go",
+    "internal/traeauth/rpc_test.go",
+    "internal/traeauth/rpc.go",
+    "web/src/i18n/en.ts",
+    "web/src/i18n/zh.ts",
+    "internal/traeauth/rpc_live_test.go",
+    "core/channel_direct.go",
+    "core/channel_direct_test.go",
+    "core/turn_streaming.go",
+    "core/channel_timeout_test.go",
+    "agent/cliagents/codex_interrupted_test.go",
+    "core/channel_dispatch.go",
+    "agent/cliagents/codex_app_server.go",
+    "core/sender.go",
+    "core/meeting_commands.go",
+    "framework/shell_proxy.go",
+    "framework/shell_proxy_test.go"
+  ],
+  "version": "0.1.8-runtime-fixes.1",
+  "binary": "/tmp/amux-0.1.8-runtime-fixes.1-linux-amd64",
+  "sha256": "bef3cbe1dfe63e0dbc5310eef5d7a924485c3de03df7ab082c6d72a0c0265d45",
+  "deployment_status": "deployed_and_verified",
+  "tests": [
+    "go test -race ./internal/traeauth ./framework ./agent/cliagent ./agent/cliagents ./bootstrap",
+    "go test ./server ./core",
+    "go vet ./internal/traeauth ./framework ./agent/cliagent ./bootstrap",
+    "isolated release baseline package tests, frontend build, i18n tests",
+    "ecs_cn native account/read refreshToken and model/list forceRefresh integration passed; healthy token did not require rotation",
+    "isolated combined patch: go test -race ./framework ./bootstrap ./core ./agent/cliagents ./internal/traeauth ./server",
+    "go vet ./framework ./bootstrap ./core ./agent/cliagents",
+    "ecs_cn exported shell proxy inheritance live test passed",
+    "ecs_cn native renewal of expired TRAE credentials passed and extended expiry"
+  ],
+  "deployed_host": "ecs_cn",
+  "backup": "/home/tiger/.agentmux/bin/amux.before-runtime-fixes-20260906T125639",
+  "verification": {
+    "codex": {
+      "http_status": 200,
+      "answer": "OK",
+      "duration_ms": 7814,
+      "per_agent_proxy_overrides": false
+    },
+    "trae": {
+      "http_status": 200,
+      "answer": "OK",
+      "duration_ms": 4990,
+      "auto_refresh_supported": true
+    },
+    "native_renewal": {
+      "before": "2026-09-06T04:29:18Z",
+      "after": "2026-09-06T06:52:35Z"
+    },
+    "shell_proxy_inheritance": [
+      "http_proxy",
+      "https_proxy",
+      "no_proxy"
+    ],
+    "historical_timeout_tasks": "both corrected to interrupted"
+  }
+}

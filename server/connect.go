@@ -22,22 +22,23 @@ import (
 // apiChannel is a channel plus live status and display enrichment.
 type apiChannel struct {
 	core.Channel
-	AgentName            string                       `json:"agent_name,omitempty"`
-	DefaultMessagePrompt string                       `json:"default_message_prompt,omitempty"`
-	BotName              string                       `json:"bot_name,omitempty"`
-	BotAvatarURL         string                       `json:"bot_avatar_url,omitempty"`
-	BotAvatarProxyURL    string                       `json:"bot_avatar_proxy_url,omitempty"`
-	BotOpenID            string                       `json:"bot_open_id,omitempty"`
-	State                string                       `json:"state,omitempty"`
-	Connected            bool                         `json:"connected"`
-	Error                string                       `json:"error,omitempty"`
-	StartedAt            *time.Time                   `json:"started_at,omitempty"`
-	ConnectedAt          *time.Time                   `json:"connected_at,omitempty"`
-	LastCheckedAt        *time.Time                   `json:"last_checked_at,omitempty"`
-	LastHeartbeatAt      *time.Time                   `json:"last_heartbeat_at,omitempty"`
-	LastEventAt          *time.Time                   `json:"last_event_at,omitempty"`
-	LastInboundAt        *time.Time                   `json:"last_inbound_at,omitempty"`
-	CodexCapability      *core.CodexControlCapability `json:"codex_control_capability,omitempty"`
+	AgentName            string                         `json:"agent_name,omitempty"`
+	DefaultMessagePrompt string                         `json:"default_message_prompt,omitempty"`
+	BotName              string                         `json:"bot_name,omitempty"`
+	BotAvatarURL         string                         `json:"bot_avatar_url,omitempty"`
+	BotAvatarProxyURL    string                         `json:"bot_avatar_proxy_url,omitempty"`
+	BotOpenID            string                         `json:"bot_open_id,omitempty"`
+	State                string                         `json:"state,omitempty"`
+	Connected            bool                           `json:"connected"`
+	Error                string                         `json:"error,omitempty"`
+	StartedAt            *time.Time                     `json:"started_at,omitempty"`
+	ConnectedAt          *time.Time                     `json:"connected_at,omitempty"`
+	LastCheckedAt        *time.Time                     `json:"last_checked_at,omitempty"`
+	LastHeartbeatAt      *time.Time                     `json:"last_heartbeat_at,omitempty"`
+	LastEventAt          *time.Time                     `json:"last_event_at,omitempty"`
+	LastInboundAt        *time.Time                     `json:"last_inbound_at,omitempty"`
+	ControlCapability    *core.ChannelControlCapability `json:"control_capability,omitempty"`
+	CodexCapability      *core.CodexControlCapability   `json:"codex_control_capability,omitempty"`
 }
 
 // apiTrigger is a trigger plus display enrichment.
@@ -53,6 +54,7 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []apiChannel{})
 		return
 	}
+	healthView := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("view")), "health")
 	principal := requestPrincipal(r)
 	var channels []core.Channel
 	var err error
@@ -65,35 +67,46 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.labelChannelOwners(r.Context(), channels)
+	if !healthView {
+		s.labelChannelOwners(r.Context(), channels)
+	}
 	statuses := map[string]core.ChannelStatus{}
 	if s.connect != nil {
 		for _, st := range s.connect.ChannelStatuses() {
 			statuses[st.ChannelID] = st
 		}
 	}
-	agentNames := s.agentNames(r.Context())
+	agentNames := map[string]string{}
+	if !healthView {
+		agentNames = s.agentNames(r.Context())
+	}
 	out := make([]apiChannel, 0, len(channels))
 	for _, ch := range channels {
-		botInfo := s.lookupChannelBotInfo(r.Context(), ch)
-		ch.Config = redactStringMap(ch.Config)
-		item := apiChannel{
-			Channel:              ch,
-			AgentName:            agentNames[ch.AgentID],
-			DefaultMessagePrompt: core.ChannelDefaultMessagePrompt(ch),
-		}
-		if s.connect != nil {
-			if capability, ok := s.connect.ChannelCodexControlCapability(ch.ID); ok {
-				item.CodexCapability = &capability
+		item := apiChannel{Channel: ch}
+		if healthView {
+			// The overview only needs persisted identity plus in-memory health.
+			// Avoid serial Feishu/Lark identity requests and omit configuration
+			// from this frequently polled fleet response.
+			item.Config = nil
+		} else {
+			botInfo := s.lookupChannelBotInfo(r.Context(), ch)
+			item.Config = redactStringMap(ch.Config)
+			item.AgentName = agentNames[ch.AgentID]
+			item.DefaultMessagePrompt = core.ChannelDefaultMessagePrompt(ch)
+			if s.connect != nil {
+				if capability, ok := s.connect.ChannelCodexControlCapability(ch.ID); ok {
+					item.CodexCapability = &capability
+					item.ControlCapability = &capability
+				}
 			}
-		}
-		if botInfo != nil {
-			item.BotName = botInfo.Name
-			item.BotAvatarURL = botInfo.AvatarURL
-			if botInfo.AvatarURL != "" {
-				item.BotAvatarProxyURL = channelAvatarProxyURL(r, ch.ID)
+			if botInfo != nil {
+				item.BotName = botInfo.Name
+				item.BotAvatarURL = botInfo.AvatarURL
+				if botInfo.AvatarURL != "" {
+					item.BotAvatarProxyURL = channelAvatarProxyURL(ch.ID)
+				}
+				item.BotOpenID = botInfo.OpenID
 			}
-			item.BotOpenID = botInfo.OpenID
 		}
 		if st, ok := statuses[ch.ID]; ok {
 			item.State = st.State
@@ -120,16 +133,8 @@ func nonZeroTime(value time.Time) *time.Time {
 	return &value
 }
 
-func channelAvatarProxyURL(r *http.Request, channelID string) string {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	host := r.Host
-	if host == "" {
-		host = "127.0.0.1:8765"
-	}
-	return scheme + "://" + host + "/channel-avatar?id=" + url.QueryEscape(channelID)
+func channelAvatarProxyURL(channelID string) string {
+	return "/api/v1/channel-avatar?id=" + url.QueryEscape(channelID)
 }
 
 func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
@@ -142,13 +147,8 @@ func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	ch, err := s.st.GetChannel(r.Context(), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if ch == nil {
-		http.NotFound(w, r)
+	ch, ok := s.authorizeChannel(w, r, id, core.GrantLevelRead)
+	if !ok {
 		return
 	}
 	info := s.lookupChannelBotInfo(r.Context(), *ch)
@@ -176,7 +176,7 @@ func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cache-Control", "private, max-age=300")
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 4<<20))
 }
 
@@ -649,35 +649,13 @@ func (s *Server) normalizeChannel(ctx context.Context, ch *core.Channel) error {
 			return fmt.Errorf("bound Agent %q was not found", ch.AgentID)
 		}
 	}
-	if core.CodexRemoteControlEnabled(*ch) {
-		if ch.AgentID == "" {
-			return fmt.Errorf("Codex remote control requires a bound Agent")
-		}
-		agent, err := s.st.GetAgentInstance(ctx, ch.AgentID)
-		if err != nil {
-			return err
-		}
-		if agent == nil || (agent.RuntimeID != "codex" && agent.RuntimeID != "codex-app") {
-			return fmt.Errorf("Codex remote control requires a Codex Agent")
-		}
-		allowed := cleanIDList(ch.Config[core.ChannelConfigAllowedUserIDs])
-		admins := cleanIDList(ch.Config[core.ChannelConfigAdminUserIDs])
-		if allowed == "" && admins == "" {
-			return fmt.Errorf("Codex remote control requires at least one allowed or admin user ID")
-		}
-		ch.Config[core.ChannelConfigAllowedUserIDs] = allowed
-		ch.Config[core.ChannelConfigAdminUserIDs] = admins
-		maxQueue, err := boundedChannelInt(ch.Config[core.ChannelConfigCodexMaxQueue], core.DefaultCodexMaxQueue, 1, 100)
-		if err != nil {
-			return fmt.Errorf("invalid codex_max_queue: %w", err)
-		}
-		timeout, err := boundedChannelInt(ch.Config[core.ChannelConfigCodexTurnTimeout], core.DefaultCodexTurnTimeoutMinutes, 1, 240)
-		if err != nil {
-			return fmt.Errorf("invalid codex_turn_timeout_minutes: %w", err)
-		}
-		ch.Config[core.ChannelConfigCodexMaxQueue] = strconv.Itoa(maxQueue)
-		ch.Config[core.ChannelConfigCodexTurnTimeout] = strconv.Itoa(timeout)
+	// Existing access lists remain authoritative across all runtimes.
+	ch.Config[core.ChannelConfigAllowedUserIDs] = cleanIDList(ch.Config[core.ChannelConfigAllowedUserIDs])
+	ch.Config[core.ChannelConfigAdminUserIDs] = cleanIDList(ch.Config[core.ChannelConfigAdminUserIDs])
+	if core.CodexRemoteControlEnabled(*ch) && ch.Config[core.ChannelConfigAllowedUserIDs] == "" && ch.Config[core.ChannelConfigAdminUserIDs] == "" {
+		return fmt.Errorf("task control requires at least one allowed or admin user ID")
 	}
+
 	if ch.CreatedAt.IsZero() {
 		ch.CreatedAt = now
 	}
@@ -698,9 +676,34 @@ func normalizeChannelConfig(ch *core.Channel) error {
 		return fmt.Errorf("invalid turn_timeout_minutes: %w", err)
 	}
 	ch.Config[core.ChannelConfigTurnTimeout] = strconv.Itoa(turnTimeout)
+	queueRaw := ch.Config["max_queue"]
+	if queueRaw == "" {
+		queueRaw = ch.Config[core.ChannelConfigCodexMaxQueue]
+	}
+	maxQueue, err := boundedChannelInt(queueRaw, core.DefaultCodexMaxQueue, 1, 100)
+	if err != nil {
+		return fmt.Errorf("invalid max_queue: %w", err)
+	}
+	ch.Config["max_queue"] = strconv.Itoa(maxQueue)
+	ch.Config[core.ChannelConfigCodexMaxQueue] = strconv.Itoa(maxQueue)
+	ch.Config[core.ChannelConfigCodexTurnTimeout] = ch.Config[core.ChannelConfigTurnTimeout]
 	if ch.Type != "feishu" && ch.Type != "lark" {
 		return nil
 	}
+	for _, setting := range []struct {
+		key, defaultValue string
+		private           bool
+	}{{core.ChannelConfigPrivateMode, "chat", true}, {core.ChannelConfigGroupMode, "chat-topic", false}} {
+		value := strings.TrimSpace(ch.Config[setting.key])
+		if value == "" {
+			value = setting.defaultValue
+		}
+		if !core.ValidConversationMode(setting.private, value) {
+			return fmt.Errorf("invalid %s %q", setting.key, value)
+		}
+		ch.Config[setting.key] = value
+	}
+
 	scope := strings.TrimSpace(ch.Config[core.ChannelConfigReplyScope])
 	if scope == "" {
 		scope = core.ReplyScopeDMAndMentions

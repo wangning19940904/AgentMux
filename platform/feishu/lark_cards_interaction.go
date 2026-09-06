@@ -61,7 +61,7 @@ func buildAgentInteractionCard(msg *core.Message, task core.ChannelTask, interac
 	request := interaction.Request
 	title := request.Title
 	if title == "" {
-		title = "Codex 需要确认"
+		title = "Agent 需要确认"
 	}
 	template := "orange"
 	elements := []map[string]any{}
@@ -144,7 +144,7 @@ func interactionApprovalElements(msg *core.Message, task core.ChannelTask, inter
 		session := modelPickerButton("本会话允许", "default", interactionActionValue(msg, task, interaction, "acceptForSession", "", ""))
 		session["confirm"] = map[string]any{
 			"title": map[string]any{"tag": "plain_text", "content": "确认本会话允许"},
-			"text":  map[string]any{"tag": "plain_text", "content": "仅当前 AgentMux/Codex 会话有效，重启后失效。"},
+			"text":  map[string]any{"tag": "plain_text", "content": "仅当前 AgentMux 会话有效，重启后失效。"},
 		}
 		buttons = append(buttons, session)
 	}

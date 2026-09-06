@@ -1,6 +1,6 @@
 import type { TenancySelf } from "./api";
 
-export type TenancyGateState = "loading" | "ready" | "required";
+export type TenancyGateState = "loading" | "ready" | "required" | "error";
 
 export interface TenancyGateResolution {
   identity: TenancySelf;

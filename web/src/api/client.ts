@@ -1,5 +1,6 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
+import { beginFleetWarningUpdate, fleetWarningMessage, fleetWarningResourceKey, resetFleetWarnings } from "./fleetWarnings";
 import type {
   DesktopUpdateStatus,
   FleetBatchResult,
@@ -48,6 +49,7 @@ export function activeMachineScope(): MachineScope {
 export function setActiveMachineScope(scope: MachineScope) {
   const value = String(scope || "all").trim() || "all";
   localStorage.setItem(ACTIVE_REMOTE_KEY, value);
+  resetFleetWarnings();
   window.dispatchEvent(new CustomEvent("agentmux:machine-scope-changed", { detail: value }));
 }
 
@@ -103,6 +105,7 @@ export function activeTenantTargetID(): string {
 export function setActiveTenantScopeID(id: string, targetID = "local") {
 	if (id) localStorage.setItem(ACTIVE_TENANT_SCOPE_KEY, tenantScopeKey(id, targetID));
   else localStorage.removeItem(ACTIVE_TENANT_SCOPE_KEY);
+  resetFleetWarnings();
   window.dispatchEvent(new CustomEvent<string>(TENANT_SCOPE_CHANGED_EVENT, { detail: id }));
 	window.dispatchEvent(new CustomEvent("agentmux:machine-scope-changed", { detail: activeMachineScope() }));
 }
@@ -148,15 +151,28 @@ async function fleetBatch<T>(
 	tenantScoped = true,
 ) {
   const path = `/api/v1/remote/fleet/${endpoint}`;
-  const res = await fetch(path, {
-    method: "POST",
-    cache: "no-store",
-		headers: { "Content-Type": "application/json", ...(tenantScoped ? consoleHeaders(path) : CONSOLE_HEADER) },
-    body: JSON.stringify({ target_ids: targetIDs, requests }),
-  });
-  const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
-  if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
-  return payload;
+  const updateWarnings = beginFleetWarningUpdate(JSON.stringify([
+    endpoint, tenantScoped, [...targetIDs].sort(),
+    requests.map((request) => [request.method || "GET", fleetWarningResourceKey(request.path)]),
+  ]));
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(tenantScoped ? consoleHeaders(path) : CONSOLE_HEADER) },
+      body: JSON.stringify({ target_ids: targetIDs, requests }),
+    });
+    const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
+    if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
+    updateWarnings((payload.targets ?? []).flatMap((target) => requests.flatMap((request) => {
+      const response = target.responses.find((response) => response.key === request.key);
+      return response?.ok ? [] : [fleetWarningMessage(target.target.name, response?.error || "unavailable")];
+    })));
+    return payload;
+  } catch (error) {
+    updateWarnings([error instanceof Error ? error.message : String(error)]);
+    throw error;
+  }
 }
 
 export function fleetQuery<T>(requests: FleetOperation[], targetIDs?: string[]) {

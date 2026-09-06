@@ -335,7 +335,7 @@ func TestMeetingOriginQuestionBypassesStaleEndedCache(t *testing.T) {
 	runtime := &channelRuntime{
 		owner: engine, channel: Channel{ID: "channel-1", Type: "feishu"}, platform: platform,
 		agent: &fakeAgent{}, runCtx: ctx, connected: true, state: ChannelStateRunning,
-		sessions: map[string]AgentSession{}, controlTasks: map[string]*channelControlState{},
+		sessions: map[string]*channelSessionBinding{}, controlTasks: map[string]*channelControlState{},
 	}
 	engine.channels["channel-1"] = runtime
 	if _, err := engine.AskMeeting("channel-1", "meeting-1", "讲个笑话", "meeting", "ou_user"); err != nil {

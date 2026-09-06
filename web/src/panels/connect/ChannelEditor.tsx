@@ -52,7 +52,7 @@ export function ChannelEditor({
   const fields = CHANNEL_FIELDS[draft.type ?? ""] ?? [];
   const isFeishuLike = draft.type === "feishu" || draft.type === "lark";
   const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
-	const isCodexAgent = selectedAgent?.runtime_id === "codex" || selectedAgent?.runtime_id === "codex-app";
+	const isCodexAgent = selectedAgent?.runtime_id === "codex" || selectedAgent?.runtime_id === "codex-app" || selectedAgent?.runtime_id === "traecli";
   const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
   const autoSetupPlatformRef = useRef("");
   const automationRef = useRef({ sessionID: "", cancelled: false, polling: false });
@@ -255,9 +255,7 @@ export function ChannelEditor({
             value={draft.agent_id ?? ""}
             onChange={(e) => {
               const agentID = e.target.value;
-              const runtimeID = agents.find((agent) => agent.id === agentID)?.runtime_id;
               const config = { ...(draft.config ?? {}) };
-				if (runtimeID !== "codex" && runtimeID !== "codex-app") config.codex_control_enabled = "false";
               delete config.approval_mode;
               update({ agent_id: agentID, config });
             }}
@@ -363,6 +361,7 @@ export function FeishuChannelOptions({
 }) {
   const { t } = useI18n();
   const config = draft.config ?? {};
+  const controlCapability = draft.control_capability ?? draft.codex_control_capability;
   const replyMode = configValue(config, "reply_mode", FEISHU_DEFAULTS.reply_mode);
   const ackEnabled = configValue(config, "ack_reaction_enabled", FEISHU_DEFAULTS.ack_reaction_enabled) !== "false";
   const legacyMeetingVoice = configValue(config, "meeting_voice_enabled", FEISHU_DEFAULTS.meeting_voice_enabled) === "true";
@@ -380,7 +379,7 @@ export function FeishuChannelOptions({
 	const [ttsCatalogError, setTTSCatalogError] = useState("");
 	const [ttsBusy, setTTSBusy] = useState("");
 	const [ttsProgress, setTTSProgress] = useState<Record<string, OperationProgress>>({});
-  const codexControl = configValue(config, "codex_control_enabled", FEISHU_DEFAULTS.codex_control_enabled) === "true";
+
 
 	async function loadTTSModels() {
 		try {
@@ -446,33 +445,25 @@ export function FeishuChannelOptions({
             ))}
           </select>
         </label>
-        {codexAgent && (
-          <label className="switch-row channel-option-toggle">
-            <span>
-              <strong>{t("connect.codexControl")}</strong>
-              <small>{t("connect.codexControlHint")}</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={codexControl}
-              onChange={(e) => updateConfig("codex_control_enabled", e.target.checked ? "true" : "false")}
-            />
-          </label>
-        )}
-        {codexAgent && codexControl && (
-          <>
-            <div className="field">
-              <span>{t("connect.codexCapability")}</span>
-              <small>
-                {draft.codex_control_capability?.state === "ready"
-                  ? t("connect.codexCapabilityReady")
-                  : draft.codex_control_capability?.state === "unavailable"
-                    ? `${t("connect.codexCapabilityUnavailable")} ${draft.codex_control_capability.error ?? ""}`
-                    : draft.codex_control_capability?.state === "disconnected"
-                      ? t("connect.codexCapabilityDisconnected")
-                      : t("connect.codexCapabilityPending")}
-              </small>
-            </div>
+        <p className="subtle-copy">{t("connect.taskQueueHint")}</p>
+        <label className="field">
+          <span>{t("connect.privateChatMode")}</span>
+          <select value={configValue(config, "private_chat_mode", "chat")} onChange={(e) => updateConfig("private_chat_mode", e.target.value)}>
+            <option value="chat">{t("connect.modeChat")}</option>
+            <option value="thread">{t("connect.modeThread")}</option>
+            <option value="group">{t("connect.modeGroup")}</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>{t("connect.groupChatMode")}</span>
+          <select value={configValue(config, "group_chat_mode", "chat-topic")} onChange={(e) => updateConfig("group_chat_mode", e.target.value)}>
+            <option value="chat-topic">{t("connect.modeChatTopic")}</option>
+            <option value="chat">{t("connect.modeChat")}</option>
+            <option value="new-topic">{t("connect.modeThread")}</option>
+          </select>
+          <small>{t("connect.modeOverrideHint")}</small>
+        </label>
+        {codexAgent && <div className="field"><span>{t("connect.codexCapability")}</span><small>{controlCapability?.error || (controlCapability?.state === "ready" ? t("connect.codexCapabilityReady") : t("connect.codexCapabilityPending"))}</small></div>}
             <label className="field">
               <span>{t("connect.codexAllowedUsers")}</span>
               <input
@@ -495,12 +486,10 @@ export function FeishuChannelOptions({
                 type="number"
                 min={1}
                 max={100}
-                value={configValue(config, "codex_max_queue", FEISHU_DEFAULTS.codex_max_queue)}
-                onChange={(e) => updateConfig("codex_max_queue", e.target.value)}
+                value={configValue(config, "max_queue", configValue(config,"codex_max_queue","20"))}
+                onChange={(e) => updateConfig("max_queue", e.target.value)}
               />
             </label>
-          </>
-        )}
         <label className="field">
           <span>{t("connect.turnTimeout")}</span>
           <input

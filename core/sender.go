@@ -194,7 +194,7 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 		return "", fmt.Errorf("conversation %q was not found in channel %q", conversationID, channelID)
 	}
 	turnCtx, cancelTurn := context.WithCancel(ctx)
-	turn, started := rt.beginDirectTurn(conversation.ConversationKey, "agentmux-console", cancelTurn)
+	turn, started := rt.beginDirectTurn(turnCtx, conversation.ConversationKey, "agentmux-console", cancelTurn)
 	if !started {
 		cancelTurn()
 		return "", fmt.Errorf("conversation %q is already running", conversationID)
@@ -223,15 +223,16 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	}
 	e.emit(ctx, HookMessageReceived, data)
 
-	sess, conv, created, err := rt.session(turnCtx, msg)
+	sess, conv, created, generation, releaseSession, err := rt.session(turnCtx, msg)
 	if err != nil {
 		e.emit(ctx, HookError, withError(data, err))
 		return "", err
 	}
-	data["agent_id"] = rt.workspace.AgentID
-	data["runtime_id"] = rt.workspace.RuntimeID
-	if rt.agent != nil {
-		data["agent_name"] = rt.agent.Name()
+	defer releaseSession()
+	data["agent_id"] = generation.workspace.AgentID
+	data["runtime_id"] = generation.workspace.RuntimeID
+	if generation.agent != nil {
+		data["agent_name"] = generation.agent.Name()
 	}
 	data["session_id"] = sessionObservationID(sess)
 	if conv != nil {

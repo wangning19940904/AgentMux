@@ -40,11 +40,18 @@ type codexRPCResponse struct {
 }
 
 func newCodexAppClient(ctx context.Context, agent *codexAgent, workDir string) (*codexAppClient, error) {
-	name := "codex"
+	name := agent.binary
+	if name == "" {
+		name = "codex"
+	}
 	if path, err := exec.LookPath(name); err == nil {
 		name = path
 	}
-	cmd := exec.Command(name, codexAppServerArgs(ctx)...)
+	args := codexAppServerArgs(ctx)
+	if agent.Name() == "traecli" {
+		args = []string{"app-server", "--listen", "stdio://"}
+	}
+	cmd := exec.Command(name, args...)
 	cmd.Dir = workDir
 	cmd.Env = runner.BuildEnv(agent.env)
 	client := &codexAppClient{

@@ -64,6 +64,9 @@ type ModelCatalogParser func(output []byte) (ModelCatalog, error)
 type Spec struct {
 	Name   string
 	Binary string
+	// EnsureAuth runs before model discovery and every turn, including resumes.
+	// It must not start a model turn or an interactive login flow.
+	EnsureAuth func(context.Context, map[string]string) error
 	// Args returns the argv (excluding the binary) for a turn carrying prompt.
 	Args func(prompt, systemPrompt, model, approvalMode string) []string
 	// ResumeArgs builds a follow-up turn against a native session discovered
@@ -178,6 +181,11 @@ func (a *Agent) Name() string { return a.spec.Name }
 
 // StartSession creates a new turn-based session.
 func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
+	if a.spec.EnsureAuth != nil {
+		if err := a.spec.EnsureAuth(ctx, a.env); err != nil {
+			return nil, err
+		}
+	}
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}
@@ -340,3 +348,15 @@ func (a *Agent) ListSessions(ctx context.Context) ([]string, error) { return nil
 
 // Stop is a no-op.
 func (a *Agent) Stop(ctx context.Context) error { return nil }
+
+// StartSessionResume restores the native handle for adapters with resume args.
+func (a *Agent) StartSessionResume(ctx context.Context, dir, id string) (core.AgentSession, error) {
+	sess, err := a.StartSession(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	if a.spec.ResumeArgs != nil {
+		sess.(*session).rememberNativeSessionID(id)
+	}
+	return sess, nil
+}

@@ -146,6 +146,12 @@ export function SessionsPanel() {
   );
   const interactionChannelID = selected?.channel_id || bindChannelID;
   const interactionConversationID = selected?.conversation_id || bindConversationID;
+  const conversationTasks = useAsync(
+    () => interactionChannelID ? api.channelTasks(interactionChannelID, interactionConversationID, selected?.target_id) : Promise.resolve([]),
+    [interactionChannelID, interactionConversationID, selected?.target_id]
+  );
+  usePolling(conversationTasks.reload, 3000, { enabled: Boolean(selected?.channel_id) });
+  const waitingTasks = (conversationTasks.data ?? []).filter(task => task.status === "queued" || task.status === "steering" || task.status === "steer_unknown");
   const pendingInteractions = useAsync(
     () => (interactionChannelID ? api.channelInteractions(interactionChannelID, interactionConversationID, selected?.target_id) : Promise.resolve([])),
     [interactionChannelID, interactionConversationID, selected?.target_id]
@@ -655,6 +661,18 @@ export function SessionsPanel() {
                   )}
                 </div>
 
+                {selected.channel_id && waitingTasks.length > 0 && (
+                  <div className="session-channel-control">
+                    <strong>{t("sessions.waitingTasks", { count: waitingTasks.length })}</strong>
+                    {waitingTasks.slice().reverse().map((task) => (
+                      <div className="control-row" key={task.id}>
+                        <span>{task.queue_position ? `${task.queue_position}. ` : ""}{task.id}</span>
+                        <span>{task.status === "queued" ? t("sessions.taskQueued") : task.status === "steering" ? t("sessions.taskSteering") : t("sessions.taskSteerUnknown")}</span>
+                        {task.error && <small>{task.error}</small>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {(selected.provider_id === "codex" || traceTool || pendingInteractions.data?.length) && (
                   <details className="session-advanced">
                     <summary>{t("sessions.advanced")}</summary>
