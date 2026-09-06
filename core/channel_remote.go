@@ -50,11 +50,6 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.handleChannelMessageDirect(ctx, msg, data)
 		return
 	}
-	if !rt.authorized(msg.UserID) {
-		_ = rt.platform.Reply(ctx, msg, "你不在此渠道的访问白名单中。")
-		e.emit(ctx, HookMessageSent, data)
-		return
-	}
 	if e.handleChannelHelpCommand(ctx, rt, msg) {
 		e.emit(ctx, HookMessageSent, data)
 		return
@@ -127,21 +122,6 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 
 func (rt *channelRuntime) remoteControlEnabled() bool {
 	return rt != nil && ((rt.owner != nil && rt.owner.channelControl != nil) || CodexRemoteControlEnabled(rt.channel))
-}
-
-func (rt *channelRuntime) authorized(userID string) bool {
-	allowed, admins := ChannelAllowedUsers(rt.channel), ChannelAdminUsers(rt.channel)
-	if len(allowed) == 0 && len(admins) == 0 {
-		return !CodexRemoteControlEnabled(rt.channel)
-	}
-	if strings.TrimSpace(userID) == "" {
-		return false
-	}
-	return allowed[userID] || admins[userID]
-}
-
-func (rt *channelRuntime) isAdmin(userID string) bool {
-	return ChannelAdminUsers(rt.channel)[userID]
 }
 
 func (rt *channelRuntime) controlStateLocked(key string) *channelControlState {

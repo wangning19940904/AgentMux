@@ -228,6 +228,7 @@ func (rt *channelRuntime) remoteStatus(key string) string {
 
 func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, expectedTaskID string) {
 	key := ResolveConversationKey(msg)
+	manager := rt.isChatManager(ctx, msg)
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(key)
 	active := state.active
@@ -237,7 +238,7 @@ func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Me
 	} else if expectedTaskID != "" && active.task.ID != expectedTaskID {
 		rt.controlMu.Unlock()
 		_ = rt.platform.Reply(ctx, msg, "该任务已结束或不再是当前任务。")
-	} else if active.task.ControllerID != msg.UserID && !rt.isAdmin(msg.UserID) {
+	} else if active.task.ControllerID != msg.UserID && !manager {
 		rt.controlMu.Unlock()
 		_ = rt.platform.Reply(ctx, msg, "只有任务控制人或管理员可以停止当前任务。")
 	} else {
@@ -262,8 +263,8 @@ func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Me
 }
 
 func (e *Engine) takeOverRemoteTask(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string) {
-	if !rt.isAdmin(msg.UserID) {
-		_ = rt.platform.Reply(ctx, msg, "只有渠道管理员可以接管任务。")
+	if !rt.isChatManager(ctx, msg) {
+		_ = rt.platform.Reply(ctx, msg, "只有群主或群管理员可以接管任务。")
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
@@ -294,9 +295,9 @@ func (e *Engine) takeOverRemoteTask(ctx context.Context, rt *channelRuntime, msg
 func (e *Engine) clearRemoteQueue(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, confirmed bool) {
 	key := ResolveConversationKey(msg)
 	confirmKey := key + ":" + msg.UserID
+	admin := rt.isChatManager(ctx, msg)
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(key)
-	admin := rt.isAdmin(msg.UserID)
 	count := 0
 	for _, task := range state.queue {
 		if admin || task.task.ControllerID == msg.UserID {

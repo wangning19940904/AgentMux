@@ -294,10 +294,6 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
 			return
 		}
-		if !msg.LogOnly && !rt.authorized(msg.UserID) {
-			_ = rt.platform.Reply(ctx, msg, "你不在此渠道的访问白名单中。")
-			return
-		}
 		if msg.Callback == nil && msg.SourceMessageID != "" {
 			if store, ok := e.conversations.(interface {
 				HasChannelSourceTask(context.Context, string, string) (bool, error)

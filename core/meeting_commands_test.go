@@ -271,16 +271,14 @@ func TestChannelMeetingResponseMode(t *testing.T) {
 	}
 }
 
-func TestMeetingModeCommandUpdatesAuthorizedChannel(t *testing.T) {
+func TestMeetingModeCommandUpdatesChannelWithoutAccessList(t *testing.T) {
 	platform := &meetingCommandTestPlatform{fakePlatform: newFakePlatform("meeting-test")}
 	store := &meetingResponseModeTestStore{}
 	engine := NewEngine(nil, nil)
 	engine.SetMeetingResponseModeStore(store)
 	runtime := &channelRuntime{
-		owner: engine,
-		channel: Channel{ID: "channel-1", Type: "feishu", Config: map[string]string{
-			ChannelConfigAllowedUserIDs: "ou_user",
-		}},
+		owner:    engine,
+		channel:  Channel{ID: "channel-1", Type: "feishu"},
 		platform: platform,
 	}
 	msg := &Message{UserID: "ou_user", Text: "/meeting mode text+voice"}

@@ -40,7 +40,6 @@ type Platform struct {
 	meetingNotify    func(core.MeetingEvent)
 	agentName        string
 	channelName      string
-	meetingUsers     []string
 	meetingWakeWords []string
 
 	client clientAPI
@@ -59,7 +58,6 @@ func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
 	p.meetingNotify, _ = cfg["meeting_event_notify"].(func(core.MeetingEvent))
 	p.agentName, _ = cfg["agent_name"].(string)
 	p.channelName, _ = cfg["channel_name"].(string)
-	p.meetingUsers = meetingBootstrapUsers(cfg)
 	wakeWords, err := core.ParseMeetingVoiceWakeWords(configString(cfg, core.ChannelConfigMeetingWakeWords))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -100,7 +98,7 @@ func (p *Platform) ChannelHealth() core.PlatformHealth {
 // Start opens the long connection and forwards inbound messages.
 func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) error {
 	if p.client == nil {
-		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice, p.meetingGreeting, p.agentName, p.channelName, p.meetingUsers, p.meetingWakeWords, p.meetingNotify)
+		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice, p.meetingGreeting, p.agentName, p.channelName, p.meetingWakeWords, p.meetingNotify)
 		if err != nil {
 			return err
 		}
@@ -112,28 +110,6 @@ func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) erro
 func configString(cfg map[string]any, key string) string {
 	value, _ := cfg[key].(string)
 	return value
-}
-
-func meetingBootstrapUsers(cfg map[string]any) []string {
-	seen := map[string]struct{}{}
-	var users []string
-	for _, key := range []string{core.ChannelConfigAllowedUserIDs, core.ChannelConfigAdminUserIDs} {
-		value, _ := cfg[key].(string)
-		for _, userID := range strings.FieldsFunc(value, func(r rune) bool {
-			return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
-		}) {
-			userID = strings.TrimSpace(userID)
-			if userID == "" {
-				continue
-			}
-			if _, exists := seen[userID]; exists {
-				continue
-			}
-			seen[userID] = struct{}{}
-			users = append(users, userID)
-		}
-	}
-	return users
 }
 
 func (p *Platform) ActiveMeetings() []core.ActiveMeeting {

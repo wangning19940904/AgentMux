@@ -34,8 +34,6 @@ export const FEISHU_DEFAULTS = {
 	meeting_voice_local_model: "kokoro-82m-zh-int8",
 	meeting_voice_local_voice: "3",
   codex_control_enabled: "false",
-  allowed_user_ids: "",
-  admin_user_ids: "",
   codex_max_queue: "20",
   codex_turn_timeout_minutes: "20",
   turn_timeout_minutes: "20",
@@ -159,29 +157,20 @@ export function configValue(config: Record<string, string>, key: string, fallbac
 
 export function completeFeishuDraft(draft: Partial<Channel>, res: FeishuSetupPollResponse): Partial<Channel> {
   const platform = res.platform ?? draft.type ?? "feishu";
-  const ownerID = res.owner_open_id ?? "";
+  const config: Record<string, string> = { ...defaultChannelConfig(platform), ...(draft.config ?? {}) };
+  delete config.allowed_user_ids;
+  delete config.admin_user_ids;
   return {
     ...draft,
     name: (draft.name ?? "").trim() || `${platformLabel(platform)} Bot`,
     type: platform,
     enabled: draft.enabled ?? true,
     config: {
-      ...defaultChannelConfig(platform),
-      ...(draft.config ?? {}),
+      ...config,
       app_id: res.app_id ?? "",
       app_secret: res.app_secret ?? "",
-      allowed_user_ids: mergeChannelUserIDs(draft.config?.allowed_user_ids ?? "", ownerID),
-      admin_user_ids: mergeChannelUserIDs(draft.config?.admin_user_ids ?? "", ownerID),
     },
   };
-}
-
-export function mergeChannelUserIDs(existing: string, added: string) {
-  const values = `${existing},${added}`
-    .split(/[\s,;]+/)
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return Array.from(new Set(values)).join(",");
 }
 
 export function platformLabel(platform: string) {

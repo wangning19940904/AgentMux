@@ -12,8 +12,6 @@ import (
 
 const (
 	ChannelConfigCodexControlEnabled = "codex_control_enabled"
-	ChannelConfigAllowedUserIDs      = "allowed_user_ids"
-	ChannelConfigAdminUserIDs        = "admin_user_ids"
 	ChannelConfigCodexMaxQueue       = "codex_max_queue"
 	ChannelConfigCodexTurnTimeout    = "codex_turn_timeout_minutes"
 	ChannelConfigTurnTimeout         = "turn_timeout_minutes"
@@ -193,14 +191,6 @@ func CodexRemoteControlEnabled(ch Channel) bool {
 	return parseChannelBool(ch.Config[ChannelConfigCodexControlEnabled])
 }
 
-func ChannelAllowedUsers(ch Channel) map[string]bool {
-	return splitChannelIDs(ch.Config[ChannelConfigAllowedUserIDs])
-}
-
-func ChannelAdminUsers(ch Channel) map[string]bool {
-	return splitChannelIDs(ch.Config[ChannelConfigAdminUserIDs])
-}
-
 func ChannelCodexMaxQueue(ch Channel) int {
 	raw := ch.Config["max_queue"]
 	if raw == "" {
@@ -363,18 +353,6 @@ func NewChannelControlID(prefix string) string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return prefix + "-" + hex.EncodeToString(b)
-}
-
-func splitChannelIDs(raw string) map[string]bool {
-	out := map[string]bool{}
-	for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ';' || r == '\n' || r == '\t' || r == ' '
-	}) {
-		if value = strings.TrimSpace(value); value != "" {
-			out[value] = true
-		}
-	}
-	return out
 }
 
 func parseChannelBool(raw string) bool {

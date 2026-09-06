@@ -111,7 +111,7 @@ func trimMeetingQuestionQuotes(value string) string {
 }
 
 const meetingHelpText = `会议命令：
-/meeting join|加入 123456789 — 让机器人加入会议（需白名单）
+/meeting join|加入 123456789 — 让机器人加入会议
 /meeting list|列表 — 查看 Bot 已加入的进行中会议
 /meeting mine|我的 — 查看你与 Bot 同时在场的会议
 /meeting mode|模式 — 查看会议回答方式
@@ -152,14 +152,6 @@ func (e *Engine) handleMeetingMessage(ctx context.Context, rt *channelRuntime, m
 	case "help":
 		reply(meetingHelpText)
 	case "join":
-		if !rt.authorized(msg.UserID) {
-			if len(ChannelAllowedUsers(rt.channel)) == 0 && len(ChannelAdminUsers(rt.channel)) == 0 {
-				reply("加入会议仅允许白名单用户；请先配置 allowed_user_ids 或 admin_user_ids。")
-			} else {
-				reply("你不在此渠道的会议加入白名单中。")
-			}
-			break
-		}
 		result, err := e.JoinMeetingByNumber(ctx, rt.channel.ID, command.MeetingNumber)
 		if err != nil {
 			reply("加入会议失败：" + err.Error())
@@ -180,10 +172,6 @@ func (e *Engine) handleMeetingMessage(ctx context.Context, rt *channelRuntime, m
 	case "mode":
 		if command.Mode == "" {
 			reply("当前会议回答方式：" + meetingResponseModeLabel(rt.currentMeetingResponseMode()) + "。")
-			break
-		}
-		if !rt.authorized(msg.UserID) {
-			reply("切换会议回答方式仅允许渠道白名单用户；请先配置 allowed_user_ids 或 admin_user_ids。")
 			break
 		}
 		mode, err := e.SetMeetingResponseMode(ctx, rt.channel.ID, command.Mode)
