@@ -70,6 +70,7 @@ type cursorUsageState struct {
 }
 
 type cursorRecordBatch func(context.Context, []core.UsageRecord) error
+type cursorSyncFunc func(context.Context, bool) error
 
 type CursorUsageManager struct {
 	store       *store.Store
@@ -79,11 +80,13 @@ type CursorUsageManager struct {
 	http        *http.Client
 	recordBatch cursorRecordBatch
 
-	mu      sync.Mutex
-	state   cursorUsageState
-	syncing bool
-	runCtx  context.Context
-	syncMu  sync.Mutex
+	mu           sync.Mutex
+	state        cursorUsageState
+	syncing      bool
+	pendingCloud bool
+	runCtx       context.Context
+	syncMu       sync.Mutex
+	syncFn       cursorSyncFunc
 }
 
 func NewCursorUsageManager(st *store.Store, log *slog.Logger, home string, recordBatch cursorRecordBatch) *CursorUsageManager {
@@ -255,6 +258,10 @@ func (m *CursorUsageManager) triggerSync(includeCloud bool) {
 	m.mu.Lock()
 	ctx := m.runCtx
 	if m.syncing {
+		// A local scan and the hourly cloud tick are phase-aligned because one
+		// hour is exactly divisible by the 30-second local interval. Never drop
+		// the higher-value cloud request when the local scan wins that race.
+		m.pendingCloud = m.pendingCloud || includeCloud
 		m.mu.Unlock()
 		return
 	}
@@ -263,18 +270,38 @@ func (m *CursorUsageManager) triggerSync(includeCloud bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	go func() {
-		defer func() {
-			m.mu.Lock()
-			m.syncing = false
-			m.mu.Unlock()
-		}()
+	go m.runSyncLoop(ctx, includeCloud)
+}
+
+func (m *CursorUsageManager) runSyncLoop(ctx context.Context, includeCloud bool) {
+	for {
 		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
-		defer cancel()
-		if err := m.sync(syncCtx, includeCloud); err != nil && syncCtx.Err() == nil {
+		err := m.executeSync(syncCtx, includeCloud)
+		timedOut := syncCtx.Err() != nil
+		cancel()
+		if err != nil && !timedOut {
 			m.log.Warn("Cursor usage sync failed", "err", err)
 		}
-	}()
+
+		m.mu.Lock()
+		if m.pendingCloud && m.state.Connected && ctx.Err() == nil {
+			m.pendingCloud = false
+			includeCloud = true
+			m.mu.Unlock()
+			continue
+		}
+		m.pendingCloud = false
+		m.syncing = false
+		m.mu.Unlock()
+		return
+	}
+}
+
+func (m *CursorUsageManager) executeSync(ctx context.Context, includeCloud bool) error {
+	if m.syncFn != nil {
+		return m.syncFn(ctx, includeCloud)
+	}
+	return m.sync(ctx, includeCloud)
 }
 
 func (m *CursorUsageManager) sync(ctx context.Context, includeCloud bool) error {
@@ -373,14 +400,9 @@ func (m *CursorUsageManager) syncCloud(ctx context.Context, state *cursorUsageSt
 		return err
 	}
 	now := time.Now().UTC()
-	since := now.Add(-cursorCloudOverlap)
+	since := cursorCloudSyncStart(now, *state)
 	page := 1
 	if !state.BackfillComplete {
-		if parsed, parseErr := time.Parse(time.RFC3339Nano, state.BackfillFrom); parseErr == nil {
-			since = parsed
-		} else {
-			since = now.Add(-cursorBackfillWindow)
-		}
 		if state.BackfillPage > 0 {
 			page = state.BackfillPage
 		}
@@ -430,6 +452,30 @@ func (m *CursorUsageManager) syncCloud(ctx context.Context, state *cursorUsageSt
 	}
 	state.CloudStatus = map[bool]string{true: "ready", false: "partial"}[result.Complete || state.BackfillComplete]
 	return nil
+}
+
+func cursorCloudSyncStart(now time.Time, state cursorUsageState) time.Time {
+	now = now.UTC()
+	floor := now.Add(-cursorBackfillWindow)
+	if !state.BackfillComplete {
+		if parsed, err := time.Parse(time.RFC3339Nano, state.BackfillFrom); err == nil {
+			if parsed.Before(floor) {
+				return floor
+			}
+			if parsed.Before(now) {
+				return parsed
+			}
+		}
+		return floor
+	}
+	if lastSync, err := time.Parse(time.RFC3339Nano, state.LastSyncAt); err == nil && lastSync.Before(now) {
+		since := lastSync.Add(-cursorCloudOverlap)
+		if since.Before(floor) {
+			return floor
+		}
+		return since
+	}
+	return now.Add(-cursorCloudOverlap)
 }
 
 func (m *CursorUsageManager) connected() bool {

@@ -231,8 +231,8 @@ func waitForCLIAuthTest(t *testing.T, sessionID string, ready func(CLIAuthSessio
 }
 
 func TestInstallGitHubCLIUsesHomebrew(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS Homebrew installation")
 	}
 	bin := t.TempDir()
 	gh := filepath.Join(bin, "gh")
@@ -262,8 +262,8 @@ echo installed
 }
 
 func TestInstallGitHubCLIFindsHomebrewOutsideServicePath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test")
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS Homebrew installation")
 	}
 	prefix := t.TempDir()
 	brewBin := filepath.Join(prefix, "bin")

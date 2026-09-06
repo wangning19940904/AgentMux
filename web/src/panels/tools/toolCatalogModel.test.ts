@@ -4,6 +4,7 @@ import {
   buildInstalledToolRows,
   buildInstallCandidates,
   normalizeToolTargets,
+  toolUpdateCandidates,
 } from "./toolCatalogModel";
 
 function cli(
@@ -61,6 +62,23 @@ const pdf: MarketplaceSkill = {
 };
 
 describe("installed tool rows", () => {
+  it("updates out-of-date CLIs and repairs linked skills without overwriting standalone local skills", () => {
+    const rows = buildInstalledToolRows([
+      cli("opencli", "local", true),
+      cli("opencli", "remote", true),
+      cli("cis-cli", "local", true, { installed: true, in_sync: false }),
+      cli("broken", "local", true),
+      cli("unchecked", "local", true),
+    ], [skill("pdf", "local"), skill("cis-cli", "local")]);
+    const candidates = toolUpdateCandidates(rows, {
+      "local::cli::opencli": { id: "opencli", installed: true, update_available: true },
+      "remote::cli::opencli": { id: "opencli", installed: true, update_available: false },
+      "local::cli::cis-cli": { id: "cis-cli", installed: true, update_available: false },
+      "local::cli::broken": { id: "broken", installed: true, update_available: true, error: "unreachable" },
+    });
+    expect(candidates.map((row) => row.key)).toEqual(["local::cli::cis-cli", "local::cli::opencli"]);
+  });
+
   it("shows installed items only and merges linked Skills on the same machine", () => {
     const rows = buildInstalledToolRows(
       [cli("cis-cli", "local", true, { installed: true, in_sync: true }), cli("opencli", "remote", false)],

@@ -32,14 +32,13 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
-
 	reactionID := ""
 	if msg.RuntimeSettingsAction == nil {
 		reactionID = e.addChannelAckReaction(ctx, rt, msg)
 		defer e.deleteChannelAckReaction(ctx, rt, msg, reactionID)
 	}
 
-	sess, conv, created, err := rt.session(ctx, msg)
+	sess, conv, created, generation, releaseSession, err := rt.session(ctx, msg)
 	if err != nil {
 		e.log.Error("start channel session", "channel", rt.channel.Name, "err", err)
 		e.emit(ctx, HookError, withError(data, err))
@@ -48,17 +47,19 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		}
 		return
 	}
-	data["agent_id"] = rt.workspace.AgentID
-	data["runtime_id"] = rt.workspace.RuntimeID
-	data["memory_scope"] = rt.workspace.MemoryScope
-	if rt.agent != nil {
-		data["agent_name"] = rt.agent.Name()
+	defer releaseSession()
+	sessionAgent, sessionWorkspace := generation.agent, generation.workspace
+	data["agent_id"] = sessionWorkspace.AgentID
+	data["runtime_id"] = sessionWorkspace.RuntimeID
+	data["memory_scope"] = sessionWorkspace.MemoryScope
+	if sessionAgent != nil {
+		data["agent_name"] = sessionAgent.Name()
 	}
 	data["session_id"] = sessionObservationID(sess)
 	if conv != nil {
 		data["conversation_id"] = conv.ID
 	}
-	rt.attachRemoteSession(ResolveConversationKey(msg), sess, conv)
+	rt.attachRemoteSession(ResolveConversationKey(msg), sess, conv, generation)
 	rt.decorateRemoteTaskData(ResolveConversationKey(msg), data)
 	if created {
 		e.emit(ctx, HookSessionStarted, data)
@@ -66,7 +67,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	defer e.persistConversationTurn(ctx, conv, sess)
 	defaults := rt.runtimeDefaults()
 	actionApplied := false
-	if e.handleRuntimeSettingsAction(ctx, sess, msg, &defaults, rt.workspace.AgentID, func(state RuntimeSettingsPickerState) bool {
+	if e.handleRuntimeSettingsAction(ctx, sess, msg, &defaults, sessionWorkspace.AgentID, func(state RuntimeSettingsPickerState) bool {
 		actionApplied = state.Notice == ""
 		picker, ok := rt.platform.(RuntimeSettingsPickerReplier)
 		if !ok {
@@ -103,7 +104,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		if !ok {
 			return false
 		}
-		state.AgentDefaultsEditable = rt.workspace.AgentID != "" && !strings.HasPrefix(rt.workspace.AgentID, "config:") && e.runtimeSettingsDefaults != nil
+		state.AgentDefaultsEditable = sessionWorkspace.AgentID != "" && !strings.HasPrefix(sessionWorkspace.AgentID, "config:") && e.runtimeSettingsDefaults != nil
 		state.RuntimeDefaults = defaults
 		if err := picker.ReplyRuntimeSettingsPicker(ctx, msg, state); err != nil {
 			e.log.Error("channel runtime settings picker reply", "channel", rt.channel.Name, "err", err)
@@ -148,7 +149,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	if managedDirectTurn {
 		turnCtx, cancelTurn := context.WithTimeout(ctx, ChannelTurnTimeout(rt.channel))
 		conversationKey := ResolveConversationKey(msg)
-		turn, started := rt.beginDirectTurn(conversationKey, msg.UserID, cancelTurn)
+		turn, started := rt.beginDirectTurn(turnCtx, conversationKey, msg.UserID, cancelTurn)
 		if !started {
 			cancelTurn()
 			_ = rt.platform.Reply(ctx, msg, "上一条消息仍在处理中。请等待完成，或发送 /stop 终止后再试。")
@@ -192,7 +193,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 
 	agentMsg := channelMessageForAgent(rt.channel, msg)
 	mode, ok := channelReplyMode(rt.channel)
-	if rt.remoteControlEnabled() && data["task_id"] != "" && isFeishuLikeChannel(rt.channel.Type) {
+	if CodexRemoteControlEnabled(rt.channel) && data["task_id"] != "" && isFeishuLikeChannel(rt.channel.Type) {
 		// Codex remote-control tasks always use one durable status card in
 		// Feishu/Lark. The classic reply_mode remains unchanged for ordinary
 		// channels and runtime/model control messages.
@@ -241,7 +242,7 @@ func (rt *channelRuntime) initialRuntimeConfigurationSetting(sess AgentSession) 
 	}
 	// Approval mode is owned by the bound Agent. Only ask when the Agent has no
 	// usable default; legacy channel-level approval_mode values are ignored.
-	agentDefault := strings.TrimSpace(rt.defaultSettings.ApprovalMode)
+	agentDefault := strings.TrimSpace(rt.runtimeDefaults().ApprovalMode)
 	if len(caps.ApprovalModes) > 1 && (agentDefault == "" || !runtimeOptionContains(caps.ApprovalModes, agentDefault)) {
 		return RuntimeSettingApprovalMode, true
 	}
@@ -392,7 +393,8 @@ func (e *Engine) handleConversationCommand(ctx context.Context, rt *channelRunti
 	if !isConversationCommand(msg.Text) {
 		return false
 	}
-	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, ResolveConversationKey(msg), rt.workspace.AgentID, rt.dropSession)
+	_, _, workspace := rt.agentSnapshot()
+	e.resetConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, ResolveConversationKey(msg), workspace.AgentID, rt.dropSession)
 	if replyErr := rt.platform.Reply(ctx, msg, conversationResetReply); replyErr != nil {
 		e.log.Error("channel reply", "channel", rt.channel.Name, "err", replyErr)
 	}

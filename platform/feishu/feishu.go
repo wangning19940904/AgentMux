@@ -667,6 +667,12 @@ func shouldReplyInThread(msg *core.Message) bool {
 	if msg == nil || msg.ID == "" {
 		return false
 	}
+	if msg.ReplyInThread {
+		return true
+	}
+	if msg.ChatMode == "chat" && strings.HasPrefix(msg.ConversationKey, "chat:") {
+		return false
+	}
 	return msg.ThreadID != "" || msg.RootID != "" || (msg.ChatType != "" && msg.ChatType != "p2p")
 }
 

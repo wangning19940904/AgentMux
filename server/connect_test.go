@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -462,6 +463,47 @@ func TestChannelsListIncludesFeishuBotInfo(t *testing.T) {
 	}
 }
 
+func TestChannelsHealthViewSkipsRemoteBotInfoAndConfig(t *testing.T) {
+	s, st := newTestServer(t)
+	now := time.Now().UTC()
+	channel := core.Channel{
+		ID: "channel-health", Name: "Health Bot", Type: "feishu", Enabled: true,
+		Config:    map[string]string{"app_id": "health_app", "app_secret": "secret"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertChannel(context.Background(), &channel); err != nil {
+		t.Fatal(err)
+	}
+
+	oldBase := channelBotOpenAPIBase["feishu"]
+	var remoteCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		remoteCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	channelBotOpenAPIBase["feishu"] = upstream.URL
+	t.Cleanup(func() { channelBotOpenAPIBase["feishu"] = oldBase })
+
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/channels?view=health", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var listed []apiChannel
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != channel.Name || listed[0].State != "pending" {
+		t.Fatalf("listed = %+v", listed)
+	}
+	if listed[0].Config != nil || listed[0].BotName != "" || listed[0].BotAvatarURL != "" {
+		t.Fatalf("health view leaked full channel details: %+v", listed[0])
+	}
+	if calls := remoteCalls.Load(); calls != 0 {
+		t.Fatalf("health view made %d remote bot-info calls", calls)
+	}
+}
+
 func TestFeishuSetupBeginAndPollLarkSwitch(t *testing.T) {
 	s, _ := newTestServer(t)
 	var calls []string
@@ -666,8 +708,8 @@ func TestCodexRemoteControlChannelValidation(t *testing.T) {
 	channel.AgentID = "agent-other"
 	channel.Config[core.ChannelConfigAllowedUserIDs] = "ou_member"
 	rec = doJSON(t, s, http.MethodPost, "/api/v1/channels", channel)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Codex Agent") {
-		t.Fatalf("wrong runtime: code=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generic runtime: code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	channel.AgentID = "agent-codex"

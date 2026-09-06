@@ -34,12 +34,13 @@ export function TenantsPanel({
 }: {
   onContinue?: () => void;
   onTenantChanged?: (change?: { type: "delete"; tenant: Tenant }) => void;
-  identity?: TenancySelf;
+  identity: TenancySelf;
   initialTenants?: Tenant[];
 }) {
   const { t } = useI18n();
-  const self = useAsync(() => identity ? Promise.resolve(identity) : api.tenancySelf(), [identity]);
-  const admin = identity?.admin === true || self.data?.admin === true;
+  // The shell owns identity verification and navigation access. Do not run a
+  // second check here that can succeed while the shell remains locked.
+  const admin = identity.admin;
   const tenants = useAsync(() => admin ? api.tenants() : Promise.resolve([]), [admin]);
 
   const [selectedID, setSelectedID] = useState("");
@@ -64,9 +65,9 @@ export function TenantsPanel({
       : Promise.resolve({ grants: [], agents: [], channels: [], triggers: [], providers: [] }),
     [admin, selectedID],
   );
-  const scoped = self.data && !self.data.admin;
+  const scoped = !admin;
   const hasActiveTenant = scoped
-    ? Boolean(self.data?.tenant_id && self.data.status !== "disabled")
+    ? Boolean(identity.tenant_id && identity.status !== "disabled")
     : items.some((item) => item.status === "active");
 
   async function run(
@@ -91,26 +92,6 @@ export function TenantsPanel({
     }
   }
 
-  if (self.loading) {
-    return <div className="empty-state">{t("tenants.checking")}</div>;
-  }
-
-  if (self.error || !self.data) {
-    return (
-      <section className="surface">
-        <div className="surface-header">
-          <div>
-            <h2>{t("tenants.requiredTitle")}</h2>
-            <p>{t("tenants.identityError")}</p>
-          </div>
-          <button className="ghost-action" onClick={() => void self.reload()}>
-            <RefreshCw size={15} /> {t("common.retry")}
-          </button>
-        </div>
-      </section>
-    );
-  }
-
   if (scoped) {
     return (
       <div className="page-stack">
@@ -118,7 +99,7 @@ export function TenantsPanel({
           <div className="surface-header">
             <div>
               <h2>{t("tenants.registeredTitle")}</h2>
-              <p>{t("tenants.registeredHint", { tenant: self.data?.tenant ?? "" })}</p>
+              <p>{t("tenants.registeredHint", { tenant: identity.tenant ?? "" })}</p>
             </div>
             <button className="primary-action" onClick={onContinue}>
               <ShieldCheck size={15} /> {t("tenants.enterConfig")}
@@ -131,15 +112,15 @@ export function TenantsPanel({
                   <ShieldCheck size={15} />
                 </span>
                 <span>
-                  <strong>{self.data.tenant}</strong>
-                  <small>{self.data.tenant_id}</small>
+                  <strong>{identity.tenant}</strong>
+                  <small>{identity.tenant_id}</small>
                 </span>
               </div>
               <div className="agent-list-meta">
                 <span className="status-badge success">
                   <span className="status-dot" /> {t("tenants.active")}
                 </span>
-                <span className="source-badge manual">{self.data.kind ?? "app"}</span>
+                <span className="source-badge manual">{identity.kind ?? "app"}</span>
               </div>
             </article>
           </div>

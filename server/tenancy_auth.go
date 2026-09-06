@@ -62,6 +62,7 @@ var tenantConsoleRoutePolicy = map[string][]string{
 	// Channels (stable).
 	"/api/v1/channels/validate": {http.MethodPost},
 	"/api/v1/channels/restart":  {http.MethodPost},
+	"/api/v1/channel-avatar":    {http.MethodGet},
 
 	// Channel onboarding. These flows only exchange the current user's Feishu
 	// device/web session for credentials and then save through tenant-scoped

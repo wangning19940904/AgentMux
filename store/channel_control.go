@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -22,13 +24,13 @@ func (s *Store) CreateChannelTask(ctx context.Context, task core.ChannelTask) er
 	}
 	_, err := s.writer.ExecContext(ctx, `INSERT INTO channel_tasks
 		(id,channel_id,conversation_id,conversation_key,chat_id,message_id,chat_type,root_id,thread_id,user_id,controller_id,
-		 native_thread_id,turn_id,status,error,delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,prompt,created_at,started_at,finished_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 native_thread_id,turn_id,status,error,delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,source_message_id,control_json,prompt,created_at,started_at,finished_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		task.ID, task.ChannelID, task.ConversationID, task.ConversationKey, task.ChatID,
 		task.MessageID, task.ChatType, task.RootID, task.ThreadID, task.UserID, task.ControllerID,
 		task.NativeThreadID, task.TurnID, task.Status,
 		task.Error, task.DeliveryKey, task.DeliveryStatus, task.DeliveryAttempts, task.DeliveryError,
-		formatControlTime(task.DeliveredAt), task.FeedbackNonce, task.Prompt, formatControlTime(task.CreatedAt), formatControlTime(task.StartedAt),
+		formatControlTime(task.DeliveredAt), task.FeedbackNonce, task.SourceMessageID, taskControlJSON(task), task.Prompt, formatControlTime(task.CreatedAt), formatControlTime(task.StartedAt),
 		formatControlTime(task.FinishedAt), formatControlTime(task.UpdatedAt))
 	return err
 }
@@ -37,11 +39,11 @@ func (s *Store) UpdateChannelTask(ctx context.Context, task core.ChannelTask) er
 	task.UpdatedAt = time.Now().UTC()
 	_, err := s.writer.ExecContext(ctx, `UPDATE channel_tasks SET
 		conversation_id=?,controller_id=?,native_thread_id=?,turn_id=?,status=?,error=?,prompt=?,
-		delivery_key=?,delivery_status=?,delivery_attempts=?,delivery_error=?,delivered_at=?,feedback_nonce=?,
+		delivery_key=?,delivery_status=?,delivery_attempts=?,delivery_error=?,delivered_at=?,feedback_nonce=?,control_json=?,
 		started_at=?,finished_at=?,updated_at=? WHERE id=?`,
 		task.ConversationID, task.ControllerID, task.NativeThreadID, task.TurnID, task.Status, task.Error,
 		task.Prompt, task.DeliveryKey, task.DeliveryStatus, task.DeliveryAttempts, task.DeliveryError,
-		formatControlTime(task.DeliveredAt), task.FeedbackNonce, formatControlTime(task.StartedAt), formatControlTime(task.FinishedAt),
+		formatControlTime(task.DeliveredAt), task.FeedbackNonce, taskControlJSON(task), formatControlTime(task.StartedAt), formatControlTime(task.FinishedAt),
 		formatControlTime(task.UpdatedAt), task.ID)
 	return err
 }
@@ -49,7 +51,7 @@ func (s *Store) UpdateChannelTask(ctx context.Context, task core.ChannelTask) er
 func (s *Store) GetChannelTask(ctx context.Context, id string) (*core.ChannelTask, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id,channel_id,conversation_id,conversation_key,chat_id,user_id,controller_id,
 		message_id,chat_type,root_id,thread_id,native_thread_id,turn_id,status,error,delivery_key,delivery_status,
-		delivery_attempts,delivery_error,delivered_at,feedback_nonce,prompt,created_at,started_at,finished_at,updated_at
+		delivery_attempts,delivery_error,delivered_at,feedback_nonce,source_message_id,control_json,prompt,created_at,started_at,finished_at,updated_at
 		FROM channel_tasks WHERE id=?`, id)
 	task, err := scanChannelTask(row)
 	if err == sql.ErrNoRows {
@@ -61,7 +63,7 @@ func (s *Store) GetChannelTask(ctx context.Context, id string) (*core.ChannelTas
 func (s *Store) ListChannelTasks(ctx context.Context, channelID, conversationID string, activeOnly bool) ([]core.ChannelTask, error) {
 	q := `SELECT id,channel_id,conversation_id,conversation_key,chat_id,user_id,controller_id,
 		message_id,chat_type,root_id,thread_id,
-		native_thread_id,turn_id,status,error,delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,prompt,created_at,started_at,finished_at,updated_at
+		native_thread_id,turn_id,status,error,delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,source_message_id,control_json,prompt,created_at,started_at,finished_at,updated_at
 		FROM channel_tasks WHERE 1=1`
 	args := []any{}
 	if channelID != "" {
@@ -135,6 +137,9 @@ func (s *Store) ListLatestChannelTasks(ctx context.Context) ([]core.ChannelTask,
 // already started as interrupted. Started prompts are never replayed.
 func (s *Store) RecoverChannelTasks(ctx context.Context, channelID string) ([]core.ChannelTask, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.writer.ExecContext(ctx, `UPDATE channel_tasks SET status='steer_unknown',error='追加结果待确认：服务在提交期间重启',prompt='',updated_at=? WHERE channel_id=? AND status='steering'`, now, channelID); err != nil {
+		return nil, err
+	}
 	if _, err := s.writer.ExecContext(ctx, `UPDATE channel_interactions
 		SET status='expired', resolved_at=?, resolved_by='system-restart'
 		WHERE channel_id=? AND status='pending' AND task_id IN (
@@ -150,9 +155,9 @@ func (s *Store) RecoverChannelTasks(ctx context.Context, channelID string) ([]co
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,channel_id,conversation_id,conversation_key,
 		chat_id,user_id,controller_id,message_id,chat_type,root_id,thread_id,native_thread_id,turn_id,status,error,
-		delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,prompt,
+		delivery_key,delivery_status,delivery_attempts,delivery_error,delivered_at,feedback_nonce,source_message_id,control_json,prompt,
 		created_at,started_at,finished_at,updated_at FROM channel_tasks
-		WHERE channel_id=? AND status='queued' ORDER BY created_at ASC`, channelID)
+		WHERE channel_id=? AND status='queued' ORDER BY created_at ASC,id ASC`, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +170,12 @@ func (s *Store) RecoverChannelTasks(ctx context.Context, channelID string) ([]co
 		}
 		out = append(out, *task)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
 	return out, rows.Err()
 }
 
@@ -172,11 +183,11 @@ func scanChannelTask(sc scanner) (*core.ChannelTask, error) {
 	var task core.ChannelTask
 	var conversationID, chatID, userID, controllerID, messageID, chatType, rootID, threadID, nativeThreadID, turnID sql.NullString
 	var status string
-	var errText, deliveryKey, deliveryStatus, deliveryError, deliveredAt, feedbackNonce, prompt, createdAt, startedAt, finishedAt, updatedAt sql.NullString
+	var errText, deliveryKey, deliveryStatus, deliveryError, deliveredAt, feedbackNonce, sourceMessageID, controlJSON, prompt, createdAt, startedAt, finishedAt, updatedAt sql.NullString
 	var deliveryAttempts int
 	if err := sc.Scan(&task.ID, &task.ChannelID, &conversationID, &task.ConversationKey,
 		&chatID, &userID, &controllerID, &messageID, &chatType, &rootID, &threadID,
-		&nativeThreadID, &turnID, &status, &errText, &deliveryKey, &deliveryStatus, &deliveryAttempts, &deliveryError, &deliveredAt, &feedbackNonce,
+		&nativeThreadID, &turnID, &status, &errText, &deliveryKey, &deliveryStatus, &deliveryAttempts, &deliveryError, &deliveredAt, &feedbackNonce, &sourceMessageID, &controlJSON,
 		&prompt, &createdAt, &startedAt, &finishedAt, &updatedAt); err != nil {
 		return nil, err
 	}
@@ -198,6 +209,8 @@ func scanChannelTask(sc scanner) (*core.ChannelTask, error) {
 	task.DeliveryError = deliveryError.String
 	task.DeliveredAt = parseControlTime(deliveredAt.String)
 	task.FeedbackNonce = feedbackNonce.String
+	task.SourceMessageID = sourceMessageID.String
+	decodeTaskControlJSON(&task, controlJSON.String)
 	task.Prompt = prompt.String
 	task.CreatedAt = parseControlTime(createdAt.String)
 	task.StartedAt = parseControlTime(startedAt.String)
@@ -394,4 +407,24 @@ func formatControlTime(value time.Time) string {
 func parseControlTime(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
+}
+
+func taskControlJSON(task core.ChannelTask) string {
+	b, _ := json.Marshal(map[string]string{"card_id": task.ControlCardID, "nonce": task.ControlNonce, "target_task_id": task.TargetTaskID, "chat_mode": task.ChatMode, "reply_in_thread": fmt.Sprint(task.ReplyInThread)})
+	return string(b)
+}
+func decodeTaskControlJSON(task *core.ChannelTask, raw string) {
+	var fields map[string]string
+	if json.Unmarshal([]byte(raw), &fields) != nil {
+		return
+	}
+	task.ChatMode = fields["chat_mode"]
+	task.ReplyInThread = fields["reply_in_thread"] == "true"
+	task.ControlCardID, task.ControlNonce, task.TargetTaskID = fields["card_id"], fields["nonce"], fields["target_task_id"]
+}
+
+func (s *Store) HasChannelSourceTask(ctx context.Context, channelID, messageID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM channel_tasks WHERE channel_id=? AND (source_message_id=? OR message_id=?))`, channelID, messageID, messageID).Scan(&exists)
+	return exists, err
 }

@@ -1,0 +1,1755 @@
+diff --git a/README.md b/README.md
+index e1dc8ab..e6bbc06 100644
+--- a/README.md
++++ b/README.md
+@@ -128,6 +128,10 @@ make release
+ 
+ Cursor 用量默认不读取。请在 Console 的「用量账本 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
+ 
++TRAE CLI 的账户登录会自动维护：运行中的 AgentMux 每 5 分钟检查已启用的 TRAE Agent，在凭证到期前 15 分钟尝试通过 TRAE 原生接口续期，开始会话和每次发送消息前也会检查。同一登录的并发刷新会合并，失败后退避重试；凭证仍有效时，临时网络故障不阻断对话。Token 的刷新和保存由 TRAE CLI 完成，不进入 AgentMux 数据库。如果 SSO 或刷新凭证已失效，框架页面会显示需要登录，调用也会给出明确提示；此时仍需在对应机器的「框架 → TRAE CLI」重新授权。后台维护随 AgentMux 停止而停止，不自动打开浏览器。
++
++AgentMux 在 Linux/macOS 启动时会从用户的交互式登录 shell 导入 `http_proxy`、`https_proxy`、`all_proxy`、`no_proxy`（包括大写形式），供后台服务和所有 Agent 子进程共同使用。服务启动环境中显式设置的变量优先，同名变量的大小写形式按一组处理；单个 Agent 的环境配置仍可覆盖全局设置。只读取已导出的代理变量，不导入其他 shell 环境变量；读取最多等待 5 秒，失败时沿用服务原有环境。修改 shell 代理配置后需要重启 AgentMux。
++
+ ## 配置
+ 
+ 复制 `config.example.toml` 为 `config.toml`,或直接运行
+diff --git a/agent/cliagent/cliagent.go b/agent/cliagent/cliagent.go
+index 4537124..da56def 100644
+--- a/agent/cliagent/cliagent.go
++++ b/agent/cliagent/cliagent.go
+@@ -64,6 +64,9 @@ type ModelCatalogParser func(output []byte) (ModelCatalog, error)
+ type Spec struct {
+ 	Name   string
+ 	Binary string
++	// EnsureAuth runs before model discovery and every turn, including resumes.
++	// It must not start a model turn or an interactive login flow.
++	EnsureAuth func(context.Context, map[string]string) error
+ 	// Args returns the argv (excluding the binary) for a turn carrying prompt.
+ 	Args func(prompt, systemPrompt, model, approvalMode string) []string
+ 	// ResumeArgs builds a follow-up turn against a native session discovered
+@@ -178,6 +181,11 @@ func (a *Agent) Name() string { return a.spec.Name }
+ 
+ // StartSession creates a new turn-based session.
+ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
++	if a.spec.EnsureAuth != nil {
++		if err := a.spec.EnsureAuth(ctx, a.env); err != nil {
++			return nil, err
++		}
++	}
+ 	if workDir == "" {
+ 		workDir, _ = os.Getwd()
+ 	}
+diff --git a/agent/cliagent/session.go b/agent/cliagent/session.go
+index d1c6775..7903e47 100644
+--- a/agent/cliagent/session.go
++++ b/agent/cliagent/session.go
+@@ -132,6 +132,11 @@ func (s *session) SetModel(model string) error {
+ func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
+ 
+ func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
++	if s.agent.spec.EnsureAuth != nil {
++		if err := s.agent.spec.EnsureAuth(ctx, s.agent.env); err != nil {
++			return nil, err
++		}
++	}
+ 	out := make(chan *core.Event, 16)
+ 	settings := s.CurrentRuntimeSettings()
+ 	model := settings.Model
+diff --git a/agent/cliagents/cliagents.go b/agent/cliagents/cliagents.go
+index 7a1a1c0..4cc1a60 100644
+--- a/agent/cliagents/cliagents.go
++++ b/agent/cliagents/cliagents.go
+@@ -18,6 +18,7 @@ import (
+ 
+ 	"github.com/wangning19940904/AgentMux/agent/cliagent"
+ 	"github.com/wangning19940904/AgentMux/core"
++	"github.com/wangning19940904/AgentMux/internal/traeauth"
+ )
+ 
+ func register(name, binary string, supportsModel bool, defaultApproval string,
+@@ -69,7 +70,8 @@ func registerTrae() {
+ 	core.RegisterAgent("traecli", func(cfg map[string]any) (core.Agent, error) {
+ 		return cliagent.New(cliagent.Spec{
+ 			Name: "traecli", Binary: "traecli",
+-			Args: traeArgs, ResumeArgs: traeResumeArgs,
++			EnsureAuth: traeauth.Ensure,
++			Args:       traeArgs, ResumeArgs: traeResumeArgs,
+ 			SessionIDFromLine: traeSessionID,
+ 			EventMapper:       traeStreamEvents, FinalFromLast: true, SupportsModel: true,
+ 			ApprovalModes: core.ApprovalModeValuesForRuntime("traecli"), DefaultApprovalMode: core.ApprovalModeManual,
+diff --git a/agent/cliagents/codex_app_server.go b/agent/cliagents/codex_app_server.go
+index 1d8206d..6308ed2 100644
+--- a/agent/cliagents/codex_app_server.go
++++ b/agent/cliagents/codex_app_server.go
+@@ -1392,6 +1392,12 @@ func (m *codexEventMapper) mapNotification(method string, params map[string]any)
+ 		}
+ 		status := firstString(turn, "status")
+ 		duration := codexInt64(turn["durationMs"])
++		if status == "interrupted" {
++			return []*core.Event{{
++				Type: core.EventModelResponse, EventID: lifecycleEventID(m.turnID, "interrupted"), TurnID: m.turnID,
++				Status: status, DurationMs: duration, Err: context.Canceled, Metadata: m.metadata("completed"),
++			}}, true, context.Canceled
++		}
+ 		if status == "failed" {
+ 			err := codexTurnError(turn)
+ 			return []*core.Event{{
+diff --git a/bootstrap/runtime.go b/bootstrap/runtime.go
+index ef37afd..5db016a 100644
+--- a/bootstrap/runtime.go
++++ b/bootstrap/runtime.go
+@@ -41,10 +41,12 @@ type Runtime struct {
+ 	Engine   *core.Engine
+ 	Connect  *core.ConnectService
+ 
+-	mu      sync.Mutex
+-	started bool
+-	errCh   chan runtimeResult
+-	stop    sync.Once
++	mu          sync.Mutex
++	started     bool
++	errCh       chan runtimeResult
++	stop        sync.Once
++	authRefresh func(context.Context)
++	authWG      sync.WaitGroup
+ }
+ 
+ // NewRuntime assembles the complete daemon under one cancellable lifecycle.
+@@ -60,6 +62,11 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
+ 		cancel()
+ 		return nil, fmt.Errorf("config.toml projects/hooks are no longer runtime resources; run `amux database import-config --apply`, then remove those sections")
+ 	}
++	if keys, err := framework.InheritShellProxyEnvironment(ctx); err != nil {
++		log.Warn("shell proxy settings unavailable; using service environment", "err", err)
++	} else if len(keys) > 0 {
++		log.Info("inherited shell proxy settings", "variables", keys)
++	}
+ 	framework.PrepareRuntimeEnvironment()
+ 	skillManager := skills.NewPersistent(st)
+ 	initializer := workspace.NewWithSkillManager(skillManager)
+@@ -109,6 +116,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
+ 	return &Runtime{
+ 		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService,
+ 		Usage: usageEngine, Engine: engine, Connect: connect,
++		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
+ 	}, nil
+ }
+ 
+@@ -125,6 +133,13 @@ func (r *Runtime) Start() error {
+ 	}
+ 	r.started = true
+ 	r.errCh = make(chan runtimeResult, 2)
++	if r.authRefresh != nil {
++		r.authWG.Add(1)
++		go func() {
++			defer r.authWG.Done()
++			r.authRefresh(r.ctx)
++		}()
++	}
+ 	r.mu.Unlock()
+ 
+ 	if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
+@@ -186,6 +201,7 @@ func (r *Runtime) Stop() {
+ 	}
+ 	r.stop.Do(func() {
+ 		r.cancel()
++		r.authWG.Wait()
+ 		if r.Connect != nil {
+ 			r.Connect.Stop()
+ 		}
+diff --git a/core/channel_direct.go b/core/channel_direct.go
+index a099505..94f578c 100644
+--- a/core/channel_direct.go
++++ b/core/channel_direct.go
+@@ -11,6 +11,7 @@ import (
+ // follow-up messages from spawning overlapping CLI agents while an earlier
+ // subprocess is still active.
+ type directChannelTurn struct {
++	ctx           context.Context
+ 	controllerID  string
+ 	cancel        context.CancelFunc
+ 	done          chan struct{}
+@@ -20,12 +21,12 @@ type directChannelTurn struct {
+ 	runErr        string
+ }
+ 
+-func (rt *channelRuntime) beginDirectTurn(key, controllerID string, cancel context.CancelFunc) (*directChannelTurn, bool) {
++func (rt *channelRuntime) beginDirectTurn(ctx context.Context, key, controllerID string, cancel context.CancelFunc) (*directChannelTurn, bool) {
+ 	key = strings.TrimSpace(key)
+ 	if key == "" {
+ 		key = "default"
+ 	}
+-	turn := &directChannelTurn{controllerID: controllerID, cancel: cancel, done: make(chan struct{})}
++	turn := &directChannelTurn{ctx: ctx, controllerID: controllerID, cancel: cancel, done: make(chan struct{})}
+ 	rt.controlMu.Lock()
+ 	defer rt.controlMu.Unlock()
+ 	if rt.directTurns == nil {
+@@ -63,6 +64,9 @@ func (rt *channelRuntime) finishDirectTurn(key string, turn *directChannelTurn)
+ 				if turn.task.Error == "" {
+ 					turn.task.Error = "interrupted by task controller"
+ 				}
++			case turn.ctx != nil && turn.ctx.Err() != nil:
++				turn.task.Status = ChannelTaskInterrupted
++				turn.task.Error = turn.ctx.Err().Error()
+ 			case turn.runErr != "":
+ 				turn.task.Status = ChannelTaskFailed
+ 				turn.task.Error = turn.runErr
+diff --git a/core/channel_direct_test.go b/core/channel_direct_test.go
+index e25a2e4..c900d69 100644
+--- a/core/channel_direct_test.go
++++ b/core/channel_direct_test.go
+@@ -13,19 +13,19 @@ import (
+ func TestDirectChannelTurnIsSingleFlightPerConversation(t *testing.T) {
+ 	rt := &channelRuntime{directTurns: map[string]*directChannelTurn{}}
+ 	ctx, cancel := context.WithCancel(context.Background())
+-	turn, ok := rt.beginDirectTurn("chat-1", "user-1", cancel)
++	turn, ok := rt.beginDirectTurn(ctx, "chat-1", "user-1", cancel)
+ 	if !ok || turn == nil {
+ 		t.Fatal("first direct turn was not accepted")
+ 	}
+-	_, second := rt.beginDirectTurn("chat-1", "user-1", func() {})
++	_, second := rt.beginDirectTurn(ctx, "chat-1", "user-1", func() {})
+ 	if second {
+ 		t.Fatal("overlapping direct turn was accepted")
+ 	}
+-	if _, other := rt.beginDirectTurn("chat-2", "user-2", func() {}); !other {
++	if _, other := rt.beginDirectTurn(ctx, "chat-2", "user-2", func() {}); !other {
+ 		t.Fatal("independent conversation was blocked")
+ 	}
+ 	rt.finishDirectTurn("chat-1", turn)
+-	if _, next := rt.beginDirectTurn("chat-1", "user-1", func() {}); !next {
++	if _, next := rt.beginDirectTurn(ctx, "chat-1", "user-1", func() {}); !next {
+ 		t.Fatal("conversation remained blocked after the turn finished")
+ 	}
+ 	select {
+@@ -38,7 +38,7 @@ func TestDirectChannelTurnIsSingleFlightPerConversation(t *testing.T) {
+ func TestCancelDirectTurnForResetWaitsForCompletion(t *testing.T) {
+ 	rt := &channelRuntime{directTurns: map[string]*directChannelTurn{}}
+ 	ctx, cancel := context.WithCancel(context.Background())
+-	turn, ok := rt.beginDirectTurn("chat-1", "user-1", cancel)
++	turn, ok := rt.beginDirectTurn(ctx, "chat-1", "user-1", cancel)
+ 	if !ok {
+ 		t.Fatal("direct turn was not accepted")
+ 	}
+@@ -82,8 +82,8 @@ func TestFinalDeliveryRetriesAndPersistsDirectTaskState(t *testing.T) {
+ 	}
+ 	engine.channels[rt.channel.ID] = rt
+ 
+-	_, cancel := context.WithCancel(context.Background())
+-	turn, ok := rt.beginDirectTurn("chat:one", "user", cancel)
++	ctx, cancel := context.WithCancel(context.Background())
++	turn, ok := rt.beginDirectTurn(ctx, "chat:one", "user", cancel)
+ 	if !ok {
+ 		t.Fatal("direct turn was not accepted")
+ 	}
+@@ -119,8 +119,8 @@ func TestFinalDeliveryExhaustionFailsTask(t *testing.T) {
+ 		directTurns: map[string]*directChannelTurn{}, controlTasks: map[string]*channelControlState{},
+ 	}
+ 	engine.channels[rt.channel.ID] = rt
+-	_, cancel := context.WithCancel(context.Background())
+-	turn, _ := rt.beginDirectTurn("chat:failed", "user", cancel)
++	ctx, cancel := context.WithCancel(context.Background())
++	turn, _ := rt.beginDirectTurn(ctx, "chat:failed", "user", cancel)
+ 	task := ChannelTask{ID: "task-failed", ChannelID: rt.channel.ID, ConversationKey: "chat:failed", Status: ChannelTaskRunning, DeliveryStatus: ChannelDeliveryPending}
+ 	rt.attachDirectTask("chat:failed", turn, task, &Message{ChannelID: rt.channel.ID, ConversationKey: "chat:failed"})
+ 	data := withTaskData(map[string]string{"channel_id": rt.channel.ID, "conversation_key": "chat:failed"}, task, "started")
+diff --git a/core/channel_dispatch.go b/core/channel_dispatch.go
+index 9b7d2ac..93fbc17 100644
+--- a/core/channel_dispatch.go
++++ b/core/channel_dispatch.go
+@@ -148,7 +148,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
+ 	if managedDirectTurn {
+ 		turnCtx, cancelTurn := context.WithTimeout(ctx, ChannelTurnTimeout(rt.channel))
+ 		conversationKey := ResolveConversationKey(msg)
+-		turn, started := rt.beginDirectTurn(conversationKey, msg.UserID, cancelTurn)
++		turn, started := rt.beginDirectTurn(turnCtx, conversationKey, msg.UserID, cancelTurn)
+ 		if !started {
+ 			cancelTurn()
+ 			_ = rt.platform.Reply(ctx, msg, "上一条消息仍在处理中。请等待完成，或发送 /stop 终止后再试。")
+diff --git a/core/meeting_commands.go b/core/meeting_commands.go
+index dcc6433..24261e6 100644
+--- a/core/meeting_commands.go
++++ b/core/meeting_commands.go
+@@ -332,7 +332,7 @@ func (e *Engine) AskMeeting(channelID, meetingID, question, source, userID strin
+ 		base = context.Background()
+ 	}
+ 	turnCtx, cancel := context.WithTimeout(base, ChannelTurnTimeout(rt.channel))
+-	guard, started := rt.beginDirectTurn("meeting:"+meetingID, userID, cancel)
++	guard, started := rt.beginDirectTurn(turnCtx, "meeting:"+meetingID, userID, cancel)
+ 	if !started {
+ 		cancel()
+ 		return MeetingTurn{}, ErrMeetingBusy
+diff --git a/core/sender.go b/core/sender.go
+index a67115f..3b4bfbe 100644
+--- a/core/sender.go
++++ b/core/sender.go
+@@ -194,7 +194,7 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
+ 		return "", fmt.Errorf("conversation %q was not found in channel %q", conversationID, channelID)
+ 	}
+ 	turnCtx, cancelTurn := context.WithCancel(ctx)
+-	turn, started := rt.beginDirectTurn(conversation.ConversationKey, "agentmux-console", cancelTurn)
++	turn, started := rt.beginDirectTurn(turnCtx, conversation.ConversationKey, "agentmux-console", cancelTurn)
+ 	if !started {
+ 		cancelTurn()
+ 		return "", fmt.Errorf("conversation %q is already running", conversationID)
+diff --git a/core/turn_streaming.go b/core/turn_streaming.go
+index 3ec6f3f..b628cf0 100644
+--- a/core/turn_streaming.go
++++ b/core/turn_streaming.go
+@@ -191,10 +191,31 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
+ 	var answer, completedAnswer, thinking, rendered string
+ 	var failed bool
+ 	var answerAfterLastTool bool
++	var modelRetrying bool
++	clearModelRetry := func() {
++		if modelRetrying {
++			thinking = ""
++		}
++		modelRetrying = false
++	}
+ 	var tools toolProgress
+ 	for ev := range events {
+ 		e.updateRemoteTaskFromEvent(data, ev)
+ 		switch ev.Type {
++		case EventModelResponse:
++			if ev.Err != nil && ev.Metadata["will_retry"] == "true" {
++				modelRetrying = true
++				thinking = "模型服务请求失败，正在重试…"
++				body := tools.render(thinking, answer, false)
++				if body != rendered {
++					if err := stream.Update(ctx, body, false, false); err != nil {
++						e.log.Error("stream update", "err", err)
++					}
++					rendered = body
++				}
++			} else if ev.Err == nil {
++				clearModelRetry()
++			}
+ 		case EventPermission:
+ 			if !e.dispatchAgentInteraction(ctx, ev, data) {
+ 				e.declineAgentInteraction(ctx, sess, ev)
+@@ -209,6 +230,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
+ 				}
+ 			}
+ 		case EventThinking:
++			clearModelRetry()
+ 			if ev.Text == "" {
+ 				continue
+ 			}
+@@ -221,6 +243,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
+ 				rendered = body
+ 			}
+ 		case EventToolUse:
++			clearModelRetry()
+ 			answerAfterLastTool = false
+ 			completedAnswer = ""
+ 			// Native adapters provide ToolCallID, allowing parallel and
+@@ -238,6 +261,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
+ 				rendered = body
+ 			}
+ 		case EventFinal, EventOutput:
++			clearModelRetry()
+ 			if ev.Text == "" || ev.Text == "NO_REPLY" {
+ 				continue
+ 			}
+@@ -291,7 +315,10 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
+ 		tools = toolProgress{}
+ 		failed = false
+ 	} else if ctx.Err() == context.DeadlineExceeded {
+-		answer = "任务执行超时，已自动终止。需要扫码、授权、验证码或人工确认时，请让命令在后台运行，并使用 request_user_input 暂停等待用户，不要让 shell 前台阻塞。"
++		answer = "任务执行超时，已自动终止。可能是模型服务连接异常或任务耗时过长，请稍后重试；如反复出现，请检查该机器的网络、代理配置和运行日志。"
++		if modelRetrying {
++			answer = "任务执行超时，已自动终止。模型服务请求持续失败，请检查该机器的网络、代理配置或模型服务状态后重试。"
++		}
+ 		thinking = ""
+ 		failed = true
+ 	}
+diff --git a/framework/auth.go b/framework/auth.go
+index 05f68c5..bf6fef3 100644
+--- a/framework/auth.go
++++ b/framework/auth.go
+@@ -12,6 +12,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/wangning19940904/AgentMux/internal/authflow"
++	"github.com/wangning19940904/AgentMux/internal/traeauth"
+ )
+ 
+ // AuthState describes whether a locally installed framework can use its own
+@@ -28,12 +29,14 @@ const (
+ // Detail is deliberately generic so account identifiers and command output do
+ // not leak through the HTTP API.
+ type AuthStatus struct {
+-	Kind            string    `json:"kind"`
+-	State           AuthState `json:"state"`
+-	Installed       bool      `json:"installed"`
+-	LoginSupported  bool      `json:"login_supported"`
+-	LogoutSupported bool      `json:"logout_supported"`
+-	Detail          string    `json:"detail,omitempty"`
++	Kind                 string    `json:"kind"`
++	State                AuthState `json:"state"`
++	Installed            bool      `json:"installed"`
++	LoginSupported       bool      `json:"login_supported"`
++	LogoutSupported      bool      `json:"logout_supported"`
++	Detail               string    `json:"detail,omitempty"`
++	AutoRefreshSupported bool      `json:"auto_refresh_supported,omitempty"`
++	ExpiresAt            string    `json:"expires_at,omitempty"`
+ }
+ 
+ // LoginResult contains the actionable part of a CLI login flow. The command
+@@ -138,6 +141,17 @@ func CheckAuth(ctx context.Context, kind string) AuthStatus {
+ 	}
+ 	output, commandErr := frameworkCommandContext(checkCtx, binary, config.statusArgs...).CombinedOutput()
+ 	status.State = classifyFrameworkAuth(kind, output, commandErr)
++	if kind == "traecli" {
++		if meta, err := traeauth.ReadMetadata(nil); err == nil && meta.Managed && !meta.ExpiresAt.IsZero() {
++			status.AutoRefreshSupported = true
++			status.ExpiresAt = meta.ExpiresAt.UTC().Format(time.RFC3339)
++			if !meta.ExpiresAt.After(time.Now()) || traeauth.NeedsLogin(nil) {
++				status.State = AuthStateUnauthenticated
++				status.Detail = "TRAE login is no longer valid; automatic renewal or a new login is required"
++				return status
++			}
++		}
++	}
+ 	switch status.State {
+ 	case AuthStateAuthenticated:
+ 		status.Detail = "CLI reports a local login"
+diff --git a/framework/framework_test.go b/framework/framework_test.go
+index 6da8e51..b09a286 100644
+--- a/framework/framework_test.go
++++ b/framework/framework_test.go
+@@ -193,6 +193,7 @@ func TestCheckTraeAuthUsesNativeStatus(t *testing.T) {
+ 		t.Skip("shell script test")
+ 	}
+ 	bin := t.TempDir()
++	t.Setenv("TRAE_HOME", t.TempDir())
+ 	writeFrameworkExecutable(t, filepath.Join(bin, "traecli"), `#!/bin/sh
+ if [ "$1" = "login" ] && [ "$2" = "status" ]; then
+   echo 'Logged in using Trae'
+diff --git a/web/src/api/types.ts b/web/src/api/types.ts
+index 3cdbc18..f4c3ece 100644
+--- a/web/src/api/types.ts
++++ b/web/src/api/types.ts
+@@ -995,6 +995,8 @@ export interface FrameworkAuthStatus {
+   login_supported: boolean;
+   logout_supported?: boolean;
+   detail?: string;
++  auto_refresh_supported?: boolean;
++  expires_at?: string;
+ }
+ 
+ export interface FrameworkLoginResult {
+diff --git a/web/src/i18n/en.ts b/web/src/i18n/en.ts
+index e11f686..d271d87 100644
+--- a/web/src/i18n/en.ts
++++ b/web/src/i18n/en.ts
+@@ -645,6 +645,8 @@ export const en = {
+     "agents.loginChecking": "Checking local sign-in for",
+     "agents.localLoginReadyTitle": "Local framework sign-in detected",
+     "agents.localLoginReady": "No Provider is bound. This Agent will use the CLI's local account.",
++    "agents.loginAutoRefresh": "Renewal is attempted automatically while the Agent is enabled. Expired authorization still requires sign-in.",
++    "agents.loginExpiresAt": "Current credential expires:",
+     "agents.runtimeNotReadyTitle": "Sign in or configure a Provider",
+     "agents.runtimeLoggedOut": "No Provider is bound and the selected framework is not signed in. Sign in now or configure a Provider before using this Agent.",
+     "agents.runtimeAuthUnknown": "No Provider is bound and AgentMux cannot verify this framework's local sign-in. Sign in first or configure a Provider.",
+diff --git a/web/src/i18n/zh.ts b/web/src/i18n/zh.ts
+index cb99f1c..b7fdf70 100644
+--- a/web/src/i18n/zh.ts
++++ b/web/src/i18n/zh.ts
+@@ -641,6 +641,8 @@ export const zh: Record<keyof typeof en, string> = {
+     "agents.loginChecking": "正在检查本机登录态：",
+     "agents.localLoginReadyTitle": "已检测到框架本机登录态",
+     "agents.localLoginReady": "当前未绑定 Provider；这个 Agent 将使用 CLI 的本机账号。",
++    "agents.loginAutoRefresh": "Agent 启用期间会自动尝试续期；授权失效时仍需重新登录。",
++    "agents.loginExpiresAt": "当前凭证到期时间：",
+     "agents.runtimeNotReadyTitle": "请登录或配置 Provider",
+     "agents.runtimeLoggedOut": "当前未绑定 Provider，且所选框架尚未登录。请立即登录，或先配置 Provider 再使用这个 Agent。",
+     "agents.runtimeAuthUnknown": "当前未绑定 Provider，AgentMux 也无法确认该框架的本机登录态。请先登录或配置 Provider。",
+diff --git a/web/src/panels/agents/AgentForm.tsx b/web/src/panels/agents/AgentForm.tsx
+index fc119d4..18a106c 100644
+--- a/web/src/panels/agents/AgentForm.tsx
++++ b/web/src/panels/agents/AgentForm.tsx
+@@ -632,6 +632,11 @@ export function AgentForm({
+                       ? t("agents.runtimeProviderRequired")
+                       : t("agents.runtimeAuthUnknown")}
+               </span>
++              {authStatus?.auto_refresh_supported && authStatus.expires_at && (
++                <span>
++                  {t("agents.loginAutoRefresh")} {t("agents.loginExpiresAt")} {new Date(authStatus.expires_at).toLocaleString()}
++                </span>
++              )}
+               {authStatus?.state !== "authenticated" && (
+                 <div className="agent-route-actions">
+                   {authStatus?.login_supported && (
+diff --git a/agent/cliagent/auth_test.go b/agent/cliagent/auth_test.go
+new file mode 100644
+index 0000000..af22e4f
+--- /dev/null
++++ b/agent/cliagent/auth_test.go
+@@ -0,0 +1,46 @@
++package cliagent
++
++import (
++	"context"
++	"errors"
++	"testing"
++)
++
++func TestAuthPreflightBeforeCatalogAndResumedTurns(t *testing.T) {
++	loginErr := errors.New("login needs renewal")
++	nextError := loginErr
++	calls := 0
++	agent := New(Spec{
++		Name: "auth-test", Binary: "/nonexistent-agentmux-test-cli",
++		EnsureAuth: func(ctx context.Context, env map[string]string) error {
++			calls++
++			if env["TRAE_HOME"] != "/agent-specific-home" {
++				t.Fatal("wrong auth environment")
++			}
++			return nextError
++		},
++		Args: func(string, string, string, string) []string { t.Fatal("turn started with expired auth"); return nil },
++		ResumeArgs: func(string, string, string, string, string) []string {
++			t.Fatal("resume started with expired auth")
++			return nil
++		},
++	}, map[string]any{"env": map[string]string{"TRAE_HOME": "/agent-specific-home"}})
++	if _, err := agent.StartSession(context.Background(), t.TempDir()); !errors.Is(err, loginErr) {
++		t.Fatalf("session auth error=%v", err)
++	}
++	nextError = nil
++	sess, err := agent.StartSession(context.Background(), t.TempDir())
++	if err != nil {
++		t.Fatal(err)
++	}
++	nextError = loginErr
++	for _, nativeID := range []string{"", "existing-native-thread"} {
++		sess.(*session).nativeSessionID = nativeID
++		if _, err := sess.Send(context.Background(), "test"); !errors.Is(err, loginErr) {
++			t.Fatalf("send auth error=%v", err)
++		}
++	}
++	if calls != 4 {
++		t.Fatalf("auth checks=%d, want 4", calls)
++	}
++}
+diff --git a/agent/cliagents/codex_interrupted_test.go b/agent/cliagents/codex_interrupted_test.go
+new file mode 100644
+index 0000000..275ef0d
+--- /dev/null
++++ b/agent/cliagents/codex_interrupted_test.go
+@@ -0,0 +1,21 @@
++package cliagents
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/wangning19940904/AgentMux/core"
++)
++
++func TestCodexInterruptedTurnDoesNotReportPartialAnswerAsSuccess(t *testing.T) {
++	for _, answer := range []string{"", "unfinished answer"} {
++		mapper := &codexEventMapper{threadID: "thread-1", turnID: "turn-1", answer: answer}
++		events, done, err := mapper.mapNotification("turn/completed", map[string]any{
++			"turn": map[string]any{"id": "turn-1", "status": "interrupted"},
++		})
++		if !done || !errors.Is(err, context.Canceled) || len(events) != 1 || events[0].Type != core.EventModelResponse || events[0].Status != "interrupted" || events[0].Final {
++			t.Fatalf("interrupted turn: events=%+v done=%t err=%v", events, done, err)
++		}
++	}
++}
+diff --git a/bootstrap/auth_refresh.go b/bootstrap/auth_refresh.go
+new file mode 100644
+index 0000000..43366a4
+--- /dev/null
++++ b/bootstrap/auth_refresh.go
+@@ -0,0 +1,72 @@
++package bootstrap
++
++import (
++	"context"
++	"log/slog"
++	"time"
++
++	"github.com/wangning19940904/AgentMux/core"
++	"github.com/wangning19940904/AgentMux/internal/traeauth"
++)
++
++type authAgentStore interface {
++	ListAgentInstances(context.Context) ([]core.AgentInstance, error)
++}
++
++func maintainFrameworkAuth(ctx context.Context, st authAgentStore, log *slog.Logger) {
++	ticker := time.NewTicker(traeauth.RefreshInterval)
++	defer ticker.Stop()
++	previous := make(map[string]string)
++	for {
++		if ctx.Err() != nil {
++			return
++		}
++		refreshAgentAuth(ctx, st, log, previous, traeauth.Ensure)
++		select {
++		case <-ctx.Done():
++			return
++		case <-ticker.C:
++		}
++	}
++}
++
++func refreshAgentAuth(ctx context.Context, st authAgentStore, log *slog.Logger, previous map[string]string, ensure func(context.Context, map[string]string) error) {
++	agents, err := st.ListAgentInstances(ctx)
++	if err != nil {
++		if ctx.Err() == nil {
++			log.Warn("could not list agents for login renewal")
++		}
++		return
++	}
++	active := make(map[string]bool)
++	for _, agent := range agents {
++		if ctx.Err() != nil {
++			return
++		}
++		if !agent.Enabled || agent.RuntimeID != "traecli" || agent.ProviderID != "" {
++			continue
++		}
++		active[agent.ID] = true
++		err := ensure(ctx, agent.Env)
++		if ctx.Err() != nil {
++			return
++		}
++		if err == nil {
++			if previous[agent.ID] != "" {
++				log.Info("TRAE login renewal recovered", "agent_id", agent.ID)
++			}
++			delete(previous, agent.ID)
++			continue
++		}
++		// Report transitions only, not an identical warning every five minutes.
++		if previous[agent.ID] != err.Error() {
++			log.Warn("TRAE login renewal requires attention", "agent_id", agent.ID, "detail", err.Error())
++			previous[agent.ID] = err.Error()
++		}
++	}
++	for id := range previous {
++		if !active[id] {
++			delete(previous, id)
++		}
++	}
++}
+diff --git a/bootstrap/auth_refresh_test.go b/bootstrap/auth_refresh_test.go
+new file mode 100644
+index 0000000..caef52e
+--- /dev/null
++++ b/bootstrap/auth_refresh_test.go
+@@ -0,0 +1,65 @@
++package bootstrap
++
++import (
++	"bytes"
++	"context"
++	"log/slog"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/wangning19940904/AgentMux/core"
++	"github.com/wangning19940904/AgentMux/internal/traeauth"
++)
++
++type authStoreStub struct{ agents []core.AgentInstance }
++
++func (s authStoreStub) ListAgentInstances(context.Context) ([]core.AgentInstance, error) {
++	return s.agents, nil
++}
++
++func TestAuthMaintenanceTargetsEnabledLocalTraeAgentsAndLogsTransitions(t *testing.T) {
++	st := authStoreStub{agents: []core.AgentInstance{
++		{ID: "active", RuntimeID: "traecli", Enabled: true, Env: map[string]string{"TRAE_HOME": "/custom/trae"}},
++		{ID: "disabled", RuntimeID: "traecli"},
++		{ID: "provider", RuntimeID: "traecli", Enabled: true, ProviderID: "provider"},
++		{ID: "codex", RuntimeID: "codex", Enabled: true},
++	}}
++	var output bytes.Buffer
++	log := slog.New(slog.NewTextHandler(&output, nil))
++	previous := make(map[string]string)
++	calls := 0
++	failure := traeauth.ErrLoginRequired
++	ensure := func(ctx context.Context, env map[string]string) error {
++		calls++
++		if env["TRAE_HOME"] != "/custom/trae" {
++			t.Fatal("wrong credential scope")
++		}
++		return failure
++	}
++	for range 2 {
++		refreshAgentAuth(context.Background(), st, log, previous, ensure)
++	}
++	if calls != 2 || strings.Count(output.String(), "requires attention") != 1 {
++		t.Fatalf("calls=%d logs=%s", calls, output.String())
++	}
++	failure = nil
++	refreshAgentAuth(context.Background(), st, log, previous, ensure)
++	if len(previous) != 0 || strings.Count(output.String(), "renewal recovered") != 1 {
++		t.Fatalf("recovery: %v %s", previous, output.String())
++	}
++}
++
++func TestRuntimeStopJoinsAuthMaintenance(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	r := &Runtime{ctx: ctx, cancel: cancel}
++	finished := make(chan struct{})
++	r.authWG.Add(1)
++	go func() { defer r.authWG.Done(); <-ctx.Done(); close(finished) }()
++	r.Stop()
++	select {
++	case <-finished:
++	case <-time.After(time.Second):
++		t.Fatal("auth maintenance was not stopped")
++	}
++}
+diff --git a/core/channel_timeout_test.go b/core/channel_timeout_test.go
+new file mode 100644
+index 0000000..e199f99
+--- /dev/null
++++ b/core/channel_timeout_test.go
+@@ -0,0 +1,69 @@
++package core
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestDirectTimeoutIsInterruptedWithoutAgentErrorEvent(t *testing.T) {
++	store := &deliveryControlStore{}
++	engine := NewEngine(nil, NewHookRunner(nil, nil))
++	engine.channelControl = store
++	rt := &channelRuntime{owner: engine, channel: Channel{ID: "timeout-channel"}}
++	engine.channels[rt.channel.ID] = rt
++	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
++	defer cancel()
++	turn, ok := rt.beginDirectTurn(ctx, "chat:timeout", "user", cancel)
++	if !ok {
++		t.Fatal("could not begin turn")
++	}
++	task := ChannelTask{ID: "timeout-task", ChannelID: rt.channel.ID, ConversationKey: "chat:timeout", Status: ChannelTaskRunning}
++	if !rt.attachDirectTask("chat:timeout", turn, task, &Message{ChannelID: rt.channel.ID, ConversationKey: "chat:timeout"}) {
++		t.Fatal("could not attach task")
++	}
++	rt.finishDirectTurn("chat:timeout", turn)
++	got := store.lastTask()
++	if got.Status != ChannelTaskInterrupted || got.Error != context.DeadlineExceeded.Error() || got.FinishedAt.IsZero() {
++		t.Fatalf("timed-out task was not interrupted: %+v", got)
++	}
++}
++
++func TestTimeoutCardDoesNotAssumeInteractiveShell(t *testing.T) {
++	for _, retrying := range []bool{false, true} {
++		engine := NewEngine(nil, NewHookRunner(nil, nil))
++		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
++		events := make(chan *Event, 1)
++		if retrying {
++			events <- &Event{Type: EventModelResponse, Err: errors.New("connection failed"), Metadata: map[string]string{"will_retry": "true"}}
++		}
++		close(events)
++		stream := &finalContextReplyStream{}
++		engine.driveReplyStream(ctx, nil, stream, nil, events, nil)
++		cancel()
++		if !stream.done || !stream.failed || stream.ctxErr != nil || !strings.Contains(stream.text, "超时") || strings.Contains(stream.text, "request_user_input") || strings.Contains(stream.text, "扫码") {
++			t.Fatalf("timeout card=%+v", stream)
++		}
++		if retrying && !strings.Contains(stream.text, "模型服务请求持续失败") {
++			t.Fatalf("missing model failure context: %s", stream.text)
++		}
++	}
++}
++
++func TestModelRetryIsProgressAndCanRecover(t *testing.T) {
++	engine := NewEngine(nil, NewHookRunner(nil, nil))
++	events := make(chan *Event, 2)
++	events <- &Event{Type: EventModelResponse, Err: errors.New("connection failed"), Metadata: map[string]string{"will_retry": "true"}}
++	events <- &Event{Type: EventFinal, Text: "Recovered"}
++	close(events)
++	stream := &recordingTextReplyStream{}
++	engine.driveReplyStream(context.Background(), nil, stream, nil, events, nil)
++	if len(stream.updates) < 2 || !strings.Contains(stream.updates[0], "正在重试") || stream.failed[len(stream.failed)-1] || !strings.Contains(stream.updates[len(stream.updates)-1], "Recovered") {
++		t.Fatalf("retry recovery: %+v", stream)
++	}
++	if strings.Contains(stream.updates[len(stream.updates)-1], "正在重试") {
++		t.Fatal("recovered answer retained stale retry progress")
++	}
++}
+diff --git a/framework/auth_refresh_test.go b/framework/auth_refresh_test.go
+new file mode 100644
+index 0000000..4cab87d
+--- /dev/null
++++ b/framework/auth_refresh_test.go
+@@ -0,0 +1,43 @@
++package framework
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestTraeAuthStatusRejectsExpiredNativeLogin(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("shell fixture")
++	}
++	home, bin := t.TempDir(), t.TempDir()
++	t.Setenv("TRAE_HOME", home)
++	t.Setenv("PATH", bin)
++	writeFrameworkExecutable(t, filepath.Join(bin, "traecli"), "#!/bin/sh\necho 'Logged in using Trae'\n")
++	if err := os.MkdirAll(filepath.Join(home, "cli"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	for _, expired := range []bool{true, false} {
++		expires := time.Now().Add(time.Hour)
++		if expired {
++			expires = time.Now().Add(-time.Hour)
++		}
++		payload := fmt.Sprintf(`{"auth_mode":"trae","trae":{"expires_at":%q,"access_token":"never-serialize-me"}}`, expires.Format(time.RFC3339))
++		if err := os.WriteFile(filepath.Join(home, "cli", "auth.json"), []byte(payload), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		status := CheckAuth(context.Background(), "traecli")
++		want := AuthStateAuthenticated
++		if expired {
++			want = AuthStateUnauthenticated
++		}
++		if status.State != want || !status.AutoRefreshSupported || status.ExpiresAt == "" || strings.Contains(fmt.Sprint(status), "never-serialize-me") {
++			t.Fatalf("status=%+v", status)
++		}
++	}
++}
+diff --git a/framework/shell_proxy.go b/framework/shell_proxy.go
+new file mode 100644
+index 0000000..8d195ec
+--- /dev/null
++++ b/framework/shell_proxy.go
+@@ -0,0 +1,113 @@
++package framework
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"io"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"time"
++
++	"github.com/wangning19940904/AgentMux/internal/procutil"
++)
++
++var proxyEnvironmentPairs = [][2]string{
++	{"http_proxy", "HTTP_PROXY"}, {"https_proxy", "HTTPS_PROXY"},
++	{"all_proxy", "ALL_PROXY"}, {"no_proxy", "NO_PROXY"},
++}
++
++const proxyEnvironmentMarker = "\x1eAGENTMUX_PROXY_ENV\x00"
++
++// InheritShellProxyEnvironment runs once during daemon composition, before
++// HTTP clients and Agent processes start. Service managers do not load shell
++// profiles, so explicitly import their exported proxy variables. Existing
++// service environment takes precedence, including explicitly empty values.
++// Only proxy variables are captured; shell output and credentials are never
++// included in logs. Individual Agent env overrides still take precedence.
++func InheritShellProxyEnvironment(ctx context.Context) ([]string, error) {
++	if runtime.GOOS == "windows" {
++		return nil, nil
++	}
++	values, err := readShellProxyEnvironment(ctx)
++	if err != nil {
++		return nil, err
++	}
++	var imported []string
++	for _, pair := range proxyEnvironmentPairs {
++		_, lowerSet := os.LookupEnv(pair[0])
++		_, upperSet := os.LookupEnv(pair[1])
++		if lowerSet || upperSet {
++			continue // Do not shadow an explicit value with its other-case alias.
++		}
++		for _, key := range pair {
++			if value, ok := values[key]; ok {
++				if err := os.Setenv(key, value); err != nil {
++					return imported, errors.New("could not import shell proxy settings")
++				}
++				imported = append(imported, key)
++			}
++		}
++	}
++	return imported, nil
++}
++
++func readShellProxyEnvironment(ctx context.Context) (map[string]string, error) {
++	shell := strings.TrimSpace(os.Getenv("SHELL"))
++	if shell == "" {
++		shell = "/bin/bash"
++		if runtime.GOOS == "darwin" {
++			shell = "/bin/zsh"
++		}
++		if _, err := os.Stat(shell); err != nil {
++			shell = "/bin/sh"
++		}
++	}
++	if !filepath.IsAbs(shell) {
++		return nil, errors.New("login shell path must be absolute")
++	}
++	// A POSIX child works even when the interactive login shell is fish. The
++	// child sees only exported values, matching normal CLI subprocess behavior.
++	script := "printf '\\036AGENTMUX_PROXY_ENV\\000';\n"
++	for _, pair := range proxyEnvironmentPairs {
++		for _, key := range pair {
++			script += "if [ \"${" + key + "+x}\" = x ]; then printf '" + key + "=%s\\000' \"$" + key + "\"; fi\n"
++		}
++	}
++	command := "exec /bin/sh -c '" + strings.ReplaceAll(script, "'", "'\\''") + "'"
++	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(probeCtx, shell, "-ilc", command)
++	cmd.Dir = durableFrameworkCommandDir()
++	cmd.Stderr = io.Discard
++	procutil.Prepare(cmd)
++	output, err := cmd.Output()
++	if err != nil {
++		return nil, errors.New("could not read login shell proxy settings within 5 seconds")
++	}
++	return parseShellProxyEnvironment(output)
++}
++
++func parseShellProxyEnvironment(output []byte) (map[string]string, error) {
++	index := bytes.LastIndex(output, []byte(proxyEnvironmentMarker))
++	if index < 0 {
++		return nil, errors.New("login shell did not return proxy settings")
++	}
++	allowed := make(map[string]bool)
++	for _, pair := range proxyEnvironmentPairs {
++		for _, key := range pair {
++			allowed[key] = true
++		}
++	}
++	values := make(map[string]string)
++	for _, entry := range bytes.Split(output[index+len(proxyEnvironmentMarker):], []byte{0}) {
++		key, value, ok := strings.Cut(string(entry), "=")
++		if ok && allowed[key] {
++			values[key] = value
++		}
++	}
++	return values, nil
++}
+diff --git a/framework/shell_proxy_test.go b/framework/shell_proxy_test.go
+new file mode 100644
+index 0000000..09b733c
+--- /dev/null
++++ b/framework/shell_proxy_test.go
+@@ -0,0 +1,121 @@
++package framework
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++	"time"
++)
++
++func unsetProxyEnvironment(t *testing.T) {
++	t.Helper()
++	for _, pair := range proxyEnvironmentPairs {
++		for _, key := range pair {
++			value, present := os.LookupEnv(key)
++			if err := os.Unsetenv(key); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() {
++				if present {
++					_ = os.Setenv(key, value)
++				} else {
++					_ = os.Unsetenv(key)
++				}
++			})
++		}
++	}
++}
++
++func fakeProxyShell(t *testing.T, body string) {
++	t.Helper()
++	if runtime.GOOS == "windows" {
++		t.Skip("POSIX shell fixture")
++	}
++	path := filepath.Join(t.TempDir(), "shell")
++	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("SHELL", path)
++}
++
++func TestImportShellProxiesForDaemonAndChildren(t *testing.T) {
++	unsetProxyEnvironment(t)
++	fakeProxyShell(t, `
++export http_proxy='http://proxy.example:8118'
++export https_proxy='http://proxy.example:8118'
++export no_proxy='localhost,127.0.0.1,::1,code.example'
++export PRIVATE_AUTH_TOKEN='must-not-be-imported'
++printf 'profile banner\n'
++exec /bin/sh -c "$2"
++`)
++	values, err := readShellProxyEnvironment(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(values) != 3 || values["http_proxy"] != "http://proxy.example:8118" || values["PRIVATE_AUTH_TOKEN"] != "" {
++		t.Fatalf("unexpected proxy snapshot: %#v", values)
++	}
++	keys, err := InheritShellProxyEnvironment(context.Background())
++	if err != nil || len(keys) != 3 {
++		t.Fatalf("import keys=%v err=%v", keys, err)
++	}
++	if os.Getenv("https_proxy") != values["https_proxy"] || os.Getenv("no_proxy") != values["no_proxy"] {
++		t.Fatal("proxies not available to child environment")
++	}
++}
++
++func TestExplicitServiceProxyOverridesShellIncludingEmptyValues(t *testing.T) {
++	unsetProxyEnvironment(t)
++	t.Setenv("HTTP_PROXY", "http://service.example:8080")
++	t.Setenv("https_proxy", "")
++	t.Setenv("NO_PROXY", "localhost,internal.example")
++	fakeProxyShell(t, `
++export http_proxy='http://shell.example:8118'
++export HTTPS_PROXY='http://shell.example:8118'
++export no_proxy='wrong.example'
++export ALL_PROXY='socks5://shell.example:1080'
++exec /bin/sh -c "$2"
++`)
++	keys, err := InheritShellProxyEnvironment(context.Background())
++	if err != nil || len(keys) != 1 || keys[0] != "ALL_PROXY" {
++		t.Fatalf("import keys=%v err=%v", keys, err)
++	}
++	if os.Getenv("HTTP_PROXY") != "http://service.example:8080" || os.Getenv("https_proxy") != "" || os.Getenv("NO_PROXY") != "localhost,internal.example" {
++		t.Fatal("service proxy settings were overwritten")
++	}
++	if _, ok := os.LookupEnv("http_proxy"); ok {
++		t.Fatal("lowercase shell value shadows explicit uppercase proxy")
++	}
++	if _, ok := os.LookupEnv("HTTPS_PROXY"); ok {
++		t.Fatal("explicitly disabled proxy was re-enabled")
++	}
++}
++
++func TestShellProxyCaptureHonorsCancellationAndRedactsDiagnostics(t *testing.T) {
++	unsetProxyEnvironment(t)
++	fakeProxyShell(t, "echo 'private-auth-diagnostic' >&2\nexec /bin/sleep 30\n")
++	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++	defer cancel()
++	start := time.Now()
++	keys, err := InheritShellProxyEnvironment(ctx)
++	if err == nil || len(keys) != 0 || strings.Contains(err.Error(), "private-auth-diagnostic") || time.Since(start) > 3*time.Second {
++		t.Fatalf("capture keys=%v err=%v", keys, err)
++	}
++}
++
++func TestLiveShellProxyInheritance(t *testing.T) {
++	if os.Getenv("AGENTMUX_LIVE_SHELL_PROXY") != "1" {
++		t.Skip("requires a host with exported shell proxy settings")
++	}
++	keys, err := InheritShellProxyEnvironment(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if os.Getenv("https_proxy") == "" && os.Getenv("HTTPS_PROXY") == "" {
++		t.Fatal("shell HTTPS proxy was not inherited")
++	}
++	t.Logf("imported proxy variable names: %v", keys)
++}
+diff --git a/internal/traeauth/auth.go b/internal/traeauth/auth.go
+new file mode 100644
+index 0000000..90c9165
+--- /dev/null
++++ b/internal/traeauth/auth.go
+@@ -0,0 +1,220 @@
++// Package traeauth renews TRAE-managed credentials through the native CLI.
++// AgentMux reads expiry metadata only; the CLI owns tokens and their storage.
++package traeauth
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"time"
++)
++
++const RefreshInterval = 5 * time.Minute
++const refreshAhead = 15 * time.Minute
++
++var ErrLoginRequired = errors.New("TRAE 登录已失效，自动续期失败；请在该机器的 AgentMux「框架 → TRAE CLI」中重新登录")
++var ErrRefreshUnavailable = errors.New("TRAE 登录自动续期暂时失败，请稍后重试；若持续失败，请在该机器的 AgentMux「框架 → TRAE CLI」中重新登录")
++
++type Metadata struct {
++	Managed     bool
++	ExpiresAt   time.Time
++	LastRefresh time.Time
++	stamp       string
++}
++
++// ReadMetadata respects the same HOME/TRAE_HOME overrides as the Agent.
++// Unrecognized credential formats are left to the native CLI.
++func ReadMetadata(extra map[string]string) (Metadata, error) {
++	path, err := authPath(extra)
++	if err != nil {
++		return Metadata{}, err
++	}
++	return readMetadata(path)
++}
++
++func authPath(extra map[string]string) (string, error) {
++	value := func(key string) string {
++		if v, ok := extra[key]; ok {
++			return v
++		}
++		return os.Getenv(key)
++	}
++	home := strings.TrimSpace(value("TRAE_HOME"))
++	if home == "" {
++		userHome := value("HOME")
++		if userHome == "" {
++			var err error
++			userHome, err = os.UserHomeDir()
++			if err != nil {
++				return "", err
++			}
++		}
++		home = filepath.Join(userHome, ".trae")
++	}
++	path, err := filepath.Abs(filepath.Join(home, "cli", "auth.json"))
++	if err == nil {
++		if resolved, resolveErr := filepath.EvalSymlinks(path); resolveErr == nil {
++			path = resolved
++		}
++	}
++	return path, err
++}
++
++func readMetadata(path string) (Metadata, error) {
++	f, err := os.Open(path)
++	if errors.Is(err, os.ErrNotExist) {
++		return Metadata{}, nil
++	}
++	if err != nil {
++		return Metadata{}, err
++	}
++	defer f.Close()
++	var payload struct {
++		AuthMode    string    `json:"auth_mode"`
++		LastRefresh time.Time `json:"last_refresh"`
++		Trae        struct {
++			ExpiresAt time.Time `json:"expires_at"`
++		} `json:"trae"`
++	}
++	if err := json.NewDecoder(f).Decode(&payload); err != nil {
++		return Metadata{}, err
++	}
++	meta := Metadata{Managed: payload.AuthMode == "trae", ExpiresAt: payload.Trae.ExpiresAt, LastRefresh: payload.LastRefresh}
++	if info, err := f.Stat(); err == nil {
++		meta.stamp = info.ModTime().UTC().Format(time.RFC3339Nano)
++	}
++	return meta, nil
++}
++
++type entry struct {
++	gate        chan struct{}
++	stamp       string
++	nextAttempt time.Time
++	failures    int
++	err         error
++}
++
++type manager struct {
++	mu      sync.Mutex
++	entries map[string]*entry
++	now     func() time.Time
++	refresh func(context.Context, map[string]string) error
++}
++
++var defaultManager = &manager{entries: make(map[string]*entry), now: time.Now, refresh: refreshNative}
++
++// Ensure renews credentials near expiry. Concurrent channels sharing a login
++// share one refresh, and transient failures back off without blocking turns
++// that still have valid credentials. No model turn or browser login is started.
++func Ensure(ctx context.Context, extra map[string]string) error {
++	return defaultManager.ensure(ctx, extra)
++}
++
++// NeedsLogin exposes a definitive rejection for the current credential
++// revision without leaking CLI output or delaying a status request.
++func NeedsLogin(extra map[string]string) bool {
++	return defaultManager.needsLogin(extra)
++}
++
++func (m *manager) needsLogin(extra map[string]string) bool {
++	path, err := authPath(extra)
++	if err != nil {
++		return false
++	}
++	meta, err := readMetadata(path)
++	if err != nil || !meta.Managed {
++		return false
++	}
++	m.mu.Lock()
++	e := m.entries[path]
++	m.mu.Unlock()
++	if e == nil {
++		return false
++	}
++	select {
++	case e.gate <- struct{}{}:
++		defer func() { <-e.gate }()
++		return e.stamp == meta.stamp && errors.Is(e.err, ErrLoginRequired)
++	default:
++		return false
++	}
++}
++
++func (m *manager) ensure(ctx context.Context, extra map[string]string) error {
++	path, err := authPath(extra)
++	if err != nil {
++		return nil // Native CLI owns unknown credential layouts.
++	}
++	meta, err := readMetadata(path)
++	if err != nil || !meta.Managed || meta.ExpiresAt.IsZero() || meta.ExpiresAt.After(m.now().Add(refreshAhead)) {
++		return nil
++	}
++	m.mu.Lock()
++	e := m.entries[path]
++	if e == nil {
++		e = &entry{gate: make(chan struct{}, 1)}
++		m.entries[path] = e
++	}
++	m.mu.Unlock()
++	select {
++	case e.gate <- struct{}{}:
++		defer func() { <-e.gate }()
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++	// Another channel or an interactive login may have replaced the file.
++	meta, err = readMetadata(path)
++	if err != nil || !meta.Managed || meta.ExpiresAt.IsZero() || meta.ExpiresAt.After(m.now().Add(refreshAhead)) {
++		return nil
++	}
++	if e.stamp == meta.stamp && m.now().Before(e.nextAttempt) {
++		if meta.ExpiresAt.After(m.now()) && !errors.Is(e.err, ErrLoginRequired) {
++			return nil
++		}
++		return e.err
++	}
++	if e.stamp != meta.stamp {
++		e.failures = 0
++	}
++	refreshErr := m.refresh(ctx, extra)
++	if ctx.Err() != nil {
++		return ctx.Err() // A cancelled caller must not poison the retry cache.
++	}
++	after, readErr := readMetadata(path)
++	if readErr == nil && after.Managed && after.ExpiresAt.After(m.now()) {
++		meta = after
++		if after.ExpiresAt.After(m.now().Add(refreshAhead)) {
++			e.failures, e.err = 0, nil
++			e.stamp = ""
++			return nil
++		}
++	}
++	// A successful RPC alone does not prove renewal. Some CLI versions return
++	// an account even when their underlying refresh failed or was skipped.
++	if refreshErr == nil {
++		refreshErr = ErrRefreshUnavailable
++	}
++	e.err, e.stamp = refreshErr, meta.stamp
++	e.failures++
++	delay := time.Minute * time.Duration(1<<min(e.failures-1, 4))
++	e.nextAttempt = m.now().Add(delay)
++	if meta.ExpiresAt.After(m.now()) && !errors.Is(refreshErr, ErrLoginRequired) {
++		if meta.ExpiresAt.Before(e.nextAttempt) {
++			e.nextAttempt = meta.ExpiresAt
++		}
++		return nil
++	}
++	return refreshErr
++}
++
++func commandEnv(extra map[string]string) []string {
++	env := os.Environ()
++	for key, value := range extra {
++		env = append(env, key+"="+value)
++	}
++	return env
++}
+diff --git a/internal/traeauth/auth_test.go b/internal/traeauth/auth_test.go
+new file mode 100644
+index 0000000..60f61b2
+--- /dev/null
++++ b/internal/traeauth/auth_test.go
+@@ -0,0 +1,202 @@
++package traeauth
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func writeAuth(t *testing.T, home string, expires, refreshed time.Time) {
++	t.Helper()
++	path := filepath.Join(home, "cli", "auth.json")
++	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	payload, _ := json.Marshal(map[string]any{"auth_mode": "trae", "last_refresh": refreshed, "trae": map[string]any{"expires_at": expires, "access_token": "secret-must-not-escape"}})
++	if err := os.WriteFile(path, payload, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	// Give independent credential revisions distinct stamps on all filesystems.
++	if err := os.Chtimes(path, refreshed, refreshed); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func newTestManager(now *time.Time, refresh func(context.Context, map[string]string) error) *manager {
++	return &manager{entries: make(map[string]*entry), now: func() time.Time { return *now }, refresh: refresh}
++}
++
++func TestRefreshCoalescesConcurrentChannels(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	extra := map[string]string{"TRAE_HOME": home}
++	writeAuth(t, home, now.Add(5*time.Minute), now.Add(-time.Hour))
++	var calls atomic.Int32
++	m := newTestManager(&now, func(ctx context.Context, env map[string]string) error {
++		calls.Add(1)
++		if env["TRAE_HOME"] != home {
++			t.Error("refresh did not receive the Agent environment")
++		}
++		writeAuth(t, home, now.Add(2*time.Hour), now)
++		return nil
++	})
++	var wg sync.WaitGroup
++	for range 20 {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if err := m.ensure(context.Background(), extra); err != nil {
++				t.Errorf("ensure: %v", err)
++			}
++		}()
++	}
++	wg.Wait()
++	if calls.Load() != 1 {
++		t.Fatalf("refresh calls = %d, want 1", calls.Load())
++	}
++}
++
++func TestRefreshBackoffAndExternalLoginRecovery(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	extra := map[string]string{"TRAE_HOME": home}
++	writeAuth(t, home, now.Add(-time.Minute), now.Add(-time.Hour))
++	calls := 0
++	m := newTestManager(&now, func(context.Context, map[string]string) error { calls++; return ErrLoginRequired })
++	for range 3 {
++		if err := m.ensure(context.Background(), extra); !errors.Is(err, ErrLoginRequired) {
++			t.Fatalf("expired credentials error = %v", err)
++		}
++	}
++	if calls != 1 {
++		t.Fatalf("refresh storm: %d calls", calls)
++	}
++	now = now.Add(time.Minute)
++	_ = m.ensure(context.Background(), extra)
++	if calls != 2 {
++		t.Fatalf("did not retry after backoff: %d calls", calls)
++	}
++	// Interactive login replaces the credential before the backoff ends.
++	writeAuth(t, home, now.Add(2*time.Hour), now)
++	if err := m.ensure(context.Background(), extra); err != nil {
++		t.Fatalf("new login remained blocked: %v", err)
++	}
++	// A different login already near expiry must also bypass old backoff.
++	writeAuth(t, home, now.Add(5*time.Minute), now.Add(time.Second))
++	_ = m.ensure(context.Background(), extra)
++	if calls != 3 {
++		t.Fatalf("new credential revision reused cached failure: %d calls", calls)
++	}
++}
++
++func TestValidTokenSurvivesTransientFailureAndRetriesAtExpiry(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	extra := map[string]string{"TRAE_HOME": home}
++	writeAuth(t, home, now.Add(30*time.Second), now.Add(-time.Hour))
++	calls := 0
++	m := newTestManager(&now, func(context.Context, map[string]string) error { calls++; return ErrRefreshUnavailable })
++	if err := m.ensure(context.Background(), extra); err != nil {
++		t.Fatalf("valid token blocked by transient refresh failure: %v", err)
++	}
++	now = now.Add(30 * time.Second)
++	if err := m.ensure(context.Background(), extra); !errors.Is(err, ErrRefreshUnavailable) || calls != 2 {
++		t.Fatalf("must retry at expiry before backoff, calls=%d err=%v", calls, err)
++	}
++}
++
++func TestSuccessfulRPCWithoutRenewalDoesNotAcceptExpiredToken(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	writeAuth(t, home, now.Add(-time.Minute), now.Add(-time.Hour))
++	m := newTestManager(&now, func(context.Context, map[string]string) error { return nil })
++	if err := m.ensure(context.Background(), map[string]string{"TRAE_HOME": home}); !errors.Is(err, ErrRefreshUnavailable) {
++		t.Fatalf("unchanged expired token accepted: %v", err)
++	}
++}
++
++func TestRevokedCredentialIsNotAcceptedBeforeRecordedExpiry(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	extra := map[string]string{"TRAE_HOME": home}
++	writeAuth(t, home, now.Add(10*time.Minute), now.Add(-time.Hour))
++	calls := 0
++	m := newTestManager(&now, func(context.Context, map[string]string) error { calls++; return ErrLoginRequired })
++	for range 2 {
++		if err := m.ensure(context.Background(), extra); !errors.Is(err, ErrLoginRequired) {
++			t.Fatalf("revoked credential accepted: %v", err)
++		}
++	}
++	if calls != 1 || !m.needsLogin(extra) {
++		t.Fatalf("revocation not cached, calls=%d", calls)
++	}
++	writeAuth(t, home, now.Add(time.Hour), now)
++	if m.needsLogin(extra) {
++		t.Fatal("new login inherited old rejection")
++	}
++}
++
++func TestRefreshSkipsHealthyMissingAndNonTraeCredentials(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	extra := map[string]string{"TRAE_HOME": home}
++	m := newTestManager(&now, func(context.Context, map[string]string) error { t.Fatal("unexpected refresh"); return nil })
++	if err := m.ensure(context.Background(), extra); err != nil {
++		t.Fatal(err)
++	}
++	writeAuth(t, home, now.Add(time.Hour), now)
++	if err := m.ensure(context.Background(), extra); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(home, "cli", "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"private"}`), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := m.ensure(context.Background(), extra); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestCancelledRefreshDoesNotPoisonNextAttempt(t *testing.T) {
++	now := time.Now()
++	home := t.TempDir()
++	writeAuth(t, home, now.Add(-time.Minute), now.Add(-time.Hour))
++	ctx, cancel := context.WithCancel(context.Background())
++	calls := 0
++	m := newTestManager(&now, func(context.Context, map[string]string) error {
++		calls++
++		if calls == 1 {
++			cancel()
++			return context.Canceled
++		}
++		writeAuth(t, home, now.Add(time.Hour), now)
++		return nil
++	})
++	extra := map[string]string{"TRAE_HOME": home}
++	if err := m.ensure(ctx, extra); !errors.Is(err, context.Canceled) {
++		t.Fatal(err)
++	}
++	if err := m.ensure(context.Background(), extra); err != nil || calls != 2 {
++		t.Fatalf("cancellation cached: calls=%d err=%v", calls, err)
++	}
++}
++
++func TestCredentialHomesAreIsolated(t *testing.T) {
++	now := time.Now()
++	for _, overrides := range []map[string]string{{"TRAE_HOME": t.TempDir()}, {"TRAE_HOME": "", "HOME": t.TempDir()}} {
++		home := overrides["TRAE_HOME"]
++		if home == "" {
++			home = filepath.Join(overrides["HOME"], ".trae")
++		}
++		writeAuth(t, home, now.Add(time.Hour), now)
++		meta, err := ReadMetadata(overrides)
++		if err != nil || !meta.Managed || !meta.ExpiresAt.Equal(now.Add(time.Hour)) {
++			t.Fatalf("metadata with overrides = %+v, %v", meta, err)
++		}
++	}
++}
+diff --git a/internal/traeauth/rpc.go b/internal/traeauth/rpc.go
+new file mode 100644
+index 0000000..bffb323
+--- /dev/null
++++ b/internal/traeauth/rpc.go
+@@ -0,0 +1,109 @@
++package traeauth
++
++import (
++	"bufio"
++	"context"
++	"encoding/json"
++	"io"
++	"os"
++	"os/exec"
++	"strings"
++	"time"
++
++	"github.com/wangning19940904/AgentMux/internal/procutil"
++)
++
++// TRAE 0.202.3 publishes these methods in its generated app-server schema.
++// Refresh through the CLI so credential rotation and secure writes stay under
++// its control. Never copy provider URLs or tokens into an AgentMux HTTP client.
++func refreshNative(ctx context.Context, extra map[string]string) error {
++	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
++	defer cancel()
++	cmd := exec.CommandContext(ctx, "traecli", "app-server", "--listen", "stdio://")
++	cmd.Env = commandEnv(extra)
++	cmd.Dir = os.TempDir()
++	cmd.Stderr = io.Discard // Raw auth diagnostics can include credentials.
++	procutil.Prepare(cmd)
++	stdin, err := cmd.StdinPipe()
++	if err != nil {
++		return ErrRefreshUnavailable
++	}
++	defer stdin.Close()
++	stdout, err := cmd.StdoutPipe()
++	if err != nil {
++		return ErrRefreshUnavailable
++	}
++	if err := cmd.Start(); err != nil {
++		return ErrRefreshUnavailable
++	}
++	defer func() {
++		_ = stdin.Close()
++		cancel()
++		_ = cmd.Wait()
++	}()
++	return refreshRPC(stdin, stdout)
++}
++
++func refreshRPC(stdin io.Writer, stdout io.Reader) error {
++	writer := json.NewEncoder(stdin)
++	scanner := bufio.NewScanner(stdout)
++	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
++	call := func(id int, method string, params any, result any) error {
++		if writer.Encode(map[string]any{"id": id, "method": method, "params": params}) != nil {
++			return ErrRefreshUnavailable
++		}
++		for scanner.Scan() {
++			var response struct {
++				ID     int             `json:"id"`
++				Result json.RawMessage `json:"result"`
++				Error  *struct {
++					Message string `json:"message"`
++					Code    int    `json:"code"`
++				} `json:"error"`
++			}
++			if json.Unmarshal(scanner.Bytes(), &response) != nil || response.ID != id {
++				continue
++			}
++			if response.Error != nil {
++				message := strings.ToLower(response.Error.Message)
++				for _, marker := range []string{"sign in again", "log in again", "not logged in", "invalid_grant", "refresh token expired", "refresh token revoked", "session could not be refreshed"} {
++					if strings.Contains(message, marker) {
++						return ErrLoginRequired
++					}
++				}
++				return ErrRefreshUnavailable
++			}
++			if len(response.Result) == 0 || string(response.Result) == "null" {
++				return ErrRefreshUnavailable
++			}
++			if result != nil && json.Unmarshal(response.Result, result) != nil {
++				return ErrRefreshUnavailable
++			}
++			return nil
++		}
++		return ErrRefreshUnavailable
++	}
++	if err := call(1, "initialize", map[string]any{"clientInfo": map[string]string{"name": "agentmux-auth-refresh", "version": "1"}}, nil); err != nil {
++		return err
++	}
++	if writer.Encode(map[string]any{"method": "initialized"}) != nil {
++		return ErrRefreshUnavailable
++	}
++	var account struct {
++		Account *struct {
++			Type string `json:"type"`
++		} `json:"account"`
++	}
++	if err := call(2, "account/read", map[string]bool{"refreshToken": true}, &account); err != nil {
++		return err
++	}
++	if account.Account == nil {
++		return ErrLoginRequired
++	}
++	if account.Account.Type != "trae" {
++		return ErrRefreshUnavailable
++	}
++	// A forced catalog refresh also exercises TRAE's provider auth path in
++	// versions where account/read only refreshes credentials when already due.
++	return call(3, "model/list", map[string]any{"forceRefresh": true, "limit": 1}, nil)
++}
+diff --git a/internal/traeauth/rpc_live_test.go b/internal/traeauth/rpc_live_test.go
+new file mode 100644
+index 0000000..0030cb6
+--- /dev/null
++++ b/internal/traeauth/rpc_live_test.go
+@@ -0,0 +1,30 @@
++package traeauth
++
++import (
++	"context"
++	"os"
++	"testing"
++	"time"
++)
++
++// Opt-in on a host with an existing TRAE login. This calls the native refresh
++// RPC and model directory only; it never starts a model turn or browser login.
++func TestLiveNativeRefresh(t *testing.T) {
++	if os.Getenv("AGENTMUX_LIVE_TRAE_AUTH") != "1" {
++		t.Skip("set AGENTMUX_LIVE_TRAE_AUTH=1 on a signed-in TRAE host")
++	}
++	before, err := ReadMetadata(nil)
++	if err != nil || !before.Managed {
++		t.Fatal("a TRAE-managed login is required")
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
++	defer cancel()
++	if err := refreshNative(ctx, nil); err != nil {
++		t.Fatal(err)
++	}
++	after, err := ReadMetadata(nil)
++	if err != nil || !after.Managed || !after.ExpiresAt.After(time.Now()) {
++		t.Fatal("native refresh did not leave valid credentials")
++	}
++	t.Logf("native refresh RPC succeeded; expiry before=%s after=%s", before.ExpiresAt.UTC().Format(time.RFC3339), after.ExpiresAt.UTC().Format(time.RFC3339))
++}
+diff --git a/internal/traeauth/rpc_test.go b/internal/traeauth/rpc_test.go
+new file mode 100644
+index 0000000..80a39d2
+--- /dev/null
++++ b/internal/traeauth/rpc_test.go
+@@ -0,0 +1,82 @@
++package traeauth
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestNativeRefreshProtocol(t *testing.T) {
++	var sent bytes.Buffer
++	responses := `{"id":1,"result":{"userAgent":"traecli"}}
++{"method":"account/updated","params":{}}
++{"id":2,"result":{"account":{"type":"trae","userId":"private-account"}}}
++{"id":3,"result":{"data":[{"id":"GPT-5.6-Sol"}]}}
++`
++	if err := refreshRPC(&sent, strings.NewReader(responses)); err != nil {
++		t.Fatal(err)
++	}
++	var requests []map[string]any
++	decoder := json.NewDecoder(&sent)
++	for decoder.More() {
++		var request map[string]any
++		if err := decoder.Decode(&request); err != nil {
++			t.Fatal(err)
++		}
++		requests = append(requests, request)
++	}
++	if len(requests) != 4 || requests[0]["method"] != "initialize" || requests[1]["method"] != "initialized" || requests[2]["method"] != "account/read" || requests[2]["params"].(map[string]any)["refreshToken"] != true || requests[3]["method"] != "model/list" || requests[3]["params"].(map[string]any)["forceRefresh"] != true {
++		t.Fatalf("incorrect refresh protocol: %#v", requests)
++	}
++}
++
++func TestNativeRefreshFailuresAreActionableAndRedacted(t *testing.T) {
++	for _, test := range []struct {
++		name, response string
++		want           error
++	}{
++		{"revoked", `{"error":{"code":-32603,"message":"session could not be refreshed secret-token"}}`, ErrLoginRequired},
++		{"network", `{"error":{"code":-32603,"message":"network timeout secret-token"}}`, ErrRefreshUnavailable},
++		{"unsupported", `{"error":{"code":-32601,"message":"Method not found"}}`, ErrRefreshUnavailable},
++		{"logged-out", `{"result":{"account":null}}`, ErrLoginRequired},
++		{"malformed", `{"result":null}`, ErrRefreshUnavailable},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			var frame map[string]any
++			_ = json.Unmarshal([]byte(test.response), &frame)
++			frame["id"] = 2
++			line, _ := json.Marshal(frame)
++			err := refreshRPC(&bytes.Buffer{}, strings.NewReader("{\"id\":1,\"result\":{}}\n"+string(line)+"\n"))
++			if !errors.Is(err, test.want) || strings.Contains(err.Error(), "secret-token") {
++				t.Fatalf("refresh error = %v, want %v", err, test.want)
++			}
++		})
++	}
++}
++
++func TestNativeRefreshCancellationStopsHangingCLI(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("shell fixture")
++	}
++	bin := t.TempDir()
++	if err := os.WriteFile(filepath.Join(bin, "traecli"), []byte("#!/bin/sh\nexec /bin/sleep 30\n"), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
++	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++	defer cancel()
++	start := time.Now()
++	if err := refreshNative(ctx, nil); !errors.Is(err, ErrRefreshUnavailable) {
++		t.Fatal(err)
++	}
++	if time.Since(start) > 3*time.Second {
++		t.Fatal("refresh process outlived cancellation")
++	}
++}

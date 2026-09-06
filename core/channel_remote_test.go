@@ -82,7 +82,7 @@ func newRemoteControlTestRuntime(engine *Engine) (*channelRuntime, *fakePlatform
 		},
 		platform:     platform,
 		agent:        &remoteControlTestAgent{},
-		sessions:     map[string]AgentSession{},
+		sessions:     map[string]*channelSessionBinding{},
 		seen:         map[string]time.Time{},
 		controlTasks: map[string]*channelControlState{},
 		clearConfirm: map[string]time.Time{},
@@ -145,6 +145,38 @@ func TestRemoteTaskTakeoverRequiresAdminAndIsAudited(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("task takeover lifecycle event was not emitted")
+	}
+}
+
+func TestRemoteMessageUsesNextTurnAfterAgentGenerationChanges(t *testing.T) {
+	engine := NewEngine(nil, NewHookRunner(nil, nil))
+	runtime, platform := newRemoteControlTestRuntime(engine)
+	generation := &channelAgentGeneration{}
+	generation.retired.Store(true)
+	state := runtime.controlStateLocked("chat:one")
+	state.active = &runtimeChannelTask{
+		task: ChannelTask{
+			ID: "task-old-generation", ConversationKey: "chat:one", ControllerID: "member", Status: ChannelTaskRunning,
+		},
+		session:    &remoteInteractiveTestSession{fakeSession: &fakeSession{id: "old-session"}},
+		generation: generation,
+	}
+
+	engine.handleChannelMessage(context.Background(), &Message{
+		ID: "message-new-generation", ChannelID: runtime.channel.ID, ChatID: "one",
+		ConversationKey: "chat:one", UserID: "member", Text: "continue with new skills",
+	}, map[string]string{"channel_id": runtime.channel.ID, "conversation_key": "chat:one"})
+
+	runtime.controlMu.Lock()
+	queued := append([]*runtimeChannelTask(nil), state.queue...)
+	runtime.controlMu.Unlock()
+	if len(queued) != 1 || queued[0].msg.Text != "continue with new skills" {
+		t.Fatalf("queued tasks = %#v", queued)
+	}
+	platform.mu.Lock()
+	defer platform.mu.Unlock()
+	if len(platform.replies) != 1 || !strings.Contains(platform.replies[0], "已排队") {
+		t.Fatalf("replies = %#v", platform.replies)
 	}
 }
 
@@ -314,7 +346,7 @@ func TestRemoteControlRejectsUnauthorizedUserBeforeSessionCreation(t *testing.T)
 	}
 }
 
-func TestRemoteSteerFailureFallsBackToQueue(t *testing.T) {
+func TestRemoteFollowupQueuesWithoutAutomaticSteer(t *testing.T) {
 	engine := NewEngine(nil, NewHookRunner(nil, nil))
 	runtime, _ := newRemoteControlTestRuntime(engine)
 	state := runtime.controlStateLocked("chat:one")

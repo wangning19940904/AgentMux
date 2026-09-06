@@ -362,7 +362,7 @@ func (s *Server) executeRemoteFleetOperation(ctx context.Context, targetID strin
 	}
 	transport := &http.Transport{
 		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			return s.remote.DialContext(ctx, targetID, network)
 		},
 		DisableKeepAlives: true,

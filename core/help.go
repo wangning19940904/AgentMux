@@ -32,7 +32,7 @@ func isHelpCommand(text string) bool {
 // arbitrary prompt sent to an Agent.
 func IsHelpCommandAction(command string) bool {
 	switch strings.ToLower(strings.TrimSpace(command)) {
-	case "/model", "/clear", "/effort", "/fast", "/approval", "/status", "/stop", "/sessions", "/open", "/takeover":
+	case "/mode", "/queue", "/model", "/clear", "/effort", "/fast", "/approval", "/status", "/stop", "/sessions", "/open", "/takeover":
 		return true
 	default:
 		return false
@@ -51,6 +51,7 @@ func buildHelpCardState(agentName, runtimeName string, remoteControl bool) HelpC
 
 	introduction := fmt.Sprintf("你好，我是 %s，一个通过 AgentMux 与你协作的 AI Agent。你可以直接发送任务，也可以使用下面的命令管理当前会话。", agentName)
 	commands := []HelpCommand{
+		{Command: "/mode", Description: "切换当前私聊或群聊的会话模式", Actionable: true},
 		{Command: "/help", Description: "查看 Agent 介绍和命令帮助"},
 		{Command: "/model", Description: "查看或切换当前会话的模型", Actionable: true},
 		{Command: "/clear", Description: "清除上下文并开始新会话（同 /new、/reset）", Actionable: true},
@@ -60,8 +61,11 @@ func buildHelpCardState(agentName, runtimeName string, remoteControl bool) HelpC
 	}
 	if remoteControl {
 		commands = append(commands,
-			HelpCommand{Command: "/status", Description: "查看当前 Codex 任务状态", Actionable: true},
+			HelpCommand{Command: "/status", Description: "查看当前任务状态", Actionable: true},
 			HelpCommand{Command: "/stop", Description: "停止当前任务", Actionable: true},
+			HelpCommand{Command: "/queue", Description: "查看等待队列", Actionable: true},
+			HelpCommand{Command: "/steer <内容>", Description: "立即调整当前任务方向"},
+			HelpCommand{Command: "/queue cancel <任务ID>", Description: "取消一项等待任务"},
 			HelpCommand{Command: "/queue <内容>", Description: "将任务加入执行队列"},
 			HelpCommand{Command: "/queue clear", Description: "清空排队任务（需要确认）"},
 			HelpCommand{Command: "/sessions", Description: "列出当前目录的 Codex threads", Actionable: true},
@@ -92,14 +96,15 @@ func (e *Engine) handleChannelHelpCommand(ctx context.Context, rt *channelRuntim
 	if rt == nil || msg == nil || !isHelpCommand(msg.Text) {
 		return false
 	}
-	agentName := rt.workspace.AgentName
-	runtimeName := rt.workspace.RuntimeID
-	if rt.agent != nil {
+	currentAgent, _, workspace := rt.agentSnapshot()
+	agentName := workspace.AgentName
+	runtimeName := workspace.RuntimeID
+	if currentAgent != nil {
 		if agentName == "" {
-			agentName = rt.agent.Name()
+			agentName = currentAgent.Name()
 		}
 		if runtimeName == "" {
-			runtimeName = rt.agent.Name()
+			runtimeName = currentAgent.Name()
 		}
 	}
 	state := buildHelpCardState(agentName, runtimeName, rt.remoteControlEnabled())

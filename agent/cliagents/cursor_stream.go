@@ -248,12 +248,18 @@ func cursorResultEvents(frame map[string]any, subtype string) []*core.Event {
 		return []*core.Event{{Type: core.EventError, Err: err, Status: subtype, DurationMs: duration, Metadata: cursorMetadata("failed")}}
 	}
 	usageMap := nestedMap(frame, "usage")
+	if len(usageMap) == 0 {
+		usageMap = nestedMap(frame, "tokenUsage")
+	}
+	if len(usageMap) == 0 {
+		usageMap = nestedMap(frame, "token_usage")
+	}
 	usage := &core.TurnUsage{
-		RequestID:        firstString(frame, "request_id"),
-		InputTokens:      cursorInt64(usageMap["inputTokens"]),
-		OutputTokens:     cursorInt64(usageMap["outputTokens"]),
-		CacheReadTokens:  cursorInt64(usageMap["cacheReadTokens"]),
-		CacheWriteTokens: cursorInt64(usageMap["cacheWriteTokens"]),
+		RequestID:        firstString(frame, "request_id", "requestId"),
+		InputTokens:      cursorFirstInt64(usageMap, "inputTokens", "input_tokens"),
+		OutputTokens:     cursorFirstInt64(usageMap, "outputTokens", "output_tokens"),
+		CacheReadTokens:  cursorFirstInt64(usageMap, "cacheReadTokens", "cache_read_tokens", "cachedInputTokens", "cached_input_tokens"),
+		CacheWriteTokens: cursorFirstInt64(usageMap, "cacheWriteTokens", "cache_write_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"),
 		DurationMs:       duration,
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
@@ -261,6 +267,15 @@ func cursorResultEvents(frame map[string]any, subtype string) []*core.Event {
 		Type: core.EventFinal, Text: text, Final: true, Status: firstNonEmpty(subtype, "success"),
 		DurationMs: duration, Usage: usage, Metadata: cursorMetadata("completed"),
 	}}
+}
+
+func cursorFirstInt64(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if value := cursorInt64(values[key]); value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func cursorConnectionStatus(frame map[string]any, subtype string) string {

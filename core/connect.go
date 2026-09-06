@@ -163,10 +163,10 @@ func (c *ConnectService) RestartChannel(ctx context.Context, id string) error {
 	return c.eng.AttachChannel(c.baseCtx(), *ch, agent, workDir, workspace)
 }
 
-// RestartChannelsForAgent refreshes every enabled channel bound to agentID.
-// Agent records can change independently from Channel records, so relying on
-// Channel.UpdatedAt alone would leave the old in-memory runtime serving new
-// messages until the daemon or channel was restarted manually.
+// RestartChannelsForAgent installs a new Agent generation in every enabled
+// bound channel without restarting the platform connection. Existing turns
+// retain their old generation; newly acquired sessions use the refreshed
+// Agent and resume their persisted native thread when one exists.
 func (c *ConnectService) RestartChannelsForAgent(ctx context.Context, agentID string) error {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
@@ -181,8 +181,16 @@ func (c *ConnectService) RestartChannelsForAgent(ctx context.Context, agentID st
 		if !ch.Enabled || ch.AgentID != agentID {
 			continue
 		}
-		if err := c.RestartChannel(ctx, ch.ID); err != nil {
-			restartErrs = append(restartErrs, fmt.Errorf("restart channel %q: %w", ch.Name, err))
+		rt := c.eng.channelRuntime(ch.ID)
+		if rt == nil {
+			if err := c.RestartChannel(ctx, ch.ID); err != nil {
+				restartErrs = append(restartErrs, fmt.Errorf("restart channel %q: %w", ch.Name, err))
+			}
+			continue
+		}
+		agent, workDir, workspace := c.resolveAgent(ctx, ch.AgentID)
+		if err := rt.replaceAgentGeneration(ctx, agent, workDir, workspace); err != nil {
+			restartErrs = append(restartErrs, fmt.Errorf("refresh channel %q Agent: %w", ch.Name, err))
 		}
 	}
 	return errors.Join(restartErrs...)
@@ -678,4 +686,27 @@ func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInsta
 		}
 	}
 	return nil
+}
+
+// DecorateChannelTask adds live queue position/capabilities without exposing prompts.
+func (c *ConnectService) DecorateChannelTask(task *ChannelTask) {
+	rt := c.eng.channelRuntime(task.ChannelID)
+	if rt == nil {
+		return
+	}
+	rt.controlMu.Lock()
+	defer rt.controlMu.Unlock()
+	state := rt.controlStateLocked(task.ConversationKey)
+	for i, item := range state.queue {
+		if item.task.ID == task.ID {
+			task.QueuePosition = i + 1
+			task.Status = item.task.Status
+		}
+	}
+	if task.Status == ChannelTaskQueued && state.active != nil && state.active.task.ID == task.TargetTaskID && !state.steering {
+		_, task.CanSteer = state.active.session.(InteractiveAgentSession)
+		if state.active.generation != nil && state.active.generation.retired.Load() {
+			task.CanSteer = false
+		}
+	}
 }

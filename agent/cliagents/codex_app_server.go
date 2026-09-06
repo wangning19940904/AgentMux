@@ -36,6 +36,9 @@ func registerCodex() {
 }
 
 type codexAgent struct {
+	runtimeID                 string
+	binary                    string
+	ensureAuth                func(context.Context, map[string]string) error
 	systemPrompt              string
 	defaultModel              string
 	defaultReasoningEffort    string
@@ -91,7 +94,12 @@ func newCodexAgent(cfg map[string]any) *codexAgent {
 	return a
 }
 
-func (a *codexAgent) Name() string { return "codex" }
+func (a *codexAgent) Name() string {
+	if a.runtimeID != "" {
+		return a.runtimeID
+	}
+	return "codex"
+}
 
 // RuntimeSettingsCatalog asks app-server for the signed-in account's models
 // directly. Unlike StartSession this does not call thread/start, so opening an
@@ -265,7 +273,7 @@ func (a *codexAgent) CodexControlCapability() core.CodexControlCapability {
 	return core.CodexControlCapability{
 		State: state, Error: a.capabilityError, Experimental: true,
 		Threads: true, Steer: true, Interrupt: true, Interactions: true,
-		DeepLink: runtime.GOOS == "darwin",
+		DeepLink: a.Name() == "codex" && runtime.GOOS == "darwin",
 	}
 }
 
@@ -281,6 +289,11 @@ func (a *codexAgent) Stop(context.Context) error {
 }
 
 func (a *codexAgent) appClient(ctx context.Context, workDir string) (*codexAppClient, error) {
+	if a.ensureAuth != nil {
+		if err := a.ensureAuth(ctx, a.env); err != nil {
+			return nil, err
+		}
+	}
 	a.clientMu.Lock()
 	defer a.clientMu.Unlock()
 	if a.client != nil && !a.client.isClosed() {
@@ -540,7 +553,7 @@ func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 	var result map[string]any
 	var err error
 	if resumeID != "" {
-		result, err = s.call(ctx, "thread/resume", map[string]any{"threadId": resumeID})
+		result, err = s.call(ctx, "thread/resume", s.threadResumeParams(resumeID))
 		if err != nil {
 			return unavailableCodexThreadError(s.withStderr(err))
 		}
@@ -576,6 +589,17 @@ func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 		}
 	}
 	return s.client.register(threadID, s)
+}
+
+func (s *codexSession) threadResumeParams(threadID string) map[string]any {
+	params := map[string]any{"threadId": threadID, "cwd": s.workDir}
+	if prompt := strings.TrimSpace(s.agent.systemPrompt); prompt != "" {
+		params["developerInstructions"] = prompt
+	}
+	if model := s.DefaultModel(); model != "" {
+		params["model"] = model
+	}
+	return params
 }
 
 func codexAppServerArgs(ctx context.Context) []string {
@@ -724,6 +748,11 @@ func (s *codexSession) Send(ctx context.Context, text string) (<-chan *core.Even
 }
 
 func (s *codexSession) SendInput(ctx context.Context, input core.AgentTurnInput) (<-chan *core.Event, error) {
+	if s.agent.ensureAuth != nil {
+		if err := s.agent.ensureAuth(ctx, s.agent.env); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
@@ -760,6 +789,7 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 
 	requestedModel := firstString(params, "model")
 	mapper := &codexEventMapper{
+		runtimeID:      s.agent.Name(),
 		threadID:       threadID,
 		requestedModel: requestedModel,
 		resolvedModel:  requestedModel,
@@ -906,6 +936,12 @@ func (s *codexSession) turnStartParamsInput(threadID string, input core.AgentTur
 		params["approvalPolicy"] = "never"
 		params["sandbox"] = "dangerFullAccess"
 	}
+	if s.agent != nil && s.agent.Name() == "traecli" {
+		if policy, ok := params["sandbox"].(string); ok {
+			params["sandboxPolicy"] = map[string]any{"type": policy}
+			delete(params, "sandbox")
+		}
+	}
 	return params
 }
 
@@ -927,13 +963,26 @@ func (s *codexSession) setActiveTurnID(turnID string) {
 func (s *codexSession) Steer(ctx context.Context, text string) error {
 	turnID := s.ActiveTurnID()
 	if turnID == "" {
-		return fmt.Errorf("codex turn is not active")
+		return &core.SteerRejectedError{Reason: "当前没有可追加的 turn"}
 	}
-	return s.controlCall(ctx, "turn/steer", map[string]any{
-		"threadId":       s.NativeSessionID(),
-		"expectedTurnId": turnID,
-		"input":          []map[string]string{{"type": "text", "text": text}},
+	result, err := s.client.call(ctx, "turn/steer", map[string]any{
+		"threadId": s.NativeSessionID(), "expectedTurnId": turnID,
+		"input": []map[string]string{{"type": "text", "text": text}},
 	})
+	if err != nil {
+		return classifySteerError(err)
+	}
+	if firstString(result, "turnId") != turnID {
+		return fmt.Errorf("steer returned an unexpected turn id; outcome unknown")
+	}
+	return nil
+}
+
+func firstNonEmptyRuntime(value string) string {
+	if value != "" {
+		return value
+	}
+	return "codex"
 }
 
 func (s *codexSession) Interrupt(ctx context.Context) error {
@@ -1214,6 +1263,7 @@ func (s *codexSession) withStderr(err error) error {
 }
 
 type codexEventMapper struct {
+	runtimeID      string
 	answer         string
 	thinking       string
 	threadID       string
@@ -1392,6 +1442,12 @@ func (m *codexEventMapper) mapNotification(method string, params map[string]any)
 		}
 		status := firstString(turn, "status")
 		duration := codexInt64(turn["durationMs"])
+		if status == "interrupted" {
+			return []*core.Event{{
+				Type: core.EventModelResponse, EventID: lifecycleEventID(m.turnID, "interrupted"), TurnID: m.turnID,
+				Status: status, DurationMs: duration, Err: context.Canceled, Metadata: m.metadata("completed"),
+			}}, true, context.Canceled
+		}
 		if status == "failed" {
 			err := codexTurnError(turn)
 			return []*core.Event{{
@@ -1443,7 +1499,7 @@ func (m *codexEventMapper) modelRequestEvent() *core.Event {
 
 func (m *codexEventMapper) metadata(lifecycle string) map[string]string {
 	metadata := map[string]string{
-		"runtime":   "codex",
+		"runtime":   firstNonEmptyRuntime(m.runtimeID),
 		"transport": "app-server",
 		"coverage":  "native",
 		"lifecycle": lifecycle,
@@ -1749,7 +1805,8 @@ func rpcID(message map[string]any) (int, bool) {
 
 func rpcError(message map[string]any) error {
 	if raw, ok := message["error"]; ok && raw != nil {
-		return fmt.Errorf("codex app-server RPC error: %s", codexValue(raw))
+		detail, _ := raw.(map[string]any)
+		return &appRPCError{code: int(codexInt64(detail["code"])), message: codexValue(raw)}
 	}
 	return nil
 }
@@ -1833,3 +1890,10 @@ func truncateCodex(value string, max int) string {
 	}
 	return value[:max-3] + "..."
 }
+
+type appRPCError struct {
+	code    int
+	message string
+}
+
+func (e *appRPCError) Error() string { return "app-server RPC error: " + e.message }

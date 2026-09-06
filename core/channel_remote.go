@@ -3,31 +3,34 @@ package core
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
 type channelControlState struct {
-	active *runtimeChannelTask
-	queue  []*runtimeChannelTask
+	active   *runtimeChannelTask
+	queue    []*runtimeChannelTask
+	steering bool
 }
 
 type runtimeChannelTask struct {
 	task          ChannelTask
 	msg           *Message
 	session       AgentSession
+	generation    *channelAgentGeneration
 	conv          *Conversation
 	stopRequested bool
 	runErr        string
 	cancel        context.CancelFunc
 }
 
-// handleChannelMessage gates the opt-in Codex remote-control path and leaves
-// every classic channel/runtime on the existing direct path.
+// handleChannelMessage admits channel tasks to the per-conversation queue.
+// Embedded engines without a control store retain their lightweight direct path.
 func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data map[string]string) {
 	rt := e.channelRuntime(msg.ChannelID)
+	if rt != nil && e.handleConversationMode(ctx, rt, msg) {
+		return
+	}
 	if rt != nil && msg.ChannelFeedbackAction != nil {
 		e.handleChannelFeedback(ctx, rt, msg, data, *msg.ChannelFeedbackAction)
 		return
@@ -48,7 +51,7 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		return
 	}
 	if !rt.authorized(msg.UserID) {
-		_ = rt.platform.Reply(ctx, msg, "你不在此渠道的 Codex 远程控制白名单中。")
+		_ = rt.platform.Reply(ctx, msg, "你不在此渠道的访问白名单中。")
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
@@ -82,7 +85,6 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 		e.handleChannelMessageDirect(ctx, msg, data)
 		return
 	}
-
 	conversationKey := ResolveConversationKey(msg)
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(conversationKey)
@@ -90,31 +92,8 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	rt.controlMu.Unlock()
 
 	if active != nil {
-		attemptedSteer := active.task.ControllerID == msg.UserID || rt.isAdmin(msg.UserID)
-		if attemptedSteer {
-			if session, ok := active.session.(InteractiveAgentSession); ok {
-				steerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				err := session.Steer(steerCtx, channelMessageForAgent(rt.channel, msg).Text)
-				cancel()
-				if err == nil {
-					rt.controlMu.Lock()
-					active.task.TurnID = session.ActiveTurnID()
-					taskSnapshot := active.task
-					rt.controlMu.Unlock()
-					_ = e.updateRemoteTask(context.Background(), taskSnapshot)
-					_ = rt.platform.Reply(ctx, msg, "已追加到当前 Codex 任务。")
-					e.emit(ctx, HookTaskSteered, withTaskData(data, active.task, "steered"))
-					e.emit(ctx, HookMessageSent, withTaskData(data, active.task, "steered"))
-					return
-				}
-			}
-		}
 		if _, err := e.enqueueRemoteTask(ctx, rt, msg, msg.Text); err != nil {
 			_ = rt.platform.Reply(ctx, msg, "排队失败："+err.Error())
-		} else if attemptedSteer {
-			_ = rt.platform.Reply(ctx, msg, "当前 Codex turn 无法追加，消息已自动加入队列。")
-		} else {
-			_ = rt.platform.Reply(ctx, msg, "当前任务由其他控制人执行，消息已加入队列。")
 		}
 		e.emit(ctx, HookMessageSent, data)
 		return
@@ -123,7 +102,7 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	task := e.newRemoteTask(rt, msg, msg.Text, ChannelTaskRunning)
 	rt.controlMu.Lock()
 	state = rt.controlStateLocked(conversationKey)
-	if state.active != nil {
+	if state.active != nil || state.steering || len(state.queue) > 0 || rt.directTurns[conversationKey] != nil {
 		rt.controlMu.Unlock()
 		if _, err := e.enqueueRemoteTask(ctx, rt, msg, task.task.Prompt); err != nil {
 			_ = rt.platform.Reply(ctx, msg, "排队失败："+err.Error())
@@ -134,36 +113,31 @@ func (e *Engine) handleChannelMessage(ctx context.Context, msg *Message, data ma
 	task.task.Prompt = ""
 	task.task.StartedAt = time.Now().UTC()
 	state.active = task
-	rt.controlMu.Unlock()
 	if e.channelControl != nil {
 		if err := e.channelControl.CreateChannelTask(ctx, task.task); err != nil {
-			rt.controlMu.Lock()
-			if state.active == task {
-				state.active = nil
-			}
+			state.active = nil
 			rt.controlMu.Unlock()
 			_ = rt.platform.Reply(ctx, msg, "创建任务失败："+err.Error())
 			return
 		}
 	}
-	e.runRemoteTask(ctx, rt, task, data)
+	rt.controlMu.Unlock()
+	go e.runRemoteTask(ctx, rt, task, data)
 }
 
 func (rt *channelRuntime) remoteControlEnabled() bool {
-	if rt == nil || !CodexRemoteControlEnabled(rt.channel) {
-		return false
-	}
-	if rt.workspace.RuntimeID == "codex" || rt.workspace.RuntimeID == "codex-app" {
-		return true
-	}
-	return rt.agent != nil && rt.agent.Name() == "codex"
+	return rt != nil && ((rt.owner != nil && rt.owner.channelControl != nil) || CodexRemoteControlEnabled(rt.channel))
 }
 
 func (rt *channelRuntime) authorized(userID string) bool {
+	allowed, admins := ChannelAllowedUsers(rt.channel), ChannelAdminUsers(rt.channel)
+	if len(allowed) == 0 && len(admins) == 0 {
+		return !CodexRemoteControlEnabled(rt.channel)
+	}
 	if strings.TrimSpace(userID) == "" {
 		return false
 	}
-	return ChannelAllowedUsers(rt.channel)[userID] || ChannelAdminUsers(rt.channel)[userID]
+	return allowed[userID] || admins[userID]
 }
 
 func (rt *channelRuntime) isAdmin(userID string) bool {
@@ -171,6 +145,9 @@ func (rt *channelRuntime) isAdmin(userID string) bool {
 }
 
 func (rt *channelRuntime) controlStateLocked(key string) *channelControlState {
+	if rt.controlTasks == nil {
+		rt.controlTasks = map[string]*channelControlState{}
+	}
 	state := rt.controlTasks[key]
 	if state == nil {
 		state = &channelControlState{}
@@ -179,7 +156,7 @@ func (rt *channelRuntime) controlStateLocked(key string) *channelControlState {
 	return state
 }
 
-func (rt *channelRuntime) attachRemoteSession(key string, session AgentSession, conv *Conversation) {
+func (rt *channelRuntime) attachRemoteSession(key string, session AgentSession, conv *Conversation, generation *channelAgentGeneration) {
 	if !rt.remoteControlEnabled() {
 		return
 	}
@@ -187,6 +164,7 @@ func (rt *channelRuntime) attachRemoteSession(key string, session AgentSession, 
 	state := rt.controlStateLocked(key)
 	if state.active != nil {
 		state.active.session = session
+		state.active.generation = generation
 		state.active.conv = conv
 		if conv != nil {
 			state.active.task.ConversationID = conv.ID
@@ -198,6 +176,7 @@ func (rt *channelRuntime) attachRemoteSession(key string, session AgentSession, 
 		if interactive, ok := session.(InteractiveAgentSession); ok {
 			state.active.task.TurnID = interactive.ActiveTurnID()
 		}
+		go rt.owner.refreshQueueCards(rt, state.active)
 		state.active.task.UpdatedAt = time.Now().UTC()
 		if rt.owner.channelControl != nil {
 			_ = rt.owner.channelControl.UpdateChannelTask(context.Background(), state.active.task)
@@ -211,6 +190,7 @@ func (e *Engine) newRemoteTask(rt *channelRuntime, msg *Message, prompt string, 
 	taskID := NewChannelControlID("task")
 	task := ChannelTask{
 		ID:              taskID,
+		SourceMessageID: msg.SourceMessageID, ChatMode: msg.ChatMode, ReplyInThread: msg.ReplyInThread,
 		ChannelID:       rt.channel.ID,
 		ConversationKey: ResolveConversationKey(msg),
 		ChatID:          msg.ChatID,
@@ -238,20 +218,20 @@ func cloneChannelMessage(msg *Message) *Message {
 		return &Message{}
 	}
 	clone := *msg
-	clone.Images = nil
+	clone.Images = append([][]byte(nil), msg.Images...)
 	clone.RuntimeSettingsAction = nil
 	clone.AgentInteractionAction = nil
 	clone.ChannelTaskAction = nil
 	clone.ChannelFeedbackAction = nil
 	clone.ChannelSessionAction = nil
+	clone.ConversationModeAction = nil
 	clone.Callback = nil
 	clone.LogOnly = false
 	return &clone
 }
 
 func (e *Engine) enqueueRemoteTask(ctx context.Context, rt *channelRuntime, msg *Message, prompt string) (*runtimeChannelTask, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	if strings.TrimSpace(prompt) == "" {
 		return nil, fmt.Errorf("排队内容不能为空")
 	}
 	key := ResolveConversationKey(msg)
@@ -262,59 +242,30 @@ func (e *Engine) enqueueRemoteTask(ctx context.Context, rt *channelRuntime, msg 
 		return nil, fmt.Errorf("队列已达到上限 %d", ChannelCodexMaxQueue(rt.channel))
 	}
 	task := e.newRemoteTask(rt, msg, prompt, ChannelTaskQueued)
-	state.queue = append(state.queue, task)
-	rt.controlMu.Unlock()
+	task.task.ControlNonce = NewChannelControlID("queue")
+	if state.active != nil {
+		task.task.TargetTaskID = state.active.task.ID
+		task.task.ConversationID = state.active.task.ConversationID
+	}
 	if e.channelControl != nil {
 		if err := e.channelControl.CreateChannelTask(ctx, task.task); err != nil {
-			rt.controlMu.Lock()
-			for i, queued := range state.queue {
-				if queued == task {
-					state.queue = append(state.queue[:i], state.queue[i+1:]...)
-					break
-				}
-			}
 			rt.controlMu.Unlock()
 			return nil, err
 		}
 	}
-	e.emit(ctx, HookTaskQueued, withTaskData(eventData(msg), task.task, "queued"))
-	rt.controlMu.Lock()
-	state = rt.controlStateLocked(key)
-	start := state.active == nil && len(state.queue) > 0 && state.queue[0] == task && rt.runCtx != nil && rt.runCtx.Err() == nil
-	if start {
-		state.queue = state.queue[1:]
-		task.task.Status = ChannelTaskRunning
-		task.task.StartedAt = time.Now().UTC()
-		task.task.UpdatedAt = task.task.StartedAt
-		task.task.Prompt = ""
-		state.active = task
-	}
+	state.queue = append(state.queue, task)
+	next := e.startNextRemoteLocked(rt, state)
+	snapshot := task.task
 	rt.controlMu.Unlock()
-	if start {
-		if err := e.updateRemoteTask(context.Background(), task.task); err != nil {
-			rt.controlMu.Lock()
-			state = rt.controlStateLocked(key)
-			if state.active == task {
-				state.active = nil
-				task.task.Status = ChannelTaskQueued
-				task.task.StartedAt = time.Time{}
-				task.task.Prompt = task.msg.Text
-				state.queue = append([]*runtimeChannelTask{task}, state.queue...)
-			}
-			rt.controlMu.Unlock()
-			e.log.Error("claim queued channel task", "task", task.task.ID, "err", err)
-		} else {
-			go e.runRemoteTask(rt.runCtx, rt, task, eventData(task.msg))
-		}
+	e.emit(ctx, HookTaskQueued, withTaskData(eventData(msg), snapshot, "queued"))
+	e.refreshQueueCards(rt, task)
+	if next != nil {
+		go e.runRemoteTask(rt.runCtx, rt, next, eventData(next.msg))
 	}
 	return task, nil
 }
 
 func (e *Engine) runRemoteTask(parent context.Context, rt *channelRuntime, task *runtimeChannelTask, data map[string]string) {
-	lock := e.remoteWorkLock(rt.workDir)
-	lock.Lock()
-	defer lock.Unlock()
-
 	timeout := ChannelCodexTurnTimeout(rt.channel)
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -348,7 +299,9 @@ func (e *Engine) runRemoteTask(parent context.Context, rt *channelRuntime, task 
 		}
 	}()
 
+	rt.controlMu.Lock()
 	taskData := withTaskData(data, task.task, "started")
+	rt.controlMu.Unlock()
 	e.emit(ctx, HookTaskStarted, taskData)
 	e.handleChannelMessageDirect(ctx, task.msg, taskData)
 	close(done)
@@ -464,47 +417,50 @@ func (e *Engine) updateRemoteTaskFromEvent(data map[string]string, event *Event)
 }
 
 func (e *Engine) finishRemoteTask(rt *channelRuntime, task *runtimeChannelTask, status ChannelTaskStatus, errText string) {
-	now := time.Now().UTC()
 	rt.controlMu.Lock()
 	state := rt.controlStateLocked(task.task.ConversationKey)
-	task.task.Status = status
-	task.task.Error = errText
-	task.task.FinishedAt = now
-	task.task.UpdatedAt = now
+	task.task.Status, task.task.Error = status, errText
+	task.task.FinishedAt = time.Now().UTC()
+	task.task.UpdatedAt = task.task.FinishedAt
 	task.task.Prompt = ""
+	// A failed terminal write must not cause this prompt to replay on restart:
+	// recovery already marks any persisted running task interrupted.
+	_ = e.updateRemoteTask(context.Background(), task.task)
 	if state.active == task {
 		state.active = nil
 	}
-	var next *runtimeChannelTask
-	if len(state.queue) > 0 && rt.runCtx != nil && rt.runCtx.Err() == nil {
-		next = state.queue[0]
-		state.queue = state.queue[1:]
-		next.task.Status = ChannelTaskRunning
-		next.task.StartedAt = now
-		next.task.UpdatedAt = now
-		next.task.Prompt = ""
-		state.active = next
-	}
+	next := e.startNextRemoteLocked(rt, state)
+	snapshot := task.task
 	rt.controlMu.Unlock()
-	_ = e.updateRemoteTask(context.Background(), task.task)
-	e.emit(context.Background(), HookTaskCompleted, withTaskData(eventData(task.msg), task.task, string(status)))
+	e.emit(context.Background(), HookTaskCompleted, withTaskData(eventData(task.msg), snapshot, string(status)))
+	e.refreshQueueCards(rt, task)
 	if next != nil {
-		if err := e.updateRemoteTask(context.Background(), next.task); err != nil {
-			rt.controlMu.Lock()
-			state := rt.controlStateLocked(next.task.ConversationKey)
-			if state.active == next {
-				state.active = nil
-				next.task.Status = ChannelTaskQueued
-				next.task.StartedAt = time.Time{}
-				next.task.Prompt = next.msg.Text
-				state.queue = append([]*runtimeChannelTask{next}, state.queue...)
-			}
-			rt.controlMu.Unlock()
-			e.log.Error("claim next channel task", "task", next.task.ID, "err", err)
-		} else {
-			go e.runRemoteTask(rt.runCtx, rt, next, eventData(next.msg))
-		}
+		go e.runRemoteTask(rt.runCtx, rt, next, eventData(next.msg))
 	}
+}
+
+// Caller holds controlMu. Commit running before launching; never remove an
+// uncommitted item from the queue or let a steer-in-flight be overtaken.
+func (e *Engine) startNextRemoteLocked(rt *channelRuntime, state *channelControlState) *runtimeChannelTask {
+	if state.active != nil || state.steering || len(state.queue) == 0 || rt.runCtx == nil || rt.runCtx.Err() != nil {
+		return nil
+	}
+	next := state.queue[0]
+	if rt.directTurns[next.task.ConversationKey] != nil {
+		return nil
+	}
+	previous := next.task
+	next.task.Status = ChannelTaskRunning
+	next.task.StartedAt = time.Now().UTC()
+	next.task.Prompt = ""
+	if err := e.updateRemoteTask(context.Background(), next.task); err != nil {
+		next.task = previous
+		e.log.Error("claim queued task", "err", err)
+		return nil
+	}
+	state.queue = state.queue[1:]
+	state.active = next
+	return next
 }
 
 func (e *Engine) updateRemoteTask(ctx context.Context, task ChannelTask) error {
@@ -580,27 +536,6 @@ func (e *Engine) activeChannelTask(data map[string]string) (ChannelTask, bool) {
 	return ChannelTask{}, false
 }
 
-func (e *Engine) remoteWorkLock(workDir string) *sync.Mutex {
-	key := strings.TrimSpace(workDir)
-	if key == "" {
-		key = "."
-	}
-	if absolute, err := filepath.Abs(key); err == nil {
-		key = filepath.Clean(absolute)
-	}
-	if resolved, err := filepath.EvalSymlinks(key); err == nil {
-		key = resolved
-	}
-	e.remoteWorkMu.Lock()
-	defer e.remoteWorkMu.Unlock()
-	lock := e.remoteWorkLocks[key]
-	if lock == nil {
-		lock = &sync.Mutex{}
-		e.remoteWorkLocks[key] = lock
-	}
-	return lock
-}
-
 func withTaskData(data map[string]string, task ChannelTask, action string) map[string]string {
 	out := map[string]string{}
 	for key, value := range data {
@@ -648,47 +583,26 @@ func (e *Engine) recoverRemoteTasks(rt *channelRuntime) {
 			}
 		}
 	}
+	// Load the complete FIFO before launching any recovered task.
+	rt.controlMu.Lock()
 	for _, stored := range tasks {
-		msg := &Message{
-			ID: stored.MessageID, ChatID: stored.ChatID, ChatType: stored.ChatType,
-			RootID: stored.RootID, ThreadID: stored.ThreadID,
-			UserID: stored.UserID, Platform: rt.channel.Type, ChannelID: rt.channel.ID,
-			ConversationKey: stored.ConversationKey, Origin: OriginChannel, Text: stored.Prompt,
-		}
-		if msg.ID == "" {
-			msg.ID = storedRootMessageID(stored.ConversationKey)
-		}
+		msg := &Message{ID: stored.MessageID, ChatID: stored.ChatID, ChatType: stored.ChatType, RootID: stored.RootID, ThreadID: stored.ThreadID, UserID: stored.UserID, Platform: rt.channel.Type, ChannelID: rt.channel.ID, ConversationKey: stored.ConversationKey, Origin: OriginChannel, Text: stored.Prompt, SourceMessageID: stored.SourceMessageID, ChatMode: stored.ChatMode, ReplyInThread: stored.ReplyInThread}
 		task := &runtimeChannelTask{task: stored, msg: msg}
-		rt.controlMu.Lock()
 		state := rt.controlStateLocked(stored.ConversationKey)
 		state.queue = append(state.queue, task)
-		start := state.active == nil && len(state.queue) == 1
-		if start {
-			state.queue = state.queue[1:]
-			state.active = task
-			task.task.Status = ChannelTaskRunning
-			task.task.StartedAt = time.Now().UTC()
-			task.task.Prompt = ""
-		}
-		rt.controlMu.Unlock()
-		if start && rt.runCtx != nil {
-			if err := e.updateRemoteTask(context.Background(), task.task); err != nil {
-				rt.controlMu.Lock()
-				state := rt.controlStateLocked(stored.ConversationKey)
-				if state.active == task {
-					state.active = nil
-					task.task.Status = ChannelTaskQueued
-					task.task.StartedAt = time.Time{}
-					task.task.Prompt = msg.Text
-					state.queue = append([]*runtimeChannelTask{task}, state.queue...)
-				}
-				rt.controlMu.Unlock()
-				e.log.Error("claim recovered channel task", "task", task.task.ID, "err", err)
-			} else {
-				go e.runRemoteTask(rt.runCtx, rt, task, eventData(msg))
-			}
+	}
+	var starts []*runtimeChannelTask
+	for _, state := range rt.controlTasks {
+		if next := e.startNextRemoteLocked(rt, state); next != nil {
+			starts = append(starts, next)
 		}
 	}
+	rt.controlMu.Unlock()
+	for _, task := range starts {
+		e.refreshQueueCards(rt, task)
+		go e.runRemoteTask(rt.runCtx, rt, task, eventData(task.msg))
+	}
+
 }
 
 func storedRootMessageID(key string) string {

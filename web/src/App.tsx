@@ -19,6 +19,7 @@ import {
   Moon,
   PanelLeft,
   PanelTop,
+  RefreshCw,
   Search,
   ServerCog,
   MessageSquareText,
@@ -44,6 +45,7 @@ import {
   activeMachineScope,
   api,
   FLEET_WARNING_EVENT,
+  currentFleetWarnings,
   getLaunchAtLogin,
   isDesktopApp,
   KeepAwakeStatus,
@@ -57,6 +59,7 @@ import {
   type TenancySelf,
 } from "./api";
 import { resolveTenancyGateWithRetry, type TenancyGateState } from "./tenancyGate";
+import { resetFleetWarnings } from "./api/fleetWarnings";
 import {
   navigationGroupForTab,
   primaryGroupDestination,
@@ -195,6 +198,7 @@ function initialTab(): Tab {
 
 export function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
+  const activeRouteRef = useRef(tab);
   const [language, setLanguage] = useState<Language>(initialLanguage);
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
 
@@ -220,7 +224,11 @@ export function App() {
   useEffect(() => {
     const onHashChange = () => {
       const hashTab = tabFromHash();
-      if (hashTab) setTab(hashTab);
+      if (hashTab) {
+        if (activeRouteRef.current !== hashTab) resetFleetWarnings();
+        activeRouteRef.current = hashTab;
+        setTab(hashTab);
+      }
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -229,6 +237,8 @@ export function App() {
   // Every tab owns a hash route (#tab or #tab/subview); panels with internal
   // sub-navigation (observability) extend the same scheme.
   function selectTab(next: Tab) {
+    if (activeRouteRef.current !== next) resetFleetWarnings();
+    activeRouteRef.current = next;
     setTab(next);
     if (next === "observability") {
       if (!window.location.hash.startsWith("#observability")) window.location.hash = "#observability/overview";
@@ -323,7 +333,9 @@ function Shell({
     ),
   );
   const [quickActionError, setQuickActionError] = useState("");
-  const [fleetWarnings, setFleetWarnings] = useState<string[]>([]);
+  const [fleetWarnings, setFleetWarnings] = useState<string[]>(currentFleetWarnings);
+  const [dismissedFleetWarnings, setDismissedFleetWarnings] = useState("");
+  const fleetWarningKey = JSON.stringify(fleetWarnings);
   const [machineScopeVersion, setMachineScopeVersion] = useState(0);
   const [remoteAddRequest, setRemoteAddRequest] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
@@ -501,15 +513,20 @@ function Shell({
   useEffect(() => {
     const receiveWarnings = (event: Event) => {
       const warnings = (event as CustomEvent<string[]>).detail;
-      if (Array.isArray(warnings)) setFleetWarnings(warnings);
+      if (Array.isArray(warnings)) {
+        setFleetWarnings(warnings);
+        if (!warnings.length) setDismissedFleetWarnings("");
+      }
     };
     window.addEventListener(FLEET_WARNING_EVENT, receiveWarnings);
+    setFleetWarnings(currentFleetWarnings());
     return () => window.removeEventListener(FLEET_WARNING_EVENT, receiveWarnings);
   }, []);
 
   useEffect(() => {
     const refreshScope = () => {
       setFleetWarnings([]);
+      setDismissedFleetWarnings("");
       setMachineScopeVersion((version) => version + 1);
     };
     window.addEventListener("agentmux:machine-scope-changed", refreshScope);
@@ -841,9 +858,11 @@ function Shell({
           <div className="title-row">
             <ActiveIcon size={20} />
             <h1>{t(active.labelKey)}</h1>
-            <span className="system-pill">
+            <span className={`system-pill${fleetWarnings.length || tenantGate.state === "error" ? " warning" : ""}`} role="status">
               <span className="status-dot" />
-              {t("app.status")}
+              {t(tenantGate.state === "loading" ? "tenants.checking"
+                : tenantGate.state !== "ready" ? "tenants.requiredTitle"
+                : fleetWarnings.length ? "app.statusWarning" : "app.status")}
             </span>
           </div>
 		  {identityIsAdmin && (
@@ -860,11 +879,11 @@ function Shell({
         <MeetingInvitationOverlay />
 
         <main className="main">
-          {fleetWarnings.length > 0 && (
+          {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && (
             <div className="session-notice warning" role="status">
               <strong>{t("remote.partialFleetWarning")}</strong>
               <span>{fleetWarnings.join(" · ")}</span>
-              <button className="ghost-action" type="button" onClick={() => setFleetWarnings([])}>{t("common.close")}</button>
+              <button className="ghost-action" type="button" onClick={() => setDismissedFleetWarnings(fleetWarningKey)}>{t("common.close")}</button>
             </div>
           )}
           <PanelErrorBoundary
@@ -877,6 +896,18 @@ function Shell({
             <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
               {tenantGate.state === "loading" ? (
                 <div className="empty-state">{t("tenants.checking")}</div>
+              ) : tenantGate.state === "error" ? (
+                <section className="surface" role="alert">
+                  <div className="surface-header">
+                    <div>
+                      <h2>{t("tenants.requiredTitle")}</h2>
+                      <p>{t("tenants.identityError")}</p>
+                    </div>
+                    <button className="ghost-action" onClick={() => void tenantGate.refresh()}>
+                      <RefreshCw size={15} /> {t("common.retry")}
+                    </button>
+                  </div>
+                </section>
               ) : (
                 <>
 				  <RegisteredPanel tab={visibleTab} />
@@ -884,9 +915,9 @@ function Shell({
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
 				  {visibleTab === "machines" && <RemoteHostsPanel addRequest={remoteAddRequest} />}
-                  {visibleTab === "tenants" && (
+                  {visibleTab === "tenants" && tenantIdentity && (
                     <TenantsPanel
-                      identity={tenantIdentity ?? undefined}
+                      identity={tenantIdentity}
                       initialTenants={tenantPanelOptions}
                       onContinue={() => setTab("agents")}
                       onTenantChanged={(change) => {
@@ -1013,9 +1044,9 @@ function useTenancyGate(): {
       setIdentity(resolved.identity);
       setState(resolved.state);
     } catch {
-      // Fail closed: configuration stays unavailable until AgentMux can prove
-      // that the Console has an active tenant.
-      setState("required");
+      // A failed identity request is not a missing tenant. Keep the retry in
+      // the shell so a successful check also unlocks navigation.
+      setState("error");
       setIdentity(null);
     }
   }, []);

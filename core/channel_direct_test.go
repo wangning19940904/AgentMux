@@ -13,19 +13,19 @@ import (
 func TestDirectChannelTurnIsSingleFlightPerConversation(t *testing.T) {
 	rt := &channelRuntime{directTurns: map[string]*directChannelTurn{}}
 	ctx, cancel := context.WithCancel(context.Background())
-	turn, ok := rt.beginDirectTurn("chat-1", "user-1", cancel)
+	turn, ok := rt.beginDirectTurn(ctx, "chat-1", "user-1", cancel)
 	if !ok || turn == nil {
 		t.Fatal("first direct turn was not accepted")
 	}
-	_, second := rt.beginDirectTurn("chat-1", "user-1", func() {})
+	_, second := rt.beginDirectTurn(ctx, "chat-1", "user-1", func() {})
 	if second {
 		t.Fatal("overlapping direct turn was accepted")
 	}
-	if _, other := rt.beginDirectTurn("chat-2", "user-2", func() {}); !other {
+	if _, other := rt.beginDirectTurn(ctx, "chat-2", "user-2", func() {}); !other {
 		t.Fatal("independent conversation was blocked")
 	}
 	rt.finishDirectTurn("chat-1", turn)
-	if _, next := rt.beginDirectTurn("chat-1", "user-1", func() {}); !next {
+	if _, next := rt.beginDirectTurn(ctx, "chat-1", "user-1", func() {}); !next {
 		t.Fatal("conversation remained blocked after the turn finished")
 	}
 	select {
@@ -38,7 +38,7 @@ func TestDirectChannelTurnIsSingleFlightPerConversation(t *testing.T) {
 func TestCancelDirectTurnForResetWaitsForCompletion(t *testing.T) {
 	rt := &channelRuntime{directTurns: map[string]*directChannelTurn{}}
 	ctx, cancel := context.WithCancel(context.Background())
-	turn, ok := rt.beginDirectTurn("chat-1", "user-1", cancel)
+	turn, ok := rt.beginDirectTurn(ctx, "chat-1", "user-1", cancel)
 	if !ok {
 		t.Fatal("direct turn was not accepted")
 	}
@@ -82,8 +82,8 @@ func TestFinalDeliveryRetriesAndPersistsDirectTaskState(t *testing.T) {
 	}
 	engine.channels[rt.channel.ID] = rt
 
-	_, cancel := context.WithCancel(context.Background())
-	turn, ok := rt.beginDirectTurn("chat:one", "user", cancel)
+	ctx, cancel := context.WithCancel(context.Background())
+	turn, ok := rt.beginDirectTurn(ctx, "chat:one", "user", cancel)
 	if !ok {
 		t.Fatal("direct turn was not accepted")
 	}
@@ -119,8 +119,8 @@ func TestFinalDeliveryExhaustionFailsTask(t *testing.T) {
 		directTurns: map[string]*directChannelTurn{}, controlTasks: map[string]*channelControlState{},
 	}
 	engine.channels[rt.channel.ID] = rt
-	_, cancel := context.WithCancel(context.Background())
-	turn, _ := rt.beginDirectTurn("chat:failed", "user", cancel)
+	ctx, cancel := context.WithCancel(context.Background())
+	turn, _ := rt.beginDirectTurn(ctx, "chat:failed", "user", cancel)
 	task := ChannelTask{ID: "task-failed", ChannelID: rt.channel.ID, ConversationKey: "chat:failed", Status: ChannelTaskRunning, DeliveryStatus: ChannelDeliveryPending}
 	rt.attachDirectTask("chat:failed", turn, task, &Message{ChannelID: rt.channel.ID, ConversationKey: "chat:failed"})
 	data := withTaskData(map[string]string{"channel_id": rt.channel.ID, "conversation_key": "chat:failed"}, task, "started")

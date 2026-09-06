@@ -420,6 +420,47 @@ func TestManagerSharesSystemOpenSSHFallbackAcrossConcurrentDials(t *testing.T) {
 	}
 }
 
+func TestManagerDialContextBoundsStaleCachedAttemptBeforeRetry(t *testing.T) {
+	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), 40*time.Millisecond, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	saved, err := manager.Upsert(Host{
+		Name: "stale-deadline", Host: "192.0.2.13", Port: 22, User: "tester",
+		RemoteAddr: defaultRemoteAddr, HostKeyFingerprint: "SHA256:trusted",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := mustStoredHost(t, manager, saved.ID)
+	replacement := &contextAwarePipeRemoteClient{}
+	stale := &deadlineReplacingRemoteClient{onDeadline: func() {
+		// Model another request promoting a freshly connected client while the
+		// stale channel attempt is being unwound. Conditional invalidation must
+		// preserve it for the retry.
+		manager.cache(host, replacement)
+	}}
+	manager.clients[saved.ID] = &cachedClient{host: host, client: stale}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	conn, err := manager.DialContext(ctx, saved.ID, "tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	// Include the bounded retry backoff while still recovering well before
+	// the caller's two-second deadline.
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("stale SSH attempt consumed the caller deadline: %s", elapsed)
+	}
+	if stale.dials.Load() != 1 || replacement.dials.Load() != 1 {
+		t.Fatalf("stale dials = %d, replacement dials = %d", stale.dials.Load(), replacement.dials.Load())
+	}
+}
+
 func TestManagerStatusPreservesClientPromotedWhileStaleRequestFails(t *testing.T) {
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -672,12 +713,46 @@ type blockingFailedRemoteClient struct {
 func (c *blockingFailedRemoteClient) DialContext(context.Context, string, string) (net.Conn, error) {
 	close(c.started)
 	<-c.release
-	return nil, errors.New("stale tunnel failed")
+	return nil, io.ErrUnexpectedEOF
 }
 func (*blockingFailedRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
 	return nil, nil
 }
 func (*blockingFailedRemoteClient) Close() error { return nil }
+
+type deadlineReplacingRemoteClient struct {
+	dials      atomic.Int32
+	onDeadline func()
+}
+
+func (c *deadlineReplacingRemoteClient) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	c.dials.Add(1)
+	<-ctx.Done()
+	if c.onDeadline != nil {
+		c.onDeadline()
+	}
+	return nil, ctx.Err()
+}
+func (*deadlineReplacingRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	return nil, nil
+}
+func (*deadlineReplacingRemoteClient) Close() error { return nil }
+
+type contextAwarePipeRemoteClient struct{ dials atomic.Int32 }
+
+func (c *contextAwarePipeRemoteClient) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	c.dials.Add(1)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	left, right := net.Pipe()
+	go func() { _ = right.Close() }()
+	return left, nil
+}
+func (*contextAwarePipeRemoteClient) Run(context.Context, string, io.Reader) ([]byte, error) {
+	return nil, nil
+}
+func (*contextAwarePipeRemoteClient) Close() error { return nil }
 
 func startSSHForwarder(t *testing.T, allowedKey ssh.PublicKey) (string, int) {
 	host, port, _ := startSSHForwarderWithHostKey(t, allowedKey)

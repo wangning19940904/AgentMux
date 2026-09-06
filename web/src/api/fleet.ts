@@ -8,7 +8,7 @@ import type {
 } from "./types";
 
 export type Targeted<T> = T & TargetMetadata;
-export const FLEET_WARNING_EVENT = "agentmux:fleet-warning";
+export { FLEET_WARNING_EVENT, currentFleetWarnings } from "./fleetWarnings";
 
 export function fleetMode() {
   return activeMachineScope() === "all";
@@ -46,9 +46,6 @@ function fleetArrayFromBatch<T>(batch: FleetBatchResult<T[]>, key: string): Targ
     }
   }
   if (!success && errors.length) throw new Error(errors.join("; "));
-  if (errors.length && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent<string[]>(FLEET_WARNING_EVENT, { detail: errors }));
-  }
   return out;
 }
 
@@ -71,9 +68,6 @@ export async function fleetReadValues<T>(path: string, key = "data"): Promise<T[
     values.push(...response.data);
   }
   if (!success && errors.length) throw new Error(errors.join("; "));
-  if (errors.length && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent<string[]>(FLEET_WARNING_EVENT, { detail: errors }));
-  }
   return [...new Set(values)];
 }
 
@@ -127,9 +121,6 @@ export async function fleetCall<T>(
     }
   }
   if (!successes.length) throw new Error(errors.join("; ") || "Fleet operation failed.");
-  if (errors.length && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent<string[]>(FLEET_WARNING_EVENT, { detail: errors }));
-  }
   return { first: successes[0], successes, errors, batch };
 }
 

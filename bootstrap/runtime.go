@@ -41,10 +41,12 @@ type Runtime struct {
 	Engine   *core.Engine
 	Connect  *core.ConnectService
 
-	mu      sync.Mutex
-	started bool
-	errCh   chan runtimeResult
-	stop    sync.Once
+	mu          sync.Mutex
+	started     bool
+	errCh       chan runtimeResult
+	stop        sync.Once
+	authRefresh func(context.Context)
+	authWG      sync.WaitGroup
 }
 
 // NewRuntime assembles the complete daemon under one cancellable lifecycle.
@@ -59,6 +61,11 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	if cfg != nil && (len(cfg.Projects) > 0 || len(cfg.Hooks) > 0) {
 		cancel()
 		return nil, fmt.Errorf("config.toml projects/hooks are no longer runtime resources; run `amux database import-config --apply`, then remove those sections")
+	}
+	if keys, err := framework.InheritShellProxyEnvironment(ctx); err != nil {
+		log.Warn("shell proxy settings unavailable; using service environment", "err", err)
+	} else if len(keys) > 0 {
+		log.Info("inherited shell proxy settings", "variables", keys)
 	}
 	framework.PrepareRuntimeEnvironment()
 	skillManager := skills.NewPersistent(st)
@@ -109,6 +116,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	return &Runtime{
 		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService,
 		Usage: usageEngine, Engine: engine, Connect: connect,
+		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
 	}, nil
 }
 
@@ -125,6 +133,13 @@ func (r *Runtime) Start() error {
 	}
 	r.started = true
 	r.errCh = make(chan runtimeResult, 2)
+	if r.authRefresh != nil {
+		r.authWG.Add(1)
+		go func() {
+			defer r.authWG.Done()
+			r.authRefresh(r.ctx)
+		}()
+	}
 	r.mu.Unlock()
 
 	if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
@@ -186,6 +201,7 @@ func (r *Runtime) Stop() {
 	}
 	r.stop.Do(func() {
 		r.cancel()
+		r.authWG.Wait()
 		if r.Connect != nil {
 			r.Connect.Stop()
 		}

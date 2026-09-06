@@ -45,7 +45,7 @@ export function OverviewPanel() {
   );
   const currencyPreferences = useAsync(() => api.menubarSettings(), []);
   const providers = useAsync(() => api.providers(), []);
-  const channels = useAsync(() => api.channels(), []);
+  const channels = useAsync(() => api.channelHealth(), []);
   const providerMonitor = useAsync(() => api.providerMonitor(), []);
 
   const cnyRate = validCNYRate(currencyPreferences.data?.cny_rate ?? 7);

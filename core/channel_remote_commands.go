@@ -9,6 +9,10 @@ import (
 )
 
 func (e *Engine) handleRemoteCommand(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, text string) bool {
+	if e.handleQueueCommand(ctx, rt, msg, text) {
+		e.emit(ctx, HookMessageSent, data)
+		return true
+	}
 	lower := strings.ToLower(text)
 	switch lower {
 	case "/status":
@@ -51,7 +55,7 @@ func (e *Engine) handleRemoteCommand(ctx context.Context, rt *channelRuntime, ms
 		if _, err := e.enqueueRemoteTask(ctx, rt, msg, prompt); err != nil {
 			_ = rt.platform.Reply(ctx, msg, "排队失败："+err.Error())
 		} else {
-			_ = rt.platform.Reply(ctx, msg, "已加入 Codex 任务队列。")
+			_ = rt.platform.Reply(ctx, msg, "已加入任务队列。")
 		}
 		e.emit(ctx, HookMessageSent, data)
 		return true
@@ -78,6 +82,10 @@ func (e *Engine) handleRemoteCommand(ctx context.Context, rt *channelRuntime, ms
 
 func (e *Engine) handleRemoteTaskAction(ctx context.Context, rt *channelRuntime, msg *Message, data map[string]string, action ChannelTaskAction) {
 	switch action.Action {
+	case ChannelTaskActionSteer, ChannelTaskActionCancel:
+		if err := e.controlQueuedTask(ctx, rt, msg, action); err != nil {
+			_ = rt.platform.Reply(ctx, msg, err.Error())
+		}
 	case ChannelTaskActionStop:
 		e.stopRemoteTask(ctx, rt, msg, data, action.TaskID)
 	default:
@@ -87,19 +95,20 @@ func (e *Engine) handleRemoteTaskAction(ctx context.Context, rt *channelRuntime,
 }
 
 func (e *Engine) ensureRemoteConversation(ctx context.Context, rt *channelRuntime, msg *Message) (*Conversation, error) {
-	opts := rt.workspace
+	_, workDir, opts := rt.agentSnapshot()
 	if opts.WorkDir == "" {
-		opts.WorkDir = rt.workDir
+		opts.WorkDir = workDir
 	}
 	conversation, _, err := e.prepareConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType,
-		ResolveConversationKey(msg), opts, rt.workDir)
+		ResolveConversationKey(msg), opts, workDir)
 	return conversation, err
 }
 
 func (e *Engine) listRemoteThreads(ctx context.Context, rt *channelRuntime, msg *Message) {
-	catalog, ok := rt.agent.(NativeThreadAgent)
+	agent, _, _ := rt.agentSnapshot()
+	catalog, ok := agent.(NativeThreadAgent)
 	if !ok {
-		_ = rt.platform.Reply(ctx, msg, "当前 Codex 运行时不支持 thread 列表。")
+		_ = rt.platform.Reply(ctx, msg, "当前运行时不支持会话 列表。")
 		return
 	}
 	conversation, err := e.ensureRemoteConversation(ctx, rt, msg)
@@ -109,14 +118,14 @@ func (e *Engine) listRemoteThreads(ctx context.Context, rt *channelRuntime, msg 
 	}
 	threads, err := catalog.ListNativeThreads(ctx, conversation.WorkDir)
 	if err != nil {
-		_ = rt.platform.Reply(ctx, msg, "读取 Codex threads 失败："+err.Error())
+		_ = rt.platform.Reply(ctx, msg, "读取原生会话失败："+err.Error())
 		return
 	}
 	rt.controlMu.Lock()
 	rt.threadLists[conversation.ConversationKey] = append([]NativeThread(nil), threads...)
 	rt.controlMu.Unlock()
 	if len(threads) == 0 {
-		_ = rt.platform.Reply(ctx, msg, "当前工作目录下没有可绑定的 Codex thread。")
+		_ = rt.platform.Reply(ctx, msg, "当前目录没有可绑定的原生会话。")
 		return
 	}
 	limit := len(threads)
@@ -154,9 +163,10 @@ func (e *Engine) bindRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 	threads := append([]NativeThread(nil), rt.threadLists[key]...)
 	rt.controlMu.Unlock()
 	if len(threads) == 0 {
-		catalog, ok := rt.agent.(NativeThreadAgent)
+		agent, _, _ := rt.agentSnapshot()
+		catalog, ok := agent.(NativeThreadAgent)
 		if !ok {
-			_ = rt.platform.Reply(ctx, msg, "当前 Codex 运行时不支持 thread 绑定。")
+			_ = rt.platform.Reply(ctx, msg, "当前运行时不支持会话 绑定。")
 			return
 		}
 		conversation, err := e.ensureRemoteConversation(ctx, rt, msg)
@@ -166,7 +176,7 @@ func (e *Engine) bindRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 		}
 		threads, err = catalog.ListNativeThreads(ctx, conversation.WorkDir)
 		if err != nil {
-			_ = rt.platform.Reply(ctx, msg, "读取 Codex threads 失败："+err.Error())
+			_ = rt.platform.Reply(ctx, msg, "读取原生会话失败："+err.Error())
 			return
 		}
 	}
@@ -198,7 +208,7 @@ func (e *Engine) bindRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 		_ = rt.platform.Reply(ctx, msg, "绑定失败："+err.Error())
 		return
 	}
-	_ = rt.platform.Reply(ctx, msg, "已绑定 Codex thread："+threadID)
+	_ = rt.platform.Reply(ctx, msg, "已绑定原生会话："+threadID)
 }
 
 func (rt *channelRuntime) remoteStatus(key string) string {
@@ -206,13 +216,13 @@ func (rt *channelRuntime) remoteStatus(key string) string {
 	defer rt.controlMu.Unlock()
 	state := rt.controlStateLocked(key)
 	if state.active == nil {
-		return fmt.Sprintf("Codex 状态：空闲\n排队任务：%d", len(state.queue))
+		return fmt.Sprintf("任务状态：空闲\n排队任务：%d", len(state.queue))
 	}
 	threadID := state.active.task.NativeThreadID
 	if threadID == "" {
 		threadID = "正在创建"
 	}
-	return fmt.Sprintf("Codex 状态：%s\nThread：%s\n控制人：%s\n排队任务：%d",
+	return fmt.Sprintf("任务状态：%s\nThread：%s\n控制人：%s\n排队任务：%d",
 		state.active.task.Status, threadID, state.active.task.ControllerID, len(state.queue))
 }
 
@@ -245,7 +255,7 @@ func (e *Engine) stopRemoteTask(ctx context.Context, rt *channelRuntime, msg *Me
 		if cancelTask != nil {
 			cancelTask()
 		}
-		_ = rt.platform.Reply(ctx, msg, "已请求停止当前 Codex 任务。")
+		_ = rt.platform.Reply(ctx, msg, "已请求停止当前任务。")
 		e.emit(ctx, HookTaskInterrupted, withTaskData(data, active.task, "interrupted"))
 	}
 	e.emit(ctx, HookMessageSent, data)
@@ -277,7 +287,7 @@ func (e *Engine) takeOverRemoteTask(ctx context.Context, rt *channelRuntime, msg
 	audit["previous_controller_id"] = previous
 	audit["resolved_by"] = msg.UserID
 	e.emit(ctx, HookTaskTakenOver, audit)
-	_ = rt.platform.Reply(ctx, msg, "已接管当前 Codex 任务。")
+	_ = rt.platform.Reply(ctx, msg, "已接管当前任务。")
 	e.emit(ctx, HookMessageSent, audit)
 }
 
@@ -308,24 +318,36 @@ func (e *Engine) clearRemoteQueue(ctx context.Context, rt *channelRuntime, msg *
 	}
 	delete(rt.clearConfirm, confirmKey)
 	queued := make([]*runtimeChannelTask, 0, count)
-	remaining := make([]*runtimeChannelTask, 0, len(state.queue)-count)
+	remaining := make([]*runtimeChannelTask, 0, len(state.queue))
 	for _, task := range state.queue {
-		if admin || task.task.ControllerID == msg.UserID {
-			queued = append(queued, task)
-		} else {
+		if task.task.Status != ChannelTaskQueued || !(admin || task.task.ControllerID == msg.UserID) {
 			remaining = append(remaining, task)
+			continue
 		}
-	}
-	state.queue = remaining
-	rt.controlMu.Unlock()
-	now := time.Now().UTC()
-	for _, task := range queued {
+		previous := task.task
 		task.task.Status = ChannelTaskCancelled
 		task.task.Error = "cancelled before start"
 		task.task.Prompt = ""
-		task.task.FinishedAt = now
-		_ = e.updateRemoteTask(context.Background(), task.task)
+		task.task.FinishedAt = time.Now().UTC()
+		if err := e.updateRemoteTask(ctx, task.task); err != nil {
+			task.task = previous
+			remaining = append(remaining, task)
+			continue
+		}
+		queued = append(queued, task)
 	}
+	state.queue = remaining
+	next := e.startNextRemoteLocked(rt, state)
+	rt.controlMu.Unlock()
+	for _, task := range queued {
+		if task.msg != nil {
+			e.refreshQueueCards(rt, task)
+		}
+	}
+	if next != nil {
+		go e.runRemoteTask(rt.runCtx, rt, next, eventData(next.msg))
+	}
+
 	_ = rt.platform.Reply(ctx, msg, fmt.Sprintf("已取消 %d 个排队任务。", len(queued)))
 	e.emit(ctx, HookMessageSent, data)
 }
@@ -353,7 +375,8 @@ func (e *Engine) openRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 		e.emit(ctx, HookMessageSent, data)
 		return
 	}
-	opener, ok := rt.agent.(NativeThreadOpener)
+	agent, _, _ := rt.agentSnapshot()
+	opener, ok := agent.(NativeThreadOpener)
 	if !ok {
 		_ = rt.platform.Reply(ctx, msg, "当前环境不支持 Codex deep link。\n请在本机运行：codex resume "+threadID)
 		e.emit(ctx, HookMessageSent, data)
@@ -369,7 +392,7 @@ func (e *Engine) openRemoteThread(ctx context.Context, rt *channelRuntime, msg *
 	case opened:
 		_ = rt.platform.Reply(ctx, msg, "已在本机 Codex App 中打开当前 thread。")
 	default:
-		_ = rt.platform.Reply(ctx, msg, "当前环境不支持 Codex deep link。\n请在本机运行："+fallback)
+		_ = rt.platform.Reply(ctx, msg, "请在本机运行："+fallback)
 	}
 	e.emit(ctx, HookMessageSent, data)
 }

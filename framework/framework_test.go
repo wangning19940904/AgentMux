@@ -193,6 +193,7 @@ func TestCheckTraeAuthUsesNativeStatus(t *testing.T) {
 		t.Skip("shell script test")
 	}
 	bin := t.TempDir()
+	t.Setenv("TRAE_HOME", t.TempDir())
 	writeFrameworkExecutable(t, filepath.Join(bin, "traecli"), `#!/bin/sh
 if [ "$1" = "login" ] && [ "$2" = "status" ]; then
   echo 'Logged in using Trae'

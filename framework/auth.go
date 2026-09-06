@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/internal/authflow"
+	"github.com/wangning19940904/AgentMux/internal/traeauth"
 )
 
 // AuthState describes whether a locally installed framework can use its own
@@ -28,12 +29,14 @@ const (
 // Detail is deliberately generic so account identifiers and command output do
 // not leak through the HTTP API.
 type AuthStatus struct {
-	Kind            string    `json:"kind"`
-	State           AuthState `json:"state"`
-	Installed       bool      `json:"installed"`
-	LoginSupported  bool      `json:"login_supported"`
-	LogoutSupported bool      `json:"logout_supported"`
-	Detail          string    `json:"detail,omitempty"`
+	Kind                 string    `json:"kind"`
+	State                AuthState `json:"state"`
+	Installed            bool      `json:"installed"`
+	LoginSupported       bool      `json:"login_supported"`
+	LogoutSupported      bool      `json:"logout_supported"`
+	Detail               string    `json:"detail,omitempty"`
+	AutoRefreshSupported bool      `json:"auto_refresh_supported,omitempty"`
+	ExpiresAt            string    `json:"expires_at,omitempty"`
 }
 
 // LoginResult contains the actionable part of a CLI login flow. The command
@@ -138,6 +141,17 @@ func CheckAuth(ctx context.Context, kind string) AuthStatus {
 	}
 	output, commandErr := frameworkCommandContext(checkCtx, binary, config.statusArgs...).CombinedOutput()
 	status.State = classifyFrameworkAuth(kind, output, commandErr)
+	if kind == "traecli" {
+		if meta, err := traeauth.ReadMetadata(nil); err == nil && meta.Managed && !meta.ExpiresAt.IsZero() {
+			status.AutoRefreshSupported = true
+			status.ExpiresAt = meta.ExpiresAt.UTC().Format(time.RFC3339)
+			if !meta.ExpiresAt.After(time.Now()) || traeauth.NeedsLogin(nil) {
+				status.State = AuthStateUnauthenticated
+				status.Detail = "TRAE login is no longer valid; automatic renewal or a new login is required"
+				return status
+			}
+		}
+	}
 	switch status.State {
 	case AuthStateAuthenticated:
 		status.Detail = "CLI reports a local login"

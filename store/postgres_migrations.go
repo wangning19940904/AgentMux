@@ -323,6 +323,11 @@ CREATE TABLE IF NOT EXISTS skill_states (
 );
 `,
 		},
+		{version: 15, name: "channel_queue_and_modes", sql: `
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS control_json TEXT;
+ALTER TABLE channel_tasks ADD COLUMN IF NOT EXISTS source_message_id TEXT;
+CREATE TABLE IF NOT EXISTS channel_chat_state (channel_id TEXT NOT NULL,state_key TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(channel_id,state_key));
+`},
 	}
 }
 

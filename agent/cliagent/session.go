@@ -132,6 +132,11 @@ func (s *session) SetModel(model string) error {
 func (s *session) ResetModel() error { return s.ResetRuntimeSetting(core.RuntimeSettingModel) }
 
 func (s *session) Send(ctx context.Context, text string) (<-chan *core.Event, error) {
+	if s.agent.spec.EnsureAuth != nil {
+		if err := s.agent.spec.EnsureAuth(ctx, s.agent.env); err != nil {
+			return nil, err
+		}
+	}
 	out := make(chan *core.Event, 16)
 	settings := s.CurrentRuntimeSettings()
 	model := settings.Model
@@ -448,3 +453,5 @@ func PlainTextMapper(line []byte) *core.Event {
 	}
 	return &core.Event{Type: core.EventOutput, Text: t}
 }
+
+func (s *session) NativeSessionID() string { return s.currentNativeSessionID() }

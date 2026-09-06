@@ -59,6 +59,7 @@ type larkClient struct {
 	meetingUsers     []string
 	meetingWakeWords []string
 
+	chatInfo        sync.Map
 	mu              sync.Mutex
 	closing         bool
 	healthState     string

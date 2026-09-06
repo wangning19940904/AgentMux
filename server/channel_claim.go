@@ -166,7 +166,7 @@ func (c *remoteChannelPeerClient) StreamMeetingEventPayloads(ctx context.Context
 	req.Header.Set("Accept", "text/event-stream")
 	transport := &http.Transport{
 		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			return c.manager.DialContext(ctx, id, network)
 		},
 		DisableKeepAlives: true,
@@ -245,7 +245,7 @@ func (c *remoteChannelPeerClient) request(
 	}
 	transport := &http.Transport{
 		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
 			return c.manager.DialContext(ctx, id, network)
 		},
 		DisableKeepAlives: true,

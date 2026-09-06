@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,36 @@ import (
 const channelMessageDedupTTL = 10 * time.Minute
 
 var channelHealthCheckInterval = 15 * time.Second
+
+// channelAgentGeneration is one immutable Agent configuration applied to a
+// channel. Saving the Agent installs a new current generation while sessions
+// that already own the previous generation finish normally.
+type channelAgentGeneration struct {
+	agent           Agent
+	workDir         string
+	workspace       WorkspaceInitOptions
+	defaultSettings RuntimeSettings
+	sessions        int
+	retired         atomic.Bool
+	stopped         bool
+}
+
+type channelSessionBinding struct {
+	cacheKey   string
+	session    AgentSession
+	generation *channelAgentGeneration
+	active     int
+	retired    bool
+	closed     bool
+	done       chan struct{}
+	doneOnce   sync.Once
+}
+
+func (binding *channelSessionBinding) signalDone() {
+	if binding != nil && binding.done != nil {
+		binding.doneOnce.Do(func() { close(binding.done) })
+	}
+}
 
 // channelRuntime holds one live console-managed channel: the platform
 // connection, the bound agent and its per-chat sessions.
@@ -26,7 +57,9 @@ type channelRuntime struct {
 	runCtx          context.Context
 
 	mu                  sync.Mutex
-	sessions            map[string]AgentSession // chatID -> session
+	generation          *channelAgentGeneration
+	sessions            map[string]*channelSessionBinding // conversation id -> current generation session
+	retiredSessions     map[*channelSessionBinding]struct{}
 	seen                map[string]time.Time
 	state               string
 	errMsg              string
@@ -41,6 +74,10 @@ type channelRuntime struct {
 	meetingResponseMode atomic.Value // string
 	definitionUpdatedAt atomic.Value // time.Time
 
+	queueCardMu  sync.Mutex
+	routingLocks sync.Map
+	routeMu      sync.Mutex
+	routeState   map[string]string
 	controlMu    sync.Mutex
 	controlTasks map[string]*channelControlState
 	directTurns  map[string]*directChannelTurn
@@ -102,7 +139,87 @@ func (rt *channelRuntime) runtimeDefaults() RuntimeSettings {
 func (rt *channelRuntime) setRuntimeDefaults(settings RuntimeSettings) {
 	rt.mu.Lock()
 	rt.defaultSettings = settings
+	if generation := rt.ensureGenerationLocked(); generation != nil {
+		generation.defaultSettings = settings
+	}
 	rt.mu.Unlock()
+}
+
+func (rt *channelRuntime) ensureGenerationLocked() *channelAgentGeneration {
+	if rt == nil {
+		return nil
+	}
+	if rt.generation == nil {
+		rt.generation = &channelAgentGeneration{
+			agent: rt.agent, workDir: rt.workDir, workspace: rt.workspace, defaultSettings: rt.defaultSettings,
+		}
+	}
+	return rt.generation
+}
+
+func (rt *channelRuntime) agentSnapshot() (Agent, string, WorkspaceInitOptions) {
+	if rt == nil {
+		return nil, "", WorkspaceInitOptions{}
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	generation := rt.ensureGenerationLocked()
+	return generation.agent, generation.workDir, generation.workspace
+}
+
+// replaceAgentGeneration hot-swaps the Agent definition without restarting
+// the platform connection. Cached idle sessions are retired immediately;
+// active sessions retain their old generation until their lease is released.
+func (rt *channelRuntime) replaceAgentGeneration(ctx context.Context, agent Agent, workDir string, workspace WorkspaceInitOptions) error {
+	if rt == nil {
+		return nil
+	}
+	newGeneration := &channelAgentGeneration{
+		agent: agent, workDir: workDir, workspace: workspace, defaultSettings: workspace.RuntimeDefaults,
+	}
+	var closeBindings []*channelSessionBinding
+	var stopGeneration *channelAgentGeneration
+	rt.mu.Lock()
+	oldGeneration := rt.ensureGenerationLocked()
+	oldGeneration.retired.Store(true)
+	if rt.retiredSessions == nil {
+		rt.retiredSessions = map[*channelSessionBinding]struct{}{}
+	}
+	for cacheKey, binding := range rt.sessions {
+		delete(rt.sessions, cacheKey)
+		binding.retired = true
+		if binding.active > 0 {
+			rt.retiredSessions[binding] = struct{}{}
+			continue
+		}
+		binding.closed = true
+		binding.generation.sessions--
+		closeBindings = append(closeBindings, binding)
+	}
+	if oldGeneration.sessions == 0 && !oldGeneration.stopped {
+		oldGeneration.stopped = true
+		stopGeneration = oldGeneration
+	}
+	rt.generation = newGeneration
+	rt.agent = agent
+	rt.workDir = workDir
+	rt.workspace = workspace
+	rt.defaultSettings = workspace.RuntimeDefaults
+	rt.mu.Unlock()
+
+	var errs []error
+	for _, binding := range closeBindings {
+		if err := rt.closeSessionBinding(ctx, binding); err != nil {
+			errs = append(errs, err)
+		}
+		binding.signalDone()
+	}
+	if stopGeneration != nil && stopGeneration.agent != nil {
+		if err := stopGeneration.agent.Stop(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // scope returns the conversation scope namespace for this channel.
@@ -111,52 +228,82 @@ func (rt *channelRuntime) scope() string { return "channel:" + rt.channel.ID }
 // session returns the agent session for chatID, creating one when needed. It
 // also returns the durable conversation (nil when no conversation store is
 // attached) so callers can persist turn activity and native session ids.
-func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSession, *Conversation, bool, error) {
-	if rt.agent == nil {
-		return nil, nil, false, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
-	}
+func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSession, *Conversation, bool, *channelAgentGeneration, func(), error) {
 	if msg == nil {
-		return nil, nil, false, fmt.Errorf("channel message is required")
+		return nil, nil, false, nil, nil, fmt.Errorf("channel message is required")
 	}
-	opts := rt.workspace
+	rt.mu.Lock()
+	generation := rt.ensureGenerationLocked()
+	for {
+		var wait <-chan struct{}
+		for binding := range rt.retiredSessions {
+			if binding.active > 0 && binding.generation.workDir == generation.workDir {
+				wait = binding.done
+				break
+			}
+		}
+		if wait == nil {
+			break
+		}
+		rt.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, nil, false, nil, nil, ctx.Err()
+		case <-wait:
+		}
+		rt.mu.Lock()
+		generation = rt.ensureGenerationLocked()
+	}
+	if generation.agent == nil {
+		rt.mu.Unlock()
+		return nil, nil, false, nil, nil, fmt.Errorf("channel %q has no agent bound", rt.channel.Name)
+	}
+	opts := generation.workspace
 	if opts.WorkDir == "" {
-		opts.WorkDir = rt.workDir
+		opts.WorkDir = generation.workDir
 	}
 	conversationKey := ResolveConversationKey(msg)
-	conv, workDir, err := rt.owner.prepareConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, conversationKey, opts, rt.workDir)
+	conv, workDir, err := rt.owner.prepareConversation(ctx, rt.scope(), msg.ChatID, msg.ChatType, conversationKey, opts, generation.workDir)
 	if err != nil {
-		return nil, nil, false, err
+		rt.mu.Unlock()
+		return nil, nil, false, nil, nil, err
 	}
 	cacheKey := conversationKey
 	if conv != nil {
 		cacheKey = conv.ID
 	}
-
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if s, ok := rt.sessions[cacheKey]; ok {
-		return s, conv, false, nil
+	if binding, ok := rt.sessions[cacheKey]; ok {
+		binding.active++
+		release := rt.bindingRelease(binding)
+		rt.mu.Unlock()
+		return binding.session, conv, false, binding.generation, release, nil
 	}
-	s, err := rt.owner.startAgentSession(ctx, rt.agent, workDir, conv)
+	s, err := rt.owner.startAgentSession(ctx, generation.agent, workDir, conv)
 	if err != nil {
-		return nil, nil, false, err
+		rt.mu.Unlock()
+		return nil, nil, false, nil, nil, err
 	}
-	// The live Agent object was created when the channel attached. Apply the
-	// persisted Agent defaults to each newly created conversation so a settings
-	// card change affects future sessions without restarting the channel, while
-	// leaving already cached sessions untouched.
-	rt.applyRuntimeDefaults(s)
+	rt.applyRuntimeDefaultsFrom(s, generation.defaultSettings)
 	rt.owner.persistConversationSessionHandle(ctx, conv, s)
-	rt.sessions[cacheKey] = s
-	return s, conv, true, nil
+	binding := &channelSessionBinding{
+		cacheKey: cacheKey, session: s, generation: generation, active: 1, done: make(chan struct{}),
+	}
+	generation.sessions++
+	rt.sessions[cacheKey] = binding
+	release := rt.bindingRelease(binding)
+	rt.mu.Unlock()
+	return s, conv, true, generation, release, nil
 }
 
 func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
+	rt.applyRuntimeDefaultsFrom(sess, rt.runtimeDefaults())
+}
+
+func (rt *channelRuntime) applyRuntimeDefaultsFrom(sess AgentSession, defaults RuntimeSettings) {
 	settings, ok := RuntimeSettingsForSession(sess)
 	if !ok {
 		return
 	}
-	defaults := rt.defaultSettings
 	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier, RuntimeSettingApprovalMode} {
 		value := defaults.Value(setting)
 		if value == "" || !settings.RuntimeSettingsCapabilities().Supports(setting) {
@@ -168,25 +315,101 @@ func (rt *channelRuntime) applyRuntimeDefaults(sess AgentSession) {
 	}
 }
 
+func (rt *channelRuntime) bindingRelease(binding *channelSessionBinding) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() { rt.releaseSessionBinding(context.Background(), binding) })
+	}
+}
+
+func (rt *channelRuntime) releaseSessionBinding(ctx context.Context, binding *channelSessionBinding) {
+	if rt == nil || binding == nil {
+		return
+	}
+	var closeBinding bool
+	var stopGeneration *channelAgentGeneration
+	rt.mu.Lock()
+	if binding.active > 0 {
+		binding.active--
+	}
+	if binding.retired && binding.active == 0 && !binding.closed {
+		binding.closed = true
+		delete(rt.retiredSessions, binding)
+		binding.generation.sessions--
+		closeBinding = true
+		if binding.generation.retired.Load() && binding.generation.sessions == 0 && !binding.generation.stopped {
+			binding.generation.stopped = true
+			stopGeneration = binding.generation
+		}
+	}
+	rt.mu.Unlock()
+	if closeBinding {
+		_ = rt.closeSessionBinding(ctx, binding)
+	}
+	if stopGeneration != nil && stopGeneration.agent != nil {
+		_ = stopGeneration.agent.Stop(ctx)
+	}
+	if closeBinding {
+		binding.signalDone()
+	}
+}
+
+func (rt *channelRuntime) closeSessionBinding(ctx context.Context, binding *channelSessionBinding) error {
+	if binding == nil || binding.session == nil {
+		return nil
+	}
+	generation := binding.generation
+	data := map[string]string{
+		"channel_id": rt.channel.ID, "session_id": sessionObservationID(binding.session), "conversation_id": binding.cacheKey,
+	}
+	if generation != nil {
+		data["agent_id"] = generation.workspace.AgentID
+		data["runtime_id"] = generation.workspace.RuntimeID
+		if generation.agent != nil {
+			data["agent_name"] = generation.agent.Name()
+		}
+	}
+	rt.owner.emit(ctx, HookSessionEnded, data)
+	if detachable, ok := binding.session.(DetachableAgentSession); ok {
+		return detachable.Detach(ctx)
+	}
+	return binding.session.Close(ctx)
+}
+
 // dropSession closes and removes the cached in-memory session for cacheKey
 // (the conversation id). No-op when absent.
 func (rt *channelRuntime) dropSession(ctx context.Context, cacheKey string) {
+	var closeBinding bool
+	var stopGeneration *channelAgentGeneration
 	rt.mu.Lock()
-	s, ok := rt.sessions[cacheKey]
+	binding, ok := rt.sessions[cacheKey]
 	if ok {
 		delete(rt.sessions, cacheKey)
+		binding.retired = true
+		if binding.active > 0 {
+			if rt.retiredSessions == nil {
+				rt.retiredSessions = map[*channelSessionBinding]struct{}{}
+			}
+			rt.retiredSessions[binding] = struct{}{}
+		} else if !binding.closed {
+			binding.closed = true
+			binding.generation.sessions--
+			closeBinding = true
+			if binding.generation.retired.Load() && binding.generation.sessions == 0 && !binding.generation.stopped {
+				binding.generation.stopped = true
+				stopGeneration = binding.generation
+			}
+		}
 	}
 	rt.mu.Unlock()
-	if ok && s != nil {
-		data := map[string]string{
-			"channel_id": rt.channel.ID, "agent_id": rt.workspace.AgentID, "runtime_id": rt.workspace.RuntimeID,
-			"session_id": sessionObservationID(s), "conversation_id": cacheKey,
-		}
-		if rt.agent != nil {
-			data["agent_name"] = rt.agent.Name()
-		}
-		rt.owner.emit(ctx, HookSessionEnded, data)
-		_ = s.Close(ctx)
+	if closeBinding {
+		_ = rt.closeSessionBinding(ctx, binding)
+	}
+	if stopGeneration != nil && stopGeneration.agent != nil {
+		_ = stopGeneration.agent.Stop(ctx)
+	}
+	if closeBinding {
+		binding.signalDone()
 	}
 }
 
@@ -249,31 +472,45 @@ func (rt *channelRuntime) close(ctx context.Context) {
 		rt.cancel()
 	}
 	rt.mu.Lock()
-	sessions := rt.sessions
-	rt.sessions = map[string]AgentSession{}
+	bindings := make(map[*channelSessionBinding]struct{}, len(rt.sessions)+len(rt.retiredSessions))
+	for _, binding := range rt.sessions {
+		bindings[binding] = struct{}{}
+	}
+	for binding := range rt.retiredSessions {
+		bindings[binding] = struct{}{}
+	}
+	rt.sessions = map[string]*channelSessionBinding{}
+	rt.retiredSessions = map[*channelSessionBinding]struct{}{}
 	platform := rt.platform
-	agent := rt.agent
+	generations := map[*channelAgentGeneration]struct{}{}
+	if generation := rt.ensureGenerationLocked(); generation != nil {
+		generations[generation] = struct{}{}
+	}
+	for binding := range bindings {
+		if !binding.closed {
+			binding.closed = true
+		}
+		if binding.generation != nil {
+			generations[binding.generation] = struct{}{}
+		}
+	}
+	for generation := range generations {
+		generation.stopped = true
+	}
 	rt.state = ChannelStateStopped
 	rt.connected = false
 	rt.terminal = true
 	rt.mu.Unlock()
-	for cacheKey, s := range sessions {
-		data := map[string]string{
-			"channel_id": rt.channel.ID, "agent_id": rt.workspace.AgentID, "runtime_id": rt.workspace.RuntimeID,
-			"session_id": sessionObservationID(s), "conversation_id": cacheKey,
-		}
-		if agent != nil {
-			data["agent_name"] = agent.Name()
-		}
-		rt.owner.emit(ctx, HookSessionEnded, data)
-		if detachable, ok := s.(DetachableAgentSession); ok {
-			_ = detachable.Detach(ctx)
-		} else {
-			_ = s.Close(ctx)
+	for binding := range bindings {
+		_ = rt.closeSessionBinding(ctx, binding)
+	}
+	for generation := range generations {
+		if generation.agent != nil {
+			_ = generation.agent.Stop(ctx)
 		}
 	}
-	if agent != nil {
-		_ = agent.Stop(ctx)
+	for binding := range bindings {
+		binding.signalDone()
 	}
 	if platform != nil {
 		_ = platform.Stop(ctx)
@@ -305,7 +542,11 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 		workDir:         workDir,
 		workspace:       opts,
 		defaultSettings: opts.RuntimeDefaults,
-		sessions:        map[string]AgentSession{},
+		generation: &channelAgentGeneration{
+			agent: agent, workDir: workDir, workspace: opts, defaultSettings: opts.RuntimeDefaults,
+		},
+		sessions:        map[string]*channelSessionBinding{},
+		retiredSessions: map[*channelSessionBinding]struct{}{},
 		seen:            map[string]time.Time{},
 		controlTasks:    map[string]*channelControlState{},
 		clearConfirm:    map[string]time.Time{},
@@ -434,10 +675,11 @@ func (e *Engine) ChannelStatuses() []ChannelStatus {
 
 func (e *Engine) ChannelCodexControlCapability(channelID string) (CodexControlCapability, bool) {
 	rt := e.channelRuntime(channelID)
-	if rt == nil || rt.agent == nil {
+	if rt == nil {
 		return CodexControlCapability{}, false
 	}
-	reporter, ok := rt.agent.(CodexControlCapabilityReporter)
+	agent, _, _ := rt.agentSnapshot()
+	reporter, ok := agent.(CodexControlCapabilityReporter)
 	if !ok {
 		return CodexControlCapability{}, false
 	}

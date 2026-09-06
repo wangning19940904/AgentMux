@@ -23,6 +23,7 @@ import {
   RemoteHost,
 } from "../api";
 import { useI18n } from "../i18n";
+import { DeleteRemoteHostDialog } from "./DeleteRemoteHostDialog";
 import {
   isRemoteUpdateAvailable,
   remoteUpdateCandidates,
@@ -65,6 +66,10 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [discoveryError, setDiscoveryError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<RemoteHost | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const deleteInFlight = useRef(false);
   const [updatingID, setUpdatingID] = useState("");
   const [updatingAll, setUpdatingAll] = useState(false);
   const [importingName, setImportingName] = useState("");
@@ -324,15 +329,29 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   };
 
   const remove = async (host: RemoteHost) => {
-    if (!window.confirm(t("remote.deleteConfirm", { name: host.name }))) return;
+    if (deleteInFlight.current) return;
+    deleteInFlight.current = true;
+    setDeleting(true);
+    setDeleteError("");
+    setMessage("");
+    setError("");
     try {
-      if (activeRemoteID() === host.id) setActiveMachineScope("all");
       await api.deleteRemoteHost(host.id);
+      // A list or health request started before deletion must not restore the host.
+      ++hostsRequestVersion.current;
+      probeVersions.current[host.id] = (probeVersions.current[host.id] ?? 0) + 1;
+      const next = hosts.filter((item) => item.id !== host.id);
+      setHosts(next);
+      setLoading(false);
+      setDeleteCandidate(null);
       setMessage(t("remote.deleted"));
-      const next = await load();
-      if (next) notifyRemoteHostsChanged(next);
+      if (activeRemoteID() === host.id) setActiveMachineScope("all");
+      notifyRemoteHostsChanged(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setDeleteError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      deleteInFlight.current = false;
+      setDeleting(false);
     }
   };
 
@@ -432,6 +451,15 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
 
   return (
     <div className="page-stack remote-hosts-page">
+      {deleteCandidate && (
+        <DeleteRemoteHostDialog
+          host={deleteCandidate}
+          busy={deleting}
+          error={deleteError}
+          onClose={() => setDeleteCandidate(null)}
+          onConfirm={() => void remove(deleteCandidate)}
+        />
+      )}
       {hostDialogOpen && (
         <button
           aria-label={t("common.close")}
@@ -828,7 +856,15 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <Pencil size={14} />
                     {t("common.edit")}
                   </button>
-                  <button className="ghost-action danger-action" onClick={() => void remove(host)}>
+                  <button
+                    className="ghost-action danger-action"
+                    type="button"
+                    disabled={deleting || updatingID === host.id || updatingAll}
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeleteCandidate(host);
+                    }}
+                  >
                     <Trash2 size={14} />
                     {t("common.delete")}
                   </button>

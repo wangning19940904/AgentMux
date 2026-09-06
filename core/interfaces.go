@@ -12,9 +12,12 @@ import (
 // Message is an inbound or outbound message flowing between a Platform and an
 // Agent. It is intentionally transport-agnostic.
 type Message struct {
-	ID       string
-	ChatID   string
-	ChatType string
+	SourceMessageID string
+	ID              string
+	ChatID          string
+	ChatType        string
+	ChatMode        string
+	ReplyInThread   bool
 	// RootID, ParentID and ThreadID preserve transport-native conversation
 	// identity. They let group topics bind to independent native agent threads
 	// without leaking platform-specific event types into the engine.
@@ -59,8 +62,9 @@ type Message struct {
 	ChannelTaskAction *ChannelTaskAction
 	// ChannelFeedbackAction is an authenticated, task-scoped rating submitted
 	// from a final answer card. It is never converted into agent input.
-	ChannelFeedbackAction *ChannelFeedbackAction
-	ChannelSessionAction  *ChannelSessionAction
+	ChannelFeedbackAction  *ChannelFeedbackAction
+	ChannelSessionAction   *ChannelSessionAction
+	ConversationModeAction *ConversationModeAction
 	// InteractionMessageID is the card/message that an interactive action
 	// updates. ID remains the unique inbound event id used for deduplication.
 	InteractionMessageID string
@@ -432,6 +436,9 @@ type CodexControlCapability struct {
 	Interactions bool   `json:"interactions"`
 	DeepLink     bool   `json:"deep_link"`
 }
+
+// ChannelControlCapability is the runtime-neutral name; retain the old alias for API clients.
+type ChannelControlCapability = CodexControlCapability
 
 type CodexControlCapabilityReporter interface {
 	CodexControlCapability() CodexControlCapability

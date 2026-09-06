@@ -14,6 +14,9 @@ export const FEISHU_FIELDS = [
 ];
 
 export const FEISHU_DEFAULTS = {
+  private_chat_mode: "chat",
+  group_chat_mode: "chat-topic",
+  max_queue: "20",
   reply_scope: "dm_and_mentions",
   reply_mode: "stream_card",
   ack_reaction_enabled: "true",

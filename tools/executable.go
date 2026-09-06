@@ -36,7 +36,7 @@ func homebrewExecutableDirs() []string {
 		"/home/linuxbrew/.linuxbrew/bin",
 	)
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		dirs = append(dirs, filepath.Join(home, ".linuxbrew", "bin"))
+		dirs = append(dirs, filepath.Join(home, ".linuxbrew", "bin"), filepath.Join(home, ".local", "bin"))
 	}
 
 	seen := make(map[string]bool, len(dirs))

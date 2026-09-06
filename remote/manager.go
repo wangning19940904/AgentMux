@@ -26,15 +26,16 @@ type cachedClient struct {
 
 // Manager owns persisted profiles and reusable SSH connections.
 type Manager struct {
-	store     *Store
-	log       *slog.Logger
-	timeout   time.Duration
-	install   func(context.Context, remoteClient, Host) error
-	update    func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error)
-	mu        sync.Mutex
-	clients   map[string]*cachedClient
-	connLocks sync.Map
-	updateMu  sync.Mutex
+	store        *Store
+	log          *slog.Logger
+	timeout      time.Duration
+	install      func(context.Context, remoteClient, Host) error
+	update       func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error)
+	mu           sync.Mutex
+	clients      map[string]*cachedClient
+	connLocks    sync.Map
+	attemptGates sync.Map
+	updateMu     sync.Mutex
 }
 
 type TestResult struct {
@@ -269,33 +270,33 @@ func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
-	var status map[string]any
-	var err error
-	for attempt := 0; attempt < 2; attempt++ {
-		var client remoteClient
-		client, err = m.client(ctx, host)
-		if err == nil {
-			status, err = requestStatus(ctx, client, host)
+	status, err := retrySSH(ctx, m.timeout, func(attemptCtx context.Context) (map[string]any, error) {
+		var usedMu sync.Mutex
+		var used remoteClient
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true,
+			DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
+				conn, client, err := m.dialOnce(attemptCtx, host, network)
+				usedMu.Lock()
+				used = client
+				usedMu.Unlock()
+				return conn, err
+			},
 		}
-		if err == nil {
-			break
-		}
+		defer transport.CloseIdleConnections()
+		result, err := requestStatusVia(attemptCtx, transport, host)
+		usedMu.Lock()
+		client := used
+		usedMu.Unlock()
 		var unavailable *ServiceUnavailableError
-		if attempt == 1 || !errors.As(err, &unavailable) {
-			return TestResult{}, err
-		}
-		// A native SSH connection can survive locally after the server or an
-		// intermediate network device has discarded it. Evict that persistent
-		// connection before retrying; a system OpenSSH dialer is stateless and
-		// remains reusable after one subprocess fails.
-		if shouldInvalidateAfterTunnelFailure(client) {
+		if errors.As(err, &unavailable) && retryableSSHError(err) && client != nil && shouldInvalidateAfterTunnelFailure(client) {
 			m.invalidateClient(id, client)
 		}
+		return result, err
+	})
+	if err != nil {
+		return TestResult{}, err
 	}
-	return TestResult{
-		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
-		HostKeyFingerprint: host.HostKeyFingerprint, Status: status,
-	}, nil
+	return TestResult{OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(), HostKeyFingerprint: host.HostKeyFingerprint, Status: status}, nil
 }
 
 // Update replaces the remote CLI with the binary bundled in the local Console,
@@ -418,7 +419,7 @@ func requestStatusVia(ctx context.Context, transport *http.Transport, host Host)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("remote AgentMux returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, &remoteHTTPError{status: resp.StatusCode, body: strings.TrimSpace(string(body))}
 	}
 	var status map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&status); err != nil {
@@ -541,34 +542,45 @@ func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	var fallbackErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		client, err := m.client(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		conn, err := client.DialContext(ctx, network, host.RemoteAddr)
-		if err == nil {
-			return conn, nil
-		}
-		if _, ok := client.(verifiedHostKeyClient); ok && isSSHChannelOpenProtocolError(err) {
-			conn, openErr := m.dialSystemOpenSSHFallback(ctx, host, network, client)
-			if openErr == nil {
-				return conn, nil
-			}
-			fallbackErr = openErr
-		}
-		if shouldInvalidateAfterTunnelFailure(client) {
-			m.invalidateClient(id, client)
-		}
-		if attempt == 1 {
-			if fallbackErr != nil {
-				return nil, fmt.Errorf("open SSH tunnel to %s: native client: %v; system OpenSSH: %w", host.RemoteAddr, err, fallbackErr)
-			}
-			return nil, fmt.Errorf("open SSH tunnel to %s: %w", host.RemoteAddr, err)
-		}
+	conn, err := retrySSH(ctx, m.timeout, func(attemptCtx context.Context) (net.Conn, error) {
+		conn, _, err := m.dialOnce(attemptCtx, host, network)
+		return conn, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open SSH tunnel to %s: %w", host.RemoteAddr, err)
 	}
-	return nil, errors.New("open SSH tunnel failed")
+	return conn, nil
+}
+
+// A single attempt only opens the tunnel. Retrying this cannot replay HTTP
+// writes; Status separately retries its entire read without nesting retries.
+func (m *Manager) dialOnce(ctx context.Context, host Host, network string) (conn net.Conn, client remoteClient, err error) {
+	value, _ := m.attemptGates.LoadOrStore(host.ID, &sshAttemptGate{contextMutex: newContextMutex()})
+	gate := value.(*sshAttemptGate)
+	if err = gate.acquire(ctx); err != nil {
+		return nil, nil, err
+	}
+	defer func() { err = sshAttemptError(ctx, err); gate.finish(err) }()
+	client, err = m.client(ctx, host)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn, err = client.DialContext(ctx, network, host.RemoteAddr)
+	if err == nil {
+		return conn, client, nil
+	}
+	if _, ok := client.(verifiedHostKeyClient); ok && isSSHChannelOpenProtocolError(err) {
+		var fallbackErr error
+		conn, fallbackErr = m.dialSystemOpenSSHFallback(ctx, host, network, client)
+		if fallbackErr == nil {
+			return conn, m.cached(host), nil
+		}
+		err = &sshFallbackError{native: err, fallback: fallbackErr}
+	}
+	if shouldInvalidateAfterTunnelFailure(client) {
+		m.invalidateClient(host.ID, client)
+	}
+	return nil, client, err
 }
 
 // dialSystemOpenSSHFallback promotes exactly one fallback client per host.
@@ -578,7 +590,9 @@ func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn
 // unauthenticated connection limit.
 func (m *Manager) dialSystemOpenSSHFallback(ctx context.Context, host Host, network string, failed remoteClient) (net.Conn, error) {
 	gate := m.connectionLock(host.ID)
-	gate.Lock()
+	if err := gate.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer gate.Unlock()
 
 	if current := m.cached(host); current != nil && current != failed {
@@ -628,7 +642,9 @@ func (m *Manager) client(ctx context.Context, host Host) (remoteClient, error) {
 		return client, nil
 	}
 	gate := m.connectionLock(host.ID)
-	gate.Lock()
+	if err := gate.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer gate.Unlock()
 	if client := m.cached(host); client != nil {
 		return client, nil
@@ -657,9 +673,9 @@ func (m *Manager) cached(host Host) remoteClient {
 	return nil
 }
 
-func (m *Manager) connectionLock(id string) *sync.Mutex {
-	lock, _ := m.connLocks.LoadOrStore(id, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+func (m *Manager) connectionLock(id string) *contextMutex {
+	lock, _ := m.connLocks.LoadOrStore(id, newContextMutex())
+	return lock.(*contextMutex)
 }
 
 func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (remoteClient, string, error) {
@@ -688,10 +704,18 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (re
 		return nil, "", fmt.Errorf("connect SSH %s: %w", address, err)
 	}
 	deadline := time.Now().Add(m.timeout)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
 	_ = raw.SetDeadline(deadline)
+	stopCancellation := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	conn, chans, reqs, err := ssh.NewClientConn(raw, address, &ssh.ClientConfig{
 		User: host.User, Auth: auth, HostKeyCallback: callback, Timeout: m.timeout,
 	})
+	if !stopCancellation() || ctx.Err() != nil {
+		_ = raw.Close()
+		return nil, observedFingerprint, ctx.Err()
+	}
 	_ = raw.SetDeadline(time.Time{})
 	if err == nil {
 		return &nativeSSHClient{client: ssh.NewClient(conn, chans, reqs), verifiedKey: observedKey}, observedFingerprint, nil
@@ -714,10 +738,7 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (re
 			err = authErr
 		}
 		if fallbackErr != nil {
-			return nil, observedFingerprint, fmt.Errorf(
-				"SSH authentication %s: native client: %v; system OpenSSH: %w",
-				address, err, fallbackErr,
-			)
+			return nil, observedFingerprint, fmt.Errorf("SSH authentication %s: %w", address, &sshFallbackError{native: err, fallback: fallbackErr})
 		}
 	}
 	if authErr != nil && isSSHAuthenticationError(err) {
@@ -786,9 +807,8 @@ func (m *Manager) invalidate(id string) {
 }
 
 func (m *Manager) invalidateClient(id string, expected remoteClient) {
-	gate := m.connectionLock(id)
-	gate.Lock()
-	defer gate.Unlock()
+	// Conditional invalidation is already protected by m.mu. Do not wait
+	// behind another handshake after the failed request has been cancelled.
 	m.invalidateCached(id, expected)
 }
 

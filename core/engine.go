@@ -15,6 +15,8 @@ type EventSink func(event HookEvent, data map[string]string)
 // inbound messages to agent sessions, streaming responses back. Besides
 // it hosts dynamically attached PostgreSQL-managed channels.
 type Engine struct {
+	ingressMu               sync.Mutex
+	ingress                 map[string]chan struct{}
 	log                     *slog.Logger
 	hooks                   *HookRunner
 	sinkMu                  sync.RWMutex
@@ -40,8 +42,6 @@ type Engine struct {
 	meetingEventMu          sync.Mutex
 	meetingEventSubscribers map[uint64]chan MeetingEvent
 	nextMeetingEventID      uint64
-	remoteWorkMu            sync.Mutex
-	remoteWorkLocks         map[string]*sync.Mutex
 	invocationMu            sync.Mutex
 	activeInvocations       map[string]struct{}
 	msgLog                  *MessageLogger
@@ -60,7 +60,6 @@ func NewEngine(log *slog.Logger, hooks *HookRunner) *Engine {
 		channels:                map[string]*channelRuntime{},
 		inbound:                 make(chan *Message, 256),
 		meetingEventSubscribers: map[uint64]chan MeetingEvent{},
-		remoteWorkLocks:         map[string]*sync.Mutex{},
 		activeInvocations:       map[string]struct{}{},
 	}
 }
@@ -225,7 +224,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return e.shutdown()
 		case msg := <-e.inbound:
-			go e.handle(ctx, msg)
+			e.dispatchInbound(ctx, msg)
 		}
 	}
 }
@@ -282,7 +281,9 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	if msg == nil {
 		return
 	}
-	msg.ConversationKey = ResolveConversationKey(msg)
+	if msg.SourceMessageID == "" {
+		msg.SourceMessageID = msg.ID
+	}
 	if msg.ChannelID != "" {
 		rt := e.channelRuntime(msg.ChannelID)
 		if rt == nil {
@@ -291,6 +292,28 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		}
 		if rt.duplicateMessage(msg) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
+			return
+		}
+		if !msg.LogOnly && !rt.authorized(msg.UserID) {
+			_ = rt.platform.Reply(ctx, msg, "你不在此渠道的访问白名单中。")
+			return
+		}
+		if msg.Callback == nil && msg.SourceMessageID != "" {
+			if store, ok := e.conversations.(interface {
+				HasChannelSourceTask(context.Context, string, string) (bool, error)
+			}); ok {
+				exists, err := store.HasChannelSourceTask(ctx, msg.ChannelID, msg.SourceMessageID)
+				if err != nil {
+					_ = rt.platform.Reply(ctx, msg, "读取消息状态失败："+err.Error())
+					return
+				}
+				if exists {
+					return
+				}
+			}
+		}
+		if err := rt.resolveChannelRoute(ctx, msg); err != nil {
+			_ = rt.platform.Reply(ctx, msg, "会话路由失败："+err.Error())
 			return
 		}
 		if !msg.LogOnly && !rt.acceptsMessage(msg) {
@@ -303,6 +326,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		}
 	}
 
+	msg.ConversationKey = ResolveConversationKey(msg)
 	data := eventData(msg)
 
 	if msg.ChannelID != "" && e.msgLog != nil {
@@ -430,4 +454,44 @@ func errString(err error) string {
 		return "unknown"
 	}
 	return err.Error()
+}
+
+// Preserve receive order within a physical chat while allowing independent
+// chats to route concurrently. Channel handlers only admit tasks; model turns
+// run independently after admission returns.
+func (e *Engine) dispatchInbound(ctx context.Context, msg *Message) {
+	if msg == nil {
+		return
+	}
+	if msg.ChannelID == "" {
+		go e.handle(ctx, msg)
+		return
+	}
+	key := msg.ChannelID + ":" + msg.ChatID
+	e.ingressMu.Lock()
+	if e.ingress == nil {
+		e.ingress = map[string]chan struct{}{}
+	}
+	previous := e.ingress[key]
+	done := make(chan struct{})
+	e.ingress[key] = done
+	e.ingressMu.Unlock()
+	go func() {
+		defer func() {
+			close(done)
+			e.ingressMu.Lock()
+			if e.ingress[key] == done {
+				delete(e.ingress, key)
+			}
+			e.ingressMu.Unlock()
+		}()
+		if previous != nil {
+			select {
+			case <-previous:
+			case <-ctx.Done():
+				return
+			}
+		}
+		e.handle(ctx, msg)
+	}()
 }

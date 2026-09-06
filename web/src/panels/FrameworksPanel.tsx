@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
@@ -17,6 +17,9 @@ import { useAsync } from "../useAsync";
 import { FrameworkBusyAction, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
+import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
+import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
+import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
 
 type FrameworkAction = "install" | "update" | "uninstall";
 
@@ -28,10 +31,14 @@ export function FrameworksPanel() {
   const [progress, setProgress] = useState<Record<string, OperationProgress>>({});
   const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
   const [notice, setNotice] = useState("");
+  const [noticeError, setNoticeError] = useState(false);
   const [result, setResult] = useState<FrameworkInstallResult | null>(null);
   const [confirming, setConfirming] = useState<Framework | null>(null);
   const [uninstallCandidate, setUninstallCandidate] = useState<Framework | null>(null);
   const [installerOpen, setInstallerOpen] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<BulkUpdateProgress | null>(null);
+  const [bulkResults, setBulkResults] = useState<BulkUpdateResult<Framework>[]>([]);
+  const bulkRunning = useRef(false);
 
   const prereqs = frameworks.data?.prereqs;
   const items = frameworks.data?.frameworks ?? [];
@@ -67,16 +74,25 @@ export function FrameworksPanel() {
     currentMachine,
     markBusy,
     clearBusy,
-    setNotice,
+    setNotice: (value, error = false) => {
+      if (typeof value === "string") setNoticeError(error);
+      setNotice(value);
+    },
   });
 
+  const updateCandidates = frameworkUpdateCandidates(installedItems, checks);
+  const updateAllBlocked = frameworks.loading || Boolean(frameworks.error) || Boolean(bulkProgress)
+    || Object.keys(busy).length > 0
+    || Object.values(frameworkAuth.loginFlows).some((flow) => flow.state === "waiting");
+
   useEffect(() => {
+    if (bulkRunning.current) return;
     installedItems.forEach((item) => {
       const key = targetKey(item.target_id, item.spec.kind);
       if (!item.spec.update_supported || checks[key] || busy[key]) return;
       void checkUpdate(item, true);
     });
-  }, [installedItems, busy, checks]);
+  }, [installedItems, busy, checks, bulkProgress]);
 
   function forgetCheck(key: string) {
     setChecks((current) => {
@@ -110,12 +126,15 @@ export function FrameworksPanel() {
     markBusy(key, "check");
     if (!silent) {
       setNotice("");
+      setNoticeError(false);
       setResult(null);
+      setBulkResults([]);
     }
     try {
       const response = await api.checkFrameworkUpdate(item.spec.kind, item.target_id);
       setChecks((current) => ({ ...current, [key]: response }));
       if (!silent) {
+        setNoticeError(Boolean(response.error));
         if (response.error) setNotice(`${t("tools.updateCheckFailed")}: ${response.error}`);
         else if (response.update_available) setNotice(`${t("tools.updateAvailable")}: ${response.current_version || "?"} -> ${response.latest_version || "?"}`);
         else setNotice(t("tools.upToDate"));
@@ -123,7 +142,7 @@ export function FrameworksPanel() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setChecks((current) => ({ ...current, [key]: { kind: item.spec.kind, installed: true, update_available: false, error: message } }));
-      if (!silent) setNotice(`${t("tools.updateCheckFailed")}: ${message}`);
+      if (!silent) { setNoticeError(true); setNotice(`${t("tools.updateCheckFailed")}: ${message}`); }
     } finally {
       clearBusy(key);
     }
@@ -134,21 +153,60 @@ export function FrameworksPanel() {
     markBusy(key, action);
     beginProgress(key, action === "update" ? "checking" : "preparing");
     setNotice("");
+    setNoticeError(false);
     setResult(null);
+    setBulkResults([]);
     if (action !== "update") forgetCheck(key);
     try {
       const response = await api.installFramework(item.spec.kind, action, (update) => updateProgress(key, update), acknowledgeInternal, item.target_id);
       setResult(response);
+      setNoticeError(!response.ok);
       setNotice(response.ok ? frameworkActionSuccessNotice(action, t) : frameworkInstallFailureNotice(response, t));
       await frameworks.reload();
       forgetCheck(key);
       return response.ok;
     } catch (error) {
+      setNoticeError(true);
       setNotice(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
       clearProgress(key);
       clearBusy(key);
+    }
+  }
+
+  async function updateAllFrameworks() {
+    if (bulkRunning.current || updateAllBlocked || updateCandidates.length === 0) return;
+    // Capture the selection before starting: later scope changes must never
+    // redirect a queued update to a different machine (or to the whole fleet).
+    const targetID = selectedRemoteID || "local";
+    const candidates = [...updateCandidates];
+    bulkRunning.current = true;
+    setBulkProgress({ completed: 0, total: candidates.length });
+    setBulkResults([]);
+    setNotice("");
+    setNoticeError(false);
+    setResult(null);
+    try {
+      await runBulkUpdates(candidates, async (item) => {
+        const key = targetKey(item.target_id, item.spec.kind);
+        markBusy(key, "update");
+        beginProgress(key, "checking");
+        try {
+          return await api.installFramework(item.spec.kind, "update", (update) => updateProgress(key, update), false, item.target_id || targetID);
+        } finally {
+          clearProgress(key);
+          clearBusy(key);
+          forgetCheck(key);
+        }
+      }, (entry, completed) => {
+        setBulkResults((current) => [...current, entry]);
+        setBulkProgress({ completed, total: candidates.length });
+      });
+      await frameworks.reload();
+    } finally {
+      bulkRunning.current = false;
+      setBulkProgress(null);
     }
   }
 
@@ -165,12 +223,19 @@ export function FrameworksPanel() {
   function requestUninstall(item: Framework) {
     setNotice("");
     setResult(null);
+    setBulkResults([]);
     setUninstallCandidate(item);
   }
 
   return (
     <div className="page-stack framework-page">
-      {notice && <div className={`session-notice${result && !result.ok ? " error" : ""}`}>{notice}</div>}
+      {notice && <div className={`session-notice${noticeError || result && !result.ok ? " error" : ""}`} role="status">{notice}</div>}
+
+      <BulkUpdateResults progress={bulkProgress} results={bulkResults.map(({ item, result }) => ({
+        key: targetKey(item.target_id, item.spec.kind),
+        label: `${item.spec.display} · ${item.target_name || item.target_id || currentMachine}`,
+        result,
+      }))} />
 
       <section className="surface framework-catalog-surface">
         <div className="surface-header framework-catalog-header">
@@ -178,11 +243,20 @@ export function FrameworksPanel() {
             <h2>{t("frameworks.catalogTitle")}</h2>
             <span className="pill on">{installedItems.length}</span>
           </div>
-          <button className="action" onClick={() => setInstallerOpen(true)} type="button">
-            <Plus size={15} />{t("frameworks.installFramework")}
-          </button>
+          <div className="catalog-bulk-actions">
+            <BulkUpdateButton
+              count={updateCandidates.length}
+              progress={bulkProgress}
+              disabled={updateAllBlocked}
+              onClick={() => void updateAllFrameworks()}
+              hint={t("frameworks.updateAllHint", { machine: currentMachine })}
+            />
+            <button className="action" disabled={Boolean(bulkProgress)} onClick={() => setInstallerOpen(true)} type="button">
+              <Plus size={15} />{t("frameworks.installFramework")}
+            </button>
+          </div>
         </div>
-        {(frameworks.data?.warnings ?? []).map((warning) => <div className="session-notice framework-warning" key={warning}>{warning}</div>)}
+        {activeMachineScope() !== "all" && (frameworks.data?.warnings ?? []).map((warning) => <div className="session-notice warning framework-warning" key={warning}>{warning}</div>)}
         {frameworks.error && <div className="surface-body error">{frameworks.error}</div>}
         <div className="catalog-table-wrap">
           <table className="catalog-table framework-table">
@@ -205,7 +279,7 @@ export function FrameworksPanel() {
                   loginCode={frameworkAuth.loginCodes[key] ?? ""}
                   copiedCode={frameworkAuth.copiedCode === key}
                   currentMachine={item.target_name || item.target_id || currentMachine}
-                  disabled={!item.spec.supported}
+                  disabled={!item.spec.supported || Boolean(bulkProgress)}
                   onCheck={() => void checkUpdate(item)}
                   onInstall={(action) => void runFrameworkAction(item, action)}
                   onUninstall={() => requestUninstall(item)}

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -280,6 +281,7 @@ func InstallCLIWithProgressOptions(ctx context.Context, id, action string, optio
 	reportProgress(progress, "preparing", "", 5)
 	statusBefore := DetectCLI(ctx, spec)
 	cmdArgs := spec.InstallCommand
+	latestVersion := ""
 	if action == "update" {
 		if !statusBefore.Installed {
 			res.Error = fmt.Sprintf("CLI %q is not installed; install it first", id)
@@ -296,9 +298,21 @@ func InstallCLIWithProgressOptions(ctx context.Context, id, action string, optio
 			res.Log = fmt.Sprintf("%s is already up to date (current %s, latest %s)", spec.Name, check.CurrentVersion, check.LatestVersion)
 			return syncAfterCLIChange(ctx, spec, res, progress)
 		}
+		latestVersion = check.LatestVersion
 		if len(spec.UpdateCommand) > 0 {
 			cmdArgs = spec.UpdateCommand
 		}
+	}
+	if spec.ID == "github-cli" && runtime.GOOS == "linux" && !githubCLIHomebrewPath(statusBefore.Path) {
+		command, err := githubCLIPackageCommand(ctx, statusBefore.Path, action)
+		if err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		if len(command) == 0 {
+			return installGitHubCLIRelease(ctx, spec, res, statusBefore.Path, latestVersion, runtime.GOARCH, progress)
+		}
+		cmdArgs = command
 	}
 	if len(cmdArgs) == 0 {
 		res.Error = fmt.Sprintf("CLI %q has no install command", id)
@@ -337,6 +351,10 @@ func InstallCLIWithProgressOptions(ctx context.Context, id, action string, optio
 		res.Error = "command completed but CLI was not found on PATH"
 		return res
 	}
+	if spec.ID == "github-cli" && runtime.GOOS == "linux" && latestVersion != "" && versionGreater(latestVersion, normalizeVersion(status.Version)) {
+		res.Error = fmt.Sprintf("GitHub CLI is still %s after the package update; latest is %s. Check the configured GitHub CLI package repository", normalizeVersion(status.Version), latestVersion)
+		return res
+	}
 	if spec.ID == "bytedcli" {
 		if out, err := commandOutput(ctx, "npm", "outdated", "-g", spec.Package, "--json"); err == nil && strings.TrimSpace(out) != "" && strings.TrimSpace(out) != "{}" {
 			res.Log += "\n" + out
@@ -360,6 +378,17 @@ func uninstallCLIWithProgress(ctx context.Context, spec CLISpec, progress Progre
 	status := DetectCLI(ctx, spec)
 	if status.Installed {
 		command := append([]string(nil), spec.UninstallCommand...)
+		if spec.ID == "github-cli" && runtime.GOOS == "linux" && !githubCLIHomebrewPath(status.Path) {
+			var err error
+			command, err = githubCLIPackageCommand(ctx, status.Path, "uninstall")
+			if err != nil {
+				res.Error = err.Error()
+				return res
+			}
+			if len(command) == 0 {
+				command = []string{"rm", "--", status.Path}
+			}
+		}
 		if len(command) == 0 && spec.Package != "" {
 			command = []string{"npm", "uninstall", "-g", spec.Package}
 		}

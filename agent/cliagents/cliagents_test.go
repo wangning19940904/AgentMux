@@ -135,6 +135,14 @@ func TestCursorStreamEventsMapFinalUsageAndSafeProgress(t *testing.T) {
 		result[0].Metadata["lifecycle"] != "completed" {
 		t.Fatalf("result events = %#v", result)
 	}
+	snakeCase := cursorStreamEvents([]byte(`{
+		"type":"result","subtype":"success","result":"done","requestId":"request-2",
+		"token_usage":{"input_tokens":11,"output_tokens":6,"cached_input_tokens":4,"cache_creation_input_tokens":3}
+	}`))
+	if len(snakeCase) != 1 || snakeCase[0].Usage == nil || snakeCase[0].Usage.TotalTokens != 24 ||
+		snakeCase[0].Usage.RequestID != "request-2" || snakeCase[0].Usage.CacheReadTokens != 4 || snakeCase[0].Usage.CacheWriteTokens != 3 {
+		t.Fatalf("snake-case result events = %#v", snakeCase)
+	}
 
 	reconnecting := cursorStreamEvents([]byte(`{"type":"connection","subtype":"reconnecting","attempt":2}`))
 	if len(reconnecting) != 1 || reconnecting[0].Type != core.EventThinking || !strings.Contains(reconnecting[0].Text, "第 2 次重连") {
@@ -404,6 +412,19 @@ func TestCodexTurnStartCarriesModelEffortAndServiceTier(t *testing.T) {
 	params := s.turnStartParamsInput("thread-1", core.AgentTurnInput{Text: "hello"})
 	if params["model"] != "gpt-5" || params["effort"] != "xhigh" || params["serviceTier"] != "priority" {
 		t.Fatalf("turn params = %#v", params)
+	}
+}
+
+func TestCodexThreadResumeRefreshesDeveloperInstructions(t *testing.T) {
+	s := &codexSession{
+		agent:        &codexAgent{systemPrompt: "updated Agent instructions"},
+		workDir:      "/workspace/current",
+		defaultModel: "gpt-5.6-sol",
+	}
+	params := s.threadResumeParams("thread-context")
+	if params["threadId"] != "thread-context" || params["cwd"] != "/workspace/current" ||
+		params["developerInstructions"] != "updated Agent instructions" || params["model"] != "gpt-5.6-sol" {
+		t.Fatalf("resume params = %#v", params)
 	}
 }
 

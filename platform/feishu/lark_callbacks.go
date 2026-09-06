@@ -31,7 +31,7 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 	inputValue := event.Event.Action.InputValue
 	option := event.Event.Action.Option
 	options := strings.Join(event.Event.Action.Options, ",")
-	if action == codexInteractionAction || action == channelFeedbackAction {
+	if action == codexInteractionAction || action == channelFeedbackAction || action == queueControlAction {
 		// Approval nonces and user answers are used only for the in-memory
 		// control action. Channel JSONL/audit records retain correlation but
 		// never the replay token or submitted answer values.
@@ -42,7 +42,7 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 			})
 		} else {
 			actionValue = jsonValue(map[string]any{
-				modelPickerActionKey: channelFeedbackAction,
+				modelPickerActionKey: action,
 				"task_id":            stringValue(value["task_id"]),
 				"semantic":           stringValue(value["semantic"]),
 			})
@@ -86,6 +86,21 @@ func (c *larkClient) messageFromCardAction(project string, event *callback.CardA
 	msg.ChatType = stringValue(value["chat_type"])
 	msg.ConversationKey = stringValue(value["conversation_key"])
 	if msg.ChatID == "" {
+		return msg, true
+	}
+
+	if action == conversationModeAction {
+		msg.LogOnly = false
+		msg.ConversationModeAction = &core.ConversationModeAction{Mode: stringValue(value["mode"]), UserID: stringValue(value["user_id"])}
+		return msg, true
+	}
+	if action == queueControlAction {
+		kind := stringValue(value["action"])
+		if kind != core.ChannelTaskActionSteer && kind != core.ChannelTaskActionCancel {
+			return msg, true
+		}
+		msg.LogOnly = false
+		msg.ChannelTaskAction = &core.ChannelTaskAction{TaskID: stringValue(value["task_id"]), Action: kind, Nonce: stringValue(value["nonce"])}
 		return msg, true
 	}
 	if action == codexTaskControlAction {

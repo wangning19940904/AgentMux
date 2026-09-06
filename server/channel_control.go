@@ -101,6 +101,19 @@ func (s *Server) handleChannelTasks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	positions := map[string]int{}
+	for i := len(tasks) - 1; i >= 0; i-- {
+		if tasks[i].Status == core.ChannelTaskQueued {
+			key := tasks[i].ChannelID + ":" + tasks[i].ConversationKey
+			positions[key]++
+			tasks[i].QueuePosition = positions[key]
+		}
+	}
+	if s.connect != nil {
+		for i := range tasks {
+			s.connect.DecorateChannelTask(&tasks[i])
+		}
+	}
 	writeJSON(w, http.StatusOK, tasks)
 }
 
