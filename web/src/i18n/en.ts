@@ -487,6 +487,7 @@ export const en = {
     "agents.channels": "Channels",
     "agents.schedules": "Schedules",
     "agents.registry": "Agent registry",
+    "agents.searchPlaceholder": "Search agents...",
     "agents.registrySubtitle": "User-created, migration-created, and config-derived Agents stay visible with their source labeled.",
     "agents.registryCount": "registered",
     "agents.registrySummaryLabel": "Agent registry summary",

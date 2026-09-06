@@ -489,6 +489,7 @@ export const zh: Record<keyof typeof en, string> = {
     "agents.channels": "渠道绑定",
     "agents.schedules": "定时任务",
     "agents.registry": "Agent 注册表",
+    "agents.searchPlaceholder": "搜索 Agent...",
     "agents.registrySubtitle": "手动创建、迁移生成和 config.toml 派生的 Agent 都会保留，并明确标记来源。",
     "agents.registryCount": "个注册项",
     "agents.registrySummaryLabel": "Agent 注册表统计",

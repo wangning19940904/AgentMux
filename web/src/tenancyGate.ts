@@ -7,6 +7,17 @@ export interface TenancyGateResolution {
   state: TenancyGateState;
 }
 
+// The packaged Wails shell is the local administrator surface. Its Go proxy
+// still enforces the configured bridge credential server-side, so a transient
+// identity request must not permanently strand the native UI behind the
+// tenant onboarding navigation lock while PostgreSQL is starting.
+export function tenancyNavigationLocked(
+  state: TenancyGateState,
+  nativeDesktopAdmin: boolean,
+): boolean {
+  return state !== "ready" && !nativeDesktopAdmin;
+}
+
 // Administrators manage the whole selected AgentMux instance and do not need a
 // tenant namespace of their own. Tenant-scoped sessions still have to prove
 // through /self that their tenant exists and is enabled.

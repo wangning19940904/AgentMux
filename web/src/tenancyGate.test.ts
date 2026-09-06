@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveTenancyGate, resolveTenancyGateWithRetry } from "./tenancyGate";
+import {
+  resolveTenancyGate,
+  resolveTenancyGateWithRetry,
+  tenancyNavigationLocked,
+} from "./tenancyGate";
 
 describe("resolveTenancyGate", () => {
   it("resolves loading, administrator, active tenant, and blocked tenant scopes", () => {
@@ -39,5 +43,12 @@ describe("resolveTenancyGate", () => {
       { attempts: 3, delayMs: 0, wait: async () => undefined },
     )).rejects.toThrow("401");
     expect(identityAttempts).toBe(1);
+  });
+
+  it("does not lock the packaged desktop navigation during backend startup", () => {
+    expect(tenancyNavigationLocked("loading", true)).toBe(false);
+    expect(tenancyNavigationLocked("required", true)).toBe(false);
+    expect(tenancyNavigationLocked("required", false)).toBe(true);
+    expect(tenancyNavigationLocked("ready", false)).toBe(false);
   });
 });
