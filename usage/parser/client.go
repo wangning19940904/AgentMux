@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// The transcript format identifies a product, not necessarily its client.
-// Keep Source stable for deduplication and use RuntimeID for the client.
+// ClaudeRuntime identifies the client from a Claude transcript entrypoint.
+// Source stays stable for deduplication; RuntimeID identifies the client.
 func ClaudeRuntime(entrypoint string) string {
 	switch strings.ToLower(strings.TrimSpace(entrypoint)) {
 	case "claude-desktop":
