@@ -743,6 +743,40 @@ function Shell({
           })}
         </nav>
 
+        <div className={`account primary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`} title={identityName}>
+          {identityIsAdmin && activeTenantOptions.length > 0 ? (
+            <>
+              <select
+                className="account-identity-select"
+                aria-label={t("app.switchIdentity")}
+                title={identityName}
+                value={selectedTenantScopeID}
+                onChange={(event) => {
+					const scopeKey = event.target.value;
+					const tenant = activeTenantOptions.find((item) =>
+						tenantScopeKey(item.id, item.target_id || "local") === scopeKey,
+					);
+					setActiveTenantScopeID(tenant?.id || "", tenant?.target_id || "local");
+					setSelectedTenantScopeID(scopeKey);
+                }}
+              >
+                <option value="">{t("app.admin")}</option>
+                {activeTenantOptions.map((tenant) => (
+				  <option
+					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}
+					value={tenantScopeKey(tenant.id, tenant.target_id || "local")}
+				  >
+					{tenant.name} · {(tenant.target_id || "local") === "local" ? t("remote.localMachine") : tenant.target_name || tenant.target_id}
+				  </option>
+                ))}
+              </select>
+              <ChevronDown size={15} aria-hidden="true" />
+            </>
+          ) : (
+            <strong>{identityName}</strong>
+          )}
+        </div>
+
         {!primaryCollapsed && <SidebarResizeHandle
           label={t("nav.resizePrimary")}
           value={primarySidebarWidth}
@@ -864,39 +898,6 @@ function Shell({
             );
           })}
         </nav>
-
-        <div className={`account secondary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`}>
-          {identityIsAdmin && activeTenantOptions.length > 0 ? (
-            <>
-              <select
-                className="account-identity-select"
-                aria-label={t("app.switchIdentity")}
-                value={selectedTenantScopeID}
-                onChange={(event) => {
-					const scopeKey = event.target.value;
-					const tenant = activeTenantOptions.find((item) =>
-						tenantScopeKey(item.id, item.target_id || "local") === scopeKey,
-					);
-					setActiveTenantScopeID(tenant?.id || "", tenant?.target_id || "local");
-					setSelectedTenantScopeID(scopeKey);
-                }}
-              >
-                <option value="">{t("app.admin")}</option>
-                {activeTenantOptions.map((tenant) => (
-				  <option
-					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}
-					value={tenantScopeKey(tenant.id, tenant.target_id || "local")}
-				  >
-					{tenant.name} · {(tenant.target_id || "local") === "local" ? t("remote.localMachine") : tenant.target_name || tenant.target_id}
-				  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} aria-hidden="true" />
-            </>
-          ) : (
-            <strong>{identityName}</strong>
-          )}
-        </div>
 
         <SidebarResizeHandle
           label={t("nav.resizeSecondary")}
@@ -1124,6 +1125,8 @@ function useTenancyGate(): {
     try {
       const resolved = await resolveTenancyGateWithRetry(
         () => api.tenancySelf(),
+        // First launch may download PostgreSQL before the native API is ready.
+        { attempts: window.location.protocol === "wails:" ? 1200 : 30 },
       );
       setIdentity(resolved.identity);
       setState(resolved.state);

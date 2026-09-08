@@ -123,3 +123,12 @@ case ":${PATH}:" in
     log "add ${install_dir} to PATH before running amux"
     ;;
 esac
+
+# Provision after installing the CLI so failures can be retried without another
+# download. Custom database URLs are handled by the CLI and never replaced.
+if [ "${AMUX_SKIP_DATABASE_SETUP:-0}" != 1 ]; then
+  log "preparing PostgreSQL (missing local dependencies will be installed)"
+  if ! "${install_dir}/amux" database setup; then
+    fail "AgentMux binaries are installed, but database setup failed; fix the error above and rerun '${install_dir}/amux database setup'"
+  fi
+fi

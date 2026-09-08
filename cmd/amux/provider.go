@@ -51,7 +51,7 @@ func providerImportCmd() *cobra.Command {
 		Short: "Import a built-in preset as a provider",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, st, err := bootstrapStore()
+			_, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -72,7 +72,7 @@ func providerListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List configured providers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, st, err := bootstrapStore()
+			_, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,7 @@ func providerSwitchCmd() *cobra.Command {
 		Short: "Switch the active provider for a tool",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, st, err := bootstrapStore()
+			cfg, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}

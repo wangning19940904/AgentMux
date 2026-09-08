@@ -8,8 +8,11 @@ import (
 	"sync"
 )
 
+// Channel keys remain readable for Agents that predate Agent-owned defaults.
 const ChannelConfigPrivateMode = "private_chat_mode"
 const ChannelConfigGroupMode = "group_chat_mode"
+const DefaultPrivateChatMode = "chat"
+const DefaultGroupChatMode = "chat-topic"
 
 type ChannelChatStateStore interface {
 	GetChannelChatState(context.Context, string, string) (string, error)
@@ -78,15 +81,23 @@ func (rt *channelRuntime) conversationMode(ctx context.Context, msg *Message) (s
 	if ValidConversationMode(private, mode) {
 		return mode, nil
 	}
+	_, _, defaults := rt.agentSnapshot()
+	mode = defaults.GroupChatMode
+	if private {
+		mode = defaults.PrivateChatMode
+	}
+	if ValidConversationMode(private, mode) {
+		return mode, nil
+	}
 	if private {
 		mode = rt.channel.Config[ChannelConfigPrivateMode]
 		if !ValidConversationMode(true, mode) {
-			mode = "chat"
+			mode = DefaultPrivateChatMode
 		}
 	} else {
 		mode = rt.channel.Config[ChannelConfigGroupMode]
 		if !ValidConversationMode(false, mode) {
-			mode = "chat-topic"
+			mode = DefaultGroupChatMode
 		}
 	}
 	return mode, nil

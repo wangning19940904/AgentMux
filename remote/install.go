@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/wangning19940904/AgentMux/internal/postgressetup"
 )
 
 type remoteUpdateArtifact struct {
@@ -391,66 +393,20 @@ func prepareRemotePostgres(ctx context.Context, client remoteClient, remoteOS, b
 	bridgeEnvironment := remoteBridgeEnvironment(bridgeToken)
 	switch remoteOS {
 	case "linux":
-		command = `set -eu
-mkdir -p "$HOME/.agentmux"
-if ! command -v psql >/dev/null 2>&1 || ! command -v pg_isready >/dev/null 2>&1; then
-  if ! sudo -n true >/dev/null 2>&1; then
-    echo "PostgreSQL is missing and passwordless sudo is unavailable" >&2
-    exit 1
-  fi
-  if command -v apt-get >/dev/null 2>&1; then
-    sudo -n apt-get update -qq
-    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql postgresql-client
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo -n dnf install -y postgresql-server postgresql
-  elif command -v yum >/dev/null 2>&1; then
-    sudo -n yum install -y postgresql-server postgresql
-  else
-    echo "install PostgreSQL before installing AgentMux" >&2
-    exit 1
-  fi
-fi
+		// Keep existing remote cluster discovery, but share installation and
+		// initialization with local startup (including root and client-only hosts).
+		script := `set -eu
 port=5432
 if command -v pg_lsclusters >/dev/null 2>&1; then
   detected_port=$(pg_lsclusters --no-header 2>/dev/null | awk '$4 == "online" { print $3; exit }')
-  if [ -n "$detected_port" ]; then
-    port="$detected_port"
-  fi
+  if [ -n "$detected_port" ]; then port="$detected_port"; fi
 fi
-case "$port" in
-  ''|*[!0-9]*) echo "invalid PostgreSQL port: $port" >&2; exit 1 ;;
-esac
-if ! sudo -n true >/dev/null 2>&1; then
-  echo "passwordless sudo is required to provision the AgentMux PostgreSQL role" >&2
-  exit 1
-fi
-if ! pg_isready -q -h /var/run/postgresql -p "$port"; then
-  sudo -n systemctl enable --now postgresql.service >/dev/null 2>&1 || \
-    sudo -n systemctl start postgresql.service >/dev/null 2>&1 || true
-fi
-attempts=0
-until pg_isready -q -h /var/run/postgresql -p "$port"; do
-  attempts=$((attempts + 1))
-  if [ "$attempts" -ge 60 ]; then
-    echo "PostgreSQL did not become ready on /var/run/postgresql:$port" >&2
-    exit 1
-  fi
-  sleep 0.5
-done
-role=$(id -un)
-case "$role" in
-  ''|*[!A-Za-z0-9_.-]*) echo "unsupported PostgreSQL role name: $role" >&2; exit 1 ;;
-esac
-if [ "$(sudo -n -u postgres psql -h /var/run/postgresql -p "$port" -d postgres -Atqc "SELECT 1 FROM pg_roles WHERE rolname='$role'")" != "1" ]; then
-  sudo -n -u postgres createuser -h /var/run/postgresql -p "$port" --login "$role"
-fi
-if [ "$(sudo -n -u postgres psql -h /var/run/postgresql -p "$port" -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='agentmux'")" != "1" ]; then
-  sudo -n -u postgres createdb -h /var/run/postgresql -p "$port" --owner="$role" agentmux
-fi
-sudo -n -u postgres psql -h /var/run/postgresql -p "$port" -d postgres -v ON_ERROR_STOP=1 -qc "ALTER DATABASE agentmux OWNER TO \"$role\""
+set -- "$port"
+` + postgressetup.LinuxScript() + `
 database_url="postgresql:///agentmux?host=/var/run/postgresql&port=$port&sslmode=disable"
 ` + bridgeEnvironment + `"$HOME/.agentmux/bin/amux" --database-url "$database_url" database setup
 printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
+		command = "/bin/bash -c " + shellQuote(script)
 	case "darwin":
 		databaseURL = remoteDarwinPostgresURL
 		command = `set -eu

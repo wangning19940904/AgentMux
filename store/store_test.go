@@ -315,6 +315,8 @@ func TestAgentInstanceCRUD(t *testing.T) {
 		DefaultReasoningEffort: "high",
 		DefaultServiceTier:     "priority",
 		DefaultApprovalMode:    core.ApprovalModeAutoEdit,
+		PrivateChatMode:        "thread",
+		GroupChatMode:          "new-topic",
 		MemoryScope:            "agent:agent-test",
 		Env:                    map[string]string{"CODEX_HOME": "/tmp/codex"},
 		ChannelBindings: []core.AgentChannelBinding{{
@@ -355,12 +357,22 @@ func TestAgentInstanceCRUD(t *testing.T) {
 	if got == nil || got.Name != "Research Codex" || got.RuntimeID != "codex" || got.DesktopThreadID != "desktop-thread" || got.WorkspaceMode != "worktree" || got.WorktreeBaseRef != "main" || got.SessionBackend != "tmux" || got.DefaultModel != "gpt-5" || got.DefaultReasoningEffort != "high" || got.DefaultServiceTier != "priority" || got.DefaultApprovalMode != core.ApprovalModeAutoEdit {
 		t.Fatalf("agent = %+v", got)
 	}
+	if got.PrivateChatMode != "thread" || got.GroupChatMode != "new-topic" || items[0].GroupChatMode != "new-topic" {
+		t.Fatalf("conversation modes not persisted: %+v", got)
+	}
+	agent.PrivateChatMode, agent.GroupChatMode = "group", "chat"
+	if err := st.UpsertAgentInstance(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.UpdateAgentRuntimeSettings(ctx, "agent-test", core.RuntimeSettings{Model: "gpt-5-mini", ReasoningEffort: "xhigh", ServiceTier: "default", ApprovalMode: core.ApprovalModeYolo}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = st.GetAgentInstance(ctx, "agent-test")
 	if err != nil || got == nil || got.DefaultModel != "gpt-5-mini" || got.DefaultReasoningEffort != "xhigh" || got.DefaultServiceTier != "default" || got.DefaultApprovalMode != core.ApprovalModeYolo {
 		t.Fatalf("updated runtime settings = %+v, err=%v", got, err)
+	}
+	if got.PrivateChatMode != "group" || got.GroupChatMode != "chat" {
+		t.Fatalf("conversation mode update lost: %+v", got)
 	}
 	if len(got.ChannelBindings) != 1 || got.ChannelBindings[0].Type != "telegram" {
 		t.Fatalf("channels = %+v", got.ChannelBindings)

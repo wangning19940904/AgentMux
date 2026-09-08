@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -42,7 +43,7 @@ func newTenantIDSuffix() string {
 	return hex.EncodeToString(buf)
 }
 
-func openTenantStore() (*store.Store, error) {
+func openTenantStore(ctx context.Context) (*store.Store, error) {
 	cfg, _, err := loadConfig(false)
 	if err != nil {
 		return nil, err
@@ -50,12 +51,12 @@ func openTenantStore() (*store.Store, error) {
 	if flagDatabaseURL != "" {
 		cfg.Database.URL = flagDatabaseURL
 	}
-	return openRuntimeStore(cfg)
+	return openRuntimeStore(ctx, cfg)
 }
 
 // withTenantStore removes the open/close boilerplate from every subcommand.
 func withTenantStore(cmd *cobra.Command, run func(st *store.Store) error) error {
-	st, err := openTenantStore()
+	st, err := openTenantStore(cmd.Context())
 	if err != nil {
 		return err
 	}

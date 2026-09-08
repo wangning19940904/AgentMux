@@ -220,15 +220,24 @@ func (c *larkClient) ModeCard(ctx context.Context, msg *core.Message, state core
 	return err
 }
 func buildConversationModeCard(msg *core.Message, state core.ConversationModeState) string {
-	labels := []struct{ mode, label string }{{"chat", "群内连续会话"}, {"chat-topic", "顶层连续，话题独立"}, {"new-topic", "每条消息新话题"}}
+	labels := []struct{ mode, label, description string }{
+		{"chat-topic", "chat-topic（默认）", "直接在群里发消息：机器人在群里单独回复，共享上下文；在话题里发消息：在话题内回复，各话题使用独立上下文。"},
+		{"new-topic", "new-topic", "每条直接发到群里的消息创建独立话题，机器人在话题内回复；同一话题内共享上下文。"},
+		{"chat", "chat", "群内所有消息共用上下文，机器人统一在群聊主界面回复，包括从话题里发起的消息。"},
+	}
 	title := "群聊模式"
 	if state.Private {
 		title = "私聊模式"
-		labels = []struct{ mode, label string }{{"chat", "连续会话"}, {"thread", "每条消息独立话题"}, {"group", "每条消息创建会话群"}}
+		labels = []struct{ mode, label, description string }{
+			{"chat", "chat（默认）", "机器人直接在私聊中回复，连续消息共享上下文。"},
+			{"thread", "thread", "每条直接发送的消息创建独立话题，机器人在话题内回复；同一话题内共享上下文。"},
+			{"group", "group", "每条直接发送的消息创建你与机器人的专属会话群，任务在群内继续，后续群内消息共享上下文。"},
+		}
 	}
 	elements := []map[string]any{{"tag": "markdown", "content": "当前模式：**" + state.Mode + "**\n" + state.Notice}}
 	for _, option := range labels {
 		value := map[string]any{modelPickerActionKey: conversationModeAction, "mode": option.mode, "user_id": state.UserID, "chat_id": msg.ChatID, "chat_type": msg.ChatType}
+		elements = append(elements, map[string]any{"tag": "markdown", "content": option.description})
 		elements = append(elements, controlButtonRow([]map[string]any{modelPickerButton(option.label, "default", value)}))
 	}
 	b, _ := json.Marshal(map[string]any{"schema": "2.0", "config": map[string]any{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": title}}, "body": map[string]any{"elements": elements}})

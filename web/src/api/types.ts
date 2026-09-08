@@ -499,6 +499,8 @@ export interface AgentInstance {
   default_reasoning_effort?: string;
   default_service_tier?: string;
   default_approval_mode?: string;
+  private_chat_mode?: "chat" | "thread" | "group" | "";
+  group_chat_mode?: "chat-topic" | "new-topic" | "chat" | "";
   memory_scope?: string;
   env?: Record<string, string>;
   channel_bindings?: AgentChannelBinding[];

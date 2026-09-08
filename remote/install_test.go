@@ -63,12 +63,13 @@ func TestPrepareRemotePostgresProvisionsLinuxDatabase(t *testing.T) {
 	}
 	command := client.commands[0]
 	for _, want := range []string{
-		"apt-get install -y -qq postgresql postgresql-client",
-		`if ! pg_isready -q -h /var/run/postgresql -p "$port"`,
-		"createuser -h /var/run/postgresql",
-		"createdb -h /var/run/postgresql",
+		"apt-get install -y postgresql-16 postgresql-client-16",
+		`if ! pg_isready -q -h "$socket" -p "$port"`,
+		`createuser -w -h "$socket"`,
+		`createdb -w -h "$socket"`,
 		`detected_port=$(pg_lsclusters`,
-		`AGENTMUX_BRIDGE_TOKEN='bridge-secret'`,
+		`AGENTMUX_BRIDGE_TOKEN=`,
+		`bridge-secret`,
 		`database setup`,
 	} {
 		if !strings.Contains(command, want) {

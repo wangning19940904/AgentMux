@@ -11,7 +11,7 @@ import (
 
 const agentInstanceColumns = `id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,
 	provider_tool,provider_id,default_model,default_reasoning_effort,default_service_tier,default_approval_mode,memory_scope,env,channel_bindings,schedules,mcp_servers,
-	skills,clis,enabled,source,owner_tenant_id,visibility,created_at,updated_at`
+	skills,clis,enabled,source,owner_tenant_id,visibility,created_at,updated_at,private_chat_mode,group_chat_mode`
 
 // visibleToTenant restricts an owned resource table to what one tenant may
 // see: what it owns, what is public, and what an admin granted it.
@@ -86,8 +86,8 @@ func upsertAgentInstance(ctx context.Context, executor statementExecutor, a *cor
 	_, err := executor.ExecContext(ctx, `INSERT INTO agent_instances
 		(id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,provider_tool,provider_id,memory_scope,
 		 default_model,default_reasoning_effort,default_service_tier,default_approval_mode,env,channel_bindings,schedules,mcp_servers,skills,clis,enabled,source,
-		 owner_tenant_id,visibility,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 owner_tenant_id,visibility,created_at,updated_at,private_chat_mode,group_chat_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,runtime_id=excluded.runtime_id,
 		desktop_thread_id=excluded.desktop_thread_id,work_dir=excluded.work_dir,workspace_mode=excluded.workspace_mode,worktree_base_ref=excluded.worktree_base_ref,session_backend=excluded.session_backend,system_prompt=excluded.system_prompt,
 		provider_tool=excluded.provider_tool,provider_id=excluded.provider_id,
@@ -97,12 +97,12 @@ func upsertAgentInstance(ctx context.Context, executor statementExecutor, a *cor
 		channel_bindings=excluded.channel_bindings,schedules=excluded.schedules,
 		mcp_servers=excluded.mcp_servers,skills=excluded.skills,clis=excluded.clis,enabled=excluded.enabled,
 		source=excluded.source,owner_tenant_id=excluded.owner_tenant_id,visibility=excluded.visibility,
-		updated_at=excluded.updated_at`,
+		updated_at=excluded.updated_at,private_chat_mode=excluded.private_chat_mode,group_chat_mode=excluded.group_chat_mode`,
 		a.ID, a.Name, a.RuntimeID, a.DesktopThreadID, a.WorkDir, a.WorkspaceMode, a.WorktreeBaseRef, a.SessionBackend, a.SystemPrompt, a.ProviderTool,
 		a.ProviderID, a.MemoryScope, a.DefaultModel, a.DefaultReasoningEffort, a.DefaultServiceTier, a.DefaultApprovalMode, string(env), string(channels), string(schedules),
 		string(mcpServers), string(skills), string(clis), enabled, a.Source,
 		nullableOwner(a.OwnerTenantID), a.Visibility,
-		a.CreatedAt.Format(time.RFC3339Nano), a.UpdatedAt.Format(time.RFC3339Nano))
+		a.CreatedAt.Format(time.RFC3339Nano), a.UpdatedAt.Format(time.RFC3339Nano), a.PrivateChatMode, a.GroupChatMode)
 	return err
 }
 
@@ -145,10 +145,11 @@ func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	var a core.AgentInstance
 	var desktopThreadID, workDir, workspaceMode, worktreeBaseRef, sessionBackend, systemPrompt, providerTool, providerID, defaultModel, defaultReasoningEffort, defaultServiceTier, defaultApprovalMode, memoryScope sql.NullString
 	var env, channels, schedules, mcpServers, skills, clis, source, ownerTenantID, visibility, created, updated sql.NullString
+	var privateChatMode, groupChatMode sql.NullString
 	var enabled int
 	if err := sc.Scan(&a.ID, &a.Name, &a.RuntimeID, &desktopThreadID, &workDir, &workspaceMode, &worktreeBaseRef, &sessionBackend, &systemPrompt,
 		&providerTool, &providerID, &defaultModel, &defaultReasoningEffort, &defaultServiceTier, &defaultApprovalMode, &memoryScope, &env, &channels, &schedules,
-		&mcpServers, &skills, &clis, &enabled, &source, &ownerTenantID, &visibility, &created, &updated); err != nil {
+		&mcpServers, &skills, &clis, &enabled, &source, &ownerTenantID, &visibility, &created, &updated, &privateChatMode, &groupChatMode); err != nil {
 		return a, err
 	}
 	a.DesktopThreadID = desktopThreadID.String
@@ -163,6 +164,8 @@ func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	a.DefaultReasoningEffort = defaultReasoningEffort.String
 	a.DefaultServiceTier = defaultServiceTier.String
 	a.DefaultApprovalMode = defaultApprovalMode.String
+	a.PrivateChatMode = privateChatMode.String
+	a.GroupChatMode = groupChatMode.String
 	a.MemoryScope = memoryScope.String
 	a.Enabled = enabled != 0
 	a.Source = source.String

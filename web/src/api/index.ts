@@ -628,20 +628,21 @@ export const api = {
     } }, writeTargetIDs(targetID)).then((result) => result.first),
   selectDirectory: (defaultDirectory = "") => selectSystemDirectory(defaultDirectory),
   directories: (path = "", targetID?: string) => {
-    const remoteID = targetID && targetID !== "local" ? targetID : activeRemoteID();
+    const remoteID = targetID ? (targetID === "local" ? "" : targetID) : activeRemoteID();
     return remoteID
       ? getChecked<SystemDirectoryListing>(
-          `/api/v1/remote/directories?id=${encodeURIComponent(remoteID)}&path=${encodeURIComponent(path)}`
+          `/api/v1/remote/directories?id=${encodeURIComponent(remoteID)}&path=${encodeURIComponent(path)}`, { local: true }
         )
-      : getChecked<SystemDirectoryListing>(`/api/v1/system/directories?path=${encodeURIComponent(path)}`);
+      : getChecked<SystemDirectoryListing>(`/api/v1/system/directories?path=${encodeURIComponent(path)}`, { local: true });
   },
   ensureDirectory: (path: string, targetID?: string) => {
-    const remoteID = targetID && targetID !== "local" ? targetID : activeRemoteID();
+    const remoteID = targetID ? (targetID === "local" ? "" : targetID) : activeRemoteID();
     return postChecked<{ path: string }>(
       remoteID
         ? `/api/v1/remote/directories?id=${encodeURIComponent(remoteID)}`
         : "/api/v1/system/directories",
       { path },
+      { local: true },
     );
   },
 

@@ -3,8 +3,6 @@ package remote
 import (
 	"context"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"testing"
@@ -53,21 +51,13 @@ func TestLiveSSHConcurrentRequestsWithIdleTunnel(t *testing.T) {
 		}
 		go func(path string) {
 			started := time.Now()
-			transport := &http.Transport{DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
-				return manager.DialContext(ctx, host.ID, network)
-			}, DisableKeepAlives: true}
-			defer transport.CloseIdleConnections()
 			req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+host.RemoteAddr+path, nil)
 			if host.APIToken != "" {
 				req.Header.Set("Authorization", "Bearer "+host.APIToken)
 			}
-			response, err := transport.RoundTrip(req)
-			if err == nil {
-				_, err = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-				response.Body.Close()
-				if response.StatusCode != http.StatusOK {
-					err = fmt.Errorf("HTTP %d", response.StatusCode)
-				}
+			status, _, err := manager.DoHTTP(host.ID, req, 1<<20)
+			if err == nil && status != http.StatusOK {
+				err = fmt.Errorf("HTTP %d", status)
 			}
 			t.Logf("%s: %s, error=%v", path, time.Since(started).Round(time.Millisecond), err)
 			results <- err
