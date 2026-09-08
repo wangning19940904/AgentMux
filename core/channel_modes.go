@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// Channel keys remain readable for Agents that predate Agent-owned defaults.
+// ChannelConfigPrivateMode remains readable for Agents without owned defaults.
 const ChannelConfigPrivateMode = "private_chat_mode"
 const ChannelConfigGroupMode = "group_chat_mode"
 const DefaultPrivateChatMode = "chat"
