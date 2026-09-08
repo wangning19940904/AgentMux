@@ -438,6 +438,55 @@ button {
   font-weight: 500;
 }
 
+.primary-account {
+  order: 3;
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-top: 6px;
+}
+
+.primary-account strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.primary-account.switchable:hover,
+.primary-account.switchable:focus-within {
+  background: var(--accent-soft);
+}
+
+.primary-account.switchable:has(select:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.primary-collapsed .primary-account {
+  justify-content: center;
+  width: 44px;
+  margin-inline: auto;
+  padding: 0;
+}
+
+.primary-collapsed .primary-account::before {
+  margin: 0;
+}
+
+.primary-collapsed .primary-account strong,
+.primary-collapsed .primary-account > svg {
+  display: none;
+}
+
+.primary-collapsed .primary-account .account-identity-select {
+  padding: 0;
+  color: transparent;
+}
+
+.primary-collapsed .primary-account .account-identity-select option {
+  color: var(--text);
+  background: var(--bg-elevated);
+}
+
 .sidebar-resize-handle {
   width: 5px;
 }
@@ -466,10 +515,6 @@ button {
   background: var(--sidebar);
   border: 0;
   border-left: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-}
-
-.native-desktop .secondary-sidebar {
-  padding-top: 52px;
 }
 
 .secondary-sidebar[hidden] {
@@ -588,11 +633,6 @@ button {
   font-weight: 620;
 }
 
-.secondary-account {
-  flex: 0 0 auto;
-  margin: auto 8px 8px;
-}
-
 .secondary-sidebar > .sidebar-resize-handle {
   right: -2px;
 }
@@ -639,6 +679,8 @@ button {
   gap: 7px;
 }
 
+/* Keep top-row controls clear of the macOS window buttons when the primary rail is collapsed. */
+.native-desktop.primary-collapsed .secondary-sidebar-header,
 .native-desktop.primary-collapsed:not(.secondary-open) .workspace-header {
   padding-left: 42px;
 }

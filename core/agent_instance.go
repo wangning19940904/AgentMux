@@ -58,4 +58,7 @@ type AgentInstance struct {
 	Visibility             string                `json:"visibility,omitempty"` // private, public
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
+	// Empty modes preserve legacy per-channel defaults until explicitly set.
+	PrivateChatMode string `json:"private_chat_mode,omitempty"`
+	GroupChatMode   string `json:"group_chat_mode,omitempty"`
 }

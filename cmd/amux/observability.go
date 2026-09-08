@@ -20,7 +20,7 @@ func observabilityMigrateTranscriptPayloadsCmd() *cobra.Command {
 		Use:   "migrate-transcript-payloads",
 		Short: "Replace duplicated transcript bodies with verified local-file references",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, st, err := bootstrapStore()
+			cfg, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}

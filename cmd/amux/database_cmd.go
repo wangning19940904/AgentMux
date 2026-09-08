@@ -1,16 +1,15 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/internal/postgressetup"
 	"github.com/wangning19940904/AgentMux/migration/configimport"
 	"github.com/wangning19940904/AgentMux/store"
 )
@@ -36,7 +35,7 @@ func databaseImportConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			st, err := openRuntimeStore(cfg)
+			st, err := openRuntimeStore(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
@@ -55,7 +54,7 @@ func databaseImportConfigCmd() *cobra.Command {
 func databaseSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Start local PostgreSQL, create the database, and apply schema migrations",
+		Short: "Install missing PostgreSQL dependencies, start it, and initialize the database",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, _, err := loadConfig(false)
 			if err != nil {
@@ -64,12 +63,10 @@ func databaseSetupCmd() *cobra.Command {
 			if flagDatabaseURL != "" {
 				cfg.Database.URL = flagDatabaseURL
 			}
-			if cfg.Database.URL == store.DefaultPostgresURL {
-				if err := ensureLocalPostgres(cmd.Context()); err != nil {
-					return err
-				}
+			if err := postgressetup.Ensure(cmd.Context(), cfg.Database.URL, cmd.ErrOrStderr()); err != nil {
+				return err
 			}
-			st, err := openRuntimeStore(cfg)
+			st, err := openRuntimeStore(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
@@ -105,7 +102,7 @@ func databaseMigrateSQLiteCmd() *cobra.Command {
 			if flagDatabaseURL != "" {
 				cfg.Database.URL = flagDatabaseURL
 			}
-			st, err := openRuntimeStore(cfg)
+			st, err := openRuntimeStore(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
@@ -141,52 +138,4 @@ func parseDayDuration(value string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid duration %q", value)
 	}
 	return duration, nil
-}
-
-func ensureLocalPostgres(ctx context.Context) error {
-	if postgresReady(ctx) {
-		return ensureAgentMuxDatabase(ctx)
-	}
-	brew, err := exec.LookPath("brew")
-	if err != nil {
-		return fmt.Errorf("PostgreSQL is not running and Homebrew is unavailable: %w", err)
-	}
-	output, err := exec.CommandContext(ctx, brew, "services", "start", "postgresql@16").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("start postgresql@16: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if postgresReady(ctx) {
-			return ensureAgentMuxDatabase(ctx)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("postgresql@16 did not become ready on /tmp:5432")
-}
-
-func postgresReady(ctx context.Context) bool {
-	command := exec.CommandContext(ctx, "pg_isready", "-h", "/tmp", "-p", "5432")
-	return command.Run() == nil
-}
-
-func ensureAgentMuxDatabase(ctx context.Context) error {
-	query := exec.CommandContext(ctx, "psql", "-h", "/tmp", "-d", "postgres", "-Atqc",
-		`SELECT 1 FROM pg_database WHERE datname='agentmux'`)
-	output, err := query.Output()
-	if err != nil {
-		return fmt.Errorf("inspect local PostgreSQL databases: %w", err)
-	}
-	if strings.TrimSpace(string(output)) == "1" {
-		return nil
-	}
-	output, err = exec.CommandContext(ctx, "createdb", "-h", "/tmp", "agentmux").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("create agentmux database: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
 }

@@ -106,3 +106,53 @@ func TestModeChangesRequireGroupManager(t *testing.T) {
 		t.Fatal("admin could not change mode")
 	}
 }
+
+func TestAgentConversationModePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, chatType, agentMode, legacyMode, override, wantMode, wantKey string
+		thread, topic, replyInThread                                       bool
+	}{
+		{"group default", "group", "", "", "", "chat-topic", "chat:chat", false, false, false},
+		{"private default", "p2p", "", "", "", "chat", "chat:chat", false, false, false},
+		{"legacy group", "group", "", "new-topic", "", "new-topic", "root:message", false, false, true},
+		{"legacy private", "p2p", "", "thread", "", "thread", "root:message", false, false, true},
+		{"agent group overrides channel", "group", "new-topic", "chat", "", "new-topic", "root:message", false, false, true},
+		{"agent private overrides channel", "p2p", "chat", "thread", "", "chat", "chat:chat", true, false, false},
+		{"group chat override", "group", "new-topic", "chat-topic", "chat", "chat", "chat:chat", true, false, false},
+		{"private chat override", "p2p", "chat", "group", "thread", "thread", "root:root", true, false, true},
+		{"agent native topic", "group", "chat-topic", "chat", "", "chat-topic", "root:root", true, false, true},
+		{"agent continuous group", "group", "chat", "new-topic", "", "chat", "chat:chat", true, false, false},
+		{"topic group stays isolated", "group", "chat", "", "chat", "chat", "root:message", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			rt := &channelRuntime{
+				owner: NewEngine(nil, NewHookRunner(nil, nil)),
+				channel: Channel{ID: "channel", Type: "feishu", Config: map[string]string{
+					ChannelConfigPrivateMode: tc.legacyMode, ChannelConfigGroupMode: tc.legacyMode,
+				}},
+				workspace: WorkspaceInitOptions{PrivateChatMode: tc.agentMode, GroupChatMode: tc.agentMode},
+				platform:  &modeTestPlatform{fakePlatform: newFakePlatform("feishu"), topic: tc.topic},
+			}
+			if tc.override != "" {
+				if err := rt.setChatState(ctx, "mode:chat", tc.override); err != nil {
+					t.Fatal(err)
+				}
+			}
+			msg := &Message{ID: "message", ChatID: "chat", ChatType: tc.chatType}
+			if tc.thread {
+				msg.ThreadID, msg.RootID = "thread", "root"
+			}
+			mode, err := rt.conversationMode(ctx, msg)
+			if err != nil || mode != tc.wantMode {
+				t.Fatalf("mode = %q, err = %v", mode, err)
+			}
+			if err := rt.resolveChannelRoute(ctx, msg); err != nil {
+				t.Fatal(err)
+			}
+			if msg.ConversationKey != tc.wantKey || msg.ReplyInThread != tc.replyInThread {
+				t.Fatalf("route = %s, reply in thread = %v", msg.ConversationKey, msg.ReplyInThread)
+			}
+		})
+	}
+}

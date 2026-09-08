@@ -18,6 +18,8 @@ export const EMPTY_AGENT: AgentInstance = {
   default_reasoning_effort: "",
   default_service_tier: "",
   default_approval_mode: "",
+  private_chat_mode: "chat",
+  group_chat_mode: "chat-topic",
   memory_scope: "",
   channel_bindings: [],
   schedules: [],

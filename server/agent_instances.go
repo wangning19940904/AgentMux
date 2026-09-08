@@ -222,6 +222,14 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.DefaultReasoningEffort = strings.TrimSpace(a.DefaultReasoningEffort)
 	a.DefaultServiceTier = strings.TrimSpace(a.DefaultServiceTier)
 	a.DefaultApprovalMode = strings.TrimSpace(a.DefaultApprovalMode)
+	a.PrivateChatMode = strings.TrimSpace(a.PrivateChatMode)
+	a.GroupChatMode = strings.TrimSpace(a.GroupChatMode)
+	if a.PrivateChatMode != "" && !core.ValidConversationMode(true, a.PrivateChatMode) {
+		return fmt.Errorf("private_chat_mode must be chat, thread or group")
+	}
+	if a.GroupChatMode != "" && !core.ValidConversationMode(false, a.GroupChatMode) {
+		return fmt.Errorf("group_chat_mode must be chat-topic, new-topic or chat")
+	}
 	a.MemoryScope = strings.TrimSpace(a.MemoryScope)
 	if a.Name == "" {
 		return fmt.Errorf("agent name is required")
@@ -267,6 +275,23 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 			return fmt.Errorf("load existing agent: %w", err)
 		}
 		creatingRecord = existing == nil
+		if existing != nil {
+			// Older clients may omit the new fields when editing an Agent.
+			if a.PrivateChatMode == "" {
+				a.PrivateChatMode = existing.PrivateChatMode
+			}
+			if a.GroupChatMode == "" {
+				a.GroupChatMode = existing.GroupChatMode
+			}
+		}
+	}
+	if creatingRecord {
+		if a.PrivateChatMode == "" {
+			a.PrivateChatMode = core.DefaultPrivateChatMode
+		}
+		if a.GroupChatMode == "" {
+			a.GroupChatMode = core.DefaultGroupChatMode
+		}
 	}
 	if creatingRecord && !agentRuntimeAvailable(a.RuntimeID) {
 		return fmt.Errorf("agent runtime %q is not installed on this machine", a.RuntimeID)

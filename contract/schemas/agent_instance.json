@@ -40,6 +40,10 @@
       "omitempty": true,
       "type": "map\u003cstring,string\u003e"
     },
+    "group_chat_mode": {
+      "omitempty": true,
+      "type": "string"
+    },
     "id": {
       "omitempty": false,
       "type": "string"
@@ -61,6 +65,10 @@
       "type": "string"
     },
     "owner_tenant_name": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "private_chat_mode": {
       "omitempty": true,
       "type": "string"
     },

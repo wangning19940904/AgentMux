@@ -446,23 +446,7 @@ export function FeishuChannelOptions({
           </select>
         </label>
         <p className="subtle-copy">{t("connect.taskQueueHint")}</p>
-        <label className="field">
-          <span>{t("connect.privateChatMode")}</span>
-          <select value={configValue(config, "private_chat_mode", "chat")} onChange={(e) => updateConfig("private_chat_mode", e.target.value)}>
-            <option value="chat">{t("connect.modeChat")}</option>
-            <option value="thread">{t("connect.modeThread")}</option>
-            <option value="group">{t("connect.modeGroup")}</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>{t("connect.groupChatMode")}</span>
-          <select value={configValue(config, "group_chat_mode", "chat-topic")} onChange={(e) => updateConfig("group_chat_mode", e.target.value)}>
-            <option value="chat-topic">{t("connect.modeChatTopic")}</option>
-            <option value="chat">{t("connect.modeChat")}</option>
-            <option value="new-topic">{t("connect.modeThread")}</option>
-          </select>
-          <small>{t("connect.modeOverrideHint")}</small>
-        </label>
+        <p className="subtle-copy">{t("connect.agentConversationModeHint")}</p>
         {codexAgent && <div className="field"><span>{t("connect.codexCapability")}</span><small>{controlCapability?.error || (controlCapability?.state === "ready" ? t("connect.codexCapabilityReady") : t("connect.codexCapabilityPending"))}</small></div>}
             <label className="field">
               <span>{t("connect.codexMaxQueue")}</span>

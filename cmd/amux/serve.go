@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/internal/consolelogin"
+	"github.com/wangning19940904/AgentMux/internal/postgressetup"
 	"github.com/wangning19940904/AgentMux/store"
 
 	// Register all adapters via blank imports (plugin pattern).
@@ -32,19 +34,22 @@ func loadConfig(required bool) (*config.Config, string, error) {
 // bootstrapStore opens just the store, tolerating a missing config file. Used
 // by commands that only need the DB (provider, usage) so they work without a
 // config.toml present.
-func bootstrapStore() (*config.Config, *store.Store, error) {
+func bootstrapStore(ctx context.Context) (*config.Config, *store.Store, error) {
 	cfg, _, err := loadConfig(false)
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := openRuntimeStore(cfg)
+	if err := prepareRuntimeDatabase(ctx, cfg, os.Stderr); err != nil {
+		return nil, nil, err
+	}
+	st, err := openRuntimeStore(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	return cfg, st, nil
 }
 
-func openRuntimeStore(cfg *config.Config) (*store.Store, error) {
+func openRuntimeStore(ctx context.Context, cfg *config.Config) (*store.Store, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is required")
 	}
@@ -56,12 +61,20 @@ func openRuntimeStore(cfg *config.Config) (*store.Store, error) {
 	if flagDatabaseURL != "" {
 		url = flagDatabaseURL
 	}
-	return store.OpenPostgres(context.Background(), store.DatabaseConfig{
-		URL:                   url,
+	return store.OpenPostgres(ctx, store.DatabaseConfig{
+		URL:                   postgressetup.ResolveURL(url),
 		MaxOpenConnections:    cfg.Database.MaxOpenConnections,
 		MaxIdleConnections:    cfg.Database.MaxIdleConnections,
 		ConnectionMaxLifetime: lifetime,
 	})
+}
+
+func prepareRuntimeDatabase(ctx context.Context, cfg *config.Config, output io.Writer) error {
+	url := cfg.Database.URL
+	if flagDatabaseURL != "" {
+		url = flagDatabaseURL
+	}
+	return postgressetup.Ensure(ctx, url, output)
 }
 
 type daemonOptions struct {
@@ -84,14 +97,16 @@ func runDaemon(cmd *cobra.Command, opts daemonOptions) error {
 	if err := cfg.ValidateListenSecurity(); err != nil {
 		return err
 	}
-	st, err := openRuntimeStore(cfg)
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := prepareRuntimeDatabase(ctx, cfg, cmd.ErrOrStderr()); err != nil {
+		return err
+	}
+	st, err := openRuntimeStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	runtime, err := newRuntime(ctx, cfg, st)
 	if err != nil {

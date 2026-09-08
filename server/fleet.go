@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -360,31 +359,11 @@ func (s *Server) executeRemoteFleetOperation(ctx context.Context, targetID strin
 	if strings.HasPrefix(operation.Path, "/api/v1/fleet-sync/") {
 		request.Header.Set("X-AgentMux-Fleet-Peer", "1")
 	}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
-			return s.remote.DialContext(ctx, targetID, network)
-		},
-		DisableKeepAlives: true,
-	}
-	defer transport.CloseIdleConnections()
-	response, err := transport.RoundTrip(request)
-	if err != nil {
-		return 0, nil, fmt.Errorf("remote %s: %w", host.Name, err)
-	}
-	defer response.Body.Close()
 	responseLimit := int64(fleetMaxResponseBytes)
 	if strings.HasPrefix(operation.Path, "/api/v1/fleet-sync/") {
 		responseLimit = fleetSyncMaxBodyBytes
 	}
-	payload, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
-	if err != nil {
-		return 0, nil, err
-	}
-	if int64(len(payload)) > responseLimit {
-		return 0, nil, fmt.Errorf("remote %s response exceeds %d MiB", host.Name, responseLimit>>20)
-	}
-	return response.StatusCode, payload, nil
+	return s.remote.DoHTTP(targetID, request, responseLimit)
 }
 
 func fleetErrorMessage(payload []byte, status int) string {

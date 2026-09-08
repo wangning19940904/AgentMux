@@ -36,7 +36,7 @@ go install github.com/wangning19940904/AgentMux/cmd/amux@latest
 
 - **Go 1.25+** (core, CLI, daemon)
 - **Node.js 20+** with npm (WebUI build)
-- **PostgreSQL 16+** (runtime data store)
+- **PostgreSQL 16+** (runtime data store; installed automatically for the default local database on macOS/Linux)
 - **Wails v2 toolchain** (only for the desktop app):
   `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 - **Xcode command line tools** (only for the macOS menu bar app)
@@ -67,16 +67,46 @@ The CLI binary is statically linked (CGO disabled) and self-contained.
 
 ## Set up PostgreSQL
 
-AgentMux uses PostgreSQL as its runtime store. On macOS with Homebrew:
+AgentMux prepares its default local database automatically when the desktop app
+or `amux client` / `amux serve` / `amux web` starts. The release installer also
+runs setup after installing the binaries. The Homebrew cask declares PostgreSQL
+16 as a dependency and runs setup after installation. To prepare or retry setup explicitly:
 
 ```bash
-brew install postgresql@16
 amux database setup
 ```
 
-The default connection is
-`postgresql:///agentmux?host=/tmp&sslmode=disable`. Override it with
-`[database].url`, `AGENTMUX_DATABASE_URL`, or `--database-url`.
+Setup reuses a healthy PostgreSQL instance, installs missing dependencies,
+starts the service, and creates the AgentMux database before applying migrations.
+It does not overwrite existing databases or upgrade an existing cluster's major
+version.
+
+- macOS: finds Homebrew even outside the app's PATH, installs Homebrew if missing,
+  and installs PostgreSQL 16 unless a supported Homebrew version is already
+  available. Homebrew's first installation may require administrator access; if
+  unattended installation cannot obtain it, setup reports the error and asks you
+  to complete Homebrew installation in Terminal, then retry.
+- Linux: uses apt, dnf, or yum with root or passwordless sudo. Apt installs
+  PostgreSQL 16, enabling the official PostgreSQL repository if necessary. RPM
+  systems use the PostgreSQL 16 module when available, otherwise their configured
+  repositories must provide PostgreSQL 16+. Setup initializes only missing
+  clusters, starts the service, and creates a login role for the current Unix user.
+- Windows and other platforms: automatic package installation is not supported;
+  install PostgreSQL 16+ and configure a connection URL.
+
+The default connection uses `/tmp` on macOS and `/var/run/postgresql` on Linux,
+port 5432, database `agentmux`. The legacy default `/tmp` URL is normalized to the
+Linux socket at runtime. Override the connection with `[database].url`,
+`AGENTMUX_DATABASE_URL`, or `--database-url`. Custom URLs (including TCP hosts,
+credentials, other databases, and non-default ports) bypass local provisioning.
+
+Package downloads require network access. Failures report their cause and can be
+retried with `amux database setup`; they do not report a successful installation.
+For download-only installations, set `AMUX_SKIP_DATABASE_SETUP=1` when running
+`install.sh`. First startup will still prepare the default local database.
+
+Installer behavior follows the official [Homebrew installation guide](https://docs.brew.sh/Installation)
+and [PostgreSQL Linux packages](https://www.postgresql.org/download/linux/).
 
 To migrate an existing AgentMux SQLite store while retaining 30 days of
 detailed observations:

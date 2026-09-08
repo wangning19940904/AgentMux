@@ -16,4 +16,5 @@ package contract
 // 2.0 makes PostgreSQL the sole runtime resource source. Invocation and
 // orchestration targets now require agent_id; config.toml projects and the
 // X-AgentMux-Project compatibility path were removed.
-const Version = "2.0"
+// 2.1 adds optional private/group conversation defaults to Agent instances.
+const Version = "2.1"

@@ -1,6 +1,6 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
-import { beginFleetWarningUpdate, fleetWarningMessage, fleetWarningResourceKey, resetFleetWarnings } from "./fleetWarnings";
+import { beginFleetWarningUpdate, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import type {
   DesktopUpdateStatus,
   FleetBatchResult,
@@ -164,13 +164,15 @@ async function fleetBatch<T>(
     });
     const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
     if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
+    const receivedAt = new Date();
     updateWarnings((payload.targets ?? []).flatMap((target) => requests.flatMap((request) => {
       const response = target.responses.find((response) => response.key === request.key);
-      return response?.ok ? [] : [fleetWarningMessage(target.target.name, response?.error || "unavailable")];
+      return response?.ok ? [] : [fleetWarningWithContext(fleetWarningMessage(target.target.name, response?.error || "unavailable"), request, receivedAt)];
     })));
     return payload;
   } catch (error) {
-    updateWarnings([error instanceof Error ? error.message : String(error)]);
+    const receivedAt = new Date();
+    updateWarnings(requests.map((request) => fleetWarningWithContext(error instanceof Error ? error.message : String(error), request, receivedAt)));
     throw error;
   }
 }
@@ -204,8 +206,8 @@ export async function getLocal<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function getChecked<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
+export async function getChecked<T>(path: string, options: { local?: boolean } = {}): Promise<T> {
+  const res = await fetch(options.local ? path : apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
@@ -244,8 +246,8 @@ export async function putLocal<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function postChecked<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(apiPath(path), {
+export async function postChecked<T>(path: string, body: unknown, options: { local?: boolean } = {}): Promise<T> {
+  const res = await fetch(options.local ? path : apiPath(path), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
     body: JSON.stringify(body),

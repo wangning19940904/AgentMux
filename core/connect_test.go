@@ -548,6 +548,8 @@ func TestRestartChannelsForAgentRefreshesChangedRuntime(t *testing.T) {
 	store.mu.Lock()
 	agent := store.agents["agent-1"]
 	agent.RuntimeID = newRuntime
+	agent.PrivateChatMode = "thread"
+	agent.GroupChatMode = "new-topic"
 	agent.UpdatedAt = now.Add(time.Second)
 	store.agents["agent-1"] = agent
 	store.mu.Unlock()
@@ -562,6 +564,12 @@ func TestRestartChannelsForAgentRefreshesChangedRuntime(t *testing.T) {
 	currentAgent, _, currentWorkspace := after.agentSnapshot()
 	if currentAgent == nil || currentAgent.Name() != newRuntime || currentWorkspace.RuntimeID != newRuntime {
 		t.Fatalf("refreshed channel still uses stale runtime: agent=%v workspace=%+v", currentAgent, currentWorkspace)
+	}
+	for _, tc := range []struct{ chatType, want string }{{"p2p", "thread"}, {"group", "new-topic"}} {
+		mode, err := after.conversationMode(ctx, &Message{ChatID: "chat", ChatType: tc.chatType})
+		if err != nil || mode != tc.want {
+			t.Fatalf("refreshed %s mode = %q, err = %v", tc.chatType, mode, err)
+		}
 	}
 }
 

@@ -158,6 +158,8 @@ export interface AgentInstance {
   default_reasoning_effort?: string;
   default_service_tier?: string;
   default_approval_mode?: string;
+  private_chat_mode?: string;
+  group_chat_mode?: string;
 	memory_scope?: string;
 	env?: Record<string, string>;
 	channel_bindings?: Array<Record<string, unknown>>;

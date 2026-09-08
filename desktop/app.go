@@ -13,6 +13,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/bootstrap"
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/internal/postgressetup"
 	"github.com/wangning19940904/AgentMux/provider"
 	"github.com/wangning19940904/AgentMux/store"
 
@@ -46,11 +47,26 @@ const desktopStoreRetryInterval = 2 * time.Second
 // macOS, so a failed first connection must not permanently strand the WebView
 // behind the asset proxy's "desktop API is starting" response.
 func (a *App) runDesktopBackend(log *slog.Logger, cfg *config.Config) {
+	a.databaseSetupError.Store("")
+	if err := postgressetup.Ensure(a.ctx, cfg.Database.URL, os.Stderr); err != nil {
+		if a.ctx.Err() != nil {
+			return
+		}
+		log.Error("prepare desktop database", "err", err)
+		a.databaseSetupError.Store(err.Error())
+		_, _ = wailsruntime.MessageDialog(a.ctx, wailsruntime.MessageDialogOptions{
+			Type: wailsruntime.ErrorDialog, Title: "AgentMux database setup",
+			Message: err.Error(),
+		})
+		// Continue waiting for a manual permission/setup repair without repeatedly
+		// launching installers or requiring the user to restart the desktop app.
+	}
 	st, err := waitForDesktopStore(a.ctx, cfg, desktopStoreRetryInterval, log, openDesktopStore)
 	if err != nil {
 		return
 	}
 	defer st.Close()
+	a.databaseSetupError.Store("")
 
 	runtime, err := bootstrap.NewRuntime(a.ctx, log, cfg, st, version, false)
 	if err != nil {
@@ -123,7 +139,7 @@ func openDesktopStore(ctx context.Context, cfg *config.Config) (*store.Store, er
 		return nil, err
 	}
 	return store.OpenPostgres(ctx, store.DatabaseConfig{
-		URL:                   cfg.Database.URL,
+		URL:                   postgressetup.ResolveURL(cfg.Database.URL),
 		MaxOpenConnections:    cfg.Database.MaxOpenConnections,
 		MaxIdleConnections:    cfg.Database.MaxIdleConnections,
 		ConnectionMaxLifetime: lifetime,

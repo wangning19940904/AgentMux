@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	default_reasoning_effort TEXT,
 	default_service_tier TEXT,
 	default_approval_mode TEXT,
+	private_chat_mode TEXT,
+	group_chat_mode TEXT,
 	memory_scope TEXT,
 	env TEXT,
 	channel_bindings TEXT,

@@ -89,16 +89,18 @@ type App struct {
 	// those requests to apiProxy, which reaches the in-process loopback daemon
 	// from Go. Keeping HTTP out of WebKit avoids macOS mixed-content/ATS failures
 	// that otherwise surface in the UI as the opaque "TypeError: Load failed".
-	apiTarget atomic.Value // *url.URL
-	apiToken  atomic.Value // string; injected only by the native Go proxy
-	apiProxy  *httputil.ReverseProxy
-	updateMu  sync.Mutex
+	apiTarget          atomic.Value // *url.URL
+	apiToken           atomic.Value // string; injected only by the native Go proxy
+	databaseSetupError atomic.Value // string; startup failure surfaced before the API exists
+	apiProxy           *httputil.ReverseProxy
+	updateMu           sync.Mutex
 }
 
 func newApp() *App {
 	app := &App{}
 	app.apiTarget.Store(desktopAPITarget("127.0.0.1:8765"))
 	app.apiToken.Store("")
+	app.databaseSetupError.Store("")
 	app.apiProxy = &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			target := app.apiTarget.Load().(*url.URL)
@@ -110,6 +112,10 @@ func newApp() *App {
 			}
 		},
 		ErrorHandler: func(response http.ResponseWriter, _ *http.Request, _ error) {
+			if message, _ := app.databaseSetupError.Load().(string); message != "" {
+				http.Error(response, "PostgreSQL setup failed: "+message, http.StatusInternalServerError)
+				return
+			}
 			http.Error(response, "desktop API is starting", http.StatusServiceUnavailable)
 		},
 	}

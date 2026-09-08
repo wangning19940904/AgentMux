@@ -45,6 +45,23 @@ describe("resolveTenancyGate", () => {
     expect(identityAttempts).toBe(1);
   });
 
+  it("allows a longer first-launch install and stops on a setup failure", async () => {
+    let attempts = 0;
+    const result = await resolveTenancyGateWithRetry(async () => {
+      if (++attempts <= 35) throw new Error("/api/v1/tenancy/self: 503");
+      return { admin: true };
+    }, { attempts: 1200, delayMs: 0, wait: async () => undefined });
+    expect(result.state).toBe("ready");
+    expect(attempts).toBe(36);
+
+    attempts = 0;
+    await expect(resolveTenancyGateWithRetry(async () => {
+      attempts++;
+      throw new Error("/api/v1/tenancy/self: 500 PostgreSQL setup failed");
+    }, { attempts: 1200, delayMs: 0, wait: async () => undefined })).rejects.toThrow("setup failed");
+    expect(attempts).toBe(1);
+  });
+
   it("does not lock the packaged desktop navigation during backend startup", () => {
     expect(tenancyNavigationLocked("loading", true)).toBe(false);
     expect(tenancyNavigationLocked("required", true)).toBe(false);

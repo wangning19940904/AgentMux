@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -188,5 +189,17 @@ func TestWaitForDesktopStoreStopsWhenDesktopShutsDown(t *testing.T) {
 	}
 	if got != nil || attempts.Load() != 1 {
 		t.Fatalf("store = %p, attempts = %d", got, attempts.Load())
+	}
+}
+
+func TestDesktopDatabaseSetupFailureIsActionableAndNotRetriedAsStartup(t *testing.T) {
+	app := newApp()
+	app.setAPITarget("127.0.0.1:1")
+	app.databaseSetupError.Store("Homebrew installation needs administrator access")
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/tenancy/self", nil)
+	app.assetServerMiddleware(http.NotFoundHandler()).ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "administrator access") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

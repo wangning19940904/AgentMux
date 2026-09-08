@@ -43,6 +43,12 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const mcpServers = useAsync(() => api.mcp(), []);
   const skills = useAsync(() => api.skills(), []);
   const tools = useAsync(() => api.tools(), []);
+  const refreshing = [agents, runtimes, providers, activeRoutes, channels, triggers, mcpServers, skills, tools]
+    .some((resource) => resource.loading);
+  const refreshAll = () => Promise.all([
+    agents.reload(), runtimes.reload(), providers.reload(), activeRoutes.reload(), channels.reload(),
+    triggers.reload(), mcpServers.reload(), skills.reload(), tools.reload(),
+  ]);
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<AgentInstance | null>(null);
   const [selectedChannelIDs, setSelectedChannelIDs] = useState<string[]>([]);
@@ -370,7 +376,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             <span className="agent-filter-chip">{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
           </div>
           <div className="table-actions">
-            <button className="ghost-action" onClick={agents.reload} title={t("common.refresh")}>
+            <button className="ghost-action" onClick={() => void refreshAll()} disabled={refreshing} title={t("common.refresh")}>
               <RefreshCw size={15} />
               {t("common.refresh")}
             </button>

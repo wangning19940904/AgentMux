@@ -360,6 +360,68 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.agent-conversation-modes {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent-conversation-modes legend {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.agent-conversation-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.agent-conversation-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.agent-conversation-option:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.agent-conversation-option input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.agent-conversation-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.agent-conversation-option strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-conversation-option small {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .agent-drawer {
   width: min(760px, calc(100vw - 28px));
 }

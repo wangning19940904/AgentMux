@@ -17,7 +17,7 @@
 
 ## 契约版本（contract_version）
 
-当前契约版本：**`2.0`**（常量定义于 [`contract.go`](contract.go)，由
+当前契约版本：**`2.1`**（常量定义于 [`contract.go`](contract.go)，由
 `GET /api/v1/capabilities` 与 `GET /api/v1/status` 返回）。
 
 `1.1` 新增多租户：Agent 实例与渠道新增可选归属字段、`/api/v1/tenancy/*`
@@ -33,6 +33,11 @@ Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 
 只接受 `agent_id`，移除 `project` 字段、`X-AgentMux-Project` 和 model→project fallback；
 `/api/v1/send` 只发送到明确的 Channel conversation。旧 config 项目先通过
 `amux database import-config --dry-run|--apply` 迁移。
+
+`2.1` 为 Agent 实例新增可选 `private_chat_mode`、`group_chat_mode`。
+私聊支持 `chat`、`thread`、`group`；群聊支持 `chat-topic`、`new-topic`、`chat`。
+旧 Agent 的空值继续使用渠道默认值，新 Agent 默认 `chat` / `chat-topic`。
+会话内已设置的模式优先于 Agent 默认。旧客户端省略字段时保留已有设置。
 
 `contract_version` 与二进制版本**相互独立**：
 

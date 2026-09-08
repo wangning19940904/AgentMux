@@ -24,7 +24,7 @@ func usageCmd() *cobra.Command {
 			if len(args) == 1 {
 				period = args[0]
 			}
-			cfg, st, err := bootstrapStore()
+			cfg, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -74,7 +74,7 @@ func usageStatuslineCmd() *cobra.Command {
 		Use:   "statusline",
 		Short: "Print a compact one-line usage summary (for status bars/hooks)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, st, err := bootstrapStore()
+			cfg, st, err := bootstrapStore(cmd.Context())
 			if err != nil {
 				return err
 			}

@@ -131,3 +131,23 @@ describe("ownership fields", () => {
 		expect((agents[0] as unknown as Record<string, unknown>)?.some_future_field).toBe(42);
   });
 });
+
+
+it("writes Agent conversation defaults without losing their values", async () => {
+  const agent: AgentInstance = {
+    id: "agent-modes", name: "modes", runtime_id: "codex", enabled: true,
+    created_at: "", updated_at: "", private_chat_mode: "thread", group_chat_mode: "chat",
+  };
+  const client = new AgentMuxClient({
+    baseUrl: "http://agentmux.test", token: "amxt_x",
+    fetch: async (_input, init) => {
+      const payload = JSON.parse(String(init?.body));
+      expect(payload.private_chat_mode).toBe("thread");
+      expect(payload.group_chat_mode).toBe("chat");
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const saved = await client.agents.upsert(agent);
+  expect(saved.private_chat_mode).toBe("thread");
+  expect(saved.group_chat_mode).toBe("chat");
+});

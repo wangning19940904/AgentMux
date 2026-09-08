@@ -1,7 +1,6 @@
 import { Bot, Cable, CheckCircle2, ExternalLink, Eye, FolderOpen, Link2, LogIn, Pencil, RefreshCw, Save, Trash2, Workflow, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  activeRemoteID,
   activeMachineScope,
   api,
   isDesktopApp,
@@ -35,6 +34,7 @@ import {
 } from "./agentUtils";
 import { MarkdownPreview, Picker } from "./widgets";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
+import { AgentConversationOptions } from "./AgentConversationOptions";
 
 export type CLIOption = { id: string; name: string; note?: string; installed: boolean };
 
@@ -352,12 +352,9 @@ export function AgentForm({
 
   async function selectWorkDir() {
     setDirectoryNotice("");
-    if ((draft.target_id && draft.target_id !== "local") || activeRemoteID()) {
+    const targetID = draft.target_id || activeMachineScope();
+    if (targetID !== "local" || !isDesktopApp()) {
       setRemoteDirectoryPickerOpen(true);
-      return;
-    }
-    if (!draft.target_id && activeMachineScope() === "all") {
-      setDirectoryNotice(t("agents.bulkWorkDirHint"));
       return;
     }
     setDirectoryBusy("select");
@@ -379,7 +376,7 @@ export function AgentForm({
       {remoteDirectoryPickerOpen && (
         <RemoteDirectoryPicker
           initialPath={draft.work_dir ?? ""}
-          targetID={draft.target_id}
+          targetID={draft.target_id || activeMachineScope()}
           onClose={() => setRemoteDirectoryPickerOpen(false)}
           onSelect={(path) => {
             onUpdate("work_dir", path);
@@ -483,7 +480,7 @@ export function AgentForm({
                 <FolderOpen size={15} />
               </button>
             </div>
-            {directoryNotice && <small className="directory-notice">{directoryNotice}</small>}
+            {directoryNotice && <small className="directory-notice" role="status">{directoryNotice}</small>}
           </label>
           <label className="field">
             <span>{t("agents.workspaceMode")}</span>
@@ -808,6 +805,15 @@ export function AgentForm({
           </div>
         </div>
       </section>
+
+      <AgentConversationOptions
+        privateMode={draft.private_chat_mode}
+        groupMode={draft.group_chat_mode}
+        readOnly={readOnly}
+        onPrivateModeChange={(value) => onUpdate("private_chat_mode", value)}
+        onGroupModeChange={(value) => onUpdate("group_chat_mode", value)}
+        t={t}
+      />
 
       <section className="agent-section">
         <header>

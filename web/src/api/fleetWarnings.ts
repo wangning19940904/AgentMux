@@ -10,6 +10,13 @@ export function fleetWarningMessage(name: string, error: string): string {
   return `${name}: ${/context deadline exceeded|i\/o timeout/i.test(detail) ? "request timed out" : detail}`;
 }
 
+export function fleetWarningWithContext(message: string, request: { path: string; method?: string }, occurredAt = new Date()): string {
+  // Query strings may contain credentials or user input. The endpoint and
+  // receipt time are enough to identify the failed load in the Console.
+  const endpoint = request.path.split("?", 1)[0];
+  return `${message} · ${request.method || "GET"} ${endpoint} · ${occurredAt.toLocaleString()}`;
+}
+
 export function fleetWarningResourceKey(path: string): string {
   const [base, query = ""] = path.split("?", 2);
   const params = new URLSearchParams(query);
