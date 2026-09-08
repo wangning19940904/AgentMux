@@ -134,3 +134,17 @@ def test_unknown_server_fields_are_preserved_for_forward_compatibility() -> None
         }
     )
     assert agent.raw["some_future_field"] == 42
+
+
+def test_agent_conversation_defaults_round_trip() -> None:
+    agent = AgentInstance.from_dict({
+        "id": "agent-modes", "name": "modes", "runtime_id": "codex", "enabled": True,
+        "private_chat_mode": "thread", "group_chat_mode": "chat",
+    })
+    assert agent.private_chat_mode == "thread"
+    assert agent.group_chat_mode == "chat"
+    assert agent.to_payload()["private_chat_mode"] == "thread"
+    assert agent.to_payload()["group_chat_mode"] == "chat"
+    legacy = AgentInstance(id="legacy", name="legacy", runtime_id="codex", enabled=True)
+    assert "private_chat_mode" not in legacy.to_payload()
+    assert "group_chat_mode" not in legacy.to_payload()

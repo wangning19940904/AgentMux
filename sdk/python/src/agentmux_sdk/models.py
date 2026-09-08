@@ -307,6 +307,8 @@ class AgentInstance:
     default_reasoning_effort: str | None = None
     default_service_tier: str | None = None
     default_approval_mode: str | None = None
+    private_chat_mode: str | None = None
+    group_chat_mode: str | None = None
     memory_scope: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     channel_bindings: tuple[dict[str, Any], ...] = ()
@@ -342,6 +344,8 @@ class AgentInstance:
             default_reasoning_effort=data.get("default_reasoning_effort"),
             default_service_tier=data.get("default_service_tier"),
             default_approval_mode=data.get("default_approval_mode"),
+            private_chat_mode=data.get("private_chat_mode"),
+            group_chat_mode=data.get("group_chat_mode"),
             memory_scope=data.get("memory_scope"),
             env=dict(data.get("env") or {}),
             channel_bindings=tuple(data.get("channel_bindings") or ()),
@@ -381,6 +385,8 @@ class AgentInstance:
             ("default_reasoning_effort", self.default_reasoning_effort),
             ("default_service_tier", self.default_service_tier),
             ("default_approval_mode", self.default_approval_mode),
+            ("private_chat_mode", self.private_chat_mode),
+            ("group_chat_mode", self.group_chat_mode),
             ("memory_scope", self.memory_scope),
             ("source", self.source),
         ):

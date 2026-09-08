@@ -41,7 +41,7 @@ MODEL_FIELD_MAP: dict[str, tuple[type, dict[str, str]]] = {
         "id", "name", "runtime_id", "desktop_thread_id", "work_dir", "workspace_mode",
         "worktree_base_ref", "session_backend", "system_prompt", "provider_tool", "provider_id",
         "provider_name", "default_model", "default_reasoning_effort", "default_service_tier",
-        "default_approval_mode", "memory_scope", "env", "channel_bindings", "schedules",
+        "default_approval_mode", "private_chat_mode", "group_chat_mode", "memory_scope", "env", "channel_bindings", "schedules",
         "mcp_servers", "skills", "clis", "enabled", "source", "owner_tenant_id",
         "owner_tenant_name", "visibility", "created_at", "updated_at",
     )),

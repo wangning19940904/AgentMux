@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "2.0"
-  x-contract-version: "2.0"
+  version: "2.1"
+  x-contract-version: "2.1"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -826,6 +826,14 @@ components:
         default_reasoning_effort: { type: string }
         default_service_tier: { type: string }
         default_approval_mode: { type: string }
+        private_chat_mode:
+          type: string
+          enum: ["", chat, thread, group]
+          description: Private-chat default; empty preserves legacy channel defaults.
+        group_chat_mode:
+          type: string
+          enum: ["", chat-topic, new-topic, chat]
+          description: Group-chat default; empty preserves legacy channel defaults.
         memory_scope: { type: string }
         env:
           type: object
