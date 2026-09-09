@@ -707,14 +707,18 @@ func TestSharedCodexClientRoutesByThread(t *testing.T) {
 		sessions: map[string]*codexSession{}, pending: map[int]chan codexRPCResponse{},
 		done: make(chan struct{}),
 	}
-	session := &codexSession{inbox: make(chan map[string]any, 1)}
+	session := &codexSession{inbox: newCodexInbox(), activeTurn: true}
 	client.sessions["thread-1"] = session
 	client.routeServerMessage(map[string]any{
 		"jsonrpc": "2.0", "method": "turn/started",
 		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1"}},
 	})
 	select {
-	case message := <-session.inbox:
+	case <-session.inbox.ready:
+		message, err := session.inbox.pop()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if message["method"] != "turn/started" {
 			t.Fatalf("message = %+v", message)
 		}

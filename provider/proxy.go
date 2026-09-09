@@ -392,6 +392,13 @@ func (s *ProxyServer) handleClaudeCodeModels(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	routes := claudeCodeModelRoutes(chain[0])
+	visible := routes[:0]
+	for _, route := range routes {
+		if !chain[0].ModelBlocked(route.ID) && !chain[0].ModelBlocked(route.UpstreamModel) {
+			visible = append(visible, route)
+		}
+	}
+	routes = visible
 	data := make([]any, 0, len(routes))
 	for _, route := range routes {
 		data = append(data, map[string]any{
@@ -468,6 +475,11 @@ func claudeCodeUpstreamModel(p *core.Provider, clientModel string) (string, bool
 	alias := strings.TrimSpace(clientModel)
 	if strings.HasSuffix(strings.ToLower(alias), "[1m]") {
 		alias = strings.TrimSpace(alias[:len(alias)-len("[1m]")])
+	}
+	for _, blocked := range p.Meta.BlockedModels {
+		if strings.EqualFold(claudeCodeModelPrefix+strings.TrimSpace(blocked), alias) {
+			return strings.TrimSpace(blocked), true
+		}
 	}
 	for _, route := range claudeCodeModelRoutes(p) {
 		if strings.EqualFold(route.ID, alias) {
@@ -586,6 +598,9 @@ func (s *ProxyServer) handleClaudeDesktopModels(w http.ResponseWriter, r *http.R
 	}
 	data := []any{}
 	for _, m := range claudeDesktopRouteModels(p) {
+		if p.ModelBlocked(m.ID) || p.ModelBlocked(m.UpstreamModel) {
+			continue
+		}
 		id := m.ID
 		if id == "" {
 			id = m.Name
@@ -725,6 +740,27 @@ func (s *ProxyServer) codexModelsPassthrough(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer resp.Body.Close()
+	if len(p.Meta.BlockedModels) > 0 && resp.StatusCode == http.StatusOK {
+		var catalog map[string]any
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&catalog); err != nil {
+			writeOpenAIError(w, http.StatusBadGateway, "invalid upstream model catalog")
+			return
+		}
+		for _, key := range []string{"data", "models"} {
+			if models, ok := catalog[key].([]any); ok {
+				visible := make([]any, 0, len(models))
+				for _, entry := range models {
+					model, _ := entry.(map[string]any)
+					if !p.ModelBlocked(stringValue(model["id"])) && !p.ModelBlocked(stringValue(model["slug"])) && !p.ModelBlocked(stringValue(model["name"])) {
+						visible = append(visible, entry)
+					}
+				}
+				catalog[key] = visible
+			}
+		}
+		writeProxyJSON(w, resp.StatusCode, catalog)
+		return
+	}
 	_ = relayResponse(w, resp)
 }
 

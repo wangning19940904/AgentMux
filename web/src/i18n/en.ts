@@ -1,4 +1,22 @@
 export const en = {
+    "gateway.modelBlockingNeedsUpdate": "The target machine did not save the blocklist. Update AgentMux on that machine and try again.",
+    "gateway.transferAdded": "Added",
+    "gateway.transferFinished": "Sync finished. Review the result for each machine.",
+    "gateway.transferNoChanges": "No configurations can be added. Review the results or change your selection.",
+
+    "resources.machineCount": "{count} machines",
+    "resources.selectMachine": "Select a machine instance",
+    "resources.selectedMachineHint": "Details and actions apply to the selected machine.",
+    "gateway.transferReady": "Review the changes above, then confirm to sync.",
+    "gateway.transferPreviewFirst": "Preview the selected destinations first, then confirm to sync.",
+    "gateway.transferPreviewing": "Preparing preview…",
+    "gateway.modelBlocked": "Temporarily blocked",
+    "gateway.blockModel": "Block {model}",
+    "gateway.restoreModel": "Restore {model}",
+    "gateway.modelCounts": "{available} selectable · {blocked} blocked",
+    "gateway.blockFailedModels": "Block failed models ({count})",
+    "gateway.modelBlockHint": "Blocked models stay excluded from selection and checks until you restore them.",
+
     "app.status": "Console ready",
     "app.statusWarning": "Machine requests failing",
     "app.search": "Search routes, providers, skills...",

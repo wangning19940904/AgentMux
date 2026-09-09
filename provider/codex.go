@@ -145,21 +145,7 @@ func legacyCodexProviderID(p *core.Provider) string {
 // codexCatalogModels resolves the desktop-visible model list: the provider's
 // default model first, then any extra supported models, deduped.
 func codexCatalogModels(p *core.Provider) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(m string) {
-		m = strings.TrimSpace(m)
-		if m == "" || seen[m] {
-			return
-		}
-		seen[m] = true
-		out = append(out, m)
-	}
-	add(p.Model)
-	for _, m := range p.Meta.SupportedModels {
-		add(m)
-	}
-	return out
+	return core.ProviderModelOptions(p)
 }
 
 // syncCodexModelCatalog writes (or unlinks) the AgentMux model catalog and

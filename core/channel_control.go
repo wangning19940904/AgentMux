@@ -17,8 +17,8 @@ const (
 	ChannelConfigTurnTimeout         = "turn_timeout_minutes"
 
 	DefaultCodexMaxQueue             = 20
-	DefaultCodexTurnTimeoutMinutes   = 20
-	DefaultChannelTurnTimeoutMinutes = 20
+	DefaultCodexTurnTimeoutMinutes   = DefaultChannelTurnTimeoutMinutes
+	DefaultChannelTurnTimeoutMinutes = 60
 )
 
 type ChannelTaskStatus string

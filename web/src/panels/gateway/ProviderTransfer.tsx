@@ -1,5 +1,5 @@
 import { ArrowRightLeft, CheckCircle2, Download, KeyRound, RefreshCw, ShieldAlert, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   api,
   type FleetSyncApplyResult,
@@ -56,6 +56,7 @@ export function ProviderTransferForm({
   const [result, setResult] = useState<FleetSyncApplyResult | null>(null);
   const [busy, setBusy] = useState<"preview" | "apply" | "">("");
   const [error, setError] = useState("");
+  const planRevision = useRef(0);
 
   const defaultDestination = targets.some((target) => target.id === defaultDestinationID && onlineTarget(target))
     ? defaultDestinationID
@@ -82,6 +83,7 @@ export function ProviderTransferForm({
     : selectedDestinationIDs.filter((id) => destinationCandidates.some((target) => target.id === id && onlineTarget(target)));
 
   function resetPlan() {
+    planRevision.current += 1;
     setPreview(null);
     setResult(null);
     setError("");
@@ -97,18 +99,23 @@ export function ProviderTransferForm({
     setBusy("preview");
     setError("");
     setResult(null);
+    setPreview(null);
+    const revision = planRevision.current;
     try {
-      setPreview(await api.previewFleetSync({
+      const next = await api.previewFleetSync({
         source_target_id: sourceTargetID,
         destination_target_ids: destinationIDs,
         categories: ["providers"],
         provider_ids: [provider.id],
         include_credentials: includeCredentials,
         preserve_activation: false,
-      }));
+      });
+      if (revision === planRevision.current) setPreview(next);
     } catch (reason) {
-      setPreview(null);
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (revision === planRevision.current) {
+        setPreview(null);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally {
       setBusy("");
     }
@@ -124,6 +131,7 @@ export function ProviderTransferForm({
       setPreview(null);
       onApplied();
     } catch (reason) {
+      setPreview(null);
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy("");
@@ -131,6 +139,7 @@ export function ProviderTransferForm({
   }
 
   const displayedDestinations: TransferDestination[] = result?.targets ?? preview?.destinations ?? [];
+  const hasChanges = preview?.destinations.some((destination) => !destination.error && destination.inspection.resources.some((resource) => resource.type === "provider" && resource.key === provider?.id && resource.action === "add"));
 
   return (
     <div className="provider-transfer-form">
@@ -152,7 +161,7 @@ export function ProviderTransferForm({
             <span>{t("gateway.importDestination")}</span>
             <select
               value={importDestinationID}
-              disabled={loading || targets.length === 0}
+              disabled={busy === "apply" || loading || targets.length === 0}
               onChange={(event) => {
                 setSelectedDestinationIDs(event.target.value ? [event.target.value] : []);
                 setSelectedSourceID("");
@@ -171,7 +180,7 @@ export function ProviderTransferForm({
             <span>{t("gateway.importSource")}</span>
             <select
               value={sourceTargetID}
-              disabled={loading || sourceCandidates.length === 0}
+              disabled={busy === "apply" || loading || sourceCandidates.length === 0}
               onChange={(event) => {
                 setSelectedSourceID(event.target.value);
                 setSelectedProviderID("");
@@ -186,7 +195,7 @@ export function ProviderTransferForm({
             <span>{t("gateway.importProviderSelect")}</span>
             <select
               value={provider?.id || ""}
-              disabled={loading || sourceProviders.length === 0}
+              disabled={busy === "apply" || loading || sourceProviders.length === 0}
               onChange={(event) => {
                 setSelectedProviderID(event.target.value);
                 resetPlan();
@@ -217,7 +226,7 @@ export function ProviderTransferForm({
               <input
                 type="checkbox"
                 checked={destinationIDs.includes(target.id)}
-                disabled={!onlineTarget(target)}
+                disabled={busy === "apply" || !onlineTarget(target)}
                 onChange={() => toggleDestination(target.id)}
               />
               <span>{targetName(target)}{!target.online ? ` · ${t("remote.offlineShort")}` : ""}</span>
@@ -235,6 +244,7 @@ export function ProviderTransferForm({
         <input
           type="checkbox"
           checked={includeCredentials}
+          disabled={busy === "apply"}
           onChange={(event) => {
             setIncludeCredentials(event.target.checked);
             resetPlan();
@@ -251,14 +261,15 @@ export function ProviderTransferForm({
             return (
               <div className="provider-transfer-result" key={destination.target.id}>
                 <span>
-                  {result ? <CheckCircle2 size={15} /> : <RefreshCw size={15} />}
+                  {destination.error || item?.action === "blocked" || item?.action === "conflict"
+                    ? <ShieldAlert size={15} /> : result ? <CheckCircle2 size={15} /> : <RefreshCw size={15} />}
                   <strong>{targetName(destination.target)}</strong>
                 </span>
                 {destination.error ? (
                   <small className="error">{destination.error}</small>
                 ) : item ? (
                   <small>
-                    {t(`fleetSync.action.${item.action}`)}
+                    {t(result && item.action === "add" ? "gateway.transferAdded" : `fleetSync.action.${item.action}`)}
                     {item.credentials_missing ? ` · ${t("gateway.providerKeyOmitted")}` : ""}
                     {item.reason ? ` · ${item.reason}` : ""}
                   </small>
@@ -269,8 +280,9 @@ export function ProviderTransferForm({
         </div>
       )}
 
+      <p className="subtle-copy" role="status">{t(result ? "gateway.transferFinished" : preview ? hasChanges ? "gateway.transferReady" : "gateway.transferNoChanges" : "gateway.transferPreviewFirst")}</p>
       <div className="form-actions">
-        <button
+        {preview && <button
           className="ghost-action"
           type="button"
           disabled={loading || busy !== "" || !provider || destinationIDs.length === 0}
@@ -278,11 +290,15 @@ export function ProviderTransferForm({
         >
           <RefreshCw size={15} className={busy === "preview" ? "spin" : ""} />
           {t("gateway.previewProviderTransfer")}
-        </button>
-        <button className="action" type="button" disabled={!preview || busy !== ""} onClick={() => void applyTransfer()}>
+        </button>}
+        <button className="action" type="button"
+          disabled={loading || busy !== "" || !provider || !sourceTargetID || destinationIDs.length === 0 || Boolean(preview && !hasChanges)}
+          onClick={() => void (preview ? applyTransfer() : createPreview())}>
           {mode === "import" ? <Download size={15} /> : <ArrowRightLeft size={15} />}
           {busy === "apply"
             ? t("gateway.providerTransferApplying")
+            : busy === "preview" ? t("gateway.transferPreviewing")
+            : !preview ? t("gateway.previewProviderTransfer")
             : mode === "import" ? t("gateway.confirmProviderImport") : t("gateway.confirmProviderSync")}
         </button>
       </div>

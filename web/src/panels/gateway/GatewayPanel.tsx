@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Ban,
   ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
@@ -74,6 +75,8 @@ import {
   uniqueValues,
 } from "./providerUtils";
 import { CapabilityBadges, ProviderMark } from "./ProviderMark";
+import { MachineInstances } from "../../components/MachineInstances";
+import { groupResources, providerGroupKey, selectedGroupMember } from "../../components/resourceGroups";
 import { ProviderModelBadges } from "./ProviderModelBadges";
 import { ProviderSyncDialog, ProviderTransferForm } from "./ProviderTransfer";
 import { providerModelHealthRows } from "./providerModelHealth";
@@ -137,7 +140,9 @@ export function GatewayPanel() {
   const [routeDraft, setRouteDraft] = useState<RouteDraft>(emptyRouteDraft);
   const [expandedProviderModels, setExpandedProviderModels] = useState<Set<string>>(() => new Set());
 
+  const [selectedInstances, setSelectedInstances] = useState<Record<string, string>>({});
   const providerList = providers.data ?? [];
+  const providerGroups = groupResources(providerList, providerGroupKey, (p) => targetKey(p.target_id, p.id), activeMachineScope() === "all");
   const presetList = presets.data ?? [];
   const routeList = activeRoutes.data ?? [];
   const selectedPreset = draft.id || "custom";
@@ -518,6 +523,25 @@ export function GatewayPanel() {
     setProviderFormOpen(true);
   }
 
+  async function setModelsBlocked(provider: Provider, models: string[], blocked: boolean) {
+    setBusy(`models:${targetKey(provider.target_id, provider.id)}`);
+    setNotice("");
+    try {
+      const next = new Set(metaStringArray(provider, "blocked_models"));
+      models.forEach((model) => blocked ? next.add(model) : next.delete(model));
+      const saved = await api.upsertProvider({ ...provider, meta: { ...provider.meta, blocked_models: [...next] } }, [targetIDForProvider(provider)]);
+      const stored = new Set(metaStringArray(saved, "blocked_models"));
+      if (stored.size !== next.size || [...next].some((model) => !stored.has(model))) {
+        throw new Error(t("gateway.modelBlockingNeedsUpdate"));
+      }
+      await Promise.all([providers.reload(), allProviders.reload(), activeRoutes.reload()]);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function openProviderSync(provider: Provider) {
     setProviderFormOpen(false);
     setRouteFormOpen(false);
@@ -530,14 +554,15 @@ export function GatewayPanel() {
     setProbeNotice(null);
     try {
       const result = await api.probeProvider(provider);
-      const models = result.models ?? [];
+      const catalog = result.models ?? [];
+      const models = catalog.filter((model) => !draft.blocked_models.includes(model));
       setModelOptions(models);
       const supportedAPIFormats = okCheckNames(result.formats ?? []);
       const supportedProtocols = okCheckNames(result.protocols ?? []);
       const probedDraft: ProviderDraft = {
         ...draft,
         api_format: result.api_format || draft.api_format,
-        supported_models: models,
+        supported_models: catalog,
         supported_api_formats: supportedAPIFormats,
         supported_protocols: supportedProtocols,
       };
@@ -555,7 +580,7 @@ export function GatewayPanel() {
           model: current.model.trim() && models.includes(current.model.trim()) ? current.model : models[0],
           model_list: current.manual_models ? desktopProxyModelListForModels(models) : current.model_list,
           tools: inferredTools.length > 0 ? inferredTools : current.tools,
-          supported_models: models,
+          supported_models: catalog,
           supported_api_formats: supportedAPIFormats,
           supported_protocols: supportedProtocols,
         }));
@@ -961,7 +986,7 @@ export function GatewayPanel() {
     ]);
     const upstreamModelOptions = uniqueValues([
       selectedRouteProvider?.model || "",
-      ...(selectedRouteProvider ? metaStringArray(selectedRouteProvider, "supported_models") : []),
+      ...(selectedRouteProvider ? providerSupportedModels(selectedRouteProvider) : []),
       ...routeModelRows.map((row) => row.upstreamModel),
     ]);
     const displayRouteModelRows = routeModelRows.length > 0 ? routeModelRows : [{ desktopModel: "", upstreamModel: "" }];
@@ -1349,7 +1374,7 @@ export function GatewayPanel() {
               <p className="subtle-copy">{t("gateway.providerInventorySubtitle")}</p>
             </div>
             <div className="table-actions">
-              <span className="pill">{providerList.length}</span>
+              <span className="pill">{providerGroups.length}</span>
               <button className="action" onClick={openNewProvider}>
                 <Plus size={15} />
                 {t("gateway.addProvider")}
@@ -1416,20 +1441,24 @@ export function GatewayPanel() {
             )}
           </div>
           <div className="surface-body provider-list-grid">
-            {providerList.map((provider) => {
+            {providerGroups.map((group) => {
+              const provider = selectedGroupMember(group, selectedInstances[group.key], (p) => targetKey(p.target_id, p.id));
+              const instanceKey = targetKey(provider.target_id, provider.id);
               const keyReady = Boolean(provider.api_key_available);
               const health = providerHealthByKey.get(targetKey(provider.target_id, provider.id));
               const healthFailure = monitorFailureDetail(health);
               const supportedModels = providerSupportedModels(provider);
-              const modelHealthRows = providerModelHealthRows(supportedModels, health?.models);
+              const modelHealthRows = providerModelHealthRows(supportedModels, health?.models, metaStringArray(provider, "blocked_models"));
+              const failedModels = modelHealthRows.filter((row) => row.state === "unhealthy" && !row.blocked).map((row) => row.model);
+              const blockedCount = modelHealthRows.filter((row) => row.blocked).length;
               const supportedProtocols = providerSupportedProtocols(provider);
               const modelsCollapsible = modelHealthRows.length > PROVIDER_MODEL_COLLAPSE_THRESHOLD;
-              const modelsExpanded = expandedProviderModels.has(provider.id);
+              const modelsExpanded = expandedProviderModels.has(instanceKey);
               const visibleModelRows =
                 modelsCollapsible && !modelsExpanded ? modelHealthRows.slice(0, PROVIDER_MODEL_PREVIEW_COUNT) : modelHealthRows;
               const hiddenModelCount = modelHealthRows.length - PROVIDER_MODEL_PREVIEW_COUNT;
               return (
-                <article className="provider-card" key={targetKey(provider.target_id, provider.id)}>
+                <article className="provider-card" key={group.key}>
                   <header>
                     <span className="provider-card-title">
                       <ProviderMark id={provider.id} name={provider.name} />
@@ -1469,20 +1498,31 @@ export function GatewayPanel() {
                       </span>
                     </span>
                   </header>
+                  <MachineInstances selected={instanceKey}
+                    instances={group.members.map((item) => ({ key: targetKey(item.target_id, item.id), targetID: item.target_id,
+                      name: item.target_name, detail: `${providerSupportedModels(item).length} ${t("providers.model")}` }))}
+                    onSelect={(key) => setSelectedInstances((current) => ({ ...current, [group.key]: key }))} />
                   <dl className="provider-facts">
                     <div className="provider-fact-wide">
                       <dt>{t("providers.model")}</dt>
                       <dd className="provider-fact-chips">
                         <div className="provider-model-list">
                           <div className="provider-fact-chips">
-                            <ProviderModelBadges rows={visibleModelRows} />
+                            <ProviderModelBadges rows={visibleModelRows} busy={busy !== null}
+                              onToggleBlocked={(model, blocked) => void setModelsBlocked(provider, [model], blocked)} />
                           </div>
+                          <small className="muted">{t("gateway.modelCounts", { available: supportedModels.length, blocked: blockedCount })}</small>
+                          {blockedCount > 0 && <small className="muted">{t("gateway.modelBlockHint")}</small>}
+                          {failedModels.length > 0 && <button type="button" className="ghost-action" disabled={busy !== null}
+                            onClick={() => void setModelsBlocked(provider, failedModels, true)}>
+                            <Ban size={13} />{t("gateway.blockFailedModels", { count: failedModels.length })}
+                          </button>}
                           {modelsCollapsible && (
                             <button
                               className="provider-model-toggle"
                               type="button"
                               aria-expanded={modelsExpanded}
-                              onClick={() => toggleProviderModels(provider.id)}
+                              onClick={() => toggleProviderModels(instanceKey)}
                             >
                               <span>{modelsExpanded ? t("gateway.collapseModels") : t("gateway.showAllModels")}</span>
                               {!modelsExpanded && <span className="provider-model-toggle-count">+{hiddenModelCount}</span>}

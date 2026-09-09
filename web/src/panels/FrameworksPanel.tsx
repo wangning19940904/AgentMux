@@ -11,6 +11,8 @@ import {
 } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
+import { MachineInstances } from "../components/MachineInstances";
+import { groupResources, selectedGroupMember } from "../components/resourceGroups";
 import { targetKey } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -48,7 +50,9 @@ export function FrameworksPanel() {
   const installableItems = useMemo(() => items
     .filter((item) => !item.installed && item.spec.supported && item.spec.install_supported)
     .sort((left, right) => left.spec.display.localeCompare(right.spec.display)), [items]);
-  const frameworkPagination = useCatalogPagination(installedItems);
+  const [selectedInstances, setSelectedInstances] = useState<Record<string, string>>({});
+  const installedGroups = groupResources(installedItems, (item) => item.spec.kind, (item) => targetKey(item.target_id, item.spec.kind), activeMachineScope() === "all");
+  const frameworkPagination = useCatalogPagination(installedGroups);
   const selectedRemoteID = activeRemoteID();
   const currentMachine = activeMachineScope() === "all"
     ? t("remote.allMachines")
@@ -241,7 +245,7 @@ export function FrameworksPanel() {
         <div className="surface-header framework-catalog-header">
           <div>
             <h2>{t("frameworks.catalogTitle")}</h2>
-            <span className="pill on">{installedItems.length}</span>
+            <span className="pill on">{installedGroups.length}</span>
           </div>
           <div className="catalog-bulk-actions">
             <BulkUpdateButton
@@ -266,10 +270,14 @@ export function FrameworksPanel() {
               <th>{t("common.actions")}</th>
             </tr></thead>
             <tbody>
-              {frameworkPagination.pageItems.map((item) => {
+              {frameworkPagination.pageItems.map((group) => {
+                const item = selectedGroupMember(group, selectedInstances[group.key], (item) => targetKey(item.target_id, item.spec.kind));
                 const key = targetKey(item.target_id, item.spec.kind);
                 return <FrameworkTableRows
-                  key={key}
+                  key={group.key}
+                  machineInstances={<MachineInstances selected={key}
+                    instances={group.members.map((item) => ({ key: targetKey(item.target_id, item.spec.kind), targetID: item.target_id, name: item.target_name, detail: item.version ? `v${item.version}` : "—" }))}
+                    onSelect={(key) => setSelectedInstances((current) => ({ ...current, [group.key]: key }))} />}
                   item={item}
                   busy={busy[key]}
                   progress={progress[key]}

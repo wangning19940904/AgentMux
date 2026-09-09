@@ -2312,3 +2312,42 @@
   color: var(--muted);
   text-align: center;
 }
+
+.machine-instances {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0;
+  min-width: 0;
+}
+.machine-instance-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.machine-instance-option {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--bg-elevated);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.machine-instance-option[aria-pressed="true"] { border-color: currentColor; background: var(--bg-subtle); }
+.machine-instance-option:focus-visible, .provider-model-block-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.provider-model-pill.blocked { color: var(--muted); background: var(--bg-subtle); border-style: dashed; }
+.provider-model-block-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.provider-model-block-action:hover { background: var(--bg-subtle); }
+.provider-model-block-action:disabled { opacity: .45; cursor: wait; }

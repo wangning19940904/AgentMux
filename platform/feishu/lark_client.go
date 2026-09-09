@@ -159,6 +159,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
 			mentionedBot, mentionAll := mentionState(msg, botOpenID, text)
+			text = stripBotCommandMention(msg, botOpenID, text)
 			if c.meetingActivity != nil && userID != "" && (chatType == "p2p" || mentionedBot) {
 				if _, loaded := c.meetingDiscovery.LoadOrStore(userID, struct{}{}); !loaded {
 					go c.meetingActivity.BootstrapActiveMeetings(ctx, []string{userID})
@@ -387,14 +388,7 @@ func mentionState(msg *larkim.EventMessage, botOpenID, text string) (bool, bool)
 		if mention.Key != nil && (*mention.Key == "@_all" || *mention.Key == "@all") {
 			mentionAll = true
 		}
-		if mention.Id != nil && botOpenID != "" {
-			if (mention.Id.OpenId != nil && *mention.Id.OpenId == botOpenID) ||
-				(mention.Id.UserId != nil && *mention.Id.UserId == botOpenID) ||
-				(mention.Id.UnionId != nil && *mention.Id.UnionId == botOpenID) {
-				mentionedBot = true
-			}
-		}
-		if botOpenID == "" && mention.MentionedType != nil && strings.EqualFold(*mention.MentionedType, "app") {
+		if isBotMention(mention, botOpenID) {
 			mentionedBot = true
 		}
 	}

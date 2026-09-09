@@ -28,6 +28,8 @@ import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../comp
 import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
 import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
 import { OperationProgress as OperationProgressView } from "../components/OperationProgress";
+import { MachineInstances } from "../components/MachineInstances";
+import { groupResources, selectedGroupMember } from "../components/resourceGroups";
 import { TargetBadge } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -91,7 +93,9 @@ export function ToolsPanel() {
     () => buildInstallCandidates(cli, skills, marketplace.data ?? tools.data?.marketplace ?? [], scopedTargets),
     [cli, skills, marketplace.data, tools.data?.marketplace, scopedTargets],
   );
-  const pagination = useCatalogPagination(rows);
+  const [selectedInstances, setSelectedInstances] = useState<Record<string, string>>({});
+  const rowGroups = groupResources(rows, (row) => JSON.stringify([row.kind, row.cli?.spec.id || row.skill?.name]), (row) => row.key, allScope);
+  const pagination = useCatalogPagination(rowGroups);
   const installTarget = cliInstallTarget();
   const updateCandidates = toolUpdateCandidates(rows, checks);
   const updateAllBlocked = tools.loading || Boolean(tools.error) || Boolean(bulkProgress)
@@ -430,7 +434,7 @@ export function ToolsPanel() {
 
       <section className="surface unified-tools-surface">
         <div className="surface-header unified-tools-header">
-          <div><h2>{t("tools.installedDirectory")}</h2><span className="pill on">{rows.length}</span></div>
+          <div><h2>{t("tools.installedDirectory")}</h2><span className="pill on">{rowGroups.length}</span></div>
           <div className="catalog-bulk-actions">
             <BulkUpdateButton count={updateCandidates.length} progress={bulkProgress} disabled={updateAllBlocked}
               hint={t("tools.updateAllHint")} onClick={() => void updateAllTools()} />
@@ -442,9 +446,14 @@ export function ToolsPanel() {
           <table className="catalog-table unified-tools-table">
             <thead><tr><th>{t("common.name")}</th><th>{t("common.description")}</th><th>{t("common.actions")}</th></tr></thead>
             <tbody>
-              {pagination.pageItems.map((row) => (
+              {pagination.pageItems.map((group) => {
+                const row = selectedGroupMember(group, selectedInstances[group.key], (row) => row.key);
+                return (
                 <InstalledToolRows
-                  key={row.key}
+                  key={group.key}
+                  machineInstances={<MachineInstances selected={row.key}
+                    instances={group.members.map((item) => ({ key: item.key, targetID: item.targetID, name: item.targetName, detail: item.cli?.version ? `v${item.cli.version}` : undefined }))}
+                    onSelect={(key) => setSelectedInstances((current) => ({ ...current, [group.key]: key }))} />}
                   row={row}
                   busy={busy[row.key]}
                   bulkUpdating={Boolean(bulkProgress)}
@@ -458,7 +467,7 @@ export function ToolsPanel() {
                   onCancelAuth={(sessionID) => void cancelCLIAuth(row, sessionID)}
                   t={t}
                 />
-              ))}
+              ); })}
               {rows.length === 0 && <tr><td className="empty-state" colSpan={3}>{t("tools.noInstalled")}</td></tr>}
             </tbody>
           </table>
@@ -504,9 +513,10 @@ export function ToolsPanel() {
 }
 
 function InstalledToolRows({
-  row, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, t,
+  row, machineInstances, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, t,
 }: {
   row: InstalledToolRow;
+  machineInstances?: React.ReactNode;
   busy?: ToolBusyAction;
   bulkUpdating: boolean;
   progress?: OperationProgress;
@@ -538,6 +548,7 @@ function InstalledToolRows({
               })}
               <TargetBadge target_id={row.targetID} target_name={row.targetName} />
             </span>
+            {machineInstances}
           </span>
         </td>
         <td className="catalog-description-cell" data-label={t("common.description")}>{row.description || "—"}</td>

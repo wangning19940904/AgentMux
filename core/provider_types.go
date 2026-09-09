@@ -43,6 +43,8 @@ type ProviderMeta struct {
 	// routing proxy translate for chat-only upstreams.
 	APIFormat       string   `json:"api_format,omitempty"`
 	SupportedModels []string `json:"supported_models,omitempty"`
+	// BlockedModels is operator-owned and survives catalog refreshes.
+	BlockedModels []string `json:"blocked_models,omitempty"`
 	// Explicit runtime controls for custom providers. They are exposed only
 	// when the selected adapter can carry the corresponding protocol field.
 	SupportedReasoningEfforts []string `json:"supported_reasoning_efforts,omitempty"`
@@ -188,7 +190,7 @@ func NormalizeProviderTool(tool string) string {
 }
 
 // ProviderModelOptions returns the selectable models advertised by a provider:
-// its default model first, then supported_models, de-duplicated.
+// its default model first, then supported_models, de-duplicated and unblocked.
 func ProviderModelOptions(p *Provider) []string {
 	if p == nil {
 		return nil
@@ -197,7 +199,7 @@ func ProviderModelOptions(p *Provider) []string {
 	var out []string
 	add := func(model string) {
 		model = strings.TrimSpace(model)
-		if model == "" || seen[model] {
+		if model == "" || seen[model] || p.ModelBlocked(model) {
 			return
 		}
 		seen[model] = true
@@ -206,6 +208,30 @@ func ProviderModelOptions(p *Provider) []string {
 	add(p.Model)
 	for _, model := range p.Meta.SupportedModels {
 		add(model)
+	}
+	return out
+}
+
+// ModelBlocked checks the explicit, reversible model blocklist.
+func (p *Provider) ModelBlocked(model string) bool {
+	if p == nil || strings.TrimSpace(model) == "" {
+		return false
+	}
+	for _, blocked := range p.Meta.BlockedModels {
+		if strings.TrimSpace(blocked) == strings.TrimSpace(model) {
+			return true
+		}
+	}
+	return false
+}
+
+// UnblockedModels preserves catalog order and does not mutate the catalog.
+func (p *Provider) UnblockedModels(models []string) []string {
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		if !p.ModelBlocked(model) {
+			out = append(out, model)
+		}
 	}
 	return out
 }
