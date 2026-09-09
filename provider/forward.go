@@ -104,13 +104,21 @@ func (s *ProxyServer) forwardChain(w http.ResponseWriter, r *http.Request, parse
 // request body. mapModel (Claude Desktop) takes precedence; otherwise tiered and
 // provider-default resolution applies.
 func resolveUpstreamModel(p *core.Provider, body map[string]any, mapModel func(*core.Provider, map[string]any) error) (string, error) {
+	if p.ModelBlocked(stringValue(body["model"])) {
+		return "", fmt.Errorf("model %q is temporarily blocked for provider %q", stringValue(body["model"]), p.ID)
+	}
+	var model string
 	if mapModel != nil {
 		if err := mapModel(p, body); err != nil {
 			return "", err
 		}
-		return stringValue(body["model"]), nil
+		model = stringValue(body["model"])
+	} else {
+		model = upstreamModelFor(p, stringValue(body["model"]))
 	}
-	model := upstreamModelFor(p, stringValue(body["model"]))
+	if p.ModelBlocked(model) {
+		return "", fmt.Errorf("model %q is temporarily blocked for provider %q", model, p.ID)
+	}
 	if model != "" {
 		body["model"] = model
 	}

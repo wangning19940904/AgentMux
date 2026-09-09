@@ -1,6 +1,24 @@
 import { en } from "./en";
 
 export const zh: Record<keyof typeof en, string> = {
+    "gateway.modelBlockingNeedsUpdate": "目标机器未保存屏蔽设置，请先更新该机器的 AgentMux 后重试。",
+    "gateway.transferAdded": "已新增",
+    "gateway.transferFinished": "同步处理结束，请查看各机器的结果。",
+    "gateway.transferNoChanges": "没有可新增的配置，请查看各机器的结果或调整选择。",
+
+    "resources.machineCount": "{count} 台机器",
+    "resources.selectMachine": "选择机器实例",
+    "resources.selectedMachineHint": "详情和操作适用于选中的机器。",
+    "gateway.transferReady": "请核对上方变更，再确认同步。",
+    "gateway.transferPreviewFirst": "先预览所选目标机器的变更，预览后即可确认同步。",
+    "gateway.transferPreviewing": "正在预览…",
+    "gateway.modelBlocked": "已暂时屏蔽",
+    "gateway.blockModel": "屏蔽 {model}",
+    "gateway.restoreModel": "恢复 {model}",
+    "gateway.modelCounts": "{available} 个可选 · {blocked} 个已屏蔽",
+    "gateway.blockFailedModels": "屏蔽异常模型（{count}）",
+    "gateway.modelBlockHint": "屏蔽后不再出现在模型选项中，也不再定时探测；可随时恢复。",
+
     "app.status": "控制台已就绪",
     "app.statusWarning": "机器请求异常",
     "app.search": "搜索路由、服务商、技能...",

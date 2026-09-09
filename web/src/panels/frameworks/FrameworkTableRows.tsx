@@ -16,6 +16,7 @@ export type FrameworkBusyAction = "install" | "update" | "uninstall" | "check" |
 
 export function FrameworkTableRows({
   item,
+  machineInstances,
   busy,
   progress,
   check,
@@ -37,6 +38,7 @@ export function FrameworkTableRows({
   onCopyCode,
 }: {
   item: Framework;
+  machineInstances?: React.ReactNode;
   busy?: FrameworkBusyAction;
   progress?: OperationProgress;
   check?: FrameworkUpdateCheck;
@@ -88,6 +90,7 @@ export function FrameworkTableRows({
               <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
               <TargetBadge target_id={item.target_id} target_name={item.target_name} />
             </span>
+            {machineInstances}
           </span>
         </td>
         <td data-label={t("frameworks.versionAndUpdate")}>

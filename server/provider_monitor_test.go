@@ -386,3 +386,79 @@ func hasProviderMonitorAlert(alerts []ProviderMonitorAlert, kind, model string) 
 	}
 	return false
 }
+
+func TestProviderMonitorKeepsModelBlocklistUntilRestored(t *testing.T) {
+	var blockedProbes atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"id": "ready"}, {"id": "blocked"}}})
+		case "/v1/messages":
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body.Model == "blocked" {
+				blockedProbes.Add(1)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"content": []map[string]string{{"type": "text", "text": "ok"}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("AGENTMUX_TEST_BLOCKED_KEY", "test-key")
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "model-blocks.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	manager := providerpkg.NewManager(st)
+	p := &core.Provider{ID: "relay", Name: "Relay", BaseURL: upstream.URL, APIKeyEnv: "AGENTMUX_TEST_BLOCKED_KEY", Model: "ready", Meta: core.ProviderMeta{APIFormat: "anthropic", SupportedModels: []string{"ready", "blocked"}, BlockedModels: []string{"blocked"}}}
+	if err := manager.Upsert(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	monitor := newProviderMonitor(slog.Default(), st, manager)
+	for i := 0; i < 2; i++ {
+		snapshot, err := monitor.RunOnce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := snapshot.Providers[0]
+		if status.CheckedModels != 1 || status.CatalogCount != 2 || status.State != "healthy" {
+			t.Fatalf("status = %+v", status)
+		}
+	}
+	saved, err := manager.Get(context.Background(), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.ModelBlocked("blocked") || blockedProbes.Load() != 0 {
+		t.Fatalf("block lost: %+v, probes=%d", saved, blockedProbes.Load())
+	}
+	saved.Meta.BlockedModels = nil
+	if err := manager.Upsert(context.Background(), saved); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := monitor.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Providers[0].CheckedModels != 2 || blockedProbes.Load() != 1 {
+		t.Fatalf("restore did not resume probing: %+v", snapshot)
+	}
+
+	saved.Meta.BlockedModels = []string{"ready", "blocked"}
+	if err := manager.Upsert(context.Background(), saved); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = monitor.RunOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Providers[0].CheckedModels != 0 || snapshot.Providers[0].State != "skipped" {
+		t.Fatalf("all blocked: %+v", snapshot)
+	}
+}

@@ -315,10 +315,14 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 		tools = toolProgress{}
 		failed = false
 	} else if ctx.Err() == context.DeadlineExceeded {
-		answer = "任务执行超时，已自动终止。可能是模型服务连接异常或任务耗时过长，请稍后重试；如反复出现，请检查该机器的网络、代理配置和运行日志。"
-		if modelRetrying {
-			answer = "任务执行超时，已自动终止。模型服务请求持续失败，请检查该机器的网络、代理配置或模型服务状态后重试。"
+		answer = "任务执行超时：已达到本轮执行时限，AgentMux 已中断本轮处理。"
+		if rt := e.channelRuntime(data["channel_id"]); rt != nil {
+			answer = fmt.Sprintf("任务执行超时：已达到本渠道设置的 %d 分钟总时限，AgentMux 已中断本轮处理。", int(ChannelTurnTimeout(rt.channel)/time.Minute))
 		}
+		if modelRetrying {
+			answer += "\n\n超时前模型服务请求失败，重试尚未恢复。请检查模型服务状态及该机器的网络、代理配置。"
+		}
+		answer += "\n\n中断不会回滚已完成的操作。已提交的构建、发布等外部任务可能仍在执行，请先核实结果，再决定是否继续，避免重复提交。\n\n可在渠道设置中延长任务超时，或拆分任务后继续。"
 		thinking = ""
 		failed = true
 	}

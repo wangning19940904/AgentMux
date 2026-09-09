@@ -35,6 +35,13 @@ func (m *Manager) Get(ctx context.Context, id string) (*core.Provider, error) {
 
 // Upsert inserts or updates a provider.
 func (m *Manager) Upsert(ctx context.Context, p *core.Provider) error {
+	if p.ModelBlocked(p.Model) {
+		models := core.ProviderModelOptions(p)
+		p.Model = ""
+		if len(models) > 0 {
+			p.Model = models[0]
+		}
+	}
 	now := time.Now()
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = now

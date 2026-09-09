@@ -46,8 +46,48 @@ func TestTimeoutCardDoesNotAssumeInteractiveShell(t *testing.T) {
 		if !stream.done || !stream.failed || stream.ctxErr != nil || !strings.Contains(stream.text, "超时") || strings.Contains(stream.text, "request_user_input") || strings.Contains(stream.text, "扫码") {
 			t.Fatalf("timeout card=%+v", stream)
 		}
-		if retrying && !strings.Contains(stream.text, "模型服务请求持续失败") {
+		if retrying && !strings.Contains(stream.text, "模型服务请求失败，重试尚未恢复") {
 			t.Fatalf("missing model failure context: %s", stream.text)
+		}
+		if !retrying && strings.Contains(stream.text, "网络") {
+			t.Fatalf("timeout without model failure blamed the network: %s", stream.text)
+		}
+		if !strings.Contains(stream.text, "不会回滚") || !strings.Contains(stream.text, "先核实结果") {
+			t.Fatalf("timeout lost external operation guidance: %s", stream.text)
+		}
+	}
+}
+
+func TestTimeoutCardShowsEffectiveChannelLimitAfterModelRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		config map[string]string
+		limit  string
+	}{
+		{map[string]string{ChannelConfigTurnTimeout: "60", ChannelConfigCodexTurnTimeout: "20"}, "60"},
+		{map[string]string{ChannelConfigTurnTimeout: "35"}, "35"},
+		{map[string]string{ChannelConfigCodexTurnTimeout: "90"}, "90"},
+		{nil, "60"},
+	} {
+		engine := NewEngine(nil, NewHookRunner(nil, nil))
+		engine.channels["channel-timeout"] = &channelRuntime{channel: Channel{ID: "channel-timeout", Config: tc.config}}
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		events := make(chan *Event, 4)
+		events <- &Event{Type: EventModelResponse, Err: errors.New("connection failed"), Metadata: map[string]string{"will_retry": "true"}}
+		events <- &Event{Type: EventModelResponse}
+		events <- &Event{Type: EventToolUse, ToolCallID: "check", ToolName: "exec_command", ToolInput: "check deployment"}
+		events <- &Event{Type: EventToolUse, ToolCallID: "check", ToolResult: "deployment finished"}
+		close(events)
+		stream := &finalContextReplyStream{}
+		engine.driveReplyStream(ctx, nil, stream, nil, events, map[string]string{"channel_id": "channel-timeout"})
+		cancel()
+		if !stream.done || !stream.failed || stream.ctxErr != nil || !strings.Contains(stream.text, tc.limit+" 分钟总时限") {
+			t.Fatalf("timeout did not show effective limit: %+v", stream)
+		}
+		if strings.Contains(stream.text, "网络") || strings.Contains(stream.text, "重试尚未恢复") {
+			t.Fatalf("timeout retained a recovered model error: %s", stream.text)
+		}
+		if !strings.Contains(stream.text, "deployment finished") {
+			t.Fatalf("timeout discarded completed tool progress: %s", stream.text)
 		}
 	}
 }

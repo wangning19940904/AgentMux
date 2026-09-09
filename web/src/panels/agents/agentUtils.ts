@@ -309,7 +309,8 @@ export function providerModelOptions(provider: Provider | undefined): string[] {
   add(provider?.model);
   const supported = provider?.meta?.supported_models;
   if (Array.isArray(supported)) supported.forEach(add);
-  return out;
+  const blocked = provider?.meta?.blocked_models;
+  return Array.isArray(blocked) ? out.filter((model) => !blocked.includes(model)) : out;
 }
 
 export function runtimeProviderOptions(provider: Provider | undefined, key: "supported_reasoning_efforts" | "supported_service_tiers"): string[] {

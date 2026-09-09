@@ -33,8 +33,8 @@ export const FEISHU_DEFAULTS = {
 	meeting_voice_local_voice: "3",
   codex_control_enabled: "false",
   codex_max_queue: "20",
-  codex_turn_timeout_minutes: "20",
-  turn_timeout_minutes: "20",
+  codex_turn_timeout_minutes: "60",
+  turn_timeout_minutes: "60",
 };
 
 export const FEISHU_REPLY_SCOPES = [

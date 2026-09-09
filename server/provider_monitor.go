@@ -506,7 +506,11 @@ func (m *providerMonitor) checkProvider(
 		return status, nil
 	}
 
-	modelsToCheck := prioritizeProviderModels(provider.Model, models, cfg.MaxModelsPerProvider)
+	defaultModel := provider.Model
+	if provider.ModelBlocked(defaultModel) {
+		defaultModel = ""
+	}
+	modelsToCheck := prioritizeProviderModels(defaultModel, provider.UnblockedModels(models), cfg.MaxModelsPerProvider)
 	status.Models = m.checkProviderModels(ctx, provider, apiKey, modelsToCheck, now)
 	status.CheckedModels = len(status.Models)
 	seenErrorIDs := make(map[string]bool)
@@ -527,6 +531,9 @@ func (m *providerMonitor) checkProvider(
 	}
 
 	switch {
+	case len(modelsToCheck) == 0 && len(provider.Meta.BlockedModels) > 0:
+		status.State = "skipped"
+		status.Message = "all discovered models are temporarily blocked"
 	case status.CheckedModels == 0:
 		status.State = "warning"
 		status.Message = "no models were checked"
@@ -600,12 +607,23 @@ func (m *providerMonitor) saveAvailableProviderModels(
 	status *ProviderMonitorProviderStatus,
 	now time.Time,
 ) error {
+	// Probes can take minutes. Preserve edits made while inference was running.
+	latest, err := m.provider.Get(ctx, provider.ID)
+	if err != nil || latest == nil {
+		if err == nil {
+			err = fmt.Errorf("provider no longer exists")
+		}
+		status.State = "error"
+		status.Message = fmt.Sprintf("reload provider before catalog save: %v", err)
+		return err
+	}
+	provider = latest
 	status.AddedModels, status.RemovedModels = diffProviderModels(provider.Meta.SupportedModels, models)
 	provider.Meta.SupportedModels = append([]string(nil), models...)
-	if strings.TrimSpace(provider.Model) == "" || providerModelWasAutoOfflined(provider.Model, currentHealth, previousHealth) {
+	if strings.TrimSpace(provider.Model) == "" || provider.ModelBlocked(provider.Model) || providerModelWasAutoOfflined(provider.Model, currentHealth, previousHealth) {
 		provider.Model = ""
-		if len(models) > 0 {
-			provider.Model = models[0]
+		if selectable := provider.UnblockedModels(models); len(selectable) > 0 {
+			provider.Model = selectable[0]
 		}
 	}
 	if err := m.provider.Upsert(ctx, provider); err != nil {

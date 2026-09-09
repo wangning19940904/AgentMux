@@ -8,6 +8,7 @@ export interface ProviderModelHealthRow {
   message: string;
   statusCode?: number;
   offline: boolean;
+  blocked?: boolean;
 }
 
 // Keep every selectable model visible and append models that were discovered
@@ -16,8 +17,10 @@ export interface ProviderModelHealthRow {
 export function providerModelHealthRows(
   supportedModels: string[],
   checkedModels: ProviderModelHealth[] = [],
+  blockedModels: string[] = [],
 ): ProviderModelHealthRow[] {
   const supported = new Set(supportedModels);
+  const blocked = new Set(blockedModels);
   const healthByModel = new Map<string, ProviderModelHealth>();
   checkedModels.forEach((health) => {
     const model = health.model.trim();
@@ -34,6 +37,7 @@ export function providerModelHealthRows(
   };
   supportedModels.forEach(add);
   checkedModels.forEach((health) => add(health.model));
+  blockedModels.forEach(add);
 
   return names
     .map((model, index) => {
@@ -50,11 +54,12 @@ export function providerModelHealthRows(
         message: health?.message?.trim() || "",
         statusCode: health?.status_code,
         offline: !supported.has(model),
+        ...(blocked.has(model) ? { blocked: true } : {}),
       };
     })
     .sort((left, right) => {
-      const leftPriority = left.state === "unhealthy" ? 0 : 1;
-      const rightPriority = right.state === "unhealthy" ? 0 : 1;
+      const leftPriority = left.blocked ? 2 : left.state === "unhealthy" ? 0 : 1;
+      const rightPriority = right.blocked ? 2 : right.state === "unhealthy" ? 0 : 1;
       return leftPriority - rightPriority || left.index - right.index;
     })
     .map(({ index: _index, ...row }) => row);

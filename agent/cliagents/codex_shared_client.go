@@ -115,6 +115,9 @@ func (c *codexAppClient) unregister(threadID string, session *codexSession) {
 }
 
 func (c *codexAppClient) call(ctx context.Context, method string, params any) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -212,11 +215,18 @@ func (c *codexAppClient) routeServerMessage(message map[string]any) {
 	session := c.sessions[threadID]
 	c.mu.Unlock()
 	if session != nil {
-		select {
-		case session.inbox <- message:
-		case <-c.done:
+		session.mu.Lock()
+		inbox := session.inbox
+		turnID := codexTurnID(params)
+		accept := !session.closed && session.activeTurn && inbox != nil &&
+			(turnID == "" || session.activeTurnID == "" || turnID == session.activeTurnID)
+		if accept {
+			inbox.push(message)
 		}
-		return
+		session.mu.Unlock()
+		if accept {
+			return
+		}
 	}
 	if id, ok := rpcID(message); ok {
 		method, _ := message["method"].(string)

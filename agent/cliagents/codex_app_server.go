@@ -316,7 +316,7 @@ type codexSession struct {
 	agent   *codexAgent
 	workDir string
 	client  *codexAppClient
-	inbox   chan map[string]any
+	inbox   *codexInbox
 
 	mu                  sync.Mutex
 	turnMu              sync.Mutex
@@ -365,7 +365,6 @@ func newCodexSession(ctx context.Context, agent *codexAgent, workDir, resumeID s
 		modelReasoningEfforts:     map[string][]string{},
 		pendingInteractions:       map[string]codexPendingInteraction{},
 		interactionPrefix:         core.NewChannelControlID("app"),
-		inbox:                     make(chan map[string]any, 256),
 	}
 	client, err := agent.appClient(ctx, workDir)
 	if err != nil {
@@ -768,22 +767,51 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 	defer close(out)
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
+	emit := func(event *core.Event) bool {
+		select {
+		case out <- event:
+			return true
+		default:
+		}
+		select {
+		case out <- event:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	s.mu.Lock()
+	if s.closed || ctx.Err() != nil {
+		s.mu.Unlock()
+		err := ctx.Err()
+		if err == nil {
+			err = fmt.Errorf("codex session is closed")
+		}
+		emit(&core.Event{Type: core.EventError, Err: err})
+		return
+	}
+	inbox := newCodexInbox()
+	s.inbox = inbox
 	s.activeTurn = true
 	s.activeTurnID = ""
 	threadID := s.threadID
 	s.mu.Unlock()
 	defer func() {
+		if ctx.Err() != nil {
+			s.interruptTurn(threadID)
+		}
 		s.mu.Lock()
 		s.activeTurn = false
 		s.activeTurnID = ""
+		s.inbox = nil
+		s.pendingInteractions = map[string]codexPendingInteraction{}
 		s.mu.Unlock()
 	}()
 	params := s.turnStartParamsInput(threadID, input)
 	result, err := s.call(ctx, "turn/start", params)
 	if err != nil {
-		out <- &core.Event{Type: core.EventError, Err: s.withStderr(err)}
+		emit(&core.Event{Type: core.EventError, Err: s.withStderr(err)})
 		return
 	}
 
@@ -803,35 +831,49 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 		s.setActiveTurnID(turnID)
 	}
 	if event := mapper.modelRequestEvent(); event != nil {
-		out <- event
+		if !emit(event) {
+			return
+		}
 	}
 	s.nameFreshThread(ctx, input.Text)
 	for {
 		var message map[string]any
 		select {
-		case message = <-s.inbox:
-		case <-ctx.Done():
-			if turnID := s.ActiveTurnID(); turnID != "" {
-				interruptCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, _ = s.client.call(interruptCtx, "turn/interrupt", map[string]any{
-					"threadId": threadID, "turnId": turnID,
-				})
-				cancel()
+		case <-inbox.ready:
+			var err error
+			message, err = inbox.pop()
+			if err != nil {
+				s.interruptTurn(threadID)
+				emit(&core.Event{Type: core.EventError, Err: err})
+				return
 			}
-			out <- &core.Event{Type: core.EventError, Err: ctx.Err()}
+			if message == nil {
+				continue
+			}
+		case <-ctx.Done():
+			emit(&core.Event{Type: core.EventError, Err: ctx.Err()})
 			return
 		case <-s.client.done:
-			out <- &core.Event{Type: core.EventError, Err: s.withStderr(fmt.Errorf("codex app-server stopped"))}
+			emit(&core.Event{Type: core.EventError, Err: s.withStderr(fmt.Errorf("codex app-server stopped"))})
 			return
 		}
 		if method, _ := message["method"].(string); method != "" {
+			params, _ := message["params"].(map[string]any)
+			if turnID := codexTurnID(params); turnID != "" && mapper.turnID != "" && turnID != mapper.turnID {
+				if id, ok := rpcID(message); ok {
+					_ = s.respondToServerRequest(id, method)
+				}
+				continue
+			}
 			if id, ok := rpcID(message); ok {
 				if interaction, ok := s.captureServerInteraction(id, method, message); ok {
-					out <- &core.Event{
+					if !emit(&core.Event{
 						Type:        core.EventPermission,
 						TurnID:      interaction.TurnID,
 						ItemID:      interaction.ItemID,
 						Interaction: interaction,
+					}) {
+						return
 					}
 				} else {
 					// Unknown client-side capabilities are always declined so a
@@ -840,21 +882,34 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 				}
 				continue
 			}
-			params, _ := message["params"].(map[string]any)
 			if turnID := codexTurnID(params); turnID != "" {
 				s.setActiveTurnID(turnID)
 			}
 			events, done, turnErr := mapper.mapNotification(method, params)
 			for _, event := range events {
-				out <- event
+				if !emit(event) {
+					return
+				}
 			}
 			if turnErr != nil {
-				out <- &core.Event{Type: core.EventError, Err: turnErr}
+				if !emit(&core.Event{Type: core.EventError, Err: turnErr}) {
+					return
+				}
 			}
 			if done {
 				return
 			}
 		}
+	}
+}
+
+func (s *codexSession) interruptTurn(threadID string) {
+	if turnID := s.ActiveTurnID(); turnID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = s.client.call(ctx, "turn/interrupt", map[string]any{
+			"threadId": threadID, "turnId": turnID,
+		})
 	}
 }
 
@@ -1278,6 +1333,9 @@ type codexEventMapper struct {
 }
 
 func (m *codexEventMapper) mapNotification(method string, params map[string]any) ([]*core.Event, bool, error) {
+	if turnID := codexTurnID(params); turnID != "" && m.turnID != "" && turnID != m.turnID {
+		return nil, false, nil
+	}
 	m.updateContext(params)
 	switch method {
 	case "turn/started":

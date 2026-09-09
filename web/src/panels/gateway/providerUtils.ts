@@ -51,6 +51,7 @@ export type ProviderDraft = {
   claude_opus_model: string;
   claude_haiku_model: string;
   supported_models: string[];
+  blocked_models: string[];
   supported_api_formats: string[];
   supported_protocols: string[];
 	// Explicit values used by Agent runtime setting cards. These are never
@@ -138,6 +139,7 @@ export const emptyDraft: ProviderDraft = {
   claude_opus_model: "",
   claude_haiku_model: "",
   supported_models: [],
+  blocked_models: [],
   supported_api_formats: [],
   supported_protocols: [],
 	supported_reasoning_efforts: "",
@@ -323,6 +325,7 @@ export function providerToDraft(provider: Provider): ProviderDraft {
     claude_opus_model: metaString(provider, "claude_opus_model"),
     claude_haiku_model: metaString(provider, "claude_haiku_model"),
     supported_models: metaStringArray(provider, "supported_models"),
+    blocked_models: metaStringArray(provider, "blocked_models"),
     supported_api_formats: metaStringArray(provider, "supported_api_formats"),
     supported_protocols: metaStringArray(provider, "supported_protocols"),
 		supported_reasoning_efforts: metaValuesString(provider.meta, "supported_reasoning_efforts"),
@@ -432,10 +435,11 @@ export function claudeDesktopModelIDs(provider: Provider) {
 }
 
 export function providerSupportedModels(provider: Provider) {
+  const blocked = new Set(metaStringArray(provider, "blocked_models"));
   return uniqueValues([
     ...metaStringArray(provider, "supported_models"),
     provider.model || "",
-  ]);
+  ]).filter((model) => !blocked.has(model));
 }
 
 export function providerProtocolValues(provider: Provider) {
@@ -554,7 +558,7 @@ export function desktopProxyModelListForProvider(provider?: Provider) {
   if (!provider) return "";
   const existing = modelListString(provider);
   if (existing) return existing;
-  return desktopProxyModelListForModels(uniqueValues([provider.model || "", ...metaStringArray(provider, "supported_models")]));
+  return desktopProxyModelListForModels(providerSupportedModels(provider));
 }
 
 export function providerNeedsClaudeDesktopProxy(provider?: Provider) {
@@ -588,6 +592,7 @@ export function draftToProvider(draft: ProviderDraft, providers: Provider[]): Pr
   if (draft.claude_opus_model.trim()) meta.claude_opus_model = draft.claude_opus_model.trim();
   if (draft.claude_haiku_model.trim()) meta.claude_haiku_model = draft.claude_haiku_model.trim();
   if (draft.supported_models.length > 0) meta.supported_models = uniqueValues(draft.supported_models);
+  if (draft.blocked_models.length > 0) meta.blocked_models = uniqueValues(draft.blocked_models);
   if (draft.supported_api_formats.length > 0) meta.supported_api_formats = uniqueValues(draft.supported_api_formats);
   if (draft.supported_protocols.length > 0) meta.supported_protocols = uniqueValues(draft.supported_protocols);
 	const reasoningEfforts = parseRuntimeValues(draft.supported_reasoning_efforts);
