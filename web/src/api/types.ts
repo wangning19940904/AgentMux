@@ -995,7 +995,7 @@ export interface FrameworkRuntimeSettings {
   capabilities: RuntimeSettingsCapabilities;
 }
 
-export interface FrameworkAuthStatus {
+export interface FrameworkAuthStatus extends TargetMetadata {
   kind: string;
   state: "authenticated" | "unauthenticated" | "unknown";
   installed: boolean;

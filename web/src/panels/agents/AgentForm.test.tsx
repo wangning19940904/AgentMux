@@ -121,3 +121,31 @@ it("shows directory load failures inside the browser dialog", async () => {
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain("permission denied");
   expect(button("选择此目录").disabled).toBe(true);
 });
+
+it("shows the detected local Codex login when all machines contains only local", async () => {
+  localStorage.setItem("agentmux:active-remote", "all");
+  const auth = vi.spyOn(api, "frameworkAuth").mockResolvedValue({
+    kind: "codex",
+    state: "authenticated",
+    installed: true,
+    login_supported: true,
+    target_id: "local",
+    target_name: "Local machine",
+  });
+  const settings = vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue({
+    kind: "codex",
+    defaults: {},
+    capabilities: {},
+  });
+
+  await act(async () => {
+    root.render(<I18nProvider language="zh"><Form draft={newAgent(["codex"])} /></I18nProvider>);
+  });
+  await vi.waitFor(() => {
+    expect(container.textContent).toContain("已检测到框架本机登录态");
+  });
+  expect(container.textContent).not.toContain("请登录或配置 Provider");
+  expect(container.textContent).not.toContain("Choose one machine");
+  expect(auth).toHaveBeenCalledWith("codex", undefined);
+  expect(settings).toHaveBeenCalledWith("codex", "", "local");
+});
