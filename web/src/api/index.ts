@@ -7,7 +7,7 @@ export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
 import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetQuery, get, getChecked, getLocal, post, put, putLocal, postChecked, postProgress, del } from "./client";
-import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
+import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
@@ -654,10 +654,10 @@ export const api = {
     const path =
       `/api/v1/frameworks/runtime-settings?kind=${encodeURIComponent(kind)}` +
         (workDir ? `&work_dir=${encodeURIComponent(workDir)}` : "");
-    return fleetGet<FrameworkRuntimeSettings>(path, singleTargetID(targetID));
+    return interactiveFleetGet<FrameworkRuntimeSettings>(path, targetID);
   },
   frameworkAuth: (kind: string, targetID?: string) =>
-    fleetGet<FrameworkAuthStatus>(`/api/v1/frameworks/auth?kind=${encodeURIComponent(kind)}`, singleTargetID(targetID)),
+    interactiveFleetGet<FrameworkAuthStatus>(`/api/v1/frameworks/auth?kind=${encodeURIComponent(kind)}`, targetID),
   logoutFramework: (kind: string, targetID?: string) =>
     fleetCall<FrameworkAuthStatus>({
       key: "logout", method: "POST", path: "/api/v1/frameworks/auth/logout", body: { kind },
@@ -967,7 +967,7 @@ export const api = {
     ) : get<AgentSession[] | null>(
       `/api/v1/sessions?provider=${encodeURIComponent(provider)}&surface=${encodeURIComponent(surface)}`
     )),
-  codexDesktopThreads: (targetID?: string) => fleetGet<AgentSession[] | null>("/api/v1/codex/desktop-threads", singleTargetID(targetID)),
+  codexDesktopThreads: (targetID?: string) => interactiveFleetGet<AgentSession[] | null>("/api/v1/codex/desktop-threads", targetID),
   sessionMessages: (session: Pick<AgentSession, "provider_id" | "surface" | "session_id" | "source_path" | "project_dir" | "conversation_id" | "target_id">) => {
     const path = `/api/v1/sessions/messages?provider=${encodeURIComponent(session.provider_id)}&surface=${encodeURIComponent(
         session.surface

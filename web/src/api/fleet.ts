@@ -73,6 +73,10 @@ export async function fleetReadValues<T>(path: string, key = "data"): Promise<T[
 
 export async function fleetGet<T>(path: string, targetID: string, key = "data") {
   const batch = await fleetQuery<T>([{ key, path }], [targetID]);
+  return fleetValueForTarget(batch, targetID, key);
+}
+
+function fleetValueForTarget<T>(batch: FleetBatchResult<T>, targetID: string, key: string) {
   const result = batch.targets[0];
   const response = result && operationFor<T>(result.responses, key);
   if (!result || !response?.ok || response.data === undefined) {
@@ -87,6 +91,19 @@ export async function fleetGet<T>(path: string, targetID: string, key = "data") 
   return value && typeof value === "object"
     ? { ...value, target_id: result.target.id, target_name: result.target.name } as T & TargetMetadata
     : value;
+}
+
+// Interactive reads cannot span machines because CLI credentials and login
+// sessions are machine-local. "All" is nevertheless unambiguous when the
+// fleet contains only one target (the common local-desktop configuration).
+export async function interactiveFleetGet<T>(path: string, targetID?: string, key = "data") {
+  const scope = targetID || activeMachineScope();
+  if (scope !== "all") return fleetGet<T>(path, scope, key);
+  const batch = await fleetQuery<T>([{ key, path }], ["all"]);
+  if (batch.targets.length !== 1) {
+    throw new Error("Choose one machine for this interactive operation.");
+  }
+  return fleetValueForTarget(batch, batch.targets[0].target.id, key);
 }
 
 export async function fleetWrite<T>(operation: FleetOperation, targetIDs: string[]): Promise<FleetBatchResult<T>> {
