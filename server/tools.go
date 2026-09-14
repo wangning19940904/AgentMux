@@ -21,6 +21,16 @@ type toolsResponse struct {
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	var resp toolsResponse
 	resp.CLI = toolpkg.DetectCLIs(r.Context())
+	if s.st != nil {
+		for i := range resp.CLI {
+			note, err := toolpkg.CLIDescription(r.Context(), s.st, resp.CLI[i].Spec)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			resp.CLI[i].Spec.Note = note
+		}
+	}
 	resp.Bundles = toolpkg.DetectBundles(r.Context())
 	statuses := framework.DetectAll()
 	resp.Frameworks = make([]frameworkView, 0, len(statuses))

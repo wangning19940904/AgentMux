@@ -15,13 +15,14 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type UsageBucket, type UsageReport } from "../api";
-import { formatUsageCost, type SupportedCurrency, validCNYRate } from "../currency";
+import { useId, useMemo, useState, type ReactNode } from "react";
+import { api, type ModelStat, type UsageBucket, type UsageReport } from "../api";
+import { formatUsageCost, validCNYRate } from "../currency";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { usePolling } from "../hooks/usePolling";
 import { runtimeLabel } from "./agents/agentUtils";
+import { buildModelTrendSeries } from "./overviewModelTrend";
 import {
   summarizeChannelHealth,
   summarizeModelHealth,
@@ -30,13 +31,12 @@ import {
 
 const STAT_RANGES = ["today", "7d", "30d"] as const;
 type StatRange = (typeof STAT_RANGES)[number];
-type TrendDimension = "total" | "framework" | "machine";
+type TrendDimension = "total" | "framework" | "model" | "machine";
 type TrendSeries = { id: string; label: string; tokens: number; values: number[] };
 
 export function OverviewPanel() {
   const { language, t } = useI18n();
   const [range, setRange] = useState<StatRange>("today");
-  const [displayCurrency, setDisplayCurrency] = useState<SupportedCurrency>("cny");
   const [trendDimension, setTrendDimension] = useState<TrendDimension>("total");
   const bounds = useMemo(() => usageRangeBounds(range), [range]);
   const usage = useAsync(
@@ -71,9 +71,6 @@ export function OverviewPanel() {
     : 0;
   const estimatedTokens = totals?.estimated_tokens ?? 0;
   const exactCoverage = totalTokens > 0 ? Math.max(0, Math.round((1 - estimatedTokens / totalTokens) * 100)) : 100;
-  const topRuntimes = usage.data?.by_runtime
-    ? [...usage.data.by_runtime].filter((item) => item.tokens > 0).sort((left, right) => right.tokens - left.tokens).slice(0, 3)
-    : [];
   const hourlyBuckets = useMemo(
     () => normalizeHourlyBuckets(usage.data?.buckets ?? [], bounds.from, bounds.to),
     [bounds.from, bounds.to, usage.data?.buckets],
@@ -83,19 +80,8 @@ export function OverviewPanel() {
     [hourlyBuckets, t, totalTokens, trendDimension, usage.data],
   );
 
-  useEffect(() => {
-    if (currencyPreferences.data?.currency) setDisplayCurrency(currencyPreferences.data.currency);
-  }, [currencyPreferences.data?.currency]);
-
   usePolling(channels.reload, 30_000);
   usePolling(providerMonitor.reload, 30_000);
-
-  function changeCurrency(next: SupportedCurrency) {
-    setDisplayCurrency(next);
-    if (currencyPreferences.data) {
-      void api.saveMenubarSettings({ ...currencyPreferences.data, currency: next }).catch(() => undefined);
-    }
-  }
 
   const updatedAt = useMemo(
     () => new Date().toLocaleTimeString(),
@@ -138,10 +124,6 @@ export function OverviewPanel() {
             <section className="statistics-summary-card usage-summary-card">
               <header>
                 <span className="statistics-summary-title"><Gauge size={19} />{t("overview.usageCard")}</span>
-                <div className="currency-toggle" aria-label={t("usage.currency")}>
-                  <button className={displayCurrency === "cny" ? "active" : ""} type="button" onClick={() => changeCurrency("cny")}>¥ RMB</button>
-                  <button className={displayCurrency === "usd" ? "active" : ""} type="button" onClick={() => changeCurrency("usd")}>$ USD</button>
-                </div>
               </header>
               <div className="usage-summary-metrics">
                 <SummaryMetric
@@ -151,27 +133,49 @@ export function OverviewPanel() {
                   detail={totals && estimatedTokens > 0 ? t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage }) : undefined}
                 />
                 <SummaryMetric icon={<MessageSquareText size={17} />} label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} />
-                <SummaryMetric icon={<CircleDollarSign size={17} />} label={t("overview.estimatedAmount")} value={totals ? formatUsageCost(totals.cost_usd, displayCurrency, cnyRate, language) : "—"} />
+                <SummaryMetric
+                  icon={<CircleDollarSign size={17} />}
+                  label={t("overview.estimatedAmount")}
+                  value={(
+                    <span className="usage-cost-values">
+                      <span>{totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}<small>RMB</small></span>
+                      <span>{totals ? formatUsageCost(totals.cost_usd, "usd", cnyRate, language) : "—"}<small>USD</small></span>
+                    </span>
+                  )}
+                  detail={t("overview.exchangeRate", { rate: cnyRate })}
+                />
               </div>
+              <details className="usage-pricing-note">
+                <summary>{t("overview.pricingDetails")}</summary>
+                <p>{t("overview.pricingFormula")}</p>
+                <p>{t("overview.pricingSource")}</p>
+              </details>
             </section>
 
-            <section className="statistics-summary-card framework-ranking-card">
-              <header>
-                <span className="statistics-summary-title"><Bot size={19} />{t("overview.frameworkRanking")}</span>
-                <span className="ranking-top-label">TOP 3</span>
-              </header>
-              <div className="framework-ranking-list">
-                {topRuntimes.length > 0 ? topRuntimes.map((runtime, index) => (
-                  <FrameworkRank
-                    key={runtime.runtime}
-                    rank={index + 1}
-                    runtime={runtime.runtime}
-                    tokens={runtime.tokens}
-                    share={totalTokens > 0 ? runtime.tokens / totalTokens : 0}
-                  />
-                )) : <div className="framework-ranking-empty">{t("overview.noFrameworkUsage")}</div>}
-              </div>
-            </section>
+            <div className="overview-rankings">
+              <UsageRanking
+                title={t("overview.frameworkRanking")}
+                icon={<Bot size={19} />}
+                emptyText={t("overview.noFrameworkUsage")}
+                totalTokens={totalTokens}
+                items={(usage.data?.by_runtime ?? []).map((runtime) => {
+                  const Icon = runtimeIcon(runtime.runtime);
+                  return { id: runtime.runtime, label: runtimeLabel(runtime.runtime, t), tokens: runtime.tokens, icon: <Icon size={17} /> };
+                })}
+              />
+              <UsageRanking
+                title={t("overview.modelRanking")}
+                icon={<Brain size={19} />}
+                emptyText={t("overview.noModelUsage")}
+                totalTokens={totalTokens}
+                items={(usage.data?.by_model ?? []).map((model) => ({
+                  id: model.model,
+                  label: model.model.trim() || t("overview.unknownModel"),
+                  tokens: model.tokens,
+                  icon: <Brain size={17} />,
+                }))}
+              />
+            </div>
           </div>
 
           <div className="usage-trend-card">
@@ -183,11 +187,12 @@ export function OverviewPanel() {
               <div className="usage-trend-actions">
                 <span className="usage-trend-total">{fmt(totalTokens)}</span>
                 <div className="trend-dimension-toggle" aria-label={t("overview.trendBreakdown")}>
-                  {(["total", "framework", "machine"] as TrendDimension[]).map((dimension) => (
+                  {(["total", "framework", "model", "machine"] as TrendDimension[]).map((dimension) => (
                     <button
                       key={dimension}
                       className={trendDimension === dimension ? "active" : ""}
                       type="button"
+                      aria-pressed={trendDimension === dimension}
                       onClick={() => setTrendDimension(dimension)}
                     >
                       {t(`overview.trend.${dimension}`)}
@@ -335,7 +340,7 @@ function HealthSummaryRow({
   );
 }
 
-function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: string; detail?: string }) {
+function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail?: string }) {
   return (
     <div className="usage-summary-metric">
       <span className="usage-summary-metric-label">{icon}{label}</span>
@@ -345,15 +350,50 @@ function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label:
   );
 }
 
-function FrameworkRank({ rank, runtime, tokens, share }: { rank: number; runtime: string; tokens: number; share: number }) {
-	const { t } = useI18n();
-  const RuntimeIcon = runtimeIcon(runtime);
+type UsageRankingItem = { id: string; label: string; tokens: number; icon: ReactNode };
+
+function UsageRanking({ title, icon, emptyText, totalTokens, items }: {
+  title: string;
+  icon: ReactNode;
+  emptyText: string;
+  totalTokens: number;
+  items: UsageRankingItem[];
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const listID = useId();
+  const ranked = items.filter((item) => item.tokens > 0)
+    .sort((left, right) => right.tokens - left.tokens || left.id.localeCompare(right.id));
+  const visible = expanded ? ranked : ranked.slice(0, 3);
+  return (
+    <section className="statistics-summary-card framework-ranking-card" aria-label={title}>
+      <header>
+        <span className="statistics-summary-title">{icon}{title}</span>
+        <div className="ranking-actions">
+          <span className="ranking-top-label">{expanded ? t("overview.rankingAll") : "TOP 3"}</span>
+          {ranked.length > 3 && (
+            <button className="ranking-expand" type="button" aria-expanded={expanded} aria-controls={listID} onClick={() => setExpanded(!expanded)}>
+              {expanded ? t("overview.rankingCollapse") : t("overview.rankingExpand", { count: ranked.length })}
+            </button>
+          )}
+        </div>
+      </header>
+      <div className="framework-ranking-list" id={listID}>
+        {visible.length > 0 ? visible.map((item, index) => (
+          <UsageRank key={item.id} rank={index + 1} label={item.label} icon={item.icon} tokens={item.tokens} share={totalTokens > 0 ? item.tokens / totalTokens : 0} />
+        )) : <div className="framework-ranking-empty">{emptyText}</div>}
+      </div>
+    </section>
+  );
+}
+
+function UsageRank({ rank, label, icon, tokens, share }: { rank: number; label: string; icon: ReactNode; tokens: number; share: number }) {
   return (
     <div className="framework-rank-row">
       <span className={`framework-rank-number rank-${rank}`}>{rank}</span>
-      <span className="framework-rank-icon"><RuntimeIcon size={17} /></span>
+      <span className="framework-rank-icon">{icon}</span>
       <span className="framework-rank-copy">
-        <strong>{runtimeLabel(runtime, t)}</strong>
+        <strong title={label}>{label}</strong>
         <span>{fmt(tokens)} tokens</span>
       </span>
       <span className="framework-rank-share">{Math.round(share * 100)}%</span>
@@ -413,6 +453,7 @@ function buildTrendSeries(
     return [{ id: "total", label: t("overview.trend.total"), tokens: totalTokens, values: buckets.map(totalBucketTokens) }];
   }
   if (dimension === "framework") return buildFrameworkTrendSeries(buckets, report, t);
+  if (dimension === "model") return buildModelTrendSeries(buckets, t);
   return buildMachineTrendSeries(buckets, report, totalTokens, t);
 }
 
@@ -483,7 +524,7 @@ function buildMachineTrendSeries(
 }
 
 function combineHourlyBucket(key: string, exact?: UsageBucket, daily?: UsageBucket): UsageBucket {
-  if (!daily) return exact ?? { key, totals: emptyUsageTotals(), by_runtime: [] };
+  if (!daily) return exact ?? { key, totals: emptyUsageTotals(), by_model: [], by_runtime: [] };
   const totals = exact ? { ...exact.totals } : emptyUsageTotals();
   addScaledUsageTotals(totals, daily.totals, 1 / 24);
   const runtimes = new Map<string, { runtime: string; tokens: number; cost_usd: number; estimated_tokens?: number }>();
@@ -495,7 +536,16 @@ function combineHourlyBucket(key: string, exact?: UsageBucket, daily?: UsageBuck
     current.estimated_tokens = (current.estimated_tokens ?? 0) + (runtime.estimated_tokens ?? 0) / 24;
     runtimes.set(runtime.runtime, current);
   }
-  return { key, totals, by_runtime: [...runtimes.values()] };
+  const models = new Map<string, ModelStat>();
+  for (const model of exact?.by_model ?? []) models.set(model.model, { ...model });
+  for (const model of daily.by_model ?? []) {
+    const current = models.get(model.model) ?? { model: model.model, tokens: 0, cost_usd: 0, estimated_tokens: 0 };
+    current.tokens += model.tokens / 24;
+    current.cost_usd += model.cost_usd / 24;
+    current.estimated_tokens = (current.estimated_tokens ?? 0) + (model.estimated_tokens ?? 0) / 24;
+    models.set(model.model, current);
+  }
+  return { key, totals, by_model: [...models.values()], by_runtime: [...runtimes.values()] };
 }
 
 function hourlyValuesForTimeline(rawBuckets: UsageBucket[], timelineKeys: string[]) {
@@ -577,7 +627,7 @@ function UsageTrend({
           {series.map((item, index) => (
             <span key={item.id}>
               <i className={`trend-series-color color-${index % 6}`} />
-              <strong>{item.label}</strong>
+              <strong title={item.label}>{item.label}</strong>
               <small>{fmt(item.tokens)} · {totalTokens > 0 ? Math.round(item.tokens / totalTokens * 100) : 0}%</small>
             </span>
           ))}

@@ -279,6 +279,7 @@ describe("fleet mergers", () => {
         key: "2026-08-30 10:00",
         totals: { input_tokens: tokens, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, cost_usd: tokens / 100, records: 1, sessions: 1, estimated_tokens: estimated, estimated_records: estimated > 0 ? 1 : 0 },
         by_runtime: [{ runtime: "codex", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
+        by_model: [{ model: "gpt-5", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
       }],
       by_model: [], by_source: [], by_agent: [{ agent: "demo", tokens, cost_usd: tokens / 100 }], by_runtime: [{ runtime: "codex", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
     });
@@ -293,6 +294,7 @@ describe("fleet mergers", () => {
     expect(merged.buckets[0].totals.input_tokens).toBe(30);
     expect(merged.buckets[0].by_runtime?.[0].tokens).toBe(30);
     expect(merged.buckets[0].by_runtime?.[0].estimated_tokens).toBe(5);
+    expect(merged.buckets[0].by_model).toEqual([{ model: "gpt-5", tokens: 30, cost_usd: expect.closeTo(0.3), estimated_tokens: 5 }]);
     expect(merged.by_machine?.[0].buckets?.[0].key).toBe("2026-08-30 10:00");
     expect(merged.by_agent?.map((item) => item.agent)).toEqual(["Remote · demo", "Local · demo"]);
     expect(merged.warnings).toContain("Down: offline");

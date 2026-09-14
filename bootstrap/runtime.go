@@ -85,7 +85,9 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	backfill := time.Duration(cfg.Observability.BackfillDays) * 24 * time.Hour
 	go usageEngine.Start(ctx, backfill)
 	connect := core.NewConnectService(log, engine, st)
-	connect.SetCLINoteResolver(cliNotes)
+	connect.SetCLINoteResolver(func(ids []string) []core.CLINote {
+		return cliNotes(ctx, st, ids)
+	})
 	mcpRegistry := mcp.New(st)
 	connect.SetMCPRegistry(mcpRegistry)
 	reporter := func(ctx context.Context, period string, since, until time.Time, location *time.Location) (any, error) {

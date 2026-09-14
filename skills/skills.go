@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"gopkg.in/yaml.v3"
 )
 
 // FSManager discovers skills from SKILL.md files on disk.
@@ -226,6 +227,23 @@ func parseSkill(path string) core.Skill {
 // header.
 func ParseSkillFile(path string) core.Skill {
 	s := core.Skill{Path: path, Name: filepath.Base(filepath.Dir(path))}
+	if data, err := os.ReadFile(path); err == nil {
+		if header, _, present, err := splitSkillFrontmatter(data); present && err == nil {
+			var metadata struct {
+				Name        string  `yaml:"name"`
+				Description *string `yaml:"description"`
+			}
+			if yaml.Unmarshal(header, &metadata) == nil {
+				if metadata.Name != "" {
+					s.Name = metadata.Name
+				}
+				if metadata.Description != nil {
+					s.Description = strings.TrimSpace(*metadata.Description)
+					return s
+				}
+			}
+		}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return s

@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,29 @@ func TestAggregateHourlyBuckets(t *testing.T) {
 	}
 	if report.Buckets[0].ByRuntime[0].Runtime != "codex" || report.Buckets[1].ByRuntime[0].Runtime != "claudecode" {
 		t.Fatalf("hourly runtime series = %+v", report.Buckets)
+	}
+}
+
+func TestAggregateModelBucketsKeepHourlyUsageAcrossFrameworks(t *testing.T) {
+	start := time.Date(2026, 9, 14, 10, 15, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	report := Aggregate("hourly", []core.UsageRecord{
+		{Model: "model-a", RuntimeID: "codex", Timestamp: start, InputTokens: 100, OutputTokens: 20, CacheReadTokens: 30, CacheWriteTokens: 40, CostUSD: 1},
+		{Model: "model-a", RuntimeID: "claudecode", Timestamp: start.Add(5 * time.Minute), InputTokens: 50, CostUSD: 2, Requests: 3, TokenQuality: core.UsageTokenQualityEstimated},
+		{Model: "model-b", Timestamp: start.Add(10 * time.Minute), OutputTokens: 10, CacheReadTokens: 20, CostUSD: 4},
+		{Model: "model-b", Timestamp: start.Add(time.Hour), InputTokens: 75, CacheWriteTokens: 25, CostUSD: 5, Requests: 2},
+		{Model: "", Timestamp: start.Add(time.Hour + time.Minute), InputTokens: 5},
+	})
+	if len(report.Buckets) != 2 {
+		t.Fatalf("buckets = %+v", report.Buckets)
+	}
+	want := [][]ModelStat{
+		{{Model: "model-a", Tokens: 240, CostUSD: 3, Records: 4, EstimatedTokens: 50}, {Model: "model-b", Tokens: 30, CostUSD: 4, Records: 1}},
+		{{Model: "model-b", Tokens: 100, CostUSD: 5, Records: 2}, {Model: "", Tokens: 5, Records: 1}},
+	}
+	for i, bucket := range report.Buckets {
+		if !reflect.DeepEqual(bucket.ByModel, want[i]) {
+			t.Fatalf("%s models = %+v, want %+v", bucket.Key, bucket.ByModel, want[i])
+		}
 	}
 }
 

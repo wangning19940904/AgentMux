@@ -33,6 +33,7 @@ import { groupResources, selectedGroupMember } from "../components/resourceGroup
 import { TargetBadge } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { ToolDescriptionEditor } from "./tools/ToolDescriptionEditor";
 import {
   buildInstalledToolRows,
   buildInstallCandidates,
@@ -42,7 +43,7 @@ import {
   toolUpdateCandidates,
 } from "./tools/toolCatalogModel";
 
-type ToolBusyAction = "install" | "update" | "uninstall" | "check" | "auth";
+type ToolBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "description";
 type InternalInstallTarget = { candidate: ToolInstallCandidate; targetIDs: string[] };
 
 export function ToolsPanel() {
@@ -180,6 +181,18 @@ export function ToolsPanel() {
   async function refreshAll() {
     setChecks({});
     await Promise.all([tools.reload(), marketplace.reload(), fleetTargets.reload()]);
+  }
+
+  async function saveDescription(row: InstalledToolRow, description: string) {
+    setToolBusy(row.key, "description");
+    try {
+      const response = await api.updateToolDescription(row.kind, row.cli?.spec.id ?? row.skill!.name, description, row.targetID);
+      showNotice(response.warning ? `${t("tools.descriptionRefreshFailed")} ${response.warning}` : t("tools.descriptionSaved"), Boolean(response.warning));
+      void tools.reload();
+      return response.description;
+    } finally {
+      clearToolBusy(row.key);
+    }
   }
 
   function setToolBusy(key: string, action: ToolBusyAction) {
@@ -465,6 +478,7 @@ export function ToolsPanel() {
                   onUninstall={() => row.cli ? requestCLIUninstall(row) : void uninstallSkill(row)}
                   onAuth={() => void startCLIAuth(row)}
                   onCancelAuth={(sessionID) => void cancelCLIAuth(row, sessionID)}
+                  onSaveDescription={(description) => saveDescription(row, description)}
                   t={t}
                 />
               ); })}
@@ -513,7 +527,7 @@ export function ToolsPanel() {
 }
 
 function InstalledToolRows({
-  row, machineInstances, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, t,
+  row, machineInstances, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, onSaveDescription, t,
 }: {
   row: InstalledToolRow;
   machineInstances?: React.ReactNode;
@@ -527,6 +541,7 @@ function InstalledToolRows({
   onUninstall: () => void;
   onAuth: () => void;
   onCancelAuth: (sessionID: string) => void;
+  onSaveDescription: (description: string) => Promise<string>;
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
   const hasUpdate = Boolean(check?.update_available) || row.needsRepair;
@@ -551,7 +566,10 @@ function InstalledToolRows({
             {machineInstances}
           </span>
         </td>
-        <td className="catalog-description-cell" data-label={t("common.description")}>{row.description || "—"}</td>
+        <td className="catalog-description-cell" data-label={t("common.description")}>
+          <ToolDescriptionEditor key={row.key} name={row.name} description={row.description} kind={row.kind}
+            disabled={disabled} onSave={onSaveDescription} />
+        </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
           <div className="tool-row-actions">
             {row.cli && (

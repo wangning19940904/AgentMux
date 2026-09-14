@@ -39,6 +39,7 @@ type Totals struct {
 type Bucket struct {
 	Key       string        `json:"key"`
 	Totals    Totals        `json:"totals"`
+	ByModel   []ModelStat   `json:"by_model,omitempty"`
 	ByRuntime []RuntimeStat `json:"by_runtime,omitempty"`
 }
 
@@ -94,6 +95,7 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 	agentMap := map[string]*AgentStat{}
 	runtimeMap := map[string]*RuntimeStat{}
 	bucketRuntimeMap := map[string]map[string]*RuntimeStat{}
+	bucketModelMap := map[string]map[string]*ModelStat{}
 	sessionSet := map[string]struct{}{}
 	bucketSessionSets := map[string]map[string]struct{}{}
 	agentSessionSets := map[string]map[string]struct{}{}
@@ -134,6 +136,22 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		ms.Records += recCount
 		if rec.TokenQuality == core.UsageTokenQualityEstimated {
 			ms.EstimatedTokens += totalTokens(rec)
+		}
+		bucketModels := bucketModelMap[key]
+		if bucketModels == nil {
+			bucketModels = map[string]*ModelStat{}
+			bucketModelMap[key] = bucketModels
+		}
+		bucketModel := bucketModels[rec.Model]
+		if bucketModel == nil {
+			bucketModel = &ModelStat{Model: rec.Model}
+			bucketModels[rec.Model] = bucketModel
+		}
+		bucketModel.Tokens += totalTokens(rec)
+		bucketModel.CostUSD += rec.CostUSD
+		bucketModel.Records += recCount
+		if rec.TokenQuality == core.UsageTokenQualityEstimated {
+			bucketModel.EstimatedTokens += totalTokens(rec)
 		}
 
 		ss := sourceMap[rec.Source]
@@ -212,7 +230,16 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 	}
 
 	for k, t := range bucketMap {
-		bucket := Bucket{Key: k, Totals: *t, ByRuntime: []RuntimeStat{}}
+		bucket := Bucket{Key: k, Totals: *t, ByModel: []ModelStat{}, ByRuntime: []RuntimeStat{}}
+		for _, model := range bucketModelMap[k] {
+			bucket.ByModel = append(bucket.ByModel, *model)
+		}
+		sort.Slice(bucket.ByModel, func(i, j int) bool {
+			if bucket.ByModel[i].Tokens == bucket.ByModel[j].Tokens {
+				return bucket.ByModel[i].Model < bucket.ByModel[j].Model
+			}
+			return bucket.ByModel[i].Tokens > bucket.ByModel[j].Tokens
+		})
 		for _, runtime := range bucketRuntimeMap[k] {
 			bucket.ByRuntime = append(bucket.ByRuntime, *runtime)
 		}
