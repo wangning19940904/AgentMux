@@ -125,6 +125,7 @@ export function AgentForm({
   const selectedRouteTool = draft.provider_tool || routeToolForRuntime(draft.runtime_id);
   const desktopRuntime = draft.runtime_id === "codex-app";
   const frameworkRuntimeID = desktopRuntime ? "codex" : draft.runtime_id;
+  const authTargetID = draft.target_id || authStatus?.target_id;
   const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
@@ -251,7 +252,7 @@ export function AgentForm({
 		}
 		setLocalRuntimeSettingsBusy(true);
 		void Promise.resolve()
-			.then(() => api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", draft.target_id))
+      .then(() => api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", authTargetID))
 			.then((settings) => {
 				if (active) setLocalRuntimeSettings(settings);
 			})
@@ -264,14 +265,14 @@ export function AgentForm({
 		return () => {
 			active = false;
 		};
-	}, [authStatus?.state, draft.runtime_id, draft.target_id, usingLocalLogin]);
+	}, [authStatus?.state, authTargetID, draft.runtime_id, draft.work_dir, usingLocalLogin]);
 
   useEffect(() => {
     if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
     let active = true;
     const interval = window.setInterval(() => {
       void Promise.resolve()
-        .then(() => api.frameworkAuth(frameworkRuntimeID, draft.target_id))
+        .then(() => api.frameworkAuth(frameworkRuntimeID, authTargetID))
         .then((status) => {
           if (!active) return;
           setAuthStatus(status);
@@ -286,14 +287,14 @@ export function AgentForm({
       active = false;
       window.clearInterval(interval);
     };
-  }, [draft.target_id, frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
+  }, [authTargetID, frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
 
   async function refreshFrameworkAuth() {
     if (!frameworkRuntimeID) return;
     setAuthBusy(true);
     setAuthNotice("");
     try {
-      const status = await api.frameworkAuth(frameworkRuntimeID, draft.target_id);
+      const status = await api.frameworkAuth(frameworkRuntimeID, authTargetID);
       setAuthStatus(status);
       if (status.state === "authenticated") setAuthNotice(t("agents.loginComplete"));
     } catch (err) {
@@ -307,7 +308,7 @@ export function AgentForm({
     setDesktopThreadsBusy(true);
     setDesktopThreadsError("");
     try {
-      setDesktopThreads((await api.codexDesktopThreads(draft.target_id)) ?? []);
+      setDesktopThreads((await api.codexDesktopThreads(authTargetID)) ?? []);
     } catch (err) {
       setDesktopThreadsError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -328,7 +329,7 @@ export function AgentForm({
     setLoginResult(null);
     setLoginCode("");
     try {
-      setLoginResult(await api.startFrameworkLogin(frameworkRuntimeID, draft.target_id));
+      setLoginResult(await api.startFrameworkLogin(frameworkRuntimeID, authTargetID));
     } catch (err) {
       setAuthNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -341,7 +342,7 @@ export function AgentForm({
     setLoginBusy("complete");
     setAuthNotice("");
     try {
-      await api.completeFrameworkLogin(loginResult.session_id, loginCode.trim(), draft.target_id);
+      await api.completeFrameworkLogin(loginResult.session_id, loginCode.trim(), authTargetID);
       setAuthNotice(t("agents.loginCodeSubmitted"));
     } catch (err) {
       setAuthNotice(err instanceof Error ? err.message : String(err));

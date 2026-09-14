@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeMachineScope, fleetQuery, resolveMachineScope, resolveTenantScope, tenantScopeHeaders, tenantScopeKey } from "./client";
 import { beginFleetWarningUpdate, currentFleetWarnings, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import { api, mergeFleetObservationOverview, mergeFleetUsage } from "./index";
-import { fleetAdminReadArray, fleetCall, fleetReadArray } from "./fleet";
+import { fleetAdminReadArray, fleetCall, fleetReadArray, interactiveFleetGet } from "./fleet";
 import type { FleetBatchResult, ObservationOverview, UsageReport } from "./types";
 
 function target<T>(id: string, name: string, key: string, data?: T, error?: string) {
@@ -147,6 +147,34 @@ describe("fleet array responses", () => {
 		const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
 		expect(headers.has("X-AgentMux-Tenant-Scope")).toBe(false);
 	});
+});
+
+describe("interactive fleet reads", () => {
+  it("uses the only target when the selected scope is all machines", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      targets: [target("local", "Local", "data", { kind: "codex", state: "authenticated", installed: true, login_supported: true })],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.frameworkAuth("codex"))
+      .resolves.toMatchObject({ kind: "codex", state: "authenticated", target_id: "local" });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.target_ids).toEqual(["all"]);
+  });
+
+  it("still requires a selection when all machines resolves to multiple targets", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      targets: [
+        target("local", "Local", "data", { state: "authenticated" }),
+        target("ssh-1", "Remote", "data", { state: "authenticated" }),
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    await expect(interactiveFleetGet("/api/v1/frameworks/auth?kind=codex"))
+      .rejects.toThrow("Choose one machine for this interactive operation.");
+  });
 });
 
 describe("fleet actions", () => {
