@@ -1739,6 +1739,42 @@
   gap: 7px;
 }
 
+.tool-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tool-description > span {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+
+.tool-description-edit {
+  flex-shrink: 0;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+
+.tool-description-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.tool-description-editor textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  font: inherit;
+}
+
+.tool-description-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .unified-tool-row .catalog-primary-copy strong {
   font-size: 14px;
 }

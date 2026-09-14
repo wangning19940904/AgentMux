@@ -158,6 +158,7 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
   const totals = emptyUsageTotals();
   const buckets = new Map<string, UsageTotals>();
   const bucketRuntimes = new Map<string, Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>>();
+  const bucketModels = new Map<string, Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>>();
   const models = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
   const sources = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
   const agents = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
@@ -171,6 +172,11 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
         addUsageStat(runtimesForBucket, runtime.runtime, runtime.tokens, runtime.cost_usd, runtime.estimated_tokens);
       }
       bucketRuntimes.set(bucket.key, runtimesForBucket);
+      const modelsForBucket = bucketModels.get(bucket.key) ?? new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
+      for (const model of bucket.by_model ?? []) {
+        addUsageStat(modelsForBucket, model.model, model.tokens, model.cost_usd, model.estimated_tokens);
+      }
+      bucketModels.set(bucket.key, modelsForBucket);
     }
     for (const stat of item.report.by_model ?? []) addUsageStat(models, stat.model, stat.tokens, stat.cost_usd, stat.estimated_tokens);
     for (const stat of item.report.by_source ?? []) addUsageStat(sources, stat.source, stat.tokens, stat.cost_usd, stat.estimated_tokens);
@@ -193,6 +199,7 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
     buckets: [...buckets].sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => ({
       key,
       totals: value,
+      by_model: usageStats(bucketModels.get(key) ?? new Map(), "model"),
       by_runtime: usageStats(bucketRuntimes.get(key) ?? new Map(), "runtime"),
     })),
     by_model: usageStats(models, "model"),
@@ -510,6 +517,10 @@ export const api = {
   tools: () => activeMachineScope() === "all"
     ? fleetQuery<ToolsResponse>([{ key: "tools", path: "/api/v1/tools" }]).then(mergeFleetTools)
     : get<ToolsResponse>("/api/v1/tools"),
+  updateToolDescription: (kind: "cli" | "skill", id: string, description: string, targetID: string) =>
+    fleetCall<{ ok: boolean; description: string; warning?: string }>({
+      key: "description", method: "POST", path: "/api/v1/tools/description", body: { kind, id, description },
+    }, [targetID], { confirm: false }).then((result) => result.first),
 	ttsModels: () => getChecked<TTSCatalogStatus>("/api/v1/tts/models"),
 	downloadTTSModel: (id: string, onProgress: (progress: OperationProgress) => void) =>
 		postProgress<TTSModel>("/api/v1/tts/models/download/stream", { id }, onProgress),

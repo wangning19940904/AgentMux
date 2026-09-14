@@ -180,6 +180,7 @@ export interface UsageTotals {
 export interface UsageBucket {
   key: string;
   totals: UsageTotals;
+  by_model?: ModelStat[];
   by_runtime?: RuntimeStat[];
 }
 

@@ -1027,6 +1027,7 @@ tbody tr:hover,
 }
 
 .statistics-summary-grid {
+  container-type: inline-size;
   gap: 0;
   overflow: hidden;
   background: var(--bg-elevated);
@@ -1041,8 +1042,20 @@ tbody tr:hover,
   border-radius: 0;
 }
 
-.statistics-summary-card + .statistics-summary-card {
+.overview-rankings > .statistics-summary-card + .statistics-summary-card {
   border-left: 1px solid var(--border);
+  border-top: 0;
+}
+
+@container (max-width: 560px) {
+  .overview-rankings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .overview-rankings > .statistics-summary-card + .statistics-summary-card {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
 }
 
 .usage-summary-card,
@@ -1119,14 +1132,12 @@ tbody tr:hover,
   font-weight: 620;
 }
 
-.trend-dimension-toggle,
-.currency-toggle {
+.trend-dimension-toggle {
   background: var(--bg-subtle);
   border-radius: 6px;
 }
 
-.trend-dimension-toggle button.active,
-.currency-toggle button.active {
+.trend-dimension-toggle button.active {
   color: var(--text);
   background: var(--bg-elevated);
   box-shadow: 0 1px 2px rgba(20, 20, 22, 0.08);

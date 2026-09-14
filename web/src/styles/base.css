@@ -1558,7 +1558,7 @@ h2 {
 
 .statistics-summary-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -1605,34 +1605,74 @@ h2 {
   color: var(--accent-strong);
 }
 
-.currency-toggle {
-  display: inline-flex;
-  flex: 0 0 auto;
-  padding: 2px;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.currency-toggle button {
-  min-height: 26px;
-  padding: 0 8px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 6px;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.currency-toggle button.active {
-  color: #fff;
-  background: var(--text);
-}
-
 .usage-summary-metrics {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(72px, .72fr) minmax(148px, 1.28fr);
+  grid-template-columns: minmax(0, 1fr) minmax(72px, .65fr) minmax(148px, 1.6fr);
+}
+
+.usage-cost-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.usage-cost-values > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.usage-cost-values small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.usage-pricing-note {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.usage-pricing-note > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.usage-pricing-note p {
+  margin: 6px 0 0;
+}
+
+.overview-rankings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+}
+
+.ranking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+}
+
+.ranking-expand {
+  min-height: 26px;
+  padding: 2px 6px;
+  color: var(--text-soft);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ranking-expand:hover {
+  color: var(--text);
+  background: var(--bg-subtle);
 }
 
 .usage-summary-metric {

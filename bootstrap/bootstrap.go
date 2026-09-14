@@ -22,7 +22,7 @@ import (
 )
 
 // cliNotes resolves managed-CLI catalog descriptions for prompt injection.
-func cliNotes(ids []string) []core.CLINote {
+func cliNotes(ctx context.Context, st tools.DescriptionStore, ids []string) []core.CLINote {
 	var notes []core.CLINote
 	for _, id := range ids {
 		spec, ok := tools.LookupCLI(id)
@@ -33,7 +33,12 @@ func cliNotes(ids []string) []core.CLINote {
 		if name == "" {
 			name = spec.ID
 		}
-		notes = append(notes, core.CLINote{Name: name, Note: spec.Note})
+		note, err := tools.CLIDescription(ctx, st, spec)
+		if err != nil {
+			slog.Warn("load CLI description for prompt", "cli", id, "err", err)
+			continue
+		}
+		notes = append(notes, core.CLINote{Name: name, Note: note})
 	}
 	return notes
 }
