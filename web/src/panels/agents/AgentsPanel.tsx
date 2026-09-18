@@ -1,4 +1,4 @@
-import { Bot, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AgentInstance } from "../../api";
 import { useI18n } from "../../i18n";
@@ -18,13 +18,14 @@ import {
   newAgent,
   ownerBadge,
   routeToolForRuntime,
-  runtimeLabel,
   syncAgentConnectBindings,
   toggleID,
   type DrawerMode,
 } from "./agentUtils";
 import { AgentForm } from "./AgentForm";
 import { ChannelLogoGroup } from "./ChannelLogo";
+import { AgentAvatar } from "./AgentAvatar";
+import { RuntimeBadge } from "./RuntimeBadge";
 
 
 export type AgentsPanelProps = {
@@ -285,9 +286,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           <aside className="provider-drawer agent-drawer" role="dialog" aria-modal="true" aria-labelledby="agent-drawer-title">
             <div className="provider-builder-head">
               <div className="provider-form-title">
-                <span className="provider-icon">
-                  <Bot size={20} />
-                </span>
+                <AgentAvatar channels={draftChannels.filter((channel) => selectedChannelIDs.includes(channel.id))} />
                 <div>
                   <h2 id="agent-drawer-title">
                     {drawerMode === "create" ? t("agents.newDrawerTitle") : draft.name || t("agents.editDrawerTitle")}
@@ -406,9 +405,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 onDoubleClick={() => editAgent(item)}
               >
                 <div className="agent-list-main">
-                  <span className="provider-icon">
-                    <Bot size={15} />
-                  </span>
+                  <AgentAvatar channels={itemChannels} />
                   <span>
                     <span className="agent-list-title-row">
                       <strong>{item.name}</strong>
@@ -429,7 +426,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                       </button>
                       {itemReadOnly && <span className="source-badge config compact">{t("agents.sourceConfig")}</span>}
                     </span>
-                    <small>{item.runtime_id ? runtimeLabel(item.runtime_id) : t("agents.noRuntime")}</small>
+                    <small className="agent-runtime"><RuntimeBadge runtime={item.runtime_id} emptyLabel={t("agents.noRuntime")} /></small>
                   </span>
                 </div>
                 <div className="agent-list-meta">

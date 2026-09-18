@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Channel } from "../../api";
 import { ChannelAvatar } from "../../ChannelAvatar";
+import { ChannelLogo } from "../agents/ChannelLogo";
 import { useI18n } from "../../i18n";
 import { OwnerBadge } from "../agents/AgentsPanel";
 import { TargetBadge } from "../../components/TargetBadge";
@@ -45,6 +46,7 @@ export function ChannelCard({
   return (
     <div className="route-card">
       <div className="agent-list-main">
+        <ChannelLogo channel={channel} />
         <ChannelAvatar channel={channel} />
         <span className="channel-card-copy">
           <strong title={displayName}>{displayName}</strong>

@@ -1,5 +1,6 @@
-import { Cable } from "lucide-react";
+import { Bot, Cable } from "lucide-react";
 import type { Channel } from "../../api";
+import { ChannelAvatar } from "../../ChannelAvatar";
 import { CHANNEL_BRAND_LOGOS, type ChannelBrandLogo } from "./channelLogoData";
 
 const CHANNEL_BRAND_ALIASES: Record<string, ChannelBrandLogo> = {
@@ -53,13 +54,22 @@ export function ChannelLogoGroup({
     );
   }
 
-  const channelNames = channels.map((channel) => channel.name || channel.type).join("、");
-  const accessibleLabel = `${label}：${channelNames}`;
   return (
-    <span className="agent-channel-group" role="img" aria-label={accessibleLabel} title={accessibleLabel}>
-      {channels.map((channel) => (
-        <ChannelLogo key={`${channel.target_id || "local"}::${channel.id}`} channel={channel} />
-      ))}
+    <span className="agent-channel-group" role="group" aria-label={label}>
+      {channels.map((channel) => {
+        const botName = channel.bot_name || channel.name || channel.type;
+        const title = [channel.type, botName, channel.name !== botName ? channel.name : ""].filter(Boolean).join(" · ");
+        return (
+          <span className="agent-channel-badge" key={`${channel.target_id || "local"}::${channel.id}`} title={title} role="img" aria-label={title}>
+            <ChannelLogo channel={channel} />
+            <span className="agent-channel-separator" aria-hidden="true">:</span>
+            <ChannelAvatar channel={channel} size="compact" fallback={
+              <span className="channel-avatar channel-avatar-compact fallback" aria-hidden="true"><Bot size={14} /></span>
+            } />
+            <span className="agent-channel-name">{botName}</span>
+          </span>
+        );
+      })}
     </span>
   );
 }

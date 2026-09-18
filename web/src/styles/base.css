@@ -2762,13 +2762,84 @@ textarea:focus {
 .agent-channel-group {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.agent-channel-badge,
+.agent-channel-group.empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 28px;
+  max-width: 100%;
   padding: 3px 8px;
   color: var(--text-soft);
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: 999px;
+  white-space: nowrap;
+}
+
+.agent-channel-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.agent-channel-separator {
+  color: var(--muted);
+}
+
+.agent-avatar {
+  flex: 0 0 24px;
+}
+
+.agent-list-main .agent-runtime {
+  overflow: visible;
+}
+
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.runtime-logo {
+  display: grid;
+  flex: 0 0 18px;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  color: var(--text-soft);
+  background: #fff;
+  border-radius: 4px;
+}
+
+.runtime-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.runtime-logo.fallback {
+  background: transparent;
+}
+
+.runtime-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
