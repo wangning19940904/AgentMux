@@ -280,9 +280,9 @@ export function ToolsPanel() {
     }
   }
 
-  async function updateAllTools() {
-    if (bulkRunning.current || updateAllBlocked || updateCandidates.length === 0) return;
-    const candidates = [...updateCandidates];
+  async function updateTools(candidateRows: InstalledToolRow[]) {
+    if (bulkRunning.current || updateAllBlocked || candidateRows.length === 0) return;
+    const candidates = [...candidateRows];
     bulkRunning.current = true;
     setBulkProgress({ completed: 0, total: candidates.length });
     setBulkResults([]);
@@ -450,7 +450,7 @@ export function ToolsPanel() {
           <div><h2>{t("tools.installedDirectory")}</h2><span className="pill on">{rowGroups.length}</span></div>
           <div className="catalog-bulk-actions">
             <BulkUpdateButton count={updateCandidates.length} progress={bulkProgress} disabled={updateAllBlocked}
-              hint={t("tools.updateAllHint")} onClick={() => void updateAllTools()} />
+              hint={t("tools.updateAllHint")} onClick={() => void updateTools(updateCandidates)} />
             <button className="action" disabled={Boolean(bulkProgress)} onClick={() => setInstallerOpen(true)} type="button"><Plus size={15} />{t("tools.installTools")}</button>
           </div>
         </div>
@@ -461,12 +461,18 @@ export function ToolsPanel() {
             <tbody>
               {pagination.pageItems.map((group) => {
                 const row = selectedGroupMember(group, selectedInstances[group.key], (row) => row.key);
+                const groupUpdateCandidates = toolUpdateCandidates(group.members, checks);
                 return (
                 <InstalledToolRows
                   key={group.key}
                   machineInstances={<MachineInstances selected={row.key}
                     instances={group.members.map((item) => ({ key: item.key, targetID: item.targetID, name: item.targetName, detail: item.cli?.version ? `v${item.cli.version}` : undefined }))}
+                    hint={row.cli ? t("tools.machineInstancesHint") : undefined}
                     onSelect={(key) => setSelectedInstances((current) => ({ ...current, [group.key]: key }))} />}
+                  bulkUpdateAction={row.cli && group.members.length > 1 ? <BulkUpdateButton
+                    count={groupUpdateCandidates.length} progress={null} disabled={updateAllBlocked}
+                    label={t("tools.updateAllMachines")} hint={t("tools.updateAllMachinesHint", { tool: row.name })}
+                    onClick={() => void updateTools(groupUpdateCandidates)} /> : undefined}
                   row={row}
                   busy={busy[row.key]}
                   bulkUpdating={Boolean(bulkProgress)}
@@ -527,10 +533,11 @@ export function ToolsPanel() {
 }
 
 function InstalledToolRows({
-  row, machineInstances, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, onSaveDescription, t,
+  row, machineInstances, bulkUpdateAction, busy, bulkUpdating, progress, check, authSession, onCheck, onUpdate, onUninstall, onAuth, onCancelAuth, onSaveDescription, t,
 }: {
   row: InstalledToolRow;
   machineInstances?: React.ReactNode;
+  bulkUpdateAction?: React.ReactNode;
   busy?: ToolBusyAction;
   bulkUpdating: boolean;
   progress?: OperationProgress;
@@ -572,6 +579,7 @@ function InstalledToolRows({
         </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
           <div className="tool-row-actions">
+            {bulkUpdateAction}
             {row.cli && (
               <button className={hasUpdate ? "action" : "ghost-action"} disabled={disabled} onClick={hasUpdate ? onUpdate : onCheck} type="button">
                 {hasUpdate ? <Download size={14} /> : <RefreshCw className={busy === "check" ? "spin" : ""} size={14} />}

@@ -32,6 +32,23 @@ func TestChannelMessageForAgentInjectsFeishuMetadata(t *testing.T) {
 	if msg.Text != "@机器人 帮我处理\n这个问题" {
 		t.Fatalf("original message text was mutated: %q", msg.Text)
 	}
+	if got.DisplayText == nil || *got.DisplayText != msg.Text || msg.DisplayText != nil {
+		t.Fatalf("original question was not preserved for display: %+v", got)
+	}
+}
+
+func TestChannelMessageForAgentPreservesDisplayText(t *testing.T) {
+	for _, displayText := range []string{"记账打车 32", ""} {
+		msg := &Message{Text: "@_user_1 " + displayText, DisplayText: &displayText}
+		got := channelMessageForAgent(Channel{Type: "lark"}, msg)
+		if got.DisplayText == nil || *got.DisplayText != displayText {
+			t.Fatalf("display text = %v, want %q", got.DisplayText, displayText)
+		}
+	}
+	got := channelMessageForAgent(Channel{Type: "feishu"}, &Message{Images: [][]byte{{1}}})
+	if got.DisplayText == nil || *got.DisplayText != "" {
+		t.Fatalf("image-only question lost its empty display text: %+v", got)
+	}
 }
 
 func TestChannelMessageForAgentLeavesOtherChannelsUnchanged(t *testing.T) {

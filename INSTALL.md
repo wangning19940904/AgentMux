@@ -185,6 +185,16 @@ Linux/macOS amd64/arm64 CLI payloads used by **Machines → Import** to install
 AgentMux on an SSH target when the remote service is missing.
 
 The desktop shell starts the daemon in-process and renders the same WebUI.
+On macOS, closing the main window hides its Dock icon while the daemon and
+menu bar helper keep running. Choose **Show AgentMux** in the menu bar or open
+the app again to restore the window and Dock icon. Minimising or using
+**Hide** keeps the Dock icon; **Quit** exits the app. A shortcut explicitly
+pinned to the Dock remains under the user's control.
+
+To verify close/reopen, minimise, Hide, second-instance activation, and Quit
+against a real Wails window in a macOS desktop session, run
+`python3 desktop/test_dock_macos.py`. The test uses a temporary app bundle and
+does not start the AgentMux daemon or modify the installed app.
 
 ## Build the macOS menu bar app
 

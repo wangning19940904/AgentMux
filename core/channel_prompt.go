@@ -77,6 +77,10 @@ func channelMessageForAgent(ch Channel, msg *Message) *Message {
 	}
 
 	agentMsg := *msg
+	if agentMsg.DisplayText == nil {
+		displayText := msg.Text
+		agentMsg.DisplayText = &displayText
+	}
 	agentMsg.Text = prompt + "\n\n" + string(payload)
 	return &agentMsg
 }
