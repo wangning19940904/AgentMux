@@ -285,6 +285,10 @@ type cardImageStream interface {
 }
 
 func (p *Platform) newCardStream(msg *core.Message, control *streamCardControl) *cardStream {
+	if control == nil {
+		control = &streamCardControl{}
+	}
+	control.summary = replyCardSummary(msg)
 	stream := &cardStream{
 		client: p.client, chatID: msg.ChatID, replyMessageID: threadReplyMessageID(msg), control: control,
 	}
@@ -497,6 +501,7 @@ type cardStream struct {
 }
 
 type streamCardControl struct {
+	summary         string
 	taskID          string
 	feedbackNonce   string
 	chatID          string

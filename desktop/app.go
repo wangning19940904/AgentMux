@@ -27,6 +27,7 @@ import (
 // embedded WebView talks to, mirroring the CLI's `serve`.
 func (a *App) startup(ctx context.Context) {
 	a.ctx, a.cancel = context.WithCancel(ctx)
+	configureDesktopDock()
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	a.ensureLaunchAtLoginDefault(log)
 

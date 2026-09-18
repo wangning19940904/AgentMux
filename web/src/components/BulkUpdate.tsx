@@ -7,18 +7,19 @@ export interface BulkUpdateProgress {
   total: number;
 }
 
-export function BulkUpdateButton({ count, progress, disabled, hint, onClick }: {
+export function BulkUpdateButton({ count, progress, disabled, hint, label, onClick }: {
   count: number;
   progress: BulkUpdateProgress | null;
   disabled: boolean;
   hint: string;
+  label?: string;
   onClick: () => void;
 }) {
   const { t } = useI18n();
   return (
     <button className="ghost-action" disabled={disabled || Boolean(progress) || count === 0} onClick={onClick} title={hint} type="button">
       {progress ? <RefreshCw className="spin" size={15} /> : <Download size={15} />}
-      {progress ? t("common.updatingAll") : t("common.updateAll")}
+      {progress ? t("common.updatingAll") : label ?? t("common.updateAll")}
       {!progress && count > 0 && <span className="pill on">{count}</span>}
     </button>
   );

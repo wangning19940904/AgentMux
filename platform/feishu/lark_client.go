@@ -166,6 +166,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				}
 			}
 			c.markInbound()
+			previewText := inboundCardPreviewText(msg, botOpenID, text)
 			inbound <- &core.Message{
 				ID:           messageID,
 				ChatID:       chatID,
@@ -175,6 +176,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				ThreadID:     threadID,
 				UserID:       userID,
 				Text:         text,
+				DisplayText:  &previewText,
 				MentionedBot: mentionedBot,
 				MentionAll:   mentionAll,
 				Platform:     c.platform,

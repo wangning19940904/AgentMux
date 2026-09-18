@@ -31,8 +31,12 @@ type Message struct {
 	UserID          string
 	UserName        string
 	Text            string
-	Images          [][]byte
-	Timestamp       time.Time
+	// DisplayText preserves the user-facing question for reply previews when
+	// Text includes transport mention tokens or an agent prompt wrapper. A nil
+	// value means Text is also suitable for display; an empty value is valid.
+	DisplayText *string
+	Images      [][]byte
+	Timestamp   time.Time
 	// Mention metadata is populated by platforms that can distinguish group
 	// messages and bot mentions, such as Feishu/Lark.
 	MentionedBot bool

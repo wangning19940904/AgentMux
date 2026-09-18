@@ -1,9 +1,10 @@
 import { useI18n } from "../i18n";
 
-export function MachineInstances({ instances, selected, onSelect }: {
+export function MachineInstances({ instances, selected, onSelect, hint }: {
   instances: { key: string; targetID?: string; name?: string; detail?: string }[];
   selected: string;
   onSelect: (key: string) => void;
+  hint?: string;
 }) {
   const { t } = useI18n();
   if (instances.length < 2) return null;
@@ -17,6 +18,6 @@ export function MachineInstances({ instances, selected, onSelect }: {
         {item.detail && <small>{item.detail}</small>}
       </button>)}
     </span>
-    <small className="muted">{t("resources.selectedMachineHint")}</small>
+    <small className="muted">{hint ?? t("resources.selectedMachineHint")}</small>
   </span>;
 }

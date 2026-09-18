@@ -171,10 +171,10 @@ func buildCardWithImages(text string, done, failed bool, images []streamCardImag
 				{"tag": "plain_text", "content": "正在输入…"},
 			},
 		})
-		if control != nil {
+		if control != nil && control.taskID != "" {
 			elements = append(elements, legacyStreamStopButton(control))
 		}
-	} else if !failed && control != nil {
+	} else if !failed && control != nil && control.taskID != "" {
 		elements = append(elements, legacySessionButtons(control))
 		if control.feedbackNonce != "" {
 			elements = append(elements, legacyFeedbackButtons(control))
@@ -191,8 +191,12 @@ func buildCardWithImages(text string, done, failed bool, images []streamCardImag
 		title = "AgentMux · 出错"
 	}
 
+	config := map[string]any{"wide_screen_mode": true}
+	if control != nil && control.summary != "" {
+		config["summary"] = map[string]string{"content": control.summary}
+	}
 	card := map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": config,
 		"header": map[string]any{
 			"template": template,
 			"title": map[string]any{
@@ -241,22 +245,26 @@ func buildStreamCardJSONWithImages(text string, done, failed bool, images []stre
 		},
 	}
 	elements = append(elements, cardImageElements(images, true)...)
-	if !done && control != nil {
+	if !done && control != nil && control.taskID != "" {
 		elements = append(elements, modelPickerButton("停止任务", "danger", streamStopActionValue(control)))
-	} else if done && !failed && control != nil {
+	} else if done && !failed && control != nil && control.taskID != "" {
 		elements = append(elements, sessionButtonColumns(control))
 		if control.feedbackNonce != "" {
 			elements = append(elements, feedbackButtonColumns(control))
 		}
 	}
+	config := map[string]any{
+		"streaming_mode": !done,
+		"streaming_config": map[string]any{
+			"print_strategy": "fast",
+		},
+	}
+	if control != nil && control.summary != "" {
+		config["summary"] = map[string]string{"content": control.summary}
+	}
 	card := map[string]any{
 		"schema": "2.0",
-		"config": map[string]any{
-			"streaming_mode": !done,
-			"streaming_config": map[string]any{
-				"print_strategy": "fast",
-			},
-		},
+		"config": config,
 		"header": map[string]any{
 			"template": template,
 			"title": map[string]any{

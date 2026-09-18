@@ -291,13 +291,13 @@ func extractText(msgType, content string) string {
 	}
 }
 
-func extractPostText(content string) string {
+func extractPostText(content string, skipMentionIDs ...string) string {
 	var post larkPostContent
 	if err := json.Unmarshal([]byte(content), &post); err != nil {
 		return ""
 	}
 	if post.Title != "" || post.Content != nil {
-		return renderPostText(post)
+		return renderPostText(post, skipMentionIDs...)
 	}
 
 	// Some Feishu APIs wrap post content by locale, for example
@@ -330,13 +330,13 @@ func extractPostText(content string) string {
 			continue
 		}
 		if candidate.Title != "" || candidate.Content != nil {
-			return renderPostText(candidate)
+			return renderPostText(candidate, skipMentionIDs...)
 		}
 	}
 	return ""
 }
 
-func renderPostText(post larkPostContent) string {
+func renderPostText(post larkPostContent, skipMentionIDs ...string) string {
 	lines := make([]string, 0, len(post.Content)+1)
 	if title := strings.TrimSpace(post.Title); title != "" {
 		lines = append(lines, title)
@@ -360,6 +360,9 @@ func renderPostText(post larkPostContent) string {
 					line.WriteByte(')')
 				}
 			case "at":
+				if slices.Contains(skipMentionIDs, element.UserID) {
+					continue
+				}
 				name := strings.TrimSpace(element.UserName)
 				if name == "" {
 					name = strings.TrimSpace(element.UserID)
