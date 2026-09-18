@@ -35,6 +35,8 @@ import {
 import { MarkdownPreview, Picker } from "./widgets";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { AgentConversationOptions } from "./AgentConversationOptions";
+import { ChannelLogo } from "./ChannelLogo";
+import { RuntimeSelect } from "./RuntimeSelect";
 
 export type CLIOption = { id: string; name: string; note?: string; installed: boolean };
 
@@ -397,26 +399,15 @@ export function AgentForm({
             <span>{t("agents.name")}</span>
             <input disabled={readOnly} value={draft.name} onChange={(event) => onUpdate("name", event.target.value)} />
           </label>
-          <label className="field">
-            <span>{t("agents.runtime")}</span>
-            <select
-              disabled={readOnly || (drawerMode === "create" && runtimeOptions.length === 0)}
-              value={draft.runtime_id}
-              onChange={(event) => onUpdate("runtime_id", event.target.value)}
-            >
-              {runtimeOptions.length === 0 && <option value="">{t("agents.noInstalledRuntime")}</option>}
-              {drawerMode === "edit" && draft.runtime_id && !runtimeOptions.includes(draft.runtime_id) && (
-                <option value={draft.runtime_id} disabled>
-                  {runtimeLabel(draft.runtime_id)} ({t("gateway.frameworkNotInstalled")})
-                </option>
-              )}
-              {runtimeOptions.map((runtime) => (
-                <option key={runtime} value={runtime}>
-                  {runtimeLabel(runtime)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <RuntimeSelect
+            label={t("agents.runtime")}
+            emptyLabel={t("agents.noInstalledRuntime")}
+            unavailableLabel={t("gateway.frameworkNotInstalled")}
+            disabled={readOnly || (drawerMode === "create" && runtimeOptions.length === 0)}
+            value={draft.runtime_id}
+            options={runtimeOptions}
+            onChange={(runtime) => onUpdate("runtime_id", runtime)}
+          />
           {desktopRuntime && (
             <label className="field wide">
               <span>{t("agents.desktopThread")}</span>
@@ -772,6 +763,7 @@ export function AgentForm({
                     title={subtitle ? `${displayName} · ${subtitle}` : displayName}
                     type="button"
                   >
+                    <ChannelLogo channel={channel} />
                     <ChannelAvatar channel={channel} size="small" />
                     <span className="agent-channel-copy">
                       <strong>{displayName}</strong>
