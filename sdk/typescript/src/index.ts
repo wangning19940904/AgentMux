@@ -42,3 +42,6 @@ export type {
   Trigger,
   TurnUsage,
 } from "./types.js";
+
+export { verifyEventSignature } from "./events.js";
+export type { RelayEvent, EventSubscriptionInput, EventSubscription, EventSubscriptionResult, EventIngestionHealth, EventSource, EventDeliveryAttempt, EventDelivery, EventDeliveryPage } from "./types.js";

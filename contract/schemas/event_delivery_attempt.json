@@ -1,0 +1,29 @@
+{
+  "fields": {
+    "delivery_id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "finished_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "http_status": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "started_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.EventDeliveryAttempt"
+}

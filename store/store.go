@@ -480,6 +480,9 @@ CREATE INDEX IF NOT EXISTS idx_orchestration_tasks_status
 	ON orchestration_tasks(orchestration_id,status);`
 
 func (s *Store) migrateSQLite() error {
+	if _, err := s.writer.Exec(eventRelaySchema); err != nil {
+		return err
+	}
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
 		return err
 	}

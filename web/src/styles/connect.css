@@ -2149,3 +2149,14 @@
     display: none;
   }
 }
+
+.event-subscription-form { display: grid; gap: 16px; padding: 20px; margin-block: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.event-subscription-form .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.event-subscription-form label { display: grid; gap: 6px; }
+.event-subscription-form input, .event-subscription-form textarea, .event-subscription-form select { width: 100%; min-width: 0; }
+.event-subscription-form fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.event-subscription-form .event-source-choice { display: flex; gap: 8px; align-items: center; margin-block: 8px; flex-wrap: wrap; }
+.event-subscription-form .event-source-choice input { width: auto; }
+.event-subscription-card { margin-top: 16px; overflow-wrap: anywhere; }
+.event-subscription-card .table-actions { flex-wrap: wrap; }
+@media (max-width: 700px) { .event-subscription-form .form-grid { grid-template-columns: 1fr; } }

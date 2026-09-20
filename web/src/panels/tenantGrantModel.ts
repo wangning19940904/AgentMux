@@ -22,6 +22,11 @@ export function resourcesForType(
   type: GrantableResourceType,
   sources: GrantResourceSources,
 ): GrantResource[] {
+  if (type === "event_source") {
+    return (["agent", "channel", "trigger"] as const).flatMap((kind) =>
+      sources[`${kind}s`].map((item) => ({ ...item, id: `${kind}:${item.id}`, name: `${item.name} · ${kind}`, type })),
+    );
+  }
   const key = `${type}s` as keyof GrantResourceSources;
   return sources[key].map((item) => ({ ...item, type }));
 }

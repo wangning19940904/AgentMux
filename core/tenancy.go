@@ -47,10 +47,11 @@ const (
 
 // Grantable resource types.
 const (
-	ResourceTypeAgent    = "agent"
-	ResourceTypeChannel  = "channel"
-	ResourceTypeTrigger  = "trigger"
-	ResourceTypeProvider = "provider"
+	ResourceTypeAgent       = "agent"
+	ResourceTypeChannel     = "channel"
+	ResourceTypeTrigger     = "trigger"
+	ResourceTypeProvider    = "provider"
+	ResourceTypeEventSource = "event_source"
 	// Orchestrations remain tenant-scoped runtime records, but are no longer
 	// offered as administrator-granted catalogue resources.
 	ResourceTypeOrchestration = "orchestration"

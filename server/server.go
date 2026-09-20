@@ -17,6 +17,7 @@ import (
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/contract"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/eventrelay"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -27,6 +28,7 @@ import (
 
 // Server is the management/bridge HTTP server.
 type Server struct {
+	eventRelay         *eventrelay.Service
 	cfg                *config.Config
 	version            string
 	log                *slog.Logger
@@ -74,6 +76,7 @@ type UsageReporter func(ctx context.Context, period string, since, until time.Ti
 // composition supplies this once rather than mutating a partially constructed
 // server through a sequence of setters.
 type Dependencies struct {
+	EventRelay     *eventrelay.Service
 	Config         *config.Config
 	Version        string
 	Log            *slog.Logger
@@ -107,6 +110,7 @@ func New(deps Dependencies) *Server {
 		log = slog.Default()
 	}
 	s := &Server{
+		eventRelay:        deps.EventRelay,
 		cfg:               cfg,
 		version:           "0.1.0",
 		log:               log,

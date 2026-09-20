@@ -17,7 +17,7 @@
 
 ## 契约版本（contract_version）
 
-当前契约版本：**`2.1`**（常量定义于 [`contract.go`](contract.go)，由
+当前契约版本：**`2.2`**（常量定义于 [`contract.go`](contract.go)，由
 `GET /api/v1/capabilities` 与 `GET /api/v1/status` 返回）。
 
 `1.1` 新增多租户：Agent 实例与渠道新增可选归属字段、`/api/v1/tenancy/*`
@@ -38,6 +38,9 @@ Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 
 私聊支持 `chat`、`thread`、`group`；群聊支持 `chat-topic`、`new-topic`、`chat`。
 旧 Agent 的空值继续使用渠道默认值，新 Agent 默认 `chat` / `chat-topic`。
 会话内已设置的模式优先于 Agent 默认。旧客户端省略字段时保留已有设置。
+
+
+`2.2` 新增本机事件订阅：`event_subscriptions` feature、事件源目录、订阅 CRUD、测试回调、签名密钥轮换和投递历史/重试 API。新增 `event_source` 授权与普通资源授权独立；共享或公开渠道不自动开放事件读取。详见 [事件接入指南](EVENT_SUBSCRIPTIONS.md)。
 
 `contract_version` 与二进制版本**相互独立**：
 
@@ -70,6 +73,9 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | --- | --- |
 | `GET/POST /api/v1/orchestrations`、`POST /api/v1/orchestrations/cancel` | 多 Agent DAG |
 | `GET/POST/DELETE /api/v1/triggers`、`POST /api/v1/triggers/run` | 定时/Webhook/事件触发 |
+| `GET /api/v1/event-sources`、`GET/POST/DELETE /api/v1/event-subscriptions` | 本机事件源与订阅 |
+| `POST /api/v1/event-subscriptions/test`、`POST /api/v1/event-subscriptions/rotate-secret` | 回调测试与密钥轮换 |
+| `GET /api/v1/event-deliveries`、`POST /api/v1/event-deliveries/retry` | 投递历史与重试 |
 | `GET /api/v1/usage` | Token 用量报表 |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
 | `POST /api/v1/tenancy/register`、`GET /api/v1/tenancy/self` | 租户自助注册与自查（见「多租户」） |

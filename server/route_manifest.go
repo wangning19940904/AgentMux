@@ -19,6 +19,15 @@ type PublicRouteSpec struct {
 // publicRouteManifest is the single inventory for the versioned public API.
 // OpenAPI, tenant access policy, and mux registration are checked against it.
 var publicRouteManifest = []PublicRouteSpec{
+	{http.MethodGet, "/api/v1/event-sources", RouteBeta, true},
+	{http.MethodGet, "/api/v1/event-subscriptions", RouteBeta, true},
+	{http.MethodPost, "/api/v1/event-subscriptions", RouteBeta, true},
+	{http.MethodDelete, "/api/v1/event-subscriptions", RouteBeta, true},
+	{http.MethodPost, "/api/v1/event-subscriptions/test", RouteBeta, true},
+	{http.MethodPost, "/api/v1/event-subscriptions/rotate-secret", RouteBeta, true},
+	{http.MethodGet, "/api/v1/event-deliveries", RouteBeta, true},
+	{http.MethodPost, "/api/v1/event-deliveries/retry", RouteBeta, true},
+
 	{http.MethodGet, "/api/v1/capabilities", RouteStable, true},
 	{http.MethodGet, "/api/v1/status", RouteStable, true},
 	{http.MethodPost, "/api/v1/tenancy/register", RouteStable, false},

@@ -91,7 +91,7 @@ import type {
   ToolsResponse,
 	TTSCatalogStatus,
 	TTSModel,
-  Trigger,
+  Trigger, EventSource, EventSubscription, EventSubscriptionInput, EventSubscriptionResult, EventDelivery, EventDeliveryPage,
   UsageReport,
   UsageTotals,
   CursorUsageActionResult,
@@ -373,6 +373,16 @@ function mergeFleetProxyStatus(batch: FleetBatchResult<ProxyStatus>): ProxyStatu
 }
 
 export const api = {
+  eventSources: () => getChecked<EventSource[]>("/api/v1/event-sources"),
+  eventSubscriptions: () => getChecked<EventSubscription[]>("/api/v1/event-subscriptions"),
+  saveEventSubscription: (sub: EventSubscriptionInput) => postChecked<EventSubscriptionResult>("/api/v1/event-subscriptions", sub),
+  deleteEventSubscription: (id: string) => del(`/api/v1/event-subscriptions?id=${encodeURIComponent(id)}`),
+  testEventSubscription: (id: string) => postChecked("/api/v1/event-subscriptions/test", { id }),
+  rotateEventSecret: (id: string) => postChecked<{signing_secret: string}>("/api/v1/event-subscriptions/rotate-secret", { id }),
+  eventDeliveries: (subscriptionID = "", status = "", offset = 0) => getChecked<EventDeliveryPage>(`/api/v1/event-deliveries?subscription_id=${encodeURIComponent(subscriptionID)}&status=${encodeURIComponent(status)}&limit=25&offset=${offset}`),
+  eventDelivery: (id: string) => getChecked<EventDelivery>(`/api/v1/event-deliveries?id=${encodeURIComponent(id)}`),
+  retryEventDelivery: (id: string) => postChecked("/api/v1/event-deliveries/retry", { id }),
+
   // SSH remote control. These paths intentionally bypass the selected target.
   remoteHosts: () => get<RemoteHost[]>("/api/v1/remote/hosts"),
   fleetTargets: () => getLocal<MachineTarget[]>("/api/v1/remote/fleet/targets"),

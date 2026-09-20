@@ -58,7 +58,7 @@ from .release import (
     latest_release,
 )
 
-# 0.1.5-dev speaks the pre-release Contract 2.0 surface.
+# 0.1.5-dev supports the Contract 2.x surface, including 2.2 event subscriptions.
 __version__ = "0.1.5.dev0"
 
 __all__ = [
@@ -100,3 +100,17 @@ __all__ = [
     "latest_release",
     "version_key",
 ]
+
+from .events import (
+    RelayEvent,
+    EventSubscription,
+    EventSubscriptionResult,
+    EventIngestionHealth,
+    EventSource,
+    EventDelivery,
+    EventDeliveryAttempt,
+    EventDeliveryPage,
+    verify_event_signature,
+)
+
+__all__ += ['RelayEvent', 'EventSubscription', 'EventSubscriptionResult', 'EventIngestionHealth', 'EventSource', 'EventDelivery', 'EventDeliveryAttempt', 'EventDeliveryPage', 'verify_event_signature']

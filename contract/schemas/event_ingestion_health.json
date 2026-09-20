@@ -1,0 +1,21 @@
+{
+  "fields": {
+    "failures": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "last_error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "last_failure_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "last_success_at": {
+      "omitempty": true,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.EventIngestionHealth"
+}

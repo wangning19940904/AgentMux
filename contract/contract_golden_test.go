@@ -22,6 +22,13 @@ var update = flag.Bool("update", false, "rewrite golden schema files")
 // retyping or removing a JSON field here is a breaking change: it must bump
 // the contract major version and regenerate goldens with `go test -update`.
 var contractTypes = map[string]any{
+	"relay_event.json":            core.RelayEvent{},
+	"event_subscription.json":     core.EventSubscription{},
+	"event_source.json":           core.EventSource{},
+	"event_ingestion_health.json": core.EventIngestionHealth{},
+	"event_delivery.json":         core.EventDelivery{},
+	"event_delivery_attempt.json": core.EventDeliveryAttempt{},
+
 	"invocation_request.json":      core.InvocationRequest{},
 	"invocation_result.json":       core.InvocationResult{},
 	"invocation_stream_event.json": core.InvocationStreamEvent{},
@@ -152,9 +159,10 @@ func wireType(t reflect.Type) string {
 // golden set.
 func TestContractTypeInventory(t *testing.T) {
 	want := []string{
-		"agent_instance.json", "channel.json", "invocation_request.json",
+		"agent_instance.json", "channel.json",
+		"event_delivery.json", "event_delivery_attempt.json", "event_ingestion_health.json", "event_source.json", "event_subscription.json", "invocation_request.json",
 		"invocation_result.json", "invocation_stream_event.json",
-		"orchestration.json", "orchestration_task.json", "tenant.json",
+		"orchestration.json", "orchestration_task.json", "relay_event.json", "tenant.json",
 		"trigger.json", "turn_usage.json",
 	}
 	var got []string

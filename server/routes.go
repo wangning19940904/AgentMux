@@ -1,6 +1,7 @@
 package server
 
 func (s *Server) routes() {
+	s.registerEventRelayRoutes()
 	s.registerTenancyRoutes()
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/capabilities", s.handleCapabilities)

@@ -26,6 +26,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | 多 Agent 编排 | **AgentMux Orchestrations** | `orchestration/` + `store/orchestrations.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
+- **事件订阅** — 同机服务可使用租户 Token 订阅飞书/Lark 原始事件与 AgentMux 生命周期事件，复用现有长连接。PostgreSQL 持久化、独立 HTTP 回调、HMAC 验签、失败重试及投递记录；共享渠道需要单独授权事件读取权。见 [接入指南](contract/EVENT_SUBSCRIPTIONS.md) 与 [Homebook 示例](integrations/homebook-events/README.md)。
 - **Router** — 支持 Claude Code、Codex CLI、Codex Desktop Thread、Cursor、Gemini、Qoder、OpenCode、TRAE CLI、iFlow、Kimi(插件式扩展),并在多 LLM Provider 间切换/故障转移；Codex Desktop Agent 会校验并固定恢复由 Desktop 创建的原生 Thread。TRAE CLI、bytedcli 与 CIS CLI 可通过 Console 或 `amux tools bundle install bytedance-internal` 一键安装，且仅适用于字节内部环境。
 - **渠道 & 触发** — 渠道是绑定 Agent 的实时 IM 连接(飞书/Telegram/钉钉/Slack/Discord/Webhook),控制台可增删改与启停/重启并显示运行状态;触发统一承载三类自动化:定时任务(robfig/cron,标准 5 段表达式)、入站 Webhook(`POST /hook/{id}`,自带 token 鉴权)、生命周期事件回调(`message.received`/`cron.triggered`/`error` 等 → Shell 或 HTTP)。定时/Webhook 触发把 Prompt 发给绑定 Agent 并将结果推回渠道会话,支持 `reuse`/`new_per_run` 会话模式。
 - **Ledger** — 读取 Claude/Codex/Gemini 的本地会话日志；Cursor 在用户显式连接后通过原生 Hook、本地只读 SQLite 与 Cursor 用量 API 混合采集。Ledger 基于 LiteLLM 价格数据计费，按小时/天/周/月/会话/5 小时块出账，并能通过 SSH 采集远程机器用量。

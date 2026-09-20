@@ -1,0 +1,73 @@
+{
+  "fields": {
+    "callback_url": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "dead": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "deleted": {
+      "omitempty": true,
+      "type": "boolean"
+    },
+    "event_types": {
+      "omitempty": false,
+      "type": "array\u003cstring\u003e"
+    },
+    "filters": {
+      "omitempty": true,
+      "type": "map\u003cstring,array\u003cstring\u003e\u003e"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "key": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "last_error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "last_success_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "owner_tenant_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "paused": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "pending": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "source": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "source_refs": {
+      "omitempty": false,
+      "type": "array\u003cstring\u003e"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.EventSubscription"
+}

@@ -281,7 +281,7 @@ func tenantsGrantCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "grant <tenant> <resource-type> <resource-id>",
 		Short: "Grant a tenant access to a resource it does not own",
-		Long: "Resource type is one of agent, channel, trigger or provider.\n" +
+		Long: "Resource type is one of agent, channel, trigger, provider or event_source.\n" +
 			"Level is read (visible), use (runnable) or manage (editable).",
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -296,9 +296,9 @@ func tenantsGrantCmd() *cobra.Command {
 				resourceType := strings.TrimSpace(args[1])
 				switch resourceType {
 				case core.ResourceTypeAgent, core.ResourceTypeChannel,
-					core.ResourceTypeTrigger, core.ResourceTypeProvider:
+					core.ResourceTypeTrigger, core.ResourceTypeProvider, core.ResourceTypeEventSource:
 				default:
-					return fmt.Errorf("resource type must be agent, channel, trigger or provider")
+					return fmt.Errorf("resource type must be agent, channel, trigger, provider or event_source")
 				}
 				resourceID := strings.TrimSpace(args[2])
 				if revoke {
@@ -308,6 +308,13 @@ func tenantsGrantCmd() *cobra.Command {
 					cmd.Printf("Revoked %s access for %q on %s %s.\n", level, tenant.Name, resourceType, resourceID)
 					return nil
 				}
+				if resourceType == core.ResourceTypeEventSource {
+					allowed, err := st.EventSourceAllowed(cmd.Context(), "", resourceID)
+					if err != nil || !allowed || resourceID == "system" {
+						return fmt.Errorf("invalid event source %q", resourceID)
+					}
+				}
+
 				grant := &core.ResourceGrant{
 					TenantID:     tenant.ID,
 					ResourceType: resourceType,

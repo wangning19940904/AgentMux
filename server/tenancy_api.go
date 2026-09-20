@@ -310,8 +310,15 @@ func (s *Server) handleGrantUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isGrantableResourceType(grant.ResourceType) {
-		writeErr(w, http.StatusBadRequest, "resource_type must be one of agent, channel, trigger, provider")
+		writeErr(w, http.StatusBadRequest, "resource_type must be one of agent, channel, trigger, provider, event_source")
 		return
+	}
+	if grant.ResourceType == core.ResourceTypeEventSource {
+		allowed, err := s.st.EventSourceAllowed(r.Context(), "", grant.ResourceID)
+		if err != nil || !allowed || grant.ResourceID == "system" {
+			writeErr(w, 400, "invalid event source grant")
+			return
+		}
 	}
 	if err := s.st.UpsertResourceGrant(r.Context(), &grant); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -394,7 +401,7 @@ func (s *Server) handleOwnershipAssign(w http.ResponseWriter, r *http.Request) {
 func isGrantableResourceType(value string) bool {
 	switch value {
 	case core.ResourceTypeAgent, core.ResourceTypeChannel,
-		core.ResourceTypeTrigger, core.ResourceTypeProvider:
+		core.ResourceTypeTrigger, core.ResourceTypeProvider, core.ResourceTypeEventSource:
 		return true
 	}
 	return false

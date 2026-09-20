@@ -30,7 +30,7 @@ import {
 	type OrchestrationTaskInput,
   type TenancySelf,
   type Tenant,
-  type Trigger,
+  type Trigger, type EventSubscription, type EventSubscriptionInput, type EventSubscriptionResult, type EventSource, type EventDelivery, type EventDeliveryPage,
 } from "./types.js";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8765";
@@ -99,6 +99,7 @@ export class AgentMuxClient {
   readonly agents: AgentsResource;
   readonly channels: ChannelsResource;
   readonly triggers: TriggersResource;
+ readonly events: EventsResource;
   readonly orchestrations: OrchestrationsResource;
   readonly integration: IntegrationResource;
   readonly console: ConsoleResource;
@@ -113,6 +114,7 @@ export class AgentMuxClient {
     this.agents = new AgentsResource(this);
     this.channels = new ChannelsResource(this);
     this.triggers = new TriggersResource(this);
+ this.events = new EventsResource(this);
     this.orchestrations = new OrchestrationsResource(this);
     this.integration = new IntegrationResource(this);
     this.console = new ConsoleResource(this);
@@ -502,5 +504,73 @@ class TenancyResource {
       body: { name, kind },
     });
     return (await response.json()) as TenantRegistration;
+  }
+}
+
+class EventsResource {
+  constructor(private readonly client: AgentMuxClient) {}
+  async sources(): Promise<EventSource[]> {
+    return (await this.client.request("/api/v1/event-sources")).json();
+  }
+  async list(): Promise<EventSubscription[]> {
+    return (await this.client.request("/api/v1/event-subscriptions")).json();
+  }
+  async upsert(body: EventSubscriptionInput): Promise<EventSubscriptionResult> {
+    return (
+      await this.client.request("/api/v1/event-subscriptions", {
+        method: "POST",
+        body,
+      })
+    ).json();
+  }
+  async delete(id: string): Promise<void> {
+    await this.client.request("/api/v1/event-subscriptions", {
+      method: "DELETE",
+      query: { id },
+    });
+  }
+  async test(id: string): Promise<void> {
+    await this.client.request("/api/v1/event-subscriptions/test", {
+      method: "POST",
+      body: { id },
+    });
+  }
+  async rotateSecret(id: string): Promise<string> {
+    return (
+      (await (
+        await this.client.request("/api/v1/event-subscriptions/rotate-secret", {
+          method: "POST",
+          body: { id },
+        })
+      ).json()) as { signing_secret: string }
+    ).signing_secret;
+  }
+  async deliveries(
+    options: {
+      subscription_id?: string;
+      status?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<EventDeliveryPage> {
+    const query = Object.fromEntries(
+      Object.entries(options)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => [key, String(value)]),
+    );
+    return (
+      await this.client.request("/api/v1/event-deliveries", { query })
+    ).json();
+  }
+  async delivery(id: string): Promise<EventDelivery> {
+    return (
+      await this.client.request("/api/v1/event-deliveries", { query: { id } })
+    ).json();
+  }
+  async retry(id: string): Promise<void> {
+    await this.client.request("/api/v1/event-deliveries/retry", {
+      method: "POST",
+      body: { id },
+    });
   }
 }

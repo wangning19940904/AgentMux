@@ -24,7 +24,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.st != nil {
-		features = append(features, "triggers")
+		features = append(features, "triggers", "event_subscriptions")
 	}
 	if s.usageFn != nil {
 		features = append(features, "usage")

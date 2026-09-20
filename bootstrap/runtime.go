@@ -11,6 +11,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/framework"
 	"github.com/wangning19940904/AgentMux/guard"
 	"github.com/wangning19940904/AgentMux/mcp"
@@ -32,14 +33,15 @@ type runtimeResult struct {
 // It owns startup, cancellation, shutdown, and waiting for every long-running
 // component assembled by bootstrap.
 type Runtime struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	log      *slog.Logger
-	Server   *server.Server
-	Provider *provider.Service
-	Usage    *usage.Engine
-	Engine   *core.Engine
-	Connect  *core.ConnectService
+	EventRelay *eventrelay.Service
+	ctx        context.Context
+	cancel     context.CancelFunc
+	log        *slog.Logger
+	Server     *server.Server
+	Provider   *provider.Service
+	Usage      *usage.Engine
+	Engine     *core.Engine
+	Connect    *core.ConnectService
 
 	mu          sync.Mutex
 	started     bool
@@ -84,6 +86,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	usageEngine := usage.NewEngine(cfg, st, log)
 	backfill := time.Duration(cfg.Observability.BackfillDays) * 24 * time.Hour
 	go usageEngine.Start(ctx, backfill)
+	relay := eventrelay.New(st, log, engine)
 	connect := core.NewConnectService(log, engine, st)
 	connect.SetCLINoteResolver(func(ids []string) []core.CLINote {
 		return cliNotes(ctx, st, ids)
@@ -94,7 +97,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		return usageEngine.ReportRangeInLocation(ctx, period, since, until, location)
 	}
 	srv := server.New(server.Dependencies{
-		Config: cfg, Version: version, Log: log, Store: st,
+		Config: cfg, Version: version, Log: log, Store: st, EventRelay: relay,
 		Provider: providerService, ProviderSvc: providerService,
 		Usage: reporter, UsageSources: usageEngine, Sender: engine, Invoker: connect, Connect: connect,
 		Presets: provider.Presets(), Memory: memoryStore, Skills: skillManager, MCP: mcpRegistry,
@@ -116,7 +119,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		}
 	}
 	return &Runtime{
-		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService,
+		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService, EventRelay: relay,
 		Usage: usageEngine, Engine: engine, Connect: connect,
 		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
 	}, nil
@@ -144,6 +147,12 @@ func (r *Runtime) Start() error {
 	}
 	r.mu.Unlock()
 
+	if r.EventRelay != nil {
+		if err := r.EventRelay.Start(r.ctx); err != nil {
+			r.cancel()
+			return fmt.Errorf("start event relay: %w", err)
+		}
+	}
 	if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
 		r.log.Warn("local routing restore failed", "err", err)
 	}
@@ -204,6 +213,9 @@ func (r *Runtime) Stop() {
 	r.stop.Do(func() {
 		r.cancel()
 		r.authWG.Wait()
+		if r.EventRelay != nil {
+			r.EventRelay.Stop()
+		}
 		if r.Connect != nil {
 			r.Connect.Stop()
 		}

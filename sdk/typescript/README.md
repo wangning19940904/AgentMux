@@ -111,3 +111,16 @@ This SDK speaks contract major `2` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
 Feature-detect tenancy with
 `capabilities.features.includes("tenancy")`.
+
+## Local event subscriptions (contract 2.2)
+
+Use `client.events.sources()`, `list()`, `upsert(config)`, `delete(id)`, `test(id)`,
+`rotateSecret(id)`, `deliveries(options)`, `delivery(id)` and `retry(id)` after
+checking the `event_subscriptions` capability. `upsert` returns
+`{ subscription, signing_secret? }`; the signing secret is returned only once.
+Keep that secret in the receiving backend, never in browser configuration.
+
+`verifyEventSignature(secret, { timestamp, deliveryId, signature }, rawBytes)`
+uses Web Crypto to verify the exact request body and a five-minute timestamp
+window. Persist event IDs to deduplicate work before acknowledging callbacks.
+See [the event contract](../../contract/EVENT_SUBSCRIPTIONS.md).

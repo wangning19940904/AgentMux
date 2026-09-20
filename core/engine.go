@@ -15,6 +15,7 @@ type EventSink func(event HookEvent, data map[string]string)
 // inbound messages to agent sessions, streaming responses back. Besides
 // it hosts dynamically attached PostgreSQL-managed channels.
 type Engine struct {
+	eventIngress            func(Channel) PlatformEventIngress
 	ingressMu               sync.Mutex
 	ingress                 map[string]chan struct{}
 	log                     *slog.Logger
@@ -324,6 +325,9 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 
 	msg.ConversationKey = ResolveConversationKey(msg)
 	data := eventData(msg)
+	if rt := e.channelRuntime(msg.ChannelID); rt != nil {
+		data["agent_id"] = rt.channel.AgentID
+	}
 
 	if msg.ChannelID != "" && e.msgLog != nil {
 		if err := e.msgLog.Log(msg.ChannelID, data); err != nil {

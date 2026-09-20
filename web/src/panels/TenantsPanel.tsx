@@ -24,7 +24,7 @@ import {
 
 const KINDS: TenantKind[] = ["app", "web", "service"];
 const LEVELS: GrantLevel[] = ["read", "use", "manage"];
-const RESOURCE_TYPES: GrantableResourceType[] = ["agent", "channel", "trigger", "provider"];
+const RESOURCE_TYPES: GrantableResourceType[] = ["agent", "channel", "trigger", "provider", "event_source"];
 
 export function TenantsPanel({
   onContinue,
@@ -567,7 +567,7 @@ function GrantEditor({
   busy: boolean;
   onGrantMany: (resources: GrantResource[], level: GrantLevel) => Promise<void>;
   onRevoke: (grant: ResourceGrant) => void;
-  onAssign: (resourceType: Exclude<GrantableResourceType, "provider">, resourceID: string) => void;
+  onAssign: (resourceType: Exclude<GrantableResourceType, "provider" | "event_source">, resourceID: string) => void;
 }) {
   const { t } = useI18n();
   const [resourceType, setResourceType] = useState<GrantableResourceType>("agent");
@@ -657,7 +657,7 @@ function GrantEditor({
               const grant = grants.find((item) =>
                 item.resource_type === resource.type && item.resource_id === resource.id
               );
-              const assignable = resource.type !== "provider" && !resource.owner_tenant_id;
+              const assignable = resource.type !== "provider" && resource.type !== "event_source" && !resource.owner_tenant_id;
               const ownedBySelected = resource.owner_tenant_id === tenant.id;
               return (
                 <article className="agent-registry-row" key={`${resource.type}:${resource.id}`}>
@@ -708,7 +708,7 @@ function GrantEditor({
                         className="ghost-action"
                         disabled={busy}
                         onClick={() => {
-                          if (resource.type !== "provider") onAssign(resource.type, resource.id);
+                          if (resource.type !== "provider" && resource.type !== "event_source") onAssign(resource.type, resource.id);
                         }}
                       >
                         {t("tenants.assignTo", { tenant: tenant.name })}

@@ -1,0 +1,53 @@
+{
+  "fields": {
+    "attempts": {
+      "omitempty": false,
+      "type": "integer"
+    },
+    "created_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "event": {
+      "omitempty": true,
+      "type": "object:core.RelayEvent"
+    },
+    "event_id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "first_attempt_at": {
+      "omitempty": true,
+      "type": "datetime"
+    },
+    "history": {
+      "omitempty": true,
+      "type": "array\u003cobject:core.EventDeliveryAttempt\u003e"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "last_error": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "next_attempt_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "status": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "subscription_id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "updated_at": {
+      "omitempty": false,
+      "type": "datetime"
+    }
+  },
+  "go_type": "core.EventDelivery"
+}

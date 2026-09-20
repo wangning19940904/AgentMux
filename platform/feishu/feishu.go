@@ -30,6 +30,7 @@ func init() {
 
 // Platform is the Feishu adapter.
 type Platform struct {
+	eventIngress     core.PlatformEventIngress
 	name             string
 	domain           string
 	appID            string
@@ -50,6 +51,7 @@ type Platform struct {
 
 func newPlatform(name, domain string, cfg map[string]any) (*Platform, error) {
 	p := &Platform{name: name, domain: domain}
+	p.eventIngress, _ = cfg["event_ingress"].(core.PlatformEventIngress)
 	p.appID, _ = cfg["app_id"].(string)
 	p.appSecret, _ = cfg["app_secret"].(string)
 	p.project, _ = cfg["project"].(string)
@@ -101,6 +103,9 @@ func (p *Platform) Start(ctx context.Context, inbound chan<- *core.Message) erro
 		c, err := newLarkClient(p.name, p.domain, p.appID, p.appSecret, p.voice, p.meetingGreeting, p.agentName, p.channelName, p.meetingWakeWords, p.meetingNotify)
 		if err != nil {
 			return err
+		}
+		if client, ok := c.(*larkClient); ok {
+			client.eventIngress = p.eventIngress
 		}
 		p.client = c
 	}

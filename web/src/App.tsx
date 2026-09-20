@@ -41,6 +41,7 @@ import { MeetingProvider } from "./MeetingContext";
 import { RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
 
+const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
 const TenantsPanel = lazy(() => import("./panels/TenantsPanel").then((m) => ({ default: m.TenantsPanel })));
@@ -125,6 +126,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "channels", labelKey: "nav.channels", icon: Cable },
       { id: "schedules", labelKey: "nav.schedules", icon: CalendarClock },
       { id: "triggers", labelKey: "nav.triggers", icon: Zap },
+      { id: "subscriptions", labelKey: "nav.subscriptions", icon: Cable },
       { id: "meetings", labelKey: "nav.meetings", icon: Video },
     ],
   },
@@ -998,6 +1000,7 @@ function Shell({
 				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
+                  {visibleTab === "subscriptions" && <EventSubscriptionsPanel />}
 				  {visibleTab === "machines" && <RemoteHostsPanel addRequest={remoteAddRequest} />}
                   {visibleTab === "tenants" && tenantIdentity && (
                     <TenantsPanel

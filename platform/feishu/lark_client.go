@@ -12,13 +12,12 @@ import (
 	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
-	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/wangning19940904/AgentMux/core"
+	larkws "github.com/wangning19940904/AgentMux/internal/larkws"
 )
 
 // streamCardElementID is the fixed element_id of the markdown component we
@@ -43,6 +42,7 @@ const (
 // larkClient wraps the official Lark SDK: a WebSocket client for inbound events
 // and an API client for outbound messages.
 type larkClient struct {
+	eventIngress     core.PlatformEventIngress
 	platform         string
 	domain           string
 	appID            string
@@ -109,15 +109,20 @@ func (c *larkClient) MeetingInviteChanged() {
 	}
 }
 
-func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- *core.Message) error {
+func (c *larkClient) eventDispatcher(ctx context.Context, project string, inbound chan<- *core.Message, eventTypes []string) *dispatcher.EventDispatcher {
 	c.beginHealth()
 	botOpenID := c.loadBotOpenID(ctx)
 	if c.meetingActivity != nil {
 		c.meetingActivity.SetInbound(project, inbound)
 	}
 	handler := dispatcher.NewEventDispatcher("", "").
-		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
+		OnP2MessageReceiveV1(func(eventCtx context.Context, event *larkim.P2MessageReceiveV1) error {
 			c.markEvent()
+			if event != nil {
+				if err := c.forwardEvent(eventCtx, event.EventReq); err != nil {
+					return err
+				}
+			}
 			if event == nil || event.Event == nil || event.Event.Message == nil {
 				return nil
 			}
@@ -167,7 +172,7 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			}
 			c.markInbound()
 			previewText := inboundCardPreviewText(msg, botOpenID, text)
-			inbound <- &core.Message{
+			message := &core.Message{
 				ID:           messageID,
 				ChatID:       chatID,
 				ChatType:     chatType,
@@ -182,10 +187,22 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 				Platform:     c.platform,
 				Project:      project,
 			}
+			enqueueCtx, cancel := context.WithTimeout(eventCtx, 2*time.Second)
+			defer cancel()
+			select {
+			case inbound <- message:
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-enqueueCtx.Done():
+				return enqueueCtx.Err()
+			}
 			return nil
 		}).
 		OnCustomizedEvent(meetingInvitedEventType, func(eventCtx context.Context, event *larkevent.EventReq) error {
 			c.markEvent()
+			if err := c.forwardEvent(eventCtx, event); err != nil {
+				return err
+			}
 			if c.meetingInvites == nil || event == nil {
 				return nil
 			}
@@ -193,6 +210,9 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 		}).
 		OnCustomizedEvent(meetingActivityEventType, func(eventCtx context.Context, event *larkevent.EventReq) error {
 			c.markEvent()
+			if err := c.forwardEvent(eventCtx, event); err != nil {
+				return err
+			}
 			if c.meetingActivity == nil || event == nil {
 				return nil
 			}
@@ -203,8 +223,11 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			}
 			return nil
 		}).
-		OnCustomizedEvent(meetingEndedEventType, func(_ context.Context, event *larkevent.EventReq) error {
+		OnCustomizedEvent(meetingEndedEventType, func(eventCtx context.Context, event *larkevent.EventReq) error {
 			c.markEvent()
+			if err := c.forwardEvent(eventCtx, event); err != nil {
+				return err
+			}
 			manager := c.currentMeetingVoice()
 			if manager == nil || event == nil {
 				return nil
@@ -217,6 +240,9 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 		}).
 		OnP2CardActionTrigger(func(eventCtx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 			c.markEvent()
+			if event != nil {
+				_ = c.forwardEvent(eventCtx, event.EventReq)
+			}
 			if c.meetingInvites != nil {
 				if handled, response := c.meetingInvites.HandleAction(ctx, event); handled {
 					c.markInbound()
@@ -236,41 +262,17 @@ func (c *larkClient) Listen(ctx context.Context, project string, inbound chan<- 
 			return nil, nil
 		})
 
-	logger := &larkWSHealthLogger{
-		client:   c,
-		delegate: larkcore.NewDefaultLogger(larkcore.LogLevelInfo),
+	for _, typ := range eventTypes {
+		switch typ {
+		case "im.message.receive_v1", "card.action.trigger", meetingInvitedEventType, meetingActivityEventType, meetingEndedEventType, "app_ticket":
+			continue
+		}
+		handler.OnCustomizedEvent(typ, func(eventCtx context.Context, event *larkevent.EventReq) error {
+			c.markEvent()
+			return c.forwardEvent(eventCtx, event)
+		})
 	}
-	ws := larkws.NewClient(
-		c.appID,
-		c.appSecret,
-		larkws.WithDomain(c.domain),
-		larkws.WithEventHandler(handler),
-		larkws.WithLogger(logger),
-		larkws.WithOnReady(c.markReady),
-		larkws.WithOnReconnecting(c.markReconnecting),
-		larkws.WithOnReconnected(func() {
-			c.markReady()
-			if c.meetingActivity != nil {
-				go c.meetingActivity.Recover(ctx)
-			}
-		}),
-		larkws.WithOnDisconnected(c.markDisconnected),
-		larkws.WithOnError(c.markError),
-	)
-	wsCtx, cancel := context.WithCancel(ctx)
-	c.mu.Lock()
-	c.ws = ws
-	c.cancel = cancel
-	c.mu.Unlock()
-	// Start blocks; run until context cancelled.
-	errCh := make(chan error, 1)
-	go func() { errCh <- ws.Start(wsCtx) }()
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-errCh:
-		return err
-	}
+	return handler
 }
 
 func (c *larkClient) Close() error {
