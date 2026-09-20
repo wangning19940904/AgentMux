@@ -207,6 +207,7 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 		Origin:          OriginAPI,
 	}
 	data := eventData(msg)
+	data["agent_id"] = req.AgentID
 	data["invocation_id"] = invocationID
 	e.emit(turnCtx, HookMessageReceived, data)
 

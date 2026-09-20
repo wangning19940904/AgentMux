@@ -560,6 +560,9 @@ func (e *Engine) AttachChannel(ctx context.Context, ch Channel, agent Agent, wor
 	}
 	cfg["project"] = "channel:" + ch.ID
 	cfg["channel_name"] = ch.Name
+	if e.eventIngress != nil {
+		cfg["event_ingress"] = e.eventIngress(ch)
+	}
 	cfg["agent_name"] = opts.AgentName
 	cfg["meeting_event_notify"] = func(event MeetingEvent) { e.publishMeetingEvent(ch.ID, event) }
 

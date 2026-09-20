@@ -58,6 +58,7 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "dingshirenwu", "ding shi ren wu", "dsrw", "dingshi", "ding shi", "ds",
     "schedule", "schedules", "scheduled task", "cron", "recurring task",
   ],
+  subscriptions: ["事件订阅", "消息转发", "订阅", "event subscription", "callback", "relay"],
   triggers: [
     "触发器", "触发", "Webhook", "事件回调", "回调", "自动化",
     "chufaqi", "chu fa qi", "cfq", "chufa", "chu fa", "cf", "huidiao", "hui diao", "hd",

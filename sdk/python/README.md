@@ -131,3 +131,18 @@ This SDK speaks contract major `2` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
 Feature-detect tenancy with
 `report.capabilities.supports("tenancy")`.
+
+## Local event subscriptions (contract 2.2)
+
+`client.events` (also available on `AsyncAgentMuxClient`) supports `sources()`,
+`list()`, `upsert(config)`, `delete(id)`, `test(id)`, `rotate_secret(id)`,
+`deliveries(...)`, `delivery(id)` and `retry(id)`. Probe the
+`event_subscriptions` capability before using it. Registration returns an
+`EventSubscriptionResult`; `signing_secret` is present only on first creation.
+Use `verify_event_signature` on the raw HTTP body before parsing JSON, then
+persist the event ID in a durable inbox before returning a successful response.
+
+See [the event contract](../../contract/EVENT_SUBSCRIPTIONS.md) and the
+[FastAPI example](../../integrations/homebook-events/README.md). Ordinary channel
+access does not grant event access; shared sources require an explicit
+`event_source/use` grant.

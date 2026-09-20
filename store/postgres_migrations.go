@@ -332,6 +332,7 @@ CREATE TABLE IF NOT EXISTS channel_chat_state (channel_id TEXT NOT NULL,state_ke
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS private_chat_mode TEXT;
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS group_chat_mode TEXT;
 `},
+		{version: 17, name: "event_relay", sql: eventRelaySchema},
 	}
 }
 

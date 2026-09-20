@@ -22,6 +22,7 @@ import httpx
 
 from ._sse import aiter_sse_payloads, iter_sse_payloads
 from .detect import looks_installed
+from .events import EventSource, EventSubscription, EventSubscriptionResult, EventDelivery, EventDeliveryPage
 from .errors import (
     AgentMuxUnreachable,
     error_for_status,
@@ -208,6 +209,7 @@ class AgentMuxClient:
         self.agents = AgentsResource(self)
         self.channels = ChannelsResource(self)
         self.triggers = TriggersResource(self)
+        self.events = EventsResource(self)
         self.orchestrations = OrchestrationsResource(self)
         self.integration = IntegrationResource(self)
         self.console = ConsoleResource(self)
@@ -620,6 +622,7 @@ class AsyncAgentMuxClient:
         self.agents = AsyncAgentsResource(self)
         self.channels = AsyncChannelsResource(self)
         self.triggers = AsyncTriggersResource(self)
+        self.events = AsyncEventsResource(self)
         self.orchestrations = AsyncOrchestrationsResource(self)
         self.integration = AsyncIntegrationResource(self)
         self.console = AsyncConsoleResource(self)
@@ -989,3 +992,153 @@ class AsyncTenancyResource:
             "POST", "/api/v1/tenancy/register", json={"name": name, "kind": kind}
         )
         return TenantRegistration.from_dict(response.json())
+
+
+class EventsResource:
+    def __init__(self, client: AgentMuxClient) -> None:
+        self._client = client
+
+    def sources(self) -> list[EventSource]:
+        response = self._client._request("GET", "/api/v1/event-sources")
+        return [EventSource.from_dict(item) for item in response.json()]
+
+    def list(self) -> list[EventSubscription]:
+        response = self._client._request("GET", "/api/v1/event-subscriptions")
+        return [EventSubscription.from_dict(item) for item in response.json()]
+
+    def upsert(
+        self, subscription: EventSubscription | dict[str, Any]
+    ) -> EventSubscriptionResult:
+        payload = (
+            subscription.to_payload()
+            if isinstance(subscription, EventSubscription)
+            else subscription
+        )
+        response = self._client._request(
+            "POST", "/api/v1/event-subscriptions", json=payload
+        )
+        return EventSubscriptionResult.from_dict(response.json())
+
+    def delete(self, subscription_id: str) -> None:
+        self._client._request(
+            "DELETE", "/api/v1/event-subscriptions", params={"id": subscription_id}
+        )
+
+    def test(self, subscription_id: str) -> None:
+        self._client._request(
+            "POST", "/api/v1/event-subscriptions/test", json={"id": subscription_id}
+        )
+
+    def rotate_secret(self, subscription_id: str) -> str:
+        response = self._client._request(
+            "POST",
+            "/api/v1/event-subscriptions/rotate-secret",
+            json={"id": subscription_id},
+        )
+        return str(response.json()["signing_secret"])
+
+    def deliveries(
+        self,
+        *,
+        subscription_id: str = "",
+        status: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> EventDeliveryPage:
+        response = self._client._request(
+            "GET",
+            "/api/v1/event-deliveries",
+            params={
+                "subscription_id": subscription_id,
+                "status": status,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        return EventDeliveryPage.from_dict(response.json())
+
+    def delivery(self, delivery_id: str) -> EventDelivery:
+        response = self._client._request(
+            "GET", "/api/v1/event-deliveries", params={"id": delivery_id}
+        )
+        return EventDelivery.from_dict(response.json())
+
+    def retry(self, delivery_id: str) -> None:
+        self._client._request(
+            "POST", "/api/v1/event-deliveries/retry", json={"id": delivery_id}
+        )
+
+
+class AsyncEventsResource:
+    def __init__(self, client: AsyncAgentMuxClient) -> None:
+        self._client = client
+
+    async def sources(self) -> list[EventSource]:
+        response = await self._client._request("GET", "/api/v1/event-sources")
+        return [EventSource.from_dict(item) for item in response.json()]
+
+    async def list(self) -> list[EventSubscription]:
+        response = await self._client._request("GET", "/api/v1/event-subscriptions")
+        return [EventSubscription.from_dict(item) for item in response.json()]
+
+    async def upsert(
+        self, subscription: EventSubscription | dict[str, Any]
+    ) -> EventSubscriptionResult:
+        payload = (
+            subscription.to_payload()
+            if isinstance(subscription, EventSubscription)
+            else subscription
+        )
+        response = await self._client._request(
+            "POST", "/api/v1/event-subscriptions", json=payload
+        )
+        return EventSubscriptionResult.from_dict(response.json())
+
+    async def delete(self, subscription_id: str) -> None:
+        await self._client._request(
+            "DELETE", "/api/v1/event-subscriptions", params={"id": subscription_id}
+        )
+
+    async def test(self, subscription_id: str) -> None:
+        await self._client._request(
+            "POST", "/api/v1/event-subscriptions/test", json={"id": subscription_id}
+        )
+
+    async def rotate_secret(self, subscription_id: str) -> str:
+        response = await self._client._request(
+            "POST",
+            "/api/v1/event-subscriptions/rotate-secret",
+            json={"id": subscription_id},
+        )
+        return str(response.json()["signing_secret"])
+
+    async def deliveries(
+        self,
+        *,
+        subscription_id: str = "",
+        status: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> EventDeliveryPage:
+        response = await self._client._request(
+            "GET",
+            "/api/v1/event-deliveries",
+            params={
+                "subscription_id": subscription_id,
+                "status": status,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        return EventDeliveryPage.from_dict(response.json())
+
+    async def delivery(self, delivery_id: str) -> EventDelivery:
+        response = await self._client._request(
+            "GET", "/api/v1/event-deliveries", params={"id": delivery_id}
+        )
+        return EventDelivery.from_dict(response.json())
+
+    async def retry(self, delivery_id: str) -> None:
+        await self._client._request(
+            "POST", "/api/v1/event-deliveries/retry", json={"id": delivery_id}
+        )

@@ -17,4 +17,5 @@ package contract
 // orchestration targets now require agent_id; config.toml projects and the
 // X-AgentMux-Project compatibility path were removed.
 // 2.1 adds optional private/group conversation defaults to Agent instances.
-const Version = "2.1"
+// 2.2 adds tenant-scoped durable event subscriptions and loopback callbacks.
+const Version = "2.2"

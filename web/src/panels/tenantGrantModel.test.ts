@@ -29,3 +29,11 @@ describe("resourcesForType", () => {
     expect(toggleResourceSelection(["a1", "a2"], "a1")).toEqual(["a2"]);
   });
 });
+
+it("event grants are distinct from ordinary source-resource grants", () => {
+  const resources = resourcesForType("event_source", {
+    agents: [{ id: "a", name: "Agent" }], channels: [{ id: "c", name: "Channel" }], triggers: [], providers: [],
+  });
+  expect(resources.map((item) => item.id)).toEqual(["agent:a", "channel:c"]);
+  expect(resources.every((item) => item.type === "event_source")).toBe(true);
+});

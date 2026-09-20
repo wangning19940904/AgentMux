@@ -1,0 +1,45 @@
+{
+  "fields": {
+    "attributes": {
+      "omitempty": false,
+      "type": "map\u003cstring,string\u003e"
+    },
+    "data": {
+      "omitempty": false,
+      "type": "bytes"
+    },
+    "id": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "occurred_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "received_at": {
+      "omitempty": false,
+      "type": "datetime"
+    },
+    "schema_version": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "source": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "source_event_id": {
+      "omitempty": true,
+      "type": "string"
+    },
+    "source_ref": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "type": {
+      "omitempty": false,
+      "type": "string"
+    }
+  },
+  "go_type": "core.RelayEvent"
+}

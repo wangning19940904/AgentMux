@@ -1,0 +1,37 @@
+{
+  "fields": {
+    "connected": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "event_types": {
+      "omitempty": false,
+      "type": "array\u003cstring\u003e"
+    },
+    "ingestion": {
+      "omitempty": false,
+      "type": "object:core.EventIngestionHealth"
+    },
+    "name": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "platform_verified": {
+      "omitempty": false,
+      "type": "boolean"
+    },
+    "ref": {
+      "omitempty": false,
+      "type": "string"
+    },
+    "sources": {
+      "omitempty": false,
+      "type": "array\u003cstring\u003e"
+    },
+    "state": {
+      "omitempty": false,
+      "type": "string"
+    }
+  },
+  "go_type": "core.EventSource"
+}

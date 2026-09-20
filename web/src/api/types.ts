@@ -567,7 +567,7 @@ export interface Channel {
 export type ResourceVisibility = "private" | "public";
 export type GrantLevel = "read" | "use" | "manage";
 export type TenantKind = "app" | "web" | "service";
-export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider";
+export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider" | "event_source";
 
 export interface Tenant {
   id: string;
@@ -1672,4 +1672,97 @@ export interface ObservationTraceFilters {
   source?: string;
   limit?: number;
   offset?: number;
+}
+
+/** Durable callback envelope. The raw body, not reserialized JSON, is signed. */
+export interface RelayEvent {
+  schema_version: string;
+  id: string;
+  source: string;
+  type: string;
+  source_ref: string;
+  source_event_id?: string;
+  occurred_at: string;
+  received_at: string;
+  attributes: Record<string, string>;
+  data: unknown;
+}
+export interface EventSubscriptionInput {
+  id?: string;
+  owner_tenant_id?: string;
+  key: string;
+  name: string;
+  source: "agentmux" | "feishu" | "lark";
+  source_refs: string[];
+  event_types: string[];
+  filters?: Record<string, string[]>;
+  callback_url: string;
+  paused?: boolean;
+}
+export interface EventSubscription extends EventSubscriptionInput {
+  id: string;
+  paused: boolean;
+  owner_tenant_id?: string;
+  created_at: string;
+  updated_at: string;
+  deleted?: boolean;
+  pending: number;
+  dead: number;
+  last_success_at?: string;
+  last_error?: string;
+}
+export interface EventSubscriptionResult {
+  subscription: EventSubscription;
+  signing_secret?: string;
+}
+export interface EventIngestionHealth {
+  failures: number;
+  last_error?: string;
+  last_failure_at?: string;
+  last_success_at?: string;
+}
+export interface EventSource {
+  ref: string;
+  name: string;
+  sources: string[];
+  event_types: string[];
+  connected: boolean;
+  state: string;
+  platform_verified: boolean;
+  ingestion: EventIngestionHealth;
+}
+export interface EventDeliveryAttempt {
+  id: string;
+  delivery_id: string;
+  started_at: string;
+  finished_at?: string;
+  http_status: number;
+  error?: string;
+}
+export interface EventDelivery {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  status:
+    | "pending"
+    | "retry"
+    | "delivering"
+    | "sent"
+    | "dead"
+    | "blocked"
+    | "cancelled";
+  attempts: number;
+  next_attempt_at: string;
+  first_attempt_at?: string;
+  created_at: string;
+  updated_at: string;
+  last_error?: string;
+  event?: RelayEvent;
+  history?: EventDeliveryAttempt[];
+}
+export interface EventDeliveryPage {
+  items: EventDelivery[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
 }

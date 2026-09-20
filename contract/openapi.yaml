@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "2.1"
-  x-contract-version: "2.1"
+  version: "2.2"
+  x-contract-version: "2.2"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -17,6 +17,8 @@ security:
   - bridgeToken: []
 
 tags:
+  - name: events
+    description: Durable tenant-scoped event subscriptions (beta)
   - name: discovery
     description: Handshake, health and capability discovery (stable)
   - name: invocations
@@ -39,6 +41,202 @@ tags:
     description: Token usage reporting (beta)
 
 paths:
+  /api/v1/event-sources:
+    get:
+      tags: [events]
+      operationId: listEventSources
+      summary: List authorized event sources; platform configuration is not automatically verified
+      x-stability: beta
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/EventSource"}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+  /api/v1/event-subscriptions:
+    get:
+      tags: [events]
+      operationId: listEventSubscriptions
+      summary: List subscriptions owned by the caller
+      x-stability: beta
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "array", "items": {"$ref": "#/components/schemas/EventSubscription"}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+    post:
+      tags: [events]
+      operationId: upsertEventSubscription
+      summary: Idempotent upsert by tenant and key; signing secret returned only on creation
+      x-stability: beta
+      requestBody: {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventSubscriptionInput"}}}}
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"$ref": "#/components/schemas/EventSubscriptionResult"}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+    delete:
+      tags: [events]
+      operationId: deleteEventSubscription
+      summary: Cancel pending deliveries and reserve the deleted subscription key
+      x-stability: beta
+      parameters: [{"in": "query", "name": "id", "required": true, "schema": {"type": "string"}}]
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+  /api/v1/event-subscriptions/test:
+    post:
+      tags: [events]
+      operationId: testEventSubscription
+      summary: Enqueue a marked test event; inspect delivery history for the result
+      x-stability: beta
+      requestBody: {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}}}}
+      responses:
+        "202":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+  /api/v1/event-subscriptions/rotate-secret:
+    post:
+      tags: [events]
+      operationId: rotateEventSigningSecret
+      summary: Rotate callback secret; update the receiver immediately
+      x-stability: beta
+      requestBody: {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}}}}
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "object", "required": ["signing_secret"], "properties": {"signing_secret": {"type": "string"}}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+  /api/v1/event-deliveries:
+    get:
+      tags: [events]
+      operationId: listOrGetEventDeliveries
+      summary: List deliveries, or get one with up to 200 recent attempts using id
+      x-stability: beta
+      parameters: [{"in": "query", "name": "id", "required": false, "schema": {"type": "string"}}, {"in": "query", "name": "subscription_id", "required": false, "schema": {"type": "string"}}, {"in": "query", "name": "status", "required": false, "schema": {"type": "string"}}, {"in": "query", "name": "limit", "required": false, "schema": {"type": "integer"}}, {"in": "query", "name": "offset", "required": false, "schema": {"type": "integer"}}]
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"oneOf": [{"$ref": "#/components/schemas/EventDeliveryPage"}, {"$ref": "#/components/schemas/EventDelivery"}]}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+  /api/v1/event-deliveries/retry:
+    post:
+      tags: [events]
+      operationId: retryEventDelivery
+      summary: Retry dead, retrying or blocked delivery; preserve event and delivery IDs
+      x-stability: beta
+      requestBody: {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}}}}
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema: {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+        "400":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "401":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "403":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "404":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "409":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
+        "503":
+          description: Invalid request, missing authorization, unavailable source or conflicting state
   /api/v1/capabilities:
     get:
       tags: [discovery]
@@ -1023,3 +1221,121 @@ components:
         session_ttl_seconds:
           type: integer
           description: Lifetime of the session cookie minted at enter_url.
+
+    RelayEvent:
+      type: "object"
+      required: ["attributes", "data", "id", "occurred_at", "received_at", "schema_version", "source", "source_ref", "type"]
+      properties:
+        attributes: {"type": "object", "additionalProperties": {"type": "string"}}
+        data: {}
+        id: {"type": "string"}
+        occurred_at: {"type": "string", "format": "date-time"}
+        received_at: {"type": "string", "format": "date-time"}
+        schema_version: {"type": "string"}
+        source: {"type": "string"}
+        source_event_id: {"type": "string"}
+        source_ref: {"type": "string"}
+        type: {"type": "string"}
+
+    EventSubscription:
+      type: "object"
+      required: ["callback_url", "created_at", "dead", "event_types", "id", "key", "name", "paused", "pending", "source", "source_refs", "updated_at"]
+      properties:
+        callback_url: {"type": "string"}
+        created_at: {"type": "string", "format": "date-time"}
+        dead: {"type": "integer"}
+        deleted: {"type": "boolean"}
+        event_types: {"type": "array", "items": {"type": "string"}}
+        filters: {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
+        id: {"type": "string"}
+        key: {"type": "string"}
+        last_error: {"type": "string"}
+        last_success_at: {"type": "string", "format": "date-time"}
+        name: {"type": "string"}
+        owner_tenant_id: {"type": "string"}
+        paused: {"type": "boolean"}
+        pending: {"type": "integer"}
+        source: {"type": "string"}
+        source_refs: {"type": "array", "items": {"type": "string"}}
+        updated_at: {"type": "string", "format": "date-time"}
+
+    EventSource:
+      type: "object"
+      required: ["connected", "event_types", "ingestion", "name", "platform_verified", "ref", "sources", "state"]
+      properties:
+        connected: {"type": "boolean"}
+        event_types: {"type": "array", "items": {"type": "string"}}
+        ingestion: {"$ref": "#/components/schemas/EventIngestionHealth"}
+        name: {"type": "string"}
+        platform_verified: {"type": "boolean"}
+        ref: {"type": "string"}
+        sources: {"type": "array", "items": {"type": "string"}}
+        state: {"type": "string"}
+
+    EventIngestionHealth:
+      type: "object"
+      required: ["failures"]
+      properties:
+        failures: {"type": "integer"}
+        last_error: {"type": "string"}
+        last_failure_at: {"type": "string", "format": "date-time"}
+        last_success_at: {"type": "string", "format": "date-time"}
+
+    EventDelivery:
+      type: "object"
+      required: ["attempts", "created_at", "event_id", "id", "next_attempt_at", "status", "subscription_id", "updated_at"]
+      properties:
+        attempts: {"type": "integer"}
+        created_at: {"type": "string", "format": "date-time"}
+        event: {"$ref": "#/components/schemas/RelayEvent"}
+        event_id: {"type": "string"}
+        first_attempt_at: {"type": "string", "format": "date-time"}
+        history: {"type": "array", "items": {"$ref": "#/components/schemas/EventDeliveryAttempt"}}
+        id: {"type": "string"}
+        last_error: {"type": "string"}
+        next_attempt_at: {"type": "string", "format": "date-time"}
+        status: {"type": "string"}
+        subscription_id: {"type": "string"}
+        updated_at: {"type": "string", "format": "date-time"}
+
+    EventDeliveryAttempt:
+      type: "object"
+      required: ["delivery_id", "http_status", "id", "started_at"]
+      properties:
+        delivery_id: {"type": "string"}
+        error: {"type": "string"}
+        finished_at: {"type": "string", "format": "date-time"}
+        http_status: {"type": "integer"}
+        id: {"type": "string"}
+        started_at: {"type": "string", "format": "date-time"}
+
+    EventSubscriptionInput:
+      type: "object"
+      required: ["key", "name", "source", "source_refs", "event_types", "callback_url"]
+      properties:
+        callback_url: {"type": "string"}
+        event_types: {"type": "array", "items": {"type": "string"}}
+        filters: {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
+        id: {"type": "string"}
+        key: {"type": "string"}
+        name: {"type": "string"}
+        paused: {"type": "boolean"}
+        source: {"type": "string", "enum": ["feishu", "lark", "agentmux"]}
+        source_refs: {"type": "array", "items": {"type": "string"}}
+        owner_tenant_id: {"type": "string", "description": "Administrator only; tenant credentials always stamp their own tenant."}
+
+    EventSubscriptionResult:
+      type: "object"
+      required: ["subscription"]
+      properties:
+        subscription: {"$ref": "#/components/schemas/EventSubscription"}
+        signing_secret: {"type": "string", "description": "Only returned on creation. Never stored in browser persistence."}
+
+    EventDeliveryPage:
+      type: "object"
+      required: ["items", "limit", "offset", "has_more"]
+      properties:
+        items: {"type": "array", "items": {"$ref": "#/components/schemas/EventDelivery"}}
+        limit: {"type": "integer"}
+        offset: {"type": "integer"}
+        has_more: {"type": "boolean"}
