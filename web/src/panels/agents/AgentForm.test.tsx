@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { api, type AgentInstance } from "../../api";
+import { api, type AgentInstance, type FrameworkRuntimeSettings } from "../../api";
 import { I18nProvider, useI18n } from "../../i18n";
 import { AgentForm } from "./AgentForm";
 import { newAgent } from "./agentUtils";
@@ -12,10 +12,10 @@ let container: HTMLDivElement;
 const onUpdate = vi.fn();
 const listing = { path: "/home/test", parent_path: "/home", entries: [{ name: "project", path: "/home/test/project" }] };
 
-function Form({ draft }: { draft: AgentInstance }) {
+function Form({ draft, canSave = false }: { draft: AgentInstance; canSave?: boolean }) {
   const { t } = useI18n();
   return <AgentForm draft={draft} drawerMode="create" t={t} onUpdate={onUpdate}
-    busy="" canSave={false} readOnly={false} activeRoutes={[]} channelOptions={[]} cliOptions={[]}
+    busy="" canSave={canSave} readOnly={false} activeRoutes={[]} channelOptions={[]} cliOptions={[]}
     compatibleProviders={[]} mcpOptions={[]} runtimeOptions={[]} selectedChannelIDs={[]} selectedTriggerIDs={[]}
     skillOptions={[]} triggerOptions={[]} onDelete={vi.fn()} onInstallCLI={vi.fn()} onSave={vi.fn()}
     onToggleChannel={vi.fn()} onToggleTrigger={vi.fn()} />;
@@ -148,4 +148,87 @@ it("shows the detected local Codex login when all machines contains only local",
   expect(container.textContent).not.toContain("Choose one machine");
   expect(auth).toHaveBeenCalledWith("codex", undefined);
   expect(settings).toHaveBeenCalledWith("codex", "", "local");
+});
+
+const options = (...values: string[]) => values.map((value) => ({ value }));
+const cursorCatalog: FrameworkRuntimeSettings = {
+  kind: "cursor", defaults: { model: "auto", approval_mode: "manual" },
+  capabilities: {
+    models: options("auto", "grok-4.7", "other-model"),
+    reasoning_efforts: options("low", "medium", "high", "xhigh", "max"),
+    service_tiers: options("default", "priority"), approval_modes: options("manual", "yolo"),
+    model_capabilities: {
+      auto: {},
+      "grok-4.7": { reasoning_efforts: options("low", "medium", "high", "xhigh"), service_tiers: options("default", "priority") },
+      "other-model": { reasoning_efforts: options("high", "max"), service_tiers: options("default", "priority"), variants: [
+        { reasoning_effort: "high", service_tier: "priority" }, { reasoning_effort: "max", service_tier: "default" },
+      ] },
+    },
+  },
+};
+
+function setting(label: string): HTMLSelectElement {
+  const field = [...container.querySelectorAll("label")].find((item) => item.querySelector("span")?.textContent === label);
+  if (!field?.querySelector("select")) throw new Error(`Missing setting: ${label}`);
+  return field.querySelector("select")!;
+}
+const selectableValues = (select: HTMLSelectElement) => [...select.options].filter((option) => !option.disabled).map((option) => option.value);
+async function renderSettings(draft: AgentInstance) {
+  await act(async () => { root.render(<I18nProvider language="zh"><Form draft={draft} canSave /></I18nProvider>); });
+}
+function mockCatalog() {
+  vi.spyOn(api, "frameworkAuth").mockResolvedValue({ kind: "cursor", state: "unknown", installed: true, login_supported: true });
+  return vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue(cursorCatalog);
+}
+
+it("loads real per-model options even when login detection is unknown, and blocks stale max", async () => {
+  const load = mockCatalog();
+  const draft = { ...newAgent(["cursor"]), default_model: "grok-4.7", default_reasoning_effort: "max" };
+  await renderSettings(draft);
+  expect(load).toHaveBeenCalled();
+  expect(selectableValues(setting("默认思考强度"))).toEqual(["", "low", "medium", "high", "xhigh"]);
+  expect(setting("默认思考强度").selectedOptions[0].textContent).toContain("max · 当前选择不支持");
+  expect(selectableValues(setting("默认速度模式"))).toEqual(["", "default", "priority"]);
+  expect(selectableValues(setting("默认审批模式"))).toEqual(["", "manual", "yolo"]);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("重新选择后保存");
+  expect(button("创建 Agent").disabled).toBe(true);
+  expect(onUpdate).not.toHaveBeenCalledWith("default_reasoning_effort", "");
+
+  await renderSettings({ ...draft, default_reasoning_effort: "xhigh" });
+  expect(button("创建 Agent").disabled).toBe(false);
+  await renderSettings({ ...draft, default_model: "other-model", default_service_tier: "priority" });
+  expect(selectableValues(setting("默认思考强度"))).toEqual(["", "high", "max"]);
+  expect(selectableValues(setting("默认速度模式"))).toEqual(["", "default"]);
+  expect(button("创建 Agent").disabled).toBe(true);
+
+  await renderSettings({ ...draft, default_model: "", default_reasoning_effort: "" });
+  expect(setting("默认模型").selectedOptions[0].textContent).toContain("auto");
+  expect(setting("默认思考强度").disabled).toBe(true);
+  expect(setting("默认速度模式").disabled).toBe(true);
+});
+
+it("preserves configured values on discovery failure and lets the user retry", async () => {
+  const load = mockCatalog().mockRejectedValueOnce(new Error("catalog unavailable"));
+  const draft = { ...newAgent(["cursor"]), default_model: "grok-4.7", default_reasoning_effort: "xhigh" };
+  await renderSettings(draft);
+  expect(container.textContent).toContain("catalog unavailable");
+  expect(setting("默认模型").value).toBe("grok-4.7");
+  expect(onUpdate).not.toHaveBeenCalledWith("default_model", "");
+  expect(button("创建 Agent").disabled).toBe(true);
+  await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="刷新模型与运行设置"]')!.click(); });
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(button("创建 Agent").disabled).toBe(false);
+});
+
+it("ignores an old host's catalog response after changing the target", async () => {
+  const load = mockCatalog();
+  let finishOld!: (value: FrameworkRuntimeSettings) => void;
+  load.mockImplementation((_kind, _dir, target) => target === "old-host"
+    ? new Promise((resolve) => { finishOld = resolve; }) : Promise.resolve(cursorCatalog));
+  const draft = { ...newAgent(["cursor"]), target_id: "old-host", default_model: "grok-4.7" };
+  await renderSettings(draft);
+  await renderSettings({ ...draft, target_id: "new-host" });
+  await act(async () => { finishOld({ kind: "cursor", defaults: {}, capabilities: { models: options("stale-model") } }); });
+  expect(selectableValues(setting("默认模型"))).toEqual(["", "auto", "grok-4.7", "other-model"]);
+  expect(selectableValues(setting("默认思考强度"))).not.toContain("max");
 });

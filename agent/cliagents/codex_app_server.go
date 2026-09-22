@@ -117,15 +117,39 @@ func (a *codexAgent) RuntimeSettingsCatalog(ctx context.Context, workDir string)
 	if len(serviceTiers) > 0 && !containsCodexOption(serviceTiers, "default") {
 		serviceTiers = append([]string{"default"}, serviceTiers...)
 	}
+	models := codexModelsFromResult(result)
 	return core.RuntimeSettings{
 			Model: a.defaultModel, ReasoningEffort: a.defaultReasoningEffort,
 			ServiceTier: a.defaultServiceTier, ApprovalMode: a.defaultApprovalMode,
 		}, core.RuntimeSettingsCapabilities{
-			Models:           core.RuntimeOptionsFor(core.RuntimeSettingModel, codexModelsFromResult(result)),
-			ReasoningEfforts: core.RuntimeOptionsFor(core.RuntimeSettingReasoningEffort, codexReasoningEffortsFromResult(result)),
-			ServiceTiers:     core.RuntimeOptionsFor(core.RuntimeSettingServiceTier, serviceTiers),
-			ApprovalModes:    core.RuntimeOptionsFor(core.RuntimeSettingApprovalMode, a.supportedApprovalModes),
+			Models:            core.RuntimeOptionsFor(core.RuntimeSettingModel, models),
+			ReasoningEfforts:  core.RuntimeOptionsFor(core.RuntimeSettingReasoningEffort, codexReasoningEffortsFromResult(result)),
+			ServiceTiers:      core.RuntimeOptionsFor(core.RuntimeSettingServiceTier, serviceTiers),
+			ApprovalModes:     core.RuntimeOptionsFor(core.RuntimeSettingApprovalMode, a.supportedApprovalModes),
+			ModelCapabilities: codexModelCapabilities(result),
 		}, nil
+}
+
+func codexModelCapabilities(result map[string]any) map[string]core.RuntimeModelCapabilities {
+	out := map[string]core.RuntimeModelCapabilities{}
+	entries, _ := result["data"].([]any)
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		model := firstString(entry, "model", "id")
+		if model == "" {
+			continue
+		}
+		efforts := codexStringSlice(firstNonNil(entry["supportedReasoningEfforts"], entry["reasoningEfforts"], result["supportedReasoningEfforts"], result["reasoningEfforts"]))
+		tiers := codexStringSlice(firstNonNil(entry["supportedServiceTiers"], entry["serviceTiers"], result["supportedServiceTiers"], result["serviceTiers"]))
+		if len(tiers) > 0 && !containsCodexOption(tiers, "default") {
+			tiers = append([]string{"default"}, tiers...)
+		}
+		out[model] = core.RuntimeModelCapabilities{
+			ReasoningEfforts: core.RuntimeOptionsFor(core.RuntimeSettingReasoningEffort, efforts),
+			ServiceTiers:     core.RuntimeOptionsFor(core.RuntimeSettingServiceTier, tiers),
+		}
+	}
+	return out
 }
 
 func (a *codexAgent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {

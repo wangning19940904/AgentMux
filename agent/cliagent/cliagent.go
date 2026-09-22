@@ -7,6 +7,7 @@ package cliagent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -133,6 +134,7 @@ type Agent struct {
 
 	catalogMu        sync.Mutex
 	catalog          ModelCatalog
+	catalogErr       error
 	catalogRefreshAt time.Time
 }
 
@@ -189,7 +191,10 @@ func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSes
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}
-	catalog := a.discoverModelCatalog(ctx, workDir)
+	catalog, err := a.discoverModelCatalog(ctx, workDir)
+	if err != nil {
+		return nil, err
+	}
 	defaultModel := a.defaultModel
 	if defaultModel == "" {
 		defaultModel = catalog.DefaultModel
@@ -242,20 +247,32 @@ func (a *Agent) RuntimeSettingsCatalog(ctx context.Context, workDir string) (cor
 	if !ok || cliSession.Settings.RuntimeSettingsSelection == nil {
 		return core.RuntimeSettings{}, core.RuntimeSettingsCapabilities{}, nil
 	}
-	// Agent defaults need the account-wide union. Per-conversation controls use
-	// RuntimeSettingsView to narrow these options after a model is selected.
-	return cliSession.Settings.DefaultRuntimeSettings(), cliSession.Settings.RuntimeSettingsCapabilities(), nil
+	capabilities := cliSession.Settings.RuntimeSettingsCapabilities()
+	capabilities.ModelCapabilities = make(map[string]core.RuntimeModelCapabilities, len(cliSession.modelCapabilities))
+	for model, available := range cliSession.modelCapabilities {
+		modelCapabilities := core.RuntimeModelCapabilities{
+			ReasoningEfforts: append([]core.RuntimeOption(nil), available.ReasoningEfforts...),
+			ServiceTiers:     append([]core.RuntimeOption(nil), available.ServiceTiers...),
+		}
+		for _, variant := range available.Variants {
+			modelCapabilities.Variants = append(modelCapabilities.Variants, core.RuntimeSettings{
+				ReasoningEffort: variant.ReasoningEffort, ServiceTier: variant.ServiceTier,
+			})
+		}
+		capabilities.ModelCapabilities[model] = modelCapabilities
+	}
+	return cliSession.Settings.DefaultRuntimeSettings(), capabilities, nil
 }
 
-func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelCatalog {
+func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) (ModelCatalog, error) {
 	if a == nil || len(a.spec.ModelCatalogArgs) == 0 || a.spec.ParseModelCatalog == nil {
-		return ModelCatalog{}
+		return ModelCatalog{}, nil
 	}
 
 	a.catalogMu.Lock()
 	defer a.catalogMu.Unlock()
 	if time.Now().Before(a.catalogRefreshAt) {
-		return copyModelCatalog(a.catalog)
+		return copyModelCatalog(a.catalog), a.catalogErr
 	}
 
 	refreshAt := time.Now().Add(modelCatalogFailureTTL)
@@ -278,7 +295,11 @@ func (a *Agent) discoverModelCatalog(ctx context.Context, workDir string) ModelC
 		}
 	}
 	a.catalogRefreshAt = refreshAt
-	return copyModelCatalog(a.catalog)
+	a.catalogErr = nil
+	if err != nil {
+		a.catalogErr = fmt.Errorf("discover %s models: %w", a.Name(), err)
+	}
+	return copyModelCatalog(a.catalog), a.catalogErr
 }
 
 func normalizeModelCatalog(catalog ModelCatalog) ModelCatalog {

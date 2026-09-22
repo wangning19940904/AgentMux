@@ -429,9 +429,31 @@ func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *cor
 		return err
 	}
 	if p == nil {
-		// Local Codex login discovers its catalog only after app-server starts.
-		// Let that runtime validate the values instead of rejecting the Agent
-		// record before it can reach the signed-in account.
+		// Approval is already checked against the transport's policy catalog.
+		// Explicit model controls must also be checked before persisting them.
+		if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" {
+			return nil
+		}
+		agent, err := core.CreateAgent(a.RuntimeID, map[string]any{"env": a.Env})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = agent.Stop(ctx) }()
+		cataloger, ok := agent.(core.RuntimeSettingsCataloger)
+		if !ok {
+			return fmt.Errorf("%s cannot verify model settings", a.RuntimeID)
+		}
+		defaults, capabilities, err := cataloger.RuntimeSettingsCatalog(ctx, a.WorkDir)
+		if err != nil {
+			return fmt.Errorf("verify %s model settings: %w", a.RuntimeID, err)
+		}
+		selected := core.RuntimeSettings{Model: a.DefaultModel, ReasoningEffort: a.DefaultReasoningEffort, ServiceTier: a.DefaultServiceTier}
+		if selected.Model == "" {
+			selected.Model = defaults.Model
+		}
+		if err := core.ValidateRuntimeSettings(capabilities, selected); err != nil {
+			return fmt.Errorf("invalid defaults for %s model %q: %w", a.RuntimeID, selected.Model, err)
+		}
 		return nil
 	}
 	if a.DefaultModel != "" {

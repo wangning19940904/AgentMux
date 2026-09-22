@@ -66,7 +66,7 @@ func TestTimeoutCardShowsEffectiveChannelLimitAfterModelRecovery(t *testing.T) {
 		{map[string]string{ChannelConfigTurnTimeout: "60", ChannelConfigCodexTurnTimeout: "20"}, "60"},
 		{map[string]string{ChannelConfigTurnTimeout: "35"}, "35"},
 		{map[string]string{ChannelConfigCodexTurnTimeout: "90"}, "90"},
-		{nil, "60"},
+		{nil, "720"},
 	} {
 		engine := NewEngine(nil, NewHookRunner(nil, nil))
 		engine.channels["channel-timeout"] = &channelRuntime{channel: Channel{ID: "channel-timeout", Config: tc.config}}

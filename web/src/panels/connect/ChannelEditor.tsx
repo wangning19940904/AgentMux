@@ -463,7 +463,7 @@ export function FeishuChannelOptions({
           <input
             type="number"
             min={1}
-            max={240}
+            max={720}
             value={configValue(
               config,
               "turn_timeout_minutes",

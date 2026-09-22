@@ -283,7 +283,11 @@ func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSessi
 		rt.mu.Unlock()
 		return nil, nil, false, nil, nil, err
 	}
-	rt.applyRuntimeDefaultsFrom(s, generation.defaultSettings)
+	if err := rt.applyRuntimeDefaultsFrom(s, generation.defaultSettings); err != nil {
+		rt.mu.Unlock()
+		_ = s.Close(ctx)
+		return nil, nil, false, nil, nil, err
+	}
 	rt.owner.persistConversationSessionHandle(ctx, conv, s)
 	binding := &channelSessionBinding{
 		cacheKey: cacheKey, session: s, generation: generation, active: 1, done: make(chan struct{}),
@@ -295,20 +299,24 @@ func (rt *channelRuntime) session(ctx context.Context, msg *Message) (AgentSessi
 	return s, conv, true, generation, release, nil
 }
 
-func (rt *channelRuntime) applyRuntimeDefaultsFrom(sess AgentSession, defaults RuntimeSettings) {
+func (rt *channelRuntime) applyRuntimeDefaultsFrom(sess AgentSession, defaults RuntimeSettings) error {
 	settings, ok := RuntimeSettingsForSession(sess)
 	if !ok {
-		return
+		return nil
 	}
 	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier, RuntimeSettingApprovalMode} {
 		value := defaults.Value(setting)
-		if value == "" || !settings.RuntimeSettingsCapabilities().Supports(setting) {
+		if value == "" {
 			continue
 		}
+		if !settings.RuntimeSettingsCapabilities().Supports(setting) && settings.CurrentRuntimeSettings().Value(setting) == value {
+			continue // The selected concrete model already fixes this value.
+		}
 		if err := settings.SetRuntimeSetting(setting, value); err != nil {
-			rt.owner.log.Warn("apply Agent runtime default", "channel", rt.channel.Name, "setting", setting, "err", err)
+			return fmt.Errorf("apply Agent %s=%q: %w", setting, value, err)
 		}
 	}
+	return nil
 }
 
 func (rt *channelRuntime) bindingRelease(binding *channelSessionBinding) func() {

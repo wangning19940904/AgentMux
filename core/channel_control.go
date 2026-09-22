@@ -18,7 +18,8 @@ const (
 
 	DefaultCodexMaxQueue             = 20
 	DefaultCodexTurnTimeoutMinutes   = DefaultChannelTurnTimeoutMinutes
-	DefaultChannelTurnTimeoutMinutes = 60
+	DefaultChannelTurnTimeoutMinutes = 720
+	MaxChannelTurnTimeoutMinutes     = 720
 )
 
 type ChannelTaskStatus string
@@ -343,8 +344,8 @@ func ChannelTurnTimeout(ch Channel) time.Duration {
 	if n <= 0 {
 		n = DefaultChannelTurnTimeoutMinutes
 	}
-	if n > 240 {
-		n = 240
+	if n > MaxChannelTurnTimeoutMinutes {
+		n = MaxChannelTurnTimeoutMinutes
 	}
 	return time.Duration(n) * time.Minute
 }

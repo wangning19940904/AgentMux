@@ -97,6 +97,8 @@ export function AgentForm({
 	const [localRuntimeSettings, setLocalRuntimeSettings] = useState<FrameworkRuntimeSettings | null>(null);
 	const [localRuntimeSettingsBusy, setLocalRuntimeSettingsBusy] = useState(false);
 	const [localRuntimeSettingsError, setLocalRuntimeSettingsError] = useState("");
+  const [localRuntimeSettingsSource, setLocalRuntimeSettingsSource] = useState("");
+  const [catalogReload, setCatalogReload] = useState(0);
   const [loginBusy, setLoginBusy] = useState("");
   const [loginResult, setLoginResult] = useState<FrameworkLoginResult | null>(null);
   const [loginCode, setLoginCode] = useState("");
@@ -128,6 +130,7 @@ export function AgentForm({
   const desktopRuntime = draft.runtime_id === "codex-app";
   const frameworkRuntimeID = desktopRuntime ? "codex" : draft.runtime_id;
   const authTargetID = draft.target_id || authStatus?.target_id;
+  const authenticated = authStatus?.state === "authenticated";
   const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
@@ -137,7 +140,12 @@ export function AgentForm({
     ? compatibleProviders.find((provider) => provider.id === activeRoute.provider_id)
     : undefined;
   const modelProvider = overrideProvider ?? routeProvider;
-	const localCapabilities = localRuntimeSettings?.capabilities;
+  const runtimeSettingsSource = JSON.stringify([draft.runtime_id, draft.work_dir ?? "", authTargetID, usingLocalLogin, catalogReload]);
+  const localSettings = localRuntimeSettingsSource === runtimeSettingsSource ? localRuntimeSettings : null;
+  const localCapabilities = localSettings?.capabilities;
+  const selectedModel = draft.default_model || modelProvider?.model || localSettings?.defaults.model || "";
+  const selectedModelCapabilities = localCapabilities?.model_capabilities?.[selectedModel];
+  const localModelCapabilities = localCapabilities?.model_capabilities ? selectedModelCapabilities : localCapabilities;
 	const modelOptions = modelProvider
 		? providerModelOptions(modelProvider)
 		: usingLocalLogin
@@ -146,13 +154,30 @@ export function AgentForm({
 	const reasoningOptions = modelProvider
 		? runtimeProviderOptions(modelProvider, "supported_reasoning_efforts")
 		: usingLocalLogin
-			? runtimeOptionValues(localCapabilities?.reasoning_efforts)
+			? runtimeOptionValues(localModelCapabilities?.reasoning_efforts)
 			: [];
 	const serviceTierOptions = modelProvider
 		? runtimeProviderOptions(modelProvider, "supported_service_tiers")
 		: usingLocalLogin
-			? runtimeOptionValues(localCapabilities?.service_tiers)
+			? runtimeOptionValues(localModelCapabilities?.service_tiers)
 			: [];
+  const variants = selectedModelCapabilities?.variants;
+  const availableServiceTiers = variants?.length
+    ? serviceTierOptions.filter((tier) => variants.some((variant) => (!draft.default_reasoning_effort || variant.reasoning_effort === draft.default_reasoning_effort) && variant.service_tier === tier))
+    : serviceTierOptions;
+  const approvalOptions = usingLocalLogin && localCapabilities
+    ? runtimeOptionValues(localCapabilities.approval_modes)
+    : approvalModesForRuntime(draft.runtime_id);
+  const settingsReady = usingLocalLogin ? Boolean(localCapabilities) : Boolean(modelProvider);
+  const invalidModel = settingsReady && Boolean(draft.default_model) && !modelOptions.includes(draft.default_model!);
+  const invalidEffort = settingsReady && Boolean(draft.default_reasoning_effort) && !reasoningOptions.includes(draft.default_reasoning_effort!);
+  const invalidTier = settingsReady && Boolean(draft.default_service_tier) && !availableServiceTiers.includes(draft.default_service_tier!);
+  const invalidApproval = Boolean(draft.default_approval_mode) && !approvalOptions.includes(draft.default_approval_mode!);
+  const invalidSettings = invalidModel || invalidEffort || invalidTier || invalidApproval;
+  const unverifiedSettings = usingLocalLogin && !settingsReady && Boolean(draft.default_model || draft.default_reasoning_effort || draft.default_service_tier);
+  const runtimeDefaults = localSettings?.defaults;
+  const modelPlaceholder = t(usingLocalLogin ? "agents.defaultModelRuntimePlaceholder" : "agents.defaultModelPlaceholder") +
+    (usingLocalLogin && runtimeDefaults?.model ? `（${runtimeDefaults.model}）` : "");
   const providerStatus = draft.provider_id
     ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
     : activeRouteProvider
@@ -178,14 +203,6 @@ export function AgentForm({
     const nextRouteTool = routeToolForRuntime(draft.runtime_id);
     if (draft.provider_tool !== nextRouteTool) onUpdate("provider_tool", nextRouteTool);
   }, [draft.provider_tool, draft.runtime_id, onUpdate, readOnly]);
-
-  useEffect(() => {
-    if (readOnly || !draft.default_model) return;
-		if (usingLocalLogin && (localRuntimeSettingsBusy || localRuntimeSettings === null)) return;
-    if (modelOptions.length === 0 || !modelOptions.includes(draft.default_model)) {
-      onUpdate("default_model", "");
-    }
-  }, [draft.default_model, localRuntimeSettings, localRuntimeSettingsBusy, modelOptions.join("\u0000"), onUpdate, readOnly, usingLocalLogin]);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -246,7 +263,7 @@ export function AgentForm({
 		let active = true;
 		setLocalRuntimeSettings(null);
 		setLocalRuntimeSettingsError("");
-		if (!usingLocalLogin || !draft.runtime_id || authStatus?.state !== "authenticated") {
+		if (!usingLocalLogin || !draft.runtime_id) {
 			setLocalRuntimeSettingsBusy(false);
 			return () => {
 				active = false;
@@ -256,7 +273,10 @@ export function AgentForm({
 		void Promise.resolve()
       .then(() => api.frameworkRuntimeSettings(draft.runtime_id, draft.work_dir ?? "", authTargetID))
 			.then((settings) => {
-				if (active) setLocalRuntimeSettings(settings);
+				if (active) {
+          setLocalRuntimeSettings(settings);
+          setLocalRuntimeSettingsSource(runtimeSettingsSource);
+        }
 			})
 			.catch((err) => {
 				if (active) setLocalRuntimeSettingsError(err instanceof Error ? err.message : String(err));
@@ -267,7 +287,7 @@ export function AgentForm({
 		return () => {
 			active = false;
 		};
-	}, [authStatus?.state, authTargetID, draft.runtime_id, draft.work_dir, usingLocalLogin]);
+	}, [authenticated, authTargetID, draft.runtime_id, draft.work_dir, usingLocalLogin, runtimeSettingsSource]);
 
   useEffect(() => {
     if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
@@ -690,44 +710,65 @@ export function AgentForm({
           )}
           <label className="field">
             <span>{t("agents.defaultModel")}</span>
+            <div className="directory-input-row">
             <select
-				disabled={readOnly || localRuntimeSettingsBusy || modelOptions.length === 0}
+				disabled={readOnly || localRuntimeSettingsBusy || (modelOptions.length === 0 && !draft.default_model)}
+              aria-invalid={invalidModel}
               value={draft.default_model ?? ""}
               onChange={(event) => onUpdate("default_model", event.target.value)}
             >
-				<option value="">{t(usingLocalLogin ? "agents.defaultModelRuntimePlaceholder" : "agents.defaultModelPlaceholder")}</option>
+				<option value="">{modelPlaceholder}</option>
+              {draft.default_model && !modelOptions.includes(draft.default_model) && (
+                <option value={draft.default_model} disabled>{draft.default_model}{invalidModel ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
+              )}
               {modelOptions.map((model) => (
                 <option key={model} value={model}>
                   {model}
                 </option>
               ))}
             </select>
+            {usingLocalLogin && (
+              <button type="button" className="ghost-action icon-action" disabled={localRuntimeSettingsBusy}
+                aria-label={t("agents.refreshRuntimeSettings")} title={t("agents.refreshRuntimeSettings")}
+                onClick={() => setCatalogReload((value) => value + 1)}>
+                <RefreshCw size={15} className={localRuntimeSettingsBusy ? "spin" : ""} />
+              </button>
+            )}
+            </div>
             <small>{defaultModelStatus}</small>
           </label>
           <label className="field">
             <span>{t("agents.defaultReasoningEffort")}</span>
-            <select disabled={readOnly || reasoningOptions.length === 0} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
+            <select disabled={readOnly || (usingLocalLogin && !settingsReady) || (reasoningOptions.length === 0 && !draft.default_reasoning_effort)} aria-invalid={invalidEffort} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
               <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
+              {draft.default_reasoning_effort && !reasoningOptions.includes(draft.default_reasoning_effort) && (
+                <option value={draft.default_reasoning_effort} disabled>{draft.default_reasoning_effort}{invalidEffort ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
+              )}
               {reasoningOptions.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
             <small>{t("agents.defaultReasoningEffortHelp")}</small>
           </label>
           <label className="field">
             <span>{t("agents.defaultServiceTier")}</span>
-            <select disabled={readOnly || serviceTierOptions.length === 0} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
+            <select disabled={readOnly || (usingLocalLogin && !settingsReady) || (availableServiceTiers.length === 0 && !draft.default_service_tier)} aria-invalid={invalidTier} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
               <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
-              {serviceTierOptions.map((value) => <option key={value} value={value}>{serviceTierLabel(value)}</option>)}
+              {draft.default_service_tier && !availableServiceTiers.includes(draft.default_service_tier) && (
+                <option value={draft.default_service_tier} disabled>{serviceTierLabel(draft.default_service_tier)}{invalidTier ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
+              )}
+              {availableServiceTiers.map((value) => <option key={value} value={value}>{serviceTierLabel(value)}</option>)}
             </select>
             <small>{t("agents.defaultServiceTierHelp")}</small>
           </label>
           <label className="field">
             <span>{t("agents.defaultApprovalMode")}</span>
-            <select disabled={readOnly || approvalModesForRuntime(draft.runtime_id).length === 0} value={draft.default_approval_mode ?? ""} onChange={(event) => onUpdate("default_approval_mode", event.target.value)}>
+            <select disabled={readOnly || (approvalOptions.length === 0 && !draft.default_approval_mode)} aria-invalid={invalidApproval} value={draft.default_approval_mode ?? ""} onChange={(event) => onUpdate("default_approval_mode", event.target.value)}>
               <option value="">{t("agents.defaultApprovalModePlaceholder")}</option>
-              {approvalModesForRuntime(draft.runtime_id).map((value) => <option key={value} value={value}>{t(approvalModeLabelKey(value))}</option>)}
+              {invalidApproval && <option value={draft.default_approval_mode} disabled>{draft.default_approval_mode} · {t("agents.runtimeSettingUnsupported")}</option>}
+              {approvalOptions.map((value) => <option key={value} value={value}>{t(approvalModeLabelKey(value))}</option>)}
             </select>
             <small>{t("agents.defaultApprovalModeHelp")}</small>
           </label>
+          {invalidSettings && <p className="directory-notice error wide" role="alert">{t("agents.runtimeSettingsInvalid")}</p>}
         </div>
       </section>
 
@@ -850,7 +891,7 @@ export function AgentForm({
           <Trash2 size={15} />
           {t("common.delete")}
         </button>
-        <button className="action" disabled={!canSave || busy === "save"} onClick={onSave}>
+        <button className="action" disabled={!canSave || busy === "save" || invalidSettings || unverifiedSettings || (usingLocalLogin && localRuntimeSettingsBusy)} onClick={onSave}>
           <Save size={15} />
           {drawerMode === "create" ? t("agents.create") : t("common.save")}
         </button>
