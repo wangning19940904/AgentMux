@@ -61,6 +61,13 @@ if [ "$1" = "--list-models" ]; then
 Available models
 auto - Auto (current, default)
 gpt-5.6-sol[reasoning=high,fast=true]
+gpt-5.6-sol-max
+grok-4.7-low
+grok-4.7-low-fast
+grok-4.7-medium
+grok-4.7-high
+grok-4.7-xhigh
+grok-4.7-xhigh-fast
 composer-2
 Tip: choose a model with --model
 MODELS
@@ -98,6 +105,48 @@ exit 1
 	}
 	if len(response.Capabilities.ReasoningEfforts) == 0 || len(response.Capabilities.ServiceTiers) == 0 {
 		t.Fatalf("runtime capabilities = %+v", response.Capabilities)
+	}
+	for _, tc := range []struct {
+		model  string
+		effort string
+		tier   string
+		valid  bool
+	}{
+		{"grok-4.7", "xhigh", "priority", true},
+		{"grok-4.7", "max", "priority", false},
+		{"grok-4.7", "high", "priority", false},
+		{"gpt-5.6-sol", "max", "default", true},
+		{"composer-2", "high", "", false},
+	} {
+		a := core.AgentInstance{RuntimeID: "cursor", WorkDir: workDir, DefaultModel: tc.model, DefaultReasoningEffort: tc.effort, DefaultServiceTier: tc.tier}
+		err := s.validateAgentDefaultRuntimeSettings(request.Context(), &a)
+		if (err == nil) != tc.valid {
+			t.Errorf("validate %s/%s/%s: %v, want valid=%v", tc.model, tc.effort, tc.tier, err, tc.valid)
+		}
+	}
+	grok := response.Capabilities.ForModel("grok-4.7")
+	if len(grok.ReasoningEfforts) != 4 {
+		t.Fatalf("Grok effort options = %+v", grok.ReasoningEfforts)
+	}
+	if len(response.Capabilities.ForModel("composer-2").ReasoningEfforts) != 0 {
+		t.Fatal("a model without effort controls must not inherit the account-wide union")
+	}
+}
+
+func TestFrameworkRuntimeSettingsReportsDiscoveryFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "cursor-agent"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	s, _ := newTestServer(t)
+	recorder := httptest.NewRecorder()
+	s.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/frameworks/runtime-settings?kind=cursor", nil))
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "discover cursor models") {
+		t.Fatalf("code=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

@@ -988,6 +988,11 @@ export interface RuntimeSettingsCapabilities {
   reasoning_efforts?: RuntimeOption[];
   service_tiers?: RuntimeOption[];
   approval_modes?: RuntimeOption[];
+  model_capabilities?: Record<string, {
+    reasoning_efforts?: RuntimeOption[];
+    service_tiers?: RuntimeOption[];
+    variants?: RuntimeSettings[];
+  }>;
 }
 
 export interface FrameworkRuntimeSettings {

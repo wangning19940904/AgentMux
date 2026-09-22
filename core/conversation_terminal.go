@@ -69,7 +69,10 @@ func (e *Engine) managedTerminalSession(ctx context.Context, channelID string, c
 		_ = resumed.Close(ctx)
 		return nil, nil, nil
 	}
-	rt.applyRuntimeDefaultsFrom(resumed, generation.defaultSettings)
+	if err := rt.applyRuntimeDefaultsFrom(resumed, generation.defaultSettings); err != nil {
+		_ = resumed.Close(ctx)
+		return nil, nil, err
+	}
 	binding := &channelSessionBinding{
 		cacheKey: conversation.ID, session: resumed, generation: generation, active: 1, done: make(chan struct{}),
 	}

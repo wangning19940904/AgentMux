@@ -669,7 +669,7 @@ func normalizeChannelConfig(ch *core.Channel) error {
 	if turnTimeoutRaw == "" {
 		turnTimeoutRaw = strings.TrimSpace(ch.Config[core.ChannelConfigCodexTurnTimeout])
 	}
-	turnTimeout, err := boundedChannelInt(turnTimeoutRaw, core.DefaultChannelTurnTimeoutMinutes, 1, 240)
+	turnTimeout, err := boundedChannelInt(turnTimeoutRaw, core.DefaultChannelTurnTimeoutMinutes, 1, core.MaxChannelTurnTimeoutMinutes)
 	if err != nil {
 		return fmt.Errorf("invalid turn_timeout_minutes: %w", err)
 	}

@@ -74,10 +74,53 @@ type RuntimeOption struct {
 // RuntimeSettingsCapabilities lists the controls an adapter can truthfully
 // expose. A missing list is intentionally hidden rather than inferred.
 type RuntimeSettingsCapabilities struct {
-	Models           []RuntimeOption `json:"models,omitempty"`
-	ReasoningEfforts []RuntimeOption `json:"reasoning_efforts,omitempty"`
-	ServiceTiers     []RuntimeOption `json:"service_tiers,omitempty"`
-	ApprovalModes    []RuntimeOption `json:"approval_modes,omitempty"`
+	Models            []RuntimeOption                     `json:"models,omitempty"`
+	ReasoningEfforts  []RuntimeOption                     `json:"reasoning_efforts,omitempty"`
+	ServiceTiers      []RuntimeOption                     `json:"service_tiers,omitempty"`
+	ApprovalModes     []RuntimeOption                     `json:"approval_modes,omitempty"`
+	ModelCapabilities map[string]RuntimeModelCapabilities `json:"model_capabilities,omitempty"`
+}
+
+// RuntimeModelCapabilities describes one model's actual controls. An entry
+// with empty lists means that model does not expose those controls.
+type RuntimeModelCapabilities struct {
+	ReasoningEfforts []RuntimeOption   `json:"reasoning_efforts,omitempty"`
+	ServiceTiers     []RuntimeOption   `json:"service_tiers,omitempty"`
+	Variants         []RuntimeSettings `json:"variants,omitempty"`
+}
+
+func (c RuntimeSettingsCapabilities) ForModel(model string) RuntimeSettingsCapabilities {
+	if capabilities, ok := c.ModelCapabilities[model]; ok {
+		c.ReasoningEfforts = capabilities.ReasoningEfforts
+		c.ServiceTiers = capabilities.ServiceTiers
+	}
+	return c
+}
+
+// ValidateRuntimeSettings validates the selection together, including effort /
+// speed combinations when the CLI advertises concrete variants.
+func ValidateRuntimeSettings(c RuntimeSettingsCapabilities, selected RuntimeSettings) error {
+	if len(c.ModelCapabilities) > 0 && selected.Model == "" && (selected.ReasoningEffort != "" || selected.ServiceTier != "") {
+		return fmt.Errorf("choose a model before setting reasoning effort or speed")
+	}
+	options := c.ForModel(selected.Model)
+	for _, setting := range []RuntimeSetting{RuntimeSettingModel, RuntimeSettingReasoningEffort, RuntimeSettingServiceTier, RuntimeSettingApprovalMode} {
+		if value := selected.Value(setting); value != "" {
+			if err := ValidateRuntimeSetting(options, setting, value); err != nil {
+				return err
+			}
+		}
+	}
+	if variants := c.ModelCapabilities[selected.Model].Variants; len(variants) > 0 {
+		for _, variant := range variants {
+			if (selected.ReasoningEffort == "" || selected.ReasoningEffort == variant.ReasoningEffort) &&
+				(selected.ServiceTier == "" || selected.ServiceTier == variant.ServiceTier) {
+				return nil
+			}
+		}
+		return fmt.Errorf("model %q does not support effort=%q with speed=%q", selected.Model, selected.ReasoningEffort, selected.ServiceTier)
+	}
+	return nil
 }
 
 // RuntimeSettingsCataloger is an optional Agent-level capability for reading
@@ -397,11 +440,20 @@ func normalizeRuntimeOptions(options []RuntimeOption, setting RuntimeSetting) []
 }
 
 func copyRuntimeCapabilities(c RuntimeSettingsCapabilities) RuntimeSettingsCapabilities {
+	models := make(map[string]RuntimeModelCapabilities, len(c.ModelCapabilities))
+	for model, capabilities := range c.ModelCapabilities {
+		models[model] = RuntimeModelCapabilities{
+			ReasoningEfforts: append([]RuntimeOption(nil), capabilities.ReasoningEfforts...),
+			ServiceTiers:     append([]RuntimeOption(nil), capabilities.ServiceTiers...),
+			Variants:         append([]RuntimeSettings(nil), capabilities.Variants...),
+		}
+	}
 	return RuntimeSettingsCapabilities{
-		Models:           append([]RuntimeOption(nil), c.Models...),
-		ReasoningEfforts: append([]RuntimeOption(nil), c.ReasoningEfforts...),
-		ServiceTiers:     append([]RuntimeOption(nil), c.ServiceTiers...),
-		ApprovalModes:    append([]RuntimeOption(nil), c.ApprovalModes...),
+		Models:            append([]RuntimeOption(nil), c.Models...),
+		ReasoningEfforts:  append([]RuntimeOption(nil), c.ReasoningEfforts...),
+		ServiceTiers:      append([]RuntimeOption(nil), c.ServiceTiers...),
+		ApprovalModes:     append([]RuntimeOption(nil), c.ApprovalModes...),
+		ModelCapabilities: models,
 	}
 }
 

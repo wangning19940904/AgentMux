@@ -728,8 +728,8 @@ func TestCodexRemoteControlChannelValidation(t *testing.T) {
 		}
 	}
 	if saved.Config[core.ChannelConfigCodexMaxQueue] != "20" ||
-		saved.Config[core.ChannelConfigCodexTurnTimeout] != "60" ||
-		saved.Config[core.ChannelConfigTurnTimeout] != "60" {
+		saved.Config[core.ChannelConfigCodexTurnTimeout] != "720" ||
+		saved.Config[core.ChannelConfigTurnTimeout] != "720" {
 		t.Fatalf("remote control defaults = %+v", saved.Config)
 	}
 }
