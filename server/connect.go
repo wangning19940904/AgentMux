@@ -156,28 +156,48 @@ func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.AvatarURL, nil)
+	avatar, err := s.channelAvatarCache.get(r.Context(), channelIdentityCacheKey(*ch)+"\x00"+info.AvatarURL, 16,
+		func(ctx context.Context) (channelAvatarData, error) {
+			return fetchChannelAvatar(ctx, info.AvatarURL)
+		})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	w.Header().Set("Content-Type", avatar.contentType)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Vary", "Authorization, Cookie, X-AgentMux-Tenant-Scope")
+	_, _ = w.Write(avatar.body)
+}
+
+func fetchChannelAvatar(ctx context.Context, avatarURL string) (channelAvatarData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, avatarURL, nil)
+	if err != nil {
+		return channelAvatarData{}, err
 	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return channelAvatarData{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		http.Error(w, fmt.Sprintf("avatar request failed: HTTP %d", resp.StatusCode), http.StatusBadGateway)
-		return
+		return channelAvatarData{}, fmt.Errorf("avatar request failed: HTTP %d", resp.StatusCode)
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
+	if err != nil {
+		return channelAvatarData{}, err
 	}
-	w.Header().Set("Cache-Control", "private, max-age=300")
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 4<<20))
+	if len(body) > 4<<20 {
+		return channelAvatarData{}, fmt.Errorf("avatar exceeds 4 MiB")
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = http.DetectContentType(body)
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return channelAvatarData{}, fmt.Errorf("avatar is not an image")
+	}
+	return channelAvatarData{contentType: contentType, body: body}, nil
 }
 
 type channelBotInfo struct {
@@ -200,9 +220,12 @@ func (s *Server) lookupChannelBotInfo(ctx context.Context, ch core.Channel) *cha
 	if appID == "" || appSecret == "" || appSecret == "<redacted>" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	info, err := fetchChannelBotInfo(ctx, &http.Client{Timeout: 3 * time.Second}, ch.Type, appID, appSecret)
+	info, err := s.channelBotCache.get(ctx, channelIdentityCacheKey(ch), 128,
+		func(ctx context.Context) (*channelBotInfo, error) {
+			ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			return fetchChannelBotInfo(ctx, &http.Client{Timeout: 3 * time.Second}, ch.Type, appID, appSecret)
+		})
 	if err != nil {
 		if s.log != nil {
 			s.log.Warn("lookup channel bot info", "channel", ch.Name, "type", ch.Type, "err", err)

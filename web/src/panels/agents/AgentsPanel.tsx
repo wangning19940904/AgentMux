@@ -2,7 +2,7 @@ import { Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AgentInstance } from "../../api";
 import { useI18n } from "../../i18n";
-import { useAsync } from "../../useAsync";
+import { useCachedResource } from "../../useCachedResource";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
 import {
   EMPTY_AGENT,
@@ -35,15 +35,15 @@ export type AgentsPanelProps = {
 
 export function AgentsPanel({ createRequested = false, onCreateRequestHandled }: AgentsPanelProps = {}) {
   const { t } = useI18n();
-  const agents = useAsync(() => api.agentInstances(), []);
-  const runtimes = useAsync(() => api.agents(), []);
-  const providers = useAsync(() => api.providers(), []);
-  const activeRoutes = useAsync(() => api.activeRoutes(), []);
-  const channels = useAsync(() => api.channels(), []);
-  const triggers = useAsync(() => api.triggers(), []);
-  const mcpServers = useAsync(() => api.mcp(), []);
-  const skills = useAsync(() => api.skills(), []);
-  const tools = useAsync(() => api.tools(), []);
+  const agents = useCachedResource("agentInstances", () => api.agentInstances());
+  const runtimes = useCachedResource("agents", () => api.agents());
+  const providers = useCachedResource("providers", () => api.providers());
+  const activeRoutes = useCachedResource("activeRoutes", () => api.activeRoutes());
+  const channels = useCachedResource("channels", () => api.channels());
+  const triggers = useCachedResource("triggers", () => api.triggers());
+  const mcpServers = useCachedResource("mcp", () => api.mcp());
+  const skills = useCachedResource("skills", () => api.skills());
+  const tools = useCachedResource("tools", () => api.tools());
   const refreshing = [agents, runtimes, providers, activeRoutes, channels, triggers, mcpServers, skills, tools]
     .some((resource) => resource.loading);
   const refreshAll = () => Promise.all([
@@ -55,6 +55,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const [selectedChannelIDs, setSelectedChannelIDs] = useState<string[]>([]);
   const [selectedTriggerIDs, setSelectedTriggerIDs] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
+  const [noticeIsError, setNoticeIsError] = useState(false);
   const [busy, setBusy] = useState("");
   const [rowBusy, setRowBusy] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<AgentInstance | null>(null);
@@ -67,6 +68,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const activeRouteItems = activeRoutes.data ?? [];
   const channelItems = channels.data ?? [];
   const triggerItems = triggers.data ?? [];
+  const bindingsReady = channels.hasValue && triggers.hasValue &&
+    !channels.loading && !triggers.loading && !channels.error && !triggers.error;
+  const bindingError = channels.error || triggers.error;
+  const channelStatusLabel = channels.error ? t("agents.channelsLoadFailed")
+    : channels.loading ? t("agents.channelsLoading") : t("agents.noBoundChannels");
   const mcpOptions = mcpServers.data ?? [];
   const skillOptions = skills.data ?? [];
   const cliCatalog = tools.data?.cli ?? [];
@@ -119,6 +125,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     setSelectedChannelIDs([]);
     setSelectedTriggerIDs([]);
     setNotice("");
+    setNoticeIsError(false);
   }, [runtimeOptions]);
 
   useEffect(() => {
@@ -134,11 +141,13 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }, [createRequested, onCreateRequestHandled, startNew]);
 
   function editAgent(agent: AgentInstance) {
+    if (!bindingsReady) return;
     setDrawerMode("edit");
     setDrawerDraft(copyAgent(agent));
     setSelectedChannelIDs(channelItems.filter((channel) => channel.target_id === agent.target_id && channel.agent_id === agent.id).map((channel) => channel.id));
     setSelectedTriggerIDs(triggerItems.filter((trigger) => trigger.target_id === agent.target_id && trigger.agent_id === agent.id).map((trigger) => trigger.id));
     setNotice("");
+    setNoticeIsError(false);
   }
 
   function closeDrawer() {
@@ -148,6 +157,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     setSelectedTriggerIDs([]);
     setBusy("");
     setNotice("");
+    setNoticeIsError(false);
   }
 
   function openCLIInstaller(id: string) {
@@ -179,9 +189,10 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }
 
   async function save() {
-    if (!drawerDraft) return;
+    if (!drawerDraft || !bindingsReady) return;
     setBusy("save");
     setNotice("");
+    setNoticeIsError(false);
     try {
       const installedCLIIDs = tools.data
         ? new Set(draftCLICatalog.filter((tool) => tool.installed).map((tool) => tool.spec.id))
@@ -207,6 +218,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
       setNotice(t("agents.saved"));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
+      setNoticeIsError(true);
     } finally {
       setBusy("");
     }
@@ -216,6 +228,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     if (!drawerDraft?.id || isConfigManaged(drawerDraft)) return;
     setBusy("delete");
     setNotice("");
+    setNoticeIsError(false);
     try {
       await api.deleteAgentInstance(drawerDraft.id, drawerDraft.target_id);
       setDrawerMode(null);
@@ -224,6 +237,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
       await Promise.all([agents.reload(), channels.reload()]);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
+      setNoticeIsError(true);
     } finally {
       setBusy("");
     }
@@ -234,12 +248,14 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     const operation = `toggle:${targetKey(agent.target_id, agent.id)}`;
     setRowBusy(operation);
     setNotice("");
+    setNoticeIsError(false);
     try {
       await api.upsertAgentInstance({ ...copyAgent(agent), enabled: !agent.enabled });
       await Promise.all([agents.reload(), channels.reload()]);
       setNotice(t(agent.enabled ? "agents.disabled" : "agents.enabled"));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
+      setNoticeIsError(true);
     } finally {
       setRowBusy("");
     }
@@ -250,6 +266,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     const operation = `delete:${targetKey(agent.target_id, agent.id)}`;
     setRowBusy(operation);
     setNotice("");
+    setNoticeIsError(false);
     try {
       await api.deleteAgentInstance(agent.id, agent.target_id);
       await Promise.all([agents.reload(), channels.reload()]);
@@ -257,6 +274,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
       setNotice(t("agents.deleted"));
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
+      setNoticeIsError(true);
     } finally {
       setRowBusy("");
     }
@@ -269,9 +287,9 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
       drawerDraft.runtime_id &&
       (drawerMode === "edit" || runtimeOptions.includes(drawerDraft.runtime_id)) &&
       (drawerDraft.runtime_id !== "codex-app" || Boolean(drawerDraft.desktop_thread_id)) &&
-      !readOnly
+      !readOnly && bindingsReady
   );
-  const noticeClass = notice.toLowerCase().includes("failed") || notice.toLowerCase().includes("error") ? " error" : "";
+  const noticeClass = noticeIsError ? " error" : "";
 
   return (
     <div className="page-stack agents-page">
@@ -350,6 +368,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             if (!rowBusy) {
               setDeleteCandidate(null);
               setNotice("");
+              setNoticeIsError(false);
             }
           }}
           onConfirm={() => removeAgentFromRow(deleteCandidate)}
@@ -382,8 +401,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           </div>
         </div>
         {!drawerOpen && notice && <div className={`surface-body session-notice${noticeClass}`}>{notice}</div>}
+        {bindingError && <div className="surface-body session-notice error" role="alert">
+          {t("agents.bindingsLoadFailed")} {bindingError}
+        </div>}
         <div className="surface-body agent-registry-list">
-          {agents.loading && <div className="empty-state">{t("common.loading")}</div>}
+          {agents.loading && agents.data === null && <div className="empty-state">{t("common.loading")}</div>}
           {agents.error && <div className="empty-state error">{String(agents.error)}</div>}
           {!agents.loading && !agents.error && visibleItems.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
           {visibleItems.map((item) => {
@@ -432,15 +454,20 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 <div className="agent-list-meta">
                   <TargetBadge target_id={item.target_id} target_name={item.target_name} />
                   <OwnerBadge resource={item} />
-                  <span className="pill agent-route-model-pill">{routeModelLabel}</span>
+                  <span className="pill agent-route-model-pill">{routeModelLabel}
+                    {item.default_reasoning_effort?.trim() && ` · ${item.default_reasoning_effort.trim()}`}
+                    {item.default_service_tier?.trim() && ` · ${["priority", "fast"].includes(item.default_service_tier.trim())
+                      ? t("agents.fastModeShort") : ["default", "normal", "standard"].includes(item.default_service_tier.trim())
+                        ? t("agents.normalModeShort") : item.default_service_tier.trim()}`}
+                  </span>
                   <ChannelLogoGroup
                     channels={itemChannels}
-                    emptyLabel={t("agents.noBoundChannels")}
+                    emptyLabel={channelStatusLabel}
                     label={t("agents.boundChannelsShort")}
                   />
                 </div>
                 <div className="agent-row-actions">
-                  <button className="ghost-action" onClick={() => editAgent(item)} onDoubleClick={(event) => event.stopPropagation()}>
+                  <button className="ghost-action" disabled={!bindingsReady} title={!bindingsReady ? (bindingError ? t("agents.bindingsLoadFailed") : t("agents.channelsLoading")) : undefined} onClick={() => editAgent(item)} onDoubleClick={(event) => event.stopPropagation()}>
                     <Pencil size={15} />
                     {t("common.edit")}
                   </button>
@@ -449,6 +476,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                     disabled={itemReadOnly || Boolean(rowBusy)}
                     onClick={() => {
                       setNotice("");
+                      setNoticeIsError(false);
                       setDeleteCandidate(copyAgent(item));
                     }}
                     onDoubleClick={(event) => event.stopPropagation()}

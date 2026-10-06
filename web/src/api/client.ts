@@ -1,5 +1,6 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
+import { invalidateResourceCache } from "../resourceCache";
 import { beginFleetWarningUpdate, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import type {
   DesktopUpdateStatus,
@@ -162,6 +163,7 @@ async function fleetBatch<T>(
       headers: { "Content-Type": "application/json", ...(tenantScoped ? consoleHeaders(path) : CONSOLE_HEADER) },
       body: JSON.stringify({ target_ids: targetIDs, requests }),
     });
+    if (endpoint === "execute") invalidateResourceCache();
     const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
     if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
     const receivedAt = new Date();
@@ -222,6 +224,7 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
     body: JSON.stringify(body),
   });
+  invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -232,6 +235,7 @@ export async function put<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
     body: JSON.stringify(body),
   });
+  invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -242,6 +246,7 @@ export async function putLocal<T>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
     body: JSON.stringify(body),
   });
+  invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -253,6 +258,7 @@ export async function postChecked<T>(path: string, body: unknown, options: { loc
     body: JSON.stringify(body),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  invalidateResourceCache();
   if (!res.ok) {
     const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
     throw new Error(message);
@@ -356,6 +362,7 @@ export async function streamMeetingEvents(
 
 export async function del<T>(path: string): Promise<T> {
   const res = await fetch(apiPath(path), { method: "DELETE", headers: consoleHeaders(path) });
+  invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }

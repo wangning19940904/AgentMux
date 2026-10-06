@@ -58,6 +58,8 @@ type Server struct {
 	meetingPeers       meetingPeerClient
 	ttsModels          *ttspkg.Manager
 	channelClaimMu     sync.Mutex
+	channelBotCache    channelResourceCache[*channelBotInfo]
+	channelAvatarCache channelResourceCache[channelAvatarData]
 	orchestrations     *orchestrationpkg.Service
 	feishuAutomationMu sync.Mutex
 	feishuAutomations  map[string]*feishuAutomationSession

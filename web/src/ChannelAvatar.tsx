@@ -2,6 +2,7 @@ import { Cable } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Channel } from "./api";
 import { channelAvatarRequestPath, fetchChannelAvatar } from "./api/channelAvatar";
+import { activeTenantScopeKey } from "./api/client";
 
 type ChannelAvatarProps = {
   channel: Pick<Channel, "id" | "target_id" | "bot_avatar_proxy_url" | "bot_avatar_url">;
@@ -14,7 +15,7 @@ export function ChannelAvatar({ channel, size = "default", fallback }: ChannelAv
     ? channelAvatarRequestPath(channel)
     : "";
   const directURL = channel.bot_avatar_url || "";
-  return <ChannelAvatarImage key={`${requestPath}|${directURL}`} requestPath={requestPath} directURL={directURL} size={size} fallback={fallback} />;
+  return <ChannelAvatarImage key={`${activeTenantScopeKey()}|${requestPath}|${directURL}`} requestPath={requestPath} directURL={directURL} size={size} fallback={fallback} />;
 }
 
 function ChannelAvatarImage({ requestPath, directURL, size, fallback }: {

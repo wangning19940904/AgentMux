@@ -556,6 +556,10 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 | macOS 菜单栏 | `make menubar` | SwiftUI, 仅 macOS |
 | 签名 macOS | `make sign-macos` | 需要 Developer ID + notarytool profile |
 
+本地 macOS 调试安装统一覆盖 `/Applications/AgentMux.app`，按
+[本地安装约定](AGENTS.md) 完整替换应用包。需要回滚备份时只保留一个 ZIP；
+安装验证成功后清理可重新生成的 `.app` 构建产物，避免重复出现在系统应用列表中。
+
 详见 [INSTALL.md](INSTALL.md)。
 
 ## 致谢

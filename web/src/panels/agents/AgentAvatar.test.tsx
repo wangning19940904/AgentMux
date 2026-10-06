@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { clearChannelAvatarCache } from "../../api/channelAvatar";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Channel } from "../../api";
@@ -24,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  clearChannelAvatarCache();
   await act(async () => root.unmount());
   container.remove();
   localStorage.clear();
