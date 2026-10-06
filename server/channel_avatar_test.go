@@ -97,4 +97,9 @@ func TestChannelAvatarAPIRoutingAndAuthorization(t *testing.T) {
 			}
 		})
 	}
+	// Two channels with the same credentials share identity and image bytes,
+	// but every request still passes channel authorization first.
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("upstream calls = %d, want token + identity + image once", got)
+	}
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { channelAvatarRequestPath, fetchChannelAvatar } from "./channelAvatar";
+import { channelAvatarRequestPath, clearChannelAvatarCache, fetchChannelAvatar } from "./channelAvatar";
 
 function scope(target: string, tenant = "") {
   vi.stubGlobal("localStorage", {
@@ -7,9 +7,30 @@ function scope(target: string, tenant = "") {
   });
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { clearChannelAvatarCache(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("channel avatar requests", () => {
+  it("shares avatar loads, survives one viewer leaving, and expires per tenant", async () => {
+    scope("ssh");
+    vi.useFakeTimers();
+    const request = vi.fn(async () => new Response("avatar", { headers: { "Content-Type": "image/png" } }));
+    vi.stubGlobal("fetch", request);
+    const first = new AbortController();
+    const path = channelAvatarRequestPath({ id: "bot" });
+    const a = fetchChannelAvatar(path, first.signal);
+    first.abort();
+    const b = fetchChannelAvatar(path, new AbortController().signal);
+    expect(await a).toBe(await b);
+    expect(request).toHaveBeenCalledTimes(1);
+    await fetchChannelAvatar(path, new AbortController().signal);
+    expect(request).toHaveBeenCalledTimes(1);
+    scope("ssh", "ssh::other-tenant");
+    await fetchChannelAvatar(path, new AbortController().signal);
+    expect(request).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(Date.now() + 301_000);
+    await fetchChannelAvatar(path, new AbortController().signal);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
   it("routes the selected SSH machine through the controller instead of a loopback image URL", async () => {
     scope("lemon_claw");
     const request = vi.fn(async () => new Response("avatar", { headers: { "Content-Type": "image/png" } }));
@@ -18,7 +39,7 @@ describe("channel avatar requests", () => {
     const path = channelAvatarRequestPath({ id: "bot /1" });
     const blob = await fetchChannelAvatar(path, signal);
     expect(request).toHaveBeenCalledWith("/api/v1/remote/proxy/lemon_claw/channel-avatar?id=bot%20%2F1", {
-      headers: { "X-AgentMux-Console": "1" }, signal,
+      headers: { "X-AgentMux-Console": "1" }, signal: expect.any(AbortSignal),
     });
     expect(blob.type).toBe("image/png");
     expect(await blob.text()).toBe("avatar");
