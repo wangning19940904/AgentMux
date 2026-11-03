@@ -84,14 +84,14 @@ func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs) (string
 	case KindSDK:
 		return "", fmt.Errorf("SDK does not have a runnable adapter")
 	case KindCLI:
+		if spec.LatestURL != "" {
+			return officialCLIVersion(ctx, spec.LatestURL)
+		}
 		if spec.NPMPackage != "" {
 			if !pre.NPM {
 				return "", fmt.Errorf("npm not found on PATH; install Node.js first")
 			}
 			return npmPackageVersion(ctx, spec.NPMPackage)
-		}
-		if spec.LatestURL != "" {
-			return officialCLIVersion(ctx, spec.LatestURL)
 		}
 	}
 	return "", fmt.Errorf("no latest-version source configured")

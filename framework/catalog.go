@@ -54,8 +54,9 @@ type Spec struct {
 	// prerequisites are missing.
 	InstallSupported   bool `json:"install_supported"`
 	InstallRequiresNPM bool `json:"install_requires_npm"`
-	// LatestURL is an official text endpoint whose response contains the latest
-	// CLI version. It is used for CLIs that are not distributed through npm.
+	// LatestURL is an official endpoint whose response contains the latest CLI
+	// version. When set, it takes precedence over querying npm so native installs
+	// do not require Node.js or inherit an unrelated private npm registry.
 	LatestURL string `json:"-"`
 	// ExactLatest selects exact latest-version equality instead of ordered
 	// semantic comparison. Native date+hash builds such as Cursor need this.
@@ -103,6 +104,7 @@ var catalog = []Spec{
 		Kind: "codex", Display: "Codex", Company: "OpenAI", KindType: KindCLI,
 		Bin: "codex", VersionArgs: []string{"--version"},
 		NPMPackage: "@openai/codex", UpdateCommand: []string{"codex", "update"},
+		LatestURL:        "https://registry.npmjs.org/@openai/codex/latest",
 		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true, UninstallSupported: true,
 		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: true,
 		Note: "OpenAI Codex CLI",

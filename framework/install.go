@@ -147,7 +147,7 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, pr
 		defer cancel()
 	}
 	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
-	cmd.Env = os.Environ()
+	cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
 	out, err := cmd.CombinedOutput()
 	res.Log = string(out)
 	if err != nil {

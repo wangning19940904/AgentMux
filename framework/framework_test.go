@@ -450,6 +450,7 @@ func TestDetectCLIsAndPrereqsFromNVMForBackgroundService(t *testing.T) {
 }
 
 func TestUpdateCodexConfiguresPNPMHomeForBackgroundService(t *testing.T) {
+	mockCodexLatestVersion(t, "0.146.0")
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script and pnpm layout test")
 	}
@@ -538,6 +539,7 @@ func TestUpdateRunsCataloguedCLICommandAndVerifiesVersion(t *testing.T) {
 }
 
 func TestUpdateCodexUsesHomebrewCommandThroughSymlink(t *testing.T) {
+	mockCodexLatestVersion(t, "0.144.6")
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script and Homebrew layout test")
 	}
