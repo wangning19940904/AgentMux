@@ -333,7 +333,9 @@ ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS private_chat_mode TEXT;
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS group_chat_mode TEXT;
 `},
 		{version: 17, name: "event_relay", sql: eventRelaySchema},
-		{version: 18, name: "super_agents", sql: `
+		// Version 18 is taken: databases exist with it applied as
+		// usage_request_identity, and versions are skipped by number alone.
+		{version: 19, name: "super_agents", sql: `
 CREATE TABLE IF NOT EXISTS super_agents (id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS super_agent_triggers (
 	id TEXT PRIMARY KEY,

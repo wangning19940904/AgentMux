@@ -121,3 +121,25 @@ func TestSuperAgentPersistence(t *testing.T) {
 		t.Fatalf("a new Source must not inherit a read position: %q", state)
 	}
 }
+
+// A database can already hold a different migration at a neighboring version.
+// The super_agents tables must still appear, or the daemon cannot start.
+func TestSuperAgentMigrationRunsOnDatabaseWithVersion18Applied(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	ctx := context.Background()
+	for _, statement := range []string{
+		`DROP TABLE super_agents, super_agent_triggers, super_agent_tickets, super_agent_source_state`,
+		`DELETE FROM schema_migrations WHERE name='super_agents'`,
+		`INSERT INTO schema_migrations (version,name) VALUES (18,'usage_request_identity') ON CONFLICT (version) DO NOTHING`,
+	} {
+		if _, err := st.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.migratePostgres(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ListSuperAgents(ctx); err != nil {
+		t.Fatalf("super_agents must exist after migrating: %v", err)
+	}
+}
