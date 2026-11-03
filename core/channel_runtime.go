@@ -448,6 +448,26 @@ func (rt *channelRuntime) duplicateMessage(msg *Message) bool {
 	return false
 }
 
+// admitsMessage checks reply scope before any operation that can reply, including
+// durable task lookup and route resolution. Dedicated session groups explicitly
+// allow unmentioned follow-ups; only their local marker is needed for admission.
+// If that marker cannot be read, callers must fail closed without replying.
+func (rt *channelRuntime) admitsMessage(ctx context.Context, msg *Message) (bool, error) {
+	if rt == nil || msg == nil {
+		return false, nil
+	}
+	if msg.LogOnly || rt.acceptsMessage(msg) {
+		return true, nil
+	}
+	// Match resolveChannelRoute's dedicated-group handling. Pre-routed messages
+	// and private chats must not acquire an implicit mention here.
+	if msg.ConversationKey != "" || msg.MeetingID != "" || isDirectChatType(msg.ChatType) {
+		return false, nil
+	}
+	dedicated, err := rt.chatState(ctx, "dedicated:"+msg.ChatID)
+	return dedicated != "" && err == nil, err
+}
+
 func (rt *channelRuntime) acceptsMessage(msg *Message) bool {
 	if rt == nil || msg == nil {
 		return false

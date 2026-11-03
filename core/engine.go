@@ -295,7 +295,23 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
 			return
 		}
-		if msg.Callback == nil && msg.SourceMessageID != "" {
+		admitted, err := rt.admitsMessage(ctx, msg)
+		if err != nil {
+			e.log.Warn("channel message admission failed; ignoring without reply",
+				"channel_id", msg.ChannelID, "chat_id", msg.ChatID, "message_id", msg.ID, "err", err)
+			return
+		}
+		if !admitted {
+			e.log.Info("channel message ignored by reply scope",
+				"channel_id", msg.ChannelID,
+				"chat_id", msg.ChatID,
+				"message_id", msg.ID,
+				"platform", msg.Platform,
+				"chat_type", msg.ChatType,
+				"mentioned_bot", msg.MentionedBot)
+			return
+		}
+		if !msg.LogOnly && msg.Callback == nil && msg.SourceMessageID != "" {
 			if store, ok := e.conversations.(interface {
 				HasChannelSourceTask(context.Context, string, string) (bool, error)
 			}); ok {

@@ -1,0 +1,128 @@
+{
+  "version": "0.1.0-mention-guard.20261103",
+  "sha256": "e4a6716d8c4a56ff1bab7615762fa551c580ae32e65fb76401af1b05eecef5ab",
+  "previous_sha256": "d548b1111e1324b19e904c2c7a0f9a36ed19af7d5f514038a668379ae3eaa537",
+  "baseline_reproduces_installed_binary": true,
+  "target": "ecs_cn",
+  "tests": [
+    "go test ./core ./platform/feishu",
+    "old-code overlay reproduces unwanted DNS/database replies"
+  ],
+  "started_at": "2026-11-03T08:48:32.610176+00:00",
+  "verified_at": "2026-11-03T08:48:48.807596+00:00",
+  "channel_configuration_unchanged": true,
+  "health": {
+    "pid": 1257790,
+    "executable": "/home/tiger/.agentmux/bin/amux",
+    "status": {
+      "contract_version": "2.2",
+      "ok": true,
+      "version": "0.1.0-mention-guard.20261103"
+    },
+    "channels": [
+      {
+        "id": "channel-4c84c8d7af20",
+        "state": "running",
+        "connected": true,
+        "connected_at": "2026-11-03T16:48:33.154661951+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.163020736+08:00"
+      },
+      {
+        "id": "channel-829d00b0d089",
+        "state": "running",
+        "connected": true,
+        "connected_at": "2026-11-03T16:48:33.482831652+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.49346161+08:00"
+      },
+      {
+        "id": "channel-b65e4f691be8",
+        "state": "running",
+        "connected": true,
+        "connected_at": "2026-11-03T16:48:33.428797078+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.447564789+08:00"
+      }
+    ]
+  },
+  "post_deploy_observation": {
+    "ignored_count": 0,
+    "ignored_samples": [],
+    "runtime_errors": [],
+    "/api/v1/status": {
+      "contract_version": "2.2",
+      "ok": true,
+      "version": "0.1.0-mention-guard.20261103"
+    },
+    "/api/v1/channels?view=health": [
+      {
+        "id": "channel-4c84c8d7af20",
+        "state": "running",
+        "connected": true,
+        "last_checked_at": "2026-11-03T16:49:17.954677503+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.163020736+08:00",
+        "last_inbound_at": null
+      },
+      {
+        "id": "channel-829d00b0d089",
+        "state": "running",
+        "connected": true,
+        "last_checked_at": "2026-11-03T16:49:17.957010498+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.49346161+08:00",
+        "last_inbound_at": null
+      },
+      {
+        "id": "channel-b65e4f691be8",
+        "state": "running",
+        "connected": true,
+        "last_checked_at": "2026-11-03T16:49:17.958073375+08:00",
+        "last_heartbeat_at": "2026-11-03T16:48:33.447564789+08:00",
+        "last_inbound_at": null
+      }
+    ]
+  },
+  "regressions": {
+    "silent_cases": 48,
+    "explicit_request_cases": 15,
+    "log_only_case": 1,
+    "old_code_reproduced": [
+      "DNS error reply without mention",
+      "task store error reply without mention",
+      "chat state error reply without mention"
+    ],
+    "packages_passed": [
+      "core",
+      "platform/feishu"
+    ]
+  },
+  "rollback_archive": "/home/tiger/.agentmux/backups/mention-guard/previous.gz",
+  "final_health_check": {
+    "/api/v1/status": {
+      "contract_version": "2.2",
+      "ok": true,
+      "version": "0.1.0-mention-guard.20261103"
+    },
+    "/api/v1/channels?view=health": [
+      {
+        "id": "channel-4c84c8d7af20",
+        "state": "running",
+        "connected": true,
+        "last_heartbeat_at": "2026-11-03T16:48:33.163020736+08:00",
+        "last_inbound_at": null
+      },
+      {
+        "id": "channel-829d00b0d089",
+        "state": "running",
+        "connected": true,
+        "last_heartbeat_at": "2026-11-03T16:48:33.49346161+08:00",
+        "last_inbound_at": null
+      },
+      {
+        "id": "channel-b65e4f691be8",
+        "state": "running",
+        "connected": true,
+        "last_heartbeat_at": "2026-11-03T16:48:33.447564789+08:00",
+        "last_inbound_at": null
+      }
+    ],
+    "ignored_samples": []
+  }
+}
