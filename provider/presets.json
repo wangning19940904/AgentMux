@@ -1,5 +1,27 @@
 [
   {
+    "id": "traex-bridge",
+    "name": "TraeX (Local Bridge)",
+    "category": "custom",
+    "base_url": "http://127.0.0.1:8317/v1",
+    "api_key_env": "AGENTMUX_TRAEX_API_KEY",
+    "model": "DeepSeek-V4-Flash",
+    "api_format": "openai_responses",
+    "supported_api_formats": ["openai_responses", "anthropic", "openai_chat"],
+    "claude_auth_scheme": "auth_token"
+  },
+  {
+    "id": "doubao-work",
+    "name": "Doubao Work (Local Switchboard)",
+    "category": "custom",
+    "base_url": "http://127.0.0.1:8787/v1",
+    "api_key_env": "AGENTMUX_DOUBAO_API_KEY",
+    "model": "gpt-6.1-sol",
+    "api_format": "openai_responses",
+    "supported_api_formats": ["openai_responses"],
+    "claude_auth_scheme": "auth_token"
+  },
+  {
     "id": "anthropic-official",
     "name": "Anthropic (Official)",
     "category": "official",

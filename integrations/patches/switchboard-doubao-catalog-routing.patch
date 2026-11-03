@@ -1,0 +1,331 @@
+--- a/src/codex_provider_switchboard/application/service.py
++++ b/src/codex_provider_switchboard/application/service.py
+@@ -8,6 +8,8 @@
+ from collections.abc import AsyncIterator
+ from datetime import UTC, datetime
+ from typing import Any
++
++import httpx
+ 
+ from .. import __version__
+ from ..compatibility.profiles import ProviderCapabilities, compatibility_profile
+@@ -697,6 +699,12 @@
+         except DirectAPIError as exc:
+             raise ProviderError(
+                 str(exc), error_type="direct_api_error", status_code=502
++            ) from exc
++        except (httpx.HTTPError, TimeoutError) as exc:
++            raise ProviderError(
++                "Could not reach the direct-provider model catalog.",
++                error_type="direct_api_error",
++                status_code=502,
+             ) from exc
+         return self.safe_model_catalog(items)
+ 
+@@ -1417,9 +1425,18 @@
+             "session_ttl_seconds": state["session_ttl_seconds"],
+         }
+ 
+-    def models(self) -> dict[str, Any]:
++    async def models(self) -> dict[str, Any]:
+         provider_id = self.active_provider_id()
+-        model_id = self.providers[provider_id].model_id()
++        if (
++            provider_id == "direct"
++            and self.direct_provider.platform_id() == "doubao_work"
++        ):
++            # A model catalog is not the dashboard's current selection. Report
++            # the authenticated account's complete list, or fail explicitly so
++            # downstream catalog sync retains its previous valid list.
++            items = await self.direct_models("doubao_work")
++        else:
++            items = [{"id": self.providers[provider_id].model_id()}]
+         return {
+             "object": "list",
+             # Codex probes a private catalog shape while OpenAI-compatible clients
+@@ -1428,10 +1445,19 @@
+             "models": [],
+             "data": [
+                 {
+-                    "id": model_id,
++                    "id": item["id"],
+                     "object": "model",
+                     "created": 0,
+                     "owned_by": f"{provider_id}-provider-switchboard",
++                    **(
++                        {"name": item["displayName"]} if item.get("displayName") else {}
++                    ),
++                    **(
++                        {"context_window": item["contextWindowTokens"]}
++                        if item.get("contextWindowTokens")
++                        else {}
++                    ),
+                 }
++                for item in items
+             ],
+         }
+--- a/src/codex_provider_switchboard/providers/direct.py
++++ b/src/codex_provider_switchboard/providers/direct.py
+@@ -331,6 +331,16 @@
+     def model_id(self) -> str:
+         return str(self.store.read()["direct"]["model_id"])
+ 
++    def request_model_id(self, body: dict[str, Any]) -> str:
++        # Resolve within the request, never by changing shared settings: two
++        # concurrent clients may select different Doubao models. The native
++        # account catalog validates the exact ID before constructing a task.
++        if self.platform_id() == "doubao_work":
++            requested = body.get("model")
++            if isinstance(requested, str) and requested.strip():
++                return requested.strip()
++        return self.model_id()
++
+     def _upstream_body(self, body: dict[str, Any]) -> dict[str, Any]:
+         if self.store.read()["direct"].get("follow_codex_effort", True):
+             return body
+@@ -343,7 +353,7 @@
+         self.inspector.record(
+             provider=self.provider_id,
+             action=f"{self.platform_id()}_{action}",
+-            model=self.model_id(),
++            model=self.request_model_id(body),
+             **(
+                 {"effort": trae_effort(body, self.model_id())}
+                 if self.platform_id() == "trae_cn"
+@@ -371,7 +381,7 @@
+             self.usage_ledger.append(
+                 usage,
+                 platform=self.platform_id(),
+-                model=self.model_id(),
++                model=self.request_model_id(body),
+                 session=thread_hash[:16] if thread_hash else None,
+                 response_id=(
+                     str(response["id"]) if isinstance(response.get("id"), str) else None
+@@ -522,7 +532,7 @@
+         async with aclosing(
+             stream_doubao_native_response(
+                 body=body,
+-                model=self.model_id(),
++                model=self.request_model_id(body),
+                 client=self.doubao_work,
+                 inspector=self.inspector,
+                 timeout_seconds=float(self.store.read()["direct"]["timeout_seconds"]),
+--- a/src/codex_provider_switchboard/web/app.py
++++ b/src/codex_provider_switchboard/web/app.py
+@@ -642,7 +642,10 @@
+     async def models(request: Request) -> JSONResponse:
+         if not authorized(request):
+             return _error(401, "Invalid proxy token.", "authentication_error")
+-        return JSONResponse(service.models())
++        try:
++            return JSONResponse(await service.models())
++        except ProviderError as exc:
++            return _error(exc.status_code, str(exc), exc.error_type)
+ 
+     @app.post("/v1/context/compact")
+     async def compact_context(request: Request):
+--- a/src/codex_provider_switchboard/infrastructure/doubao_http.py
++++ b/src/codex_provider_switchboard/infrastructure/doubao_http.py
+@@ -5,6 +5,7 @@
+ import hashlib
+ import logging
+ import math
++import os
+ import time
+ import uuid
+ from collections import OrderedDict
+@@ -13,6 +14,7 @@
+ from email.utils import parsedate_to_datetime
+ from http.cookies import CookieError, SimpleCookie
+ from typing import Any
++from urllib.parse import urlsplit
+ 
+ import httpx
+ 
+@@ -31,6 +33,25 @@
+ logger = logging.getLogger(__name__)
+ 
+ 
++def doubao_local_proxy() -> str | None:
++    """Explicitly opt into the user's local proxy without trusting global env."""
++    value = os.getenv("DOUBAO_HTTPS_PROXY", "").strip()
++    if not value:
++        return None
++    parsed = urlsplit(value)
++    if (
++        parsed.scheme not in {"http", "https"}
++        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
++        or parsed.username is not None
++        or parsed.password is not None
++        or parsed.path not in {"", "/"}
++        or parsed.query
++        or parsed.fragment
++    ):
++        raise ValueError("DOUBAO_HTTPS_PROXY must be a loopback HTTP(S) proxy URL.")
++    return value
++
++
+ class DoubaoHTTPClient:
+     """Independent HTTP transport. Desktop access is an explicit import operation."""
+ 
+@@ -43,6 +64,7 @@
+     ) -> None:
+         self.credentials = credentials
+         self.transport = transport
++        self.proxy = doubao_local_proxy() if transport is None else None
+         self.timeout = timeout
+         self._lock = asyncio.Lock()
+         self._verified = ""
+@@ -101,6 +123,7 @@
+         return httpx.AsyncClient(
+             timeout=httpx.Timeout(timeout, connect=min(timeout, 20)),
+             trust_env=False,
++            proxy=self.proxy,
+             follow_redirects=False,
+             transport=self.transport,
+         )
+--- a/src/codex_provider_switchboard/infrastructure/doubao_native_http.py
++++ b/src/codex_provider_switchboard/infrastructure/doubao_native_http.py
+@@ -28,6 +28,7 @@
+         self.http = httpx.AsyncClient(
+             http2=True,
+             trust_env=False,
++            proxy=bootstrap.proxy,
+             follow_redirects=False,
+             timeout=httpx.Timeout(45, connect=15),
+             transport=bootstrap.transport,
+--- /dev/null
++++ b/tests/unit/test_agentmux_doubao_catalog.py
+@@ -0,0 +1,132 @@
++from __future__ import annotations
++
++import asyncio
++import json
++from types import SimpleNamespace
++
++import httpx
++import pytest
++
++from codex_provider_switchboard.application.inspector import RequestInspector
++from codex_provider_switchboard.infrastructure.config_store import ConfigStore
++from codex_provider_switchboard.infrastructure.direct_client import DirectAPIError
++from codex_provider_switchboard.infrastructure.doubao_http import doubao_local_proxy
++from codex_provider_switchboard.providers.direct import DirectProvider
++from codex_provider_switchboard.runtime import build_runtime
++from codex_provider_switchboard.settings import AppSettings
++from codex_provider_switchboard.web.app import create_app
++
++MODELS = ("gpt-6.1-sol", "orange-5.5", "gpt-6-astra")
++
++
++def events(raw):
++    return [
++        json.loads(line[6:])
++        for line in raw.decode().splitlines()
++        if line.startswith("data: ")
++    ]
++
++
++def configure(store):
++    store.update_from_api(
++        {
++            "active_provider": "direct",
++            "direct": {
++                "platform_id": "doubao_work",
++                "model_id": MODELS[0],
++            },
++        }
++    )
++
++
++def test_catalog_exposes_account_models_and_does_not_fall_back_on_failure(tmp_path):
++    async def scenario():
++        runtime = build_runtime(
++            settings=AppSettings.from_env(),
++            config_path=tmp_path / "config.json",
++            codex_config_path=tmp_path / "codex.toml",
++        )
++        configure(runtime.store)
++        fail = False
++
++        async def catalog(platform_id=None, *, force=False):
++            assert platform_id == "doubao_work"
++            if fail:
++                raise httpx.ConnectError("network down")
++            return [
++                {"id": model, "displayName": model, "contextWindowTokens": 1000000}
++                for model in MODELS
++            ]
++
++        runtime.direct_client.get_models = catalog
++        async with httpx.AsyncClient(
++            transport=httpx.ASGITransport(app=create_app(runtime)),
++            base_url="http://127.0.0.1",
++        ) as client:
++            response = await client.get("/v1/models")
++            assert response.status_code == 200
++            assert [row["id"] for row in response.json()["data"]] == list(MODELS)
++            assert response.json()["data"][1]["context_window"] == 1000000
++            fail = True
++            response = await client.get("/v1/models")
++            assert response.status_code == 502
++            assert "data" not in response.json()
++            assert runtime.store.read()["direct"]["model_id"] == MODELS[0]
++
++    asyncio.run(scenario())
++
++
++def test_doubao_routes_concurrent_requests_by_model_without_changing_default(tmp_path):
++    store = ConfigStore(tmp_path / "config.json")
++    configure(store)
++    selected = {}
++
++    class Native:
++        async def run(self, body, model, timeout_seconds, *, progress):
++            selected[body["input"]] = model
++            await asyncio.sleep(0)
++            if model not in MODELS:
++                raise DirectAPIError("Unknown account model")
++            return {"text": model, "items": [], "complete": True}
++
++    inspector = RequestInspector()
++    provider = DirectProvider(store, SimpleNamespace(doubao_work=Native()), inspector)
++
++    async def request(model, identity):
++        body = {"input": identity}
++        if model is not None:
++            body["model"] = model
++        raw = b"".join([chunk async for chunk in provider.stream(body)])
++        return events(raw)
++
++    async def scenario():
++        results = await asyncio.gather(*(request(model, model) for model in MODELS))
++        for model, result in zip(MODELS, results, strict=True):
++            assert result[-1]["type"] == "response.completed"
++            assert result[-1]["response"]["model"] == model
++            assert selected[model] == model
++        result = await request(None, "default")
++        assert selected["default"] == MODELS[0]
++        assert result[-1]["type"] == "response.completed"
++        result = await request("unknown", "unknown")
++        assert selected["unknown"] == "unknown"
++        assert result[-1]["type"] == "response.failed"
++        assert not any(event["type"] == "response.completed" for event in result)
++        assert store.read()["direct"]["model_id"] == MODELS[0]
++
++    asyncio.run(scenario())
++
++
++def test_explicit_local_proxy_keeps_environment_disabled(monkeypatch):
++    monkeypatch.delenv("DOUBAO_HTTPS_PROXY", raising=False)
++    assert doubao_local_proxy() is None
++    monkeypatch.setenv("DOUBAO_HTTPS_PROXY", "http://127.0.0.1:7897")
++    assert doubao_local_proxy() == "http://127.0.0.1:7897"
++    for invalid in (
++        "http://example.com:7897",
++        "http://user:secret@127.0.0.1:7897",
++        "http://127.0.0.1:7897?key=secret",
++    ):
++        monkeypatch.setenv("DOUBAO_HTTPS_PROXY", invalid)
++        with pytest.raises(ValueError):
++            doubao_local_proxy()

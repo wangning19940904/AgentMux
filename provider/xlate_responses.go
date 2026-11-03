@@ -114,7 +114,13 @@ func chatToResponsesRequest(ir map[string]any) map[string]any {
 		out["tools"] = converted
 	}
 	if choice, ok := ir["tool_choice"]; ok {
-		out["tool_choice"] = choice
+		if selected, ok := choice.(map[string]any); ok && selected["type"] == "function" {
+			if fn, ok := selected["function"].(map[string]any); ok {
+				out["tool_choice"] = map[string]any{"type": "function", "name": fn["name"]}
+			}
+		} else {
+			out["tool_choice"] = choice
+		}
 	}
 	return out
 }

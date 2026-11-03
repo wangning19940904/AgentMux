@@ -59,7 +59,7 @@ func (s *ProxyServer) forwardChain(w http.ResponseWriter, r *http.Request, parse
 		upstreamModel, err := resolveUpstreamModel(p, reqBody, opts.mapModel)
 		if err != nil {
 			result := proxyAttemptResult{
-				StatusCode: http.StatusBadRequest, Upstream: upstreamProto(p.Meta.APIFormat, opts.clientProto),
+				StatusCode: http.StatusBadRequest, Upstream: providerUpstreamProto(p, opts.clientProto),
 				Err: err, StartedAt: startedAt, Duration: time.Since(startedAt),
 			}
 			s.recordProxyTrace(r, parsed, opts, p, requestModel, "", identity, attemptID, parentAttemptID, i+1, result)
@@ -130,7 +130,7 @@ func resolveUpstreamModel(p *core.Provider, body map[string]any, mapModel func(*
 // whether failover should try the next provider on failure.
 func (s *ProxyServer) forwardOne(w http.ResponseWriter, r *http.Request, p *core.Provider, body map[string]any, requestModel, upstreamModel string, opts forwardOpts, startedAt time.Time, beforeRespond func()) (result proxyAttemptResult) {
 	result.StartedAt = startedAt
-	result.Upstream = upstreamProto(p.Meta.APIFormat, opts.clientProto)
+	result.Upstream = providerUpstreamProto(p, opts.clientProto)
 	defer func() { result.Duration = time.Since(startedAt) }()
 
 	if issue := providerAPIKeyIssue(p); issue != "" {
@@ -156,6 +156,13 @@ func (s *ProxyServer) forwardOne(w http.ResponseWriter, r *http.Request, p *core
 		if cerr != nil {
 			result.Err = cerr
 			return result
+		}
+		if opts.clientProto == protoAnthropic && result.Upstream == protoResponses {
+			// Stateful Responses adapters use the cache key as conversation
+			// affinity. Never use an account-wide user_id as a thread identity.
+			if key := anthropicResponseCacheKey(body); key != "" {
+				upstreamBody["prompt_cache_key"] = key
+			}
 		}
 		payload, _ = json.Marshal(upstreamBody)
 	}
@@ -363,6 +370,9 @@ func firstTraceValue(values ...string) string {
 func upstreamEndpoint(proto, baseURL, model string, stream bool) string {
 	switch proto {
 	case protoAnthropic:
+		if strings.HasSuffix(strings.TrimRight(baseURL, "/"), "/v1") {
+			return joinURL(baseURL, "/messages")
+		}
 		return joinURL(baseURL, "/v1/messages")
 	case protoResponses:
 		return joinURL(baseURL, "/responses")

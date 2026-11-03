@@ -3,6 +3,8 @@ package provider
 import (
 	"fmt"
 	"strings"
+
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // xlate.go is the star-shaped protocol translation hub. Every client entry
@@ -50,6 +52,18 @@ func upstreamProto(apiFormat, fallback string) string {
 		return p
 	}
 	return fallback
+}
+
+// A gateway may expose several native endpoints at the same base URL. Prefer
+// the client's wire when it is explicitly advertised, avoiding lossy conversion
+// of tool, thinking and media blocks. Single-protocol providers keep their wire.
+func providerUpstreamProto(p *core.Provider, clientProto string) string {
+	for _, format := range p.Meta.SupportedAPIFormats {
+		if normalizeProto(format) == clientProto {
+			return clientProto
+		}
+	}
+	return upstreamProto(p.Meta.APIFormat, clientProto)
 }
 
 // decodeToIR converts a client request body (in clientProto) into the OpenAI

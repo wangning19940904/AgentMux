@@ -283,6 +283,7 @@ func chatStreamToAnthropicSSE(upstream io.Reader, w http.ResponseWriter, request
 	stopReason := "end_turn"
 	var outputTokens, inputTokens any = 0, 0
 	model := requestModel
+	messageID := randomProxyID("msg_")
 
 	startMessage := func() error {
 		if started {
@@ -292,7 +293,7 @@ func chatStreamToAnthropicSSE(upstream io.Reader, w http.ResponseWriter, request
 		return out.event("message_start", map[string]any{
 			"type": "message_start",
 			"message": map[string]any{
-				"id": "msg_proxy", "type": "message", "role": "assistant",
+				"id": messageID, "type": "message", "role": "assistant",
 				"model": model, "content": []any{}, "stop_reason": nil,
 				"stop_sequence": nil,
 				"usage":         map[string]any{"input_tokens": 0, "output_tokens": 0},

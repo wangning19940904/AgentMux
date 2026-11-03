@@ -13,6 +13,8 @@ import { Provider, ProviderProbeCheck } from "../../api";
 export const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "traecli", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
 export const DEFAULT_ROUTE_TOOLS = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini"];
 export const CURATED_PRESET_IDS = [
+  "traex-bridge",
+  "doubao-work",
   "anthropic-official",
   "openai-official",
   "claude-desktop-official",

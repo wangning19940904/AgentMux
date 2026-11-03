@@ -1,0 +1,234 @@
+{
+  "verified_at": "2026-10-23T15:40:31.693678+08:00",
+  "installation": {
+    "status": {
+      "contract_version": "2.2",
+      "ok": true,
+      "version": "0.1.0"
+    },
+    "proxy_running": true,
+    "processes": [
+      [
+        39380,
+        "/Applications/AgentMux.app/Contents/MacOS/AgentMux"
+      ],
+      [
+        39410,
+        "/Applications/AgentMux.app/Contents/MacOS/AgentMuxMenuBar"
+      ]
+    ],
+    "installed_path": "/Applications/AgentMux.app",
+    "bundle_identifier": "com.wails.agentmux-desktop",
+    "binary_sha256": "dcc20ae443af8b3a25f5246d9ccb549475de84e3dfb9fdaf4c4f43c9c55c53a0"
+  },
+  "versions": {
+    "traex_bridge": "0.7.2",
+    "traex_commit": "82b7b2e5a55175579e0cd1998ebcdf97519cfdf0",
+    "switchboard": "0.2.1 / 2026-10-20-r2",
+    "codex": "0.159.2",
+    "claude_code": "2.1.308"
+  },
+  "model_counts": {
+    "traex": 35,
+    "doubao": 9
+  },
+  "default_route": {
+    "codex": "agentmux-doubao",
+    "claudecode": "agentmux-doubao",
+    "model": "gpt-6.1-sol"
+  },
+  "end_to_end": [
+    {
+      "provider": "traex",
+      "client": "codex",
+      "model": "DeepSeek-V4-Flash",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "seconds": 19.7,
+          "tools": [
+            "command_execution",
+            "command_execution"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        },
+        {
+          "turn": 2,
+          "seconds": 23.86,
+          "tools": [
+            "command_execution",
+            "command_execution",
+            "command_execution"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        }
+      ],
+      "same_session_resumed": true
+    },
+    {
+      "provider": "traex",
+      "client": "claude",
+      "model": "DeepSeek-V4-Flash",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "seconds": 19.82,
+          "tools": [
+            "Read",
+            "Edit",
+            "Read"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        },
+        {
+          "turn": 2,
+          "seconds": 18.02,
+          "tools": [
+            "Read",
+            "Edit",
+            "Read"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        }
+      ],
+      "same_session_resumed": true
+    },
+    {
+      "provider": "doubao",
+      "client": "codex",
+      "model": "gpt-6.1-sol",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "seconds": 27.02,
+          "tools": [
+            "command_execution"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        },
+        {
+          "turn": 2,
+          "seconds": 23.8,
+          "tools": [
+            "command_execution"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        }
+      ],
+      "same_session_resumed": true
+    },
+    {
+      "provider": "doubao",
+      "client": "claude",
+      "model": "gpt-6.1-sol",
+      "passed": true,
+      "turns": [
+        {
+          "turn": 1,
+          "seconds": 61.02,
+          "tools": [
+            "Read",
+            "Edit",
+            "Read"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        },
+        {
+          "turn": 2,
+          "seconds": 30.13,
+          "tools": [
+            "Read",
+            "Edit",
+            "Read"
+          ],
+          "file_ok": true,
+          "marker_in_answer": true
+        }
+      ],
+      "same_session_resumed": true
+    }
+  ],
+  "saved_configuration_checks": [
+    {
+      "client": "codex",
+      "passed": true,
+      "response": "CONFIG_OK",
+      "used_saved_configuration": true
+    },
+    {
+      "client": "claude",
+      "passed": true,
+      "response": "CONFIG_OK",
+      "used_saved_configuration": true
+    }
+  ],
+  "claude_doubao_session_affinity_verified": true,
+  "route_evidence": [
+    {
+      "provider_id": "agentmux-doubao",
+      "client": "codex",
+      "client_protocol": "openai_responses",
+      "upstream_protocol": "openai_responses",
+      "model": "gpt-6.1-sol",
+      "successful_requests": 8,
+      "failed_requests": 1
+    },
+    {
+      "provider_id": "agentmux-doubao",
+      "client": "claudecode",
+      "client_protocol": "anthropic",
+      "upstream_protocol": "openai_responses",
+      "model": "gpt-6.1-sol",
+      "successful_requests": 16,
+      "failed_requests": 0
+    },
+    {
+      "provider_id": "agentmux-traex",
+      "client": "codex",
+      "client_protocol": "openai_responses",
+      "upstream_protocol": "openai_responses",
+      "model": "DeepSeek-V4-Flash",
+      "successful_requests": 19,
+      "failed_requests": 0
+    },
+    {
+      "provider_id": "agentmux-traex",
+      "client": "claudecode",
+      "client_protocol": "anthropic",
+      "upstream_protocol": "anthropic",
+      "model": "DeepSeek-V4-Flash",
+      "successful_requests": 8,
+      "failed_requests": 0
+    },
+    {
+      "provider_id": "agentmux-traex",
+      "client": "claudecode",
+      "client_protocol": "anthropic",
+      "upstream_protocol": "openai_responses",
+      "model": "DeepSeek-V4-Flash",
+      "successful_requests": 22,
+      "failed_requests": 0
+    }
+  ],
+  "automated_checks": {
+    "go": "go test ./provider ./server ./core — passed",
+    "web": "npm test -- src/panels/gateway — 8 passed",
+    "build": "SDKROOT=\"$(xcrun --sdk macosx --show-sdk-path)\" make desktop — passed",
+    "diff": "git diff --check — passed"
+  },
+  "limitations": [
+    "Representative models were exercised, not every model in each account catalog.",
+    "Claude-to-Doubao image and binary tool results, very long contexts, and prolonged approval recovery were not exercised.",
+    "Codex catalog currently uses the conservative 128k generic metadata."
+  ]
+}
