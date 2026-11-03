@@ -129,6 +129,10 @@ make release
 ./amux client --web
 ```
 
+Codex 用量按调用入口区分为 CLI、Desktop、IDE 和 AgentMux 内部调用。AgentMux 发起的请求以请求来源为准，即使复用了桌面线程，也不会算作人工桌面调用。实时记录与 rollout 中同机、同会话、同模型且 Token 分项完全相同的记录，在 60 秒内一对一归并；独立重试继续保留。普通和归档 rollout 均会采集。
+
+`codex exec --ephemeral` 不保存 rollout，必须由调用方保存 `turn.completed.usage` 才能统计；没有保留用量的历史调用不能恢复为精确 Token。AgentMux 支持读取 `$CODEX_HOME/usage/agentmux-exec/` 下的用量回执（默认 `~/.codex`），协议及覆盖范围见 [Codex ephemeral 用量接入](integrations/codex-exec-usage.md)。
+
 Cursor 用量默认不读取。请在 Console 的「用量账本 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
 
 TRAE CLI 的账户登录会自动维护：运行中的 AgentMux 每 5 分钟检查已启用的 TRAE Agent，在凭证到期前 15 分钟尝试通过 TRAE 原生接口续期，开始会话和每次发送消息前也会检查。同一登录的并发刷新会合并，失败后退避重试；凭证仍有效时，临时网络故障不阻断对话。Token 的刷新和保存由 TRAE CLI 完成，不进入 AgentMux 数据库。如果 SSO 或刷新凭证已失效，框架页面会显示需要登录，调用也会给出明确提示；此时仍需在对应机器的「框架 → TRAE CLI」重新授权。后台维护随 AgentMux 停止而停止，不自动打开浏览器。

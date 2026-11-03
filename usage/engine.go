@@ -125,6 +125,7 @@ func (e *Engine) Record(ctx context.Context, record core.UsageRecord) (float64, 
 		record.Provenance = "agentmux.internal"
 		record.ProvenanceRank = 100
 	}
+	record.RuntimeID = record.UsageRuntime()
 	if err := e.st.UpsertUsage(ctx, []core.UsageRecord{record}); err != nil {
 		return record.CostUSD, err
 	}
@@ -151,6 +152,7 @@ func (e *Engine) RecordProxy(ctx context.Context, trace core.ProxyTrace) error {
 		Project: trace.ProjectDir, Model: trace.UpstreamModel, Timestamp: trace.Timestamp,
 		InputTokens: trace.InputTokens, OutputTokens: trace.OutputTokens,
 		CacheReadTokens: trace.CacheReadTokens, CacheWriteTokens: trace.CacheWriteTokens,
+		Provenance: "agentmux.proxy", ProvenanceRank: 100,
 	})
 	return err
 }
@@ -291,9 +293,10 @@ func (e *Engine) Report(ctx context.Context, period string, since time.Time) (*R
 }
 
 // ReportRange aggregates the canonical usage_records table inside [since,
-// until). usage_records is already protected by request and transcript
-// identities at insertion time. Keeping the ledger on this one source avoids
-// mixing legacy rows with observation rollups of the same transcripts.
+// until). Insertion identities prevent replays of each collector, and report
+// reconciliation removes matching Codex live/transcript and Cursor
+// hook/dashboard observations without changing the ledger. Observation
+// rollups are not added to these records.
 //
 // Costs are recalculated for every report with one pricing snapshot so rows
 // imported under an old fallback price cannot make a mixed-price total.
@@ -309,10 +312,30 @@ func (e *Engine) ReportRangeInLocation(ctx context.Context, period string, since
 	if location == nil {
 		location = time.Local
 	}
-	recs, err := e.st.QueryUsageRange(ctx, since, until)
+	// Fetch the delivery overlap before matching. Otherwise one observation
+	// just before midnight and its counterpart just after midnight would
+	// survive separately in adjacent daily reports.
+	querySince, queryUntil := since, until
+	if !querySince.IsZero() {
+		querySince = querySince.Add(-usageReconciliationWindow)
+	}
+	if !queryUntil.IsZero() {
+		queryUntil = queryUntil.Add(usageReconciliationWindow)
+	}
+	recs, err := e.st.QueryUsageRange(ctx, querySince, queryUntil)
 	if err != nil {
 		return nil, err
 	}
+	recs = reconcileCodexUsage(recs)
+	recs = reconcileCursorUsage(recs)
+	bounded := recs[:0]
+	for _, record := range recs {
+		if (!since.IsZero() && record.Timestamp.Before(since)) || (!until.IsZero() && !record.Timestamp.Before(until)) {
+			continue
+		}
+		bounded = append(bounded, record)
+	}
+	recs = bounded
 	e.reprice(recs)
 	for i := range recs {
 		recs[i].Timestamp = recs[i].Timestamp.In(location)

@@ -620,6 +620,13 @@ func (s *Store) migrateSQLite() error {
 			return err
 		}
 	}
+	if err := s.migrateSQLiteUsageIdentity(); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_legacy
+		ON usage_records(source,session_id,timestamp,host) WHERE request_id IS NULL OR request_id=''`); err != nil {
+		return err
+	}
 	if _, err := s.writer.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request
 		ON usage_records(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>''`); err != nil {
 		return err
@@ -742,7 +749,8 @@ func (s *Store) UpsertUsage(ctx context.Context, recs []core.UsageRecord) error 
 		(source,session_id,conversation_id,trace_id,turn_id,request_id,runtime_id,project,model,timestamp,input_tokens,output_tokens,
 		 cache_read_tokens,cache_write_tokens,tool,cost_usd,host,provenance,provenance_rank,token_quality,cost_kind)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(source,session_id,timestamp,host) DO UPDATE SET runtime_id=excluded.runtime_id
+		ON CONFLICT(source,session_id,timestamp,host) WHERE request_id IS NULL OR request_id=''
+		DO UPDATE SET runtime_id=excluded.runtime_id
 		WHERE COALESCE(usage_records.request_id,'')=''
 		AND COALESCE(usage_records.runtime_id,'') IN ('','claude-unknown','codex-unknown')
 		AND excluded.runtime_id<>''`)

@@ -538,8 +538,13 @@
     gap: 16px 0;
   }
 
-  .usage-breakdown .stat:nth-child(2) {
+  .usage-breakdown .stat:nth-child(even) {
     border-right: 0;
+    padding-right: 0;
+  }
+
+  .usage-breakdown .stat:nth-child(odd) {
+    padding-left: 0;
   }
 
   .remote-host-card {

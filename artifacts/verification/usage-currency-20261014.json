@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-14",
+  "usd_cny_before": 7,
+  "usd_cny_after": 6.7249,
+  "source": "https://www.chinamoney.org.cn/chinese/ccprnoticecontent/index.html?searchDate=2026-10-14",
+  "method": "Current stored fixed rate updated through the existing settings API; other preferences preserved.",
+  "installed_path": "/Applications/AgentMux.app",
+  "installed_version": "0.1.14-usage-calibration.2",
+  "health_checks": [
+    "Expected running executable path",
+    "API version after restart",
+    "Persisted USD/CNY rate = 6.7249",
+    "Nonzero cache tokens from live usage API"
+  ]
+}

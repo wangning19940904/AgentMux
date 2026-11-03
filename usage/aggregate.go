@@ -189,16 +189,7 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 			}
 		}
 
-		runtimeKey := rec.RuntimeID
-		if runtimeKey == "" {
-			runtimeKey = rec.Source
-			if runtimeKey == "claude" || runtimeKey == "codex" {
-				runtimeKey += "-unknown"
-			}
-		}
-		if runtimeKey == "" {
-			runtimeKey = "unknown"
-		}
+		runtimeKey := rec.UsageRuntime()
 		rs := runtimeMap[runtimeKey]
 		if rs == nil {
 			rs = &RuntimeStat{Runtime: runtimeKey}

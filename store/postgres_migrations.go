@@ -333,6 +333,11 @@ ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS private_chat_mode TEXT;
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS group_chat_mode TEXT;
 `},
 		{version: 17, name: "event_relay", sql: eventRelaySchema},
+		{version: 18, name: "usage_request_identity", sql: `
+ALTER TABLE usage_records DROP CONSTRAINT IF EXISTS usage_records_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_legacy
+ ON usage_records(source,session_id,timestamp,host) WHERE request_id IS NULL OR request_id='';
+`},
 	}
 }
 

@@ -17,6 +17,7 @@ func TestCodexClientClassification(t *testing.T) {
 		{"cli", "codex-tui", `"cli"`, "codex"},
 		{"cli-legacy", "codex_cli_rs", `"cli"`, "codex"},
 		{"exec", "codex_exec", `"exec"`, "codex"},
+		{"agentmux", "AgentMux", `"vscode"`, "codex-agentmux"},
 		{"source-only-cli", "", `"cli"`, "codex"},
 		{"exec-not-proof-of-cli", "", `"exec"`, "codex-unknown"},
 		{"ide", "codex_vscode", `"vscode"`, "codex-vscode"},

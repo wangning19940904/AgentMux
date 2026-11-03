@@ -61,30 +61,35 @@ type codexUsageNumbers struct {
 }
 
 func (c *codexCollector) Collect(ctx context.Context, since time.Time) ([]core.UsageRecord, error) {
-	sessionsDir := filepath.Join(c.base(), "sessions")
 	var out []core.UsageRecord
-	err := filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
+	for _, dir := range []string{"sessions", "archived_sessions"} {
+		err := filepath.WalkDir(filepath.Join(c.base(), dir), func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return err
+			}
+			if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(path, ".jsonl") {
+				return nil
+			}
+			if skipUnmodified(d, since) {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+			out = append(out, c.parseFile(path, since)...)
+			return nil
+		})
 		if err != nil {
-			return nil
+			return out, err
 		}
-		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		if skipUnmodified(d, since) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		out = append(out, c.parseFile(path, since)...)
-		return nil
-	})
-	if os.IsNotExist(err) {
-		return out, nil
 	}
-	return out, err
+	receipts, err := c.collectExecReceipts(ctx, since)
+	return append(out, receipts...), err
 }
 
 func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRecord {

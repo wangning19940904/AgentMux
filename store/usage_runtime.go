@@ -16,7 +16,7 @@ func (s *Store) BackfillUsageRuntimes(ctx context.Context, source, host string, 
 	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, `UPDATE usage_records SET runtime_id=?
 		WHERE source=? AND COALESCE(host,'')=? AND session_id=?
-		AND COALESCE(request_id,'')='' AND COALESCE(runtime_id,'')=''`)
+		AND COALESCE(request_id,'')='' AND COALESCE(runtime_id,'') IN ('',?)`)
 	if err != nil {
 		return err
 	}
@@ -25,7 +25,7 @@ func (s *Store) BackfillUsageRuntimes(ctx context.Context, source, host string, 
 		if session == "" || runtime == "" {
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, runtime, source, host, session); err != nil {
+		if _, err := stmt.ExecContext(ctx, runtime, source, host, session, source+"-unknown"); err != nil {
 			return err
 		}
 	}

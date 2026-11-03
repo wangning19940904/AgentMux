@@ -140,6 +140,8 @@ export function runtimeLabel(runtime: string, t?: (key: string) => string): stri
       return "Claude Code CLI";
     case "codex":
       return "Codex CLI";
+    case "codex-agentmux":
+      return `Codex · ${t?.("usage.agentmuxInternal") ?? "AgentMux internal"}`;
     case "claude-unknown":
       return `Claude Code · ${t?.("usage.unknownClient") ?? "Unknown client"}`;
     case "codex-unknown":

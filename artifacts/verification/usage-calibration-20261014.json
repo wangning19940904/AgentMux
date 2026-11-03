@@ -1,0 +1,12 @@
+{
+  "cutoff": "2026-10-14T15:48:53+08:00",
+  "original_tokens": 273694370,
+  "corrected_tokens": 256925661,
+  "sessions": 2792,
+  "original_cost_usd": 671.259421452309,
+  "corrected_standard_cost_usd": 792.860545652309,
+  "corrected_cny_at_7": 5550.023819566163,
+  "duplicate_codex_records": 180,
+  "duplicate_cursor_records": 1,
+  "long_context_requests": 272
+}

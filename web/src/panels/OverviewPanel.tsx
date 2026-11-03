@@ -15,7 +15,7 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { api, type ModelStat, type UsageBucket, type UsageReport } from "../api";
 import { formatUsageCost, validCNYRate } from "../currency";
 import { useI18n } from "../i18n";
@@ -38,11 +38,16 @@ export function OverviewPanel() {
   const { language, t } = useI18n();
   const [range, setRange] = useState<StatRange>("today");
   const [trendDimension, setTrendDimension] = useState<TrendDimension>("total");
-  const bounds = useMemo(() => usageRangeBounds(range), [range]);
-  const usage = useAsync(
-    () => api.usage("hourly", bounds.from, bounds.to),
+  const [today, setToday] = useState(() => formatLocalDate(new Date()));
+  const bounds = useMemo(() => usageRangeBounds(range, today), [range, today]);
+  const usageSnapshot = useAsync(
+    async () => {
+      const report = await api.usage("hourly", bounds.from, bounds.to);
+      return { report, updatedAt: new Date() };
+    },
     [range, bounds.from, bounds.to],
   );
+  const usage = { ...usageSnapshot, data: usageSnapshot.data?.report ?? null };
   const currencyPreferences = useAsync(() => api.menubarSettings(), []);
   const providers = useAsync(() => api.providers(), []);
   const channels = useAsync(() => api.channelHealth(), []);
@@ -69,6 +74,7 @@ export function OverviewPanel() {
   const totalTokens = totals
     ? totals.input_tokens + totals.output_tokens + totals.cache_read_tokens + totals.cache_write_tokens
     : 0;
+  const cacheTokens = (totals?.cache_read_tokens ?? 0) + (totals?.cache_write_tokens ?? 0);
   const estimatedTokens = totals?.estimated_tokens ?? 0;
   const exactCoverage = totalTokens > 0 ? Math.max(0, Math.round((1 - estimatedTokens / totalTokens) * 100)) : 100;
   const hourlyBuckets = useMemo(
@@ -80,13 +86,21 @@ export function OverviewPanel() {
     [hourlyBuckets, t, totalTokens, trendDimension, usage.data],
   );
 
+  const refreshUsage = useCallback(() => {
+    const currentDate = formatLocalDate(new Date());
+    if (currentDate !== today) {
+      // Changing the date reloads through useAsync with the new bounds.
+      setToday(currentDate);
+      return;
+    }
+    void usage.reload();
+  }, [today, usage.reload]);
+  usePolling(refreshUsage, 30_000);
+  usePolling(currencyPreferences.reload, 30_000);
   usePolling(channels.reload, 30_000);
   usePolling(providerMonitor.reload, 30_000);
 
-  const updatedAt = useMemo(
-    () => new Date().toLocaleTimeString(),
-    [channels.data, providerMonitor.data, providers.data, usage.data],
-  );
+  const updatedAt = usageSnapshot.data?.updatedAt.toLocaleTimeString() ?? "—";
 
   return (
     <div className="page-stack">
@@ -130,9 +144,12 @@ export function OverviewPanel() {
                   icon={<Gauge size={17} />}
                   label={t("overview.totalTokens")}
                   value={totals ? fmt(totalTokens) : "—"}
-                  detail={totals && estimatedTokens > 0 ? t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage }) : undefined}
+                  detail={totals ? <>
+                    {t("overview.includedCache", { tokens: fmt(cacheTokens) })}
+                    {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage })}</>}
+                  </> : undefined}
                 />
-                <SummaryMetric icon={<MessageSquareText size={17} />} label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} />
+                <SummaryMetric icon={<MessageSquareText size={17} />} label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} detail={t("overview.sessionScope")} />
                 <SummaryMetric
                   icon={<CircleDollarSign size={17} />}
                   label={t("overview.estimatedAmount")}
@@ -144,6 +161,12 @@ export function OverviewPanel() {
                   )}
                   detail={t("overview.exchangeRate", { rate: cnyRate })}
                 />
+              </div>
+              <div className="usage-breakdown">
+                <Stat label={t("usage.uncachedInput")} value={totals ? fmt(totals.input_tokens) : "—"} />
+                <Stat label={t("overview.output")} value={totals ? fmt(totals.output_tokens) : "—"} />
+                <Stat label={t("usage.cacheRead")} value={totals ? fmt(totals.cache_read_tokens) : "—"} />
+                <Stat label={t("usage.cacheWrite")} value={totals ? fmt(totals.cache_write_tokens) : "—"} />
               </div>
               <details className="usage-pricing-note">
                 <summary>{t("overview.pricingDetails")}</summary>
@@ -202,14 +225,6 @@ export function OverviewPanel() {
               </div>
             </div>
             <UsageTrend buckets={hourlyBuckets} series={trendSeries} range={range} totalTokens={totalTokens} />
-            <div className="usage-breakdown">
-              <Stat label={t("overview.input")} value={fmt(totals?.input_tokens ?? 0)} />
-              <Stat label={t("overview.output")} value={fmt(totals?.output_tokens ?? 0)} />
-              <Stat
-                label={t("usage.cacheInput")}
-                value={fmt((totals?.cache_read_tokens ?? 0) + (totals?.cache_write_tokens ?? 0))}
-              />
-            </div>
           </div>
         </div>
       </section>
@@ -340,7 +355,7 @@ function HealthSummaryRow({
   );
 }
 
-function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail?: string }) {
+function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail?: ReactNode }) {
   return (
     <div className="usage-summary-metric">
       <span className="usage-summary-metric-label">{icon}{label}</span>
@@ -691,12 +706,11 @@ export function fmt(n: number): string {
   return String(n);
 }
 
-function usageRangeBounds(range: StatRange) {
-  const now = new Date();
-  const start = new Date(now);
+function usageRangeBounds(range: StatRange, today: string) {
+  const start = new Date(`${today}T00:00:00`);
   if (range === "7d") start.setDate(start.getDate() - 6);
   if (range === "30d") start.setDate(start.getDate() - 29);
-  return { from: formatLocalDate(start), to: formatLocalDate(now) };
+  return { from: formatLocalDate(start), to: today };
 }
 
 function formatLocalDate(value: Date) {

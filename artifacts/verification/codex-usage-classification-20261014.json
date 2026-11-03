@@ -1,0 +1,92 @@
+{
+  "timezone": "Asia/Shanghai",
+  "start": "2026-10-13T16:00:00Z",
+  "cutoff": "2026-10-14T13:16:33.726078Z",
+  "scope": "local host, recorded usage only",
+  "tokens": 265781583,
+  "components": {
+    "input_tokens": 74011132,
+    "output_tokens": 27786529,
+    "cache_read_tokens": 163963120,
+    "cache_write_tokens": 20802
+  },
+  "sessions": 3799,
+  "runtimes": [
+    {
+      "runtime": "cursor",
+      "tokens": 124623322,
+      "sessions": 3769,
+      "records": 4052,
+      "estimated_tokens": 6
+    },
+    {
+      "runtime": "codex-app",
+      "tokens": 123730757,
+      "sessions": 7,
+      "records": 577,
+      "estimated_tokens": 0
+    },
+    {
+      "runtime": "codex-agentmux",
+      "tokens": 16708427,
+      "sessions": 3,
+      "records": 180,
+      "estimated_tokens": 0
+    },
+    {
+      "runtime": "codex",
+      "tokens": 719077,
+      "sessions": 20,
+      "records": 20,
+      "estimated_tokens": 0
+    }
+  ],
+  "initial_fixed_snapshot_reconciliation": {
+    "cutoff": "2026-10-14T13:04:38.718188Z",
+    "before_tokens": 269894517,
+    "codex_duplicates": 180,
+    "codex_duplicate_tokens": 16708427,
+    "other_duplicates": 1,
+    "other_duplicate_tokens": 60282,
+    "recovered_cli_receipts": 9,
+    "recovered_cli_tokens": 305367,
+    "after_tokens": 253431175,
+    "after_components": {
+      "input_tokens": 70608835,
+      "output_tokens": 26431762,
+      "cache_read_tokens": 156369776,
+      "cache_write_tokens": 20802
+    },
+    "python_matches_go": true
+  },
+  "final_snapshot_python_matches_go": true,
+  "worker_configuration": {
+    "codex_slots": 10,
+    "cursor_slots": 5,
+    "pid": 46856,
+    "historical_receipts_recovered": 9,
+    "new_cli_sessions_in_final_snapshot": 11,
+    "new_cli_tokens_in_final_snapshot": 413710
+  },
+  "installation": {
+    "version": "0.1.14-codex-usage.4",
+    "path": "/Applications/AgentMux.app",
+    "bundle_id": "com.wails.agentmux-desktop",
+    "api_health_verified": true,
+    "native_ui_verified": true
+  },
+  "validation": {
+    "go_all": true,
+    "postgres_identity_migration": true,
+    "web_tests": 168,
+    "rookie_trade_python_tests": 43,
+    "repeat_collection_idempotent": true
+  },
+  "limitations": [
+    "Unrecorded historical ephemeral calls cannot be reconstructed; counts are a lower bound for real consumption.",
+    "Receipts cover completed CLI turns, not exact model-request counts. Failed/killed calls without usage are not assigned zero tokens.",
+    "Cache tokens are included once in the total. Reasoning output is already part of output tokens.",
+    "CLI receipt timestamps reflect subprocess completion; model labels reflect the requested model.",
+    "The all-tool total includes 6 estimated Cursor tokens."
+  ]
+}

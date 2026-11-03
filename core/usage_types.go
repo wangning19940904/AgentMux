@@ -42,6 +42,25 @@ type UsageRecord struct {
 	CostKind         string    `json:"cost_kind,omitempty"`
 }
 
+// UsageRuntime identifies who initiated the usage, independently of the
+// underlying engine. A managed turn can resume a Desktop-created thread, so
+// request provenance takes precedence over the session's original client.
+func (r UsageRecord) UsageRuntime() string {
+	if r.Source == "codex" && r.Provenance == "agentmux.internal" {
+		return "codex-agentmux"
+	}
+	if r.RuntimeID != "" {
+		return r.RuntimeID
+	}
+	if r.Source == "codex" || r.Source == "claude" {
+		return r.Source + "-unknown"
+	}
+	if r.Source == "" {
+		return "unknown"
+	}
+	return r.Source
+}
+
 // UsageCollector reads a local (or remote-synced) data source and yields
 // normalized usage records.
 type UsageCollector interface {

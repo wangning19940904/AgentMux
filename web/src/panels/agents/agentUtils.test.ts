@@ -88,6 +88,7 @@ describe("agent form model", () => {
 		expect(runtimeLabel("claude-desktop")).toBe("Claude Desktop");
 		expect(runtimeLabel("codex")).toBe("Codex CLI");
 		expect(runtimeLabel("codex-app")).toBe("Codex Desktop");
+		expect(runtimeLabel("codex-agentmux")).toBe("Codex · AgentMux internal");
 		expect(runtimeLabel("codex-vscode")).toBe("Codex IDE");
 		expect(runtimeLabel("codex-unknown")).toBe("Codex · Unknown client");
 		expect(runtimeLabel("claude-unknown", () => "来源未知")).toBe("Claude Code · 来源未知");

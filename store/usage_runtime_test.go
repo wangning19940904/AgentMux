@@ -52,7 +52,7 @@ func testUsageClientRepair(t *testing.T, st *Store) {
 			t.Fatalf("replay changed ledger: %+v", rec)
 		}
 	}
-	legacy := core.UsageRecord{Source: "codex", SessionID: "old", Timestamp: time.Now().UTC(), InputTokens: 7}
+	legacy := core.UsageRecord{Source: "codex", SessionID: "old", RuntimeID: "codex-unknown", Timestamp: time.Now().UTC(), InputTokens: 7}
 	if err := st.UpsertUsage(ctx, []core.UsageRecord{legacy}); err != nil {
 		t.Fatal(err)
 	}

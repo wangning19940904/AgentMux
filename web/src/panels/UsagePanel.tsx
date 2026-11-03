@@ -162,7 +162,7 @@ export function UsagePanel() {
                 className="usage-rate-input"
                 type="number"
                 min="0.01"
-                step="0.01"
+                step="0.0001"
                 value={preferences?.cny_rate ?? 7}
                 disabled={!preferences}
                 onChange={(e) => updateCurrencyPreferences({ cny_rate: Number(e.target.value) })}
@@ -214,9 +214,11 @@ export function UsagePanel() {
         <>
           <div className="metrics-grid usage-metrics-grid">
             <Stat label={t("usage.estimatedCost")} value={formatCost(data.totals.cost_usd)} />
-            <Stat label={t("overview.input")} value={fmt(data.totals.input_tokens)} />
+            <Stat label={t("overview.totalTokens")} value={fmt(totalUsageTokens(data.totals))} />
+            <Stat label={t("usage.uncachedInput")} value={fmt(data.totals.input_tokens)} />
             <Stat label={t("overview.output")} value={fmt(data.totals.output_tokens)} />
-            <Stat label={t("usage.cacheInput")} value={fmt(data.totals.cache_read_tokens + data.totals.cache_write_tokens)} />
+            <Stat label={t("usage.cacheRead")} value={fmt(data.totals.cache_read_tokens)} />
+            <Stat label={t("usage.cacheWrite")} value={fmt(data.totals.cache_write_tokens)} />
             <Stat label={t("overview.records")} value={String(data.totals.records)} />
             <Stat label={t("overview.sessions")} value={String(data.totals.sessions ?? 0)} />
             <Stat
@@ -252,9 +254,10 @@ export function UsagePanel() {
                     <thead>
                       <tr>
                         <th>{t(`period.${period}`)}</th>
-                        <th>{t("overview.input")}</th>
+                        <th>{t("usage.uncachedInput")}</th>
                         <th>{t("overview.output")}</th>
-                        <th>{t("usage.cacheInput")}</th>
+                        <th>{t("usage.cacheRead")}</th>
+                        <th>{t("usage.cacheWrite")}</th>
                         <th>{t("usage.estimatedCost")}</th>
                         <th>{t("usage.quality")}</th>
                       </tr>
@@ -265,7 +268,8 @@ export function UsagePanel() {
                           <td>{b.key}</td>
                           <td>{fmt(b.totals.input_tokens)}</td>
                           <td>{fmt(b.totals.output_tokens)}</td>
-                          <td>{fmt(b.totals.cache_read_tokens + b.totals.cache_write_tokens)}</td>
+                          <td>{fmt(b.totals.cache_read_tokens)}</td>
+                          <td>{fmt(b.totals.cache_write_tokens)}</td>
                           <td>{formatCost(b.totals.cost_usd)}</td>
                           <td>{(b.totals.estimated_tokens ?? 0) > 0 ? <span className="status-badge warning">{t("usage.estimated")}</span> : <span className="status-badge success">{t("usage.exact")}</span>}</td>
                         </tr>

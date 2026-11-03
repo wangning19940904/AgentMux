@@ -24,6 +24,8 @@ func ClaudeRuntime(entrypoint string) string {
 
 func CodexRuntime(originator string, source json.RawMessage) string {
 	switch strings.ToLower(strings.TrimSpace(originator)) {
+	case "agentmux":
+		return "codex-agentmux"
 	case "codex desktop", "codex-desktop":
 		// Desktop also emits source=vscode, exec, and subagent objects.
 		return "codex-app"

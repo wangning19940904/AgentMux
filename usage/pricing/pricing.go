@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +18,63 @@ import (
 // litellmURL is the upstream pricing map.
 const litellmURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
-// modelPrice holds per-million-token USD prices.
+// modelPrice holds per-token USD prices.
 type modelPrice struct {
 	Input      float64 `json:"input_cost_per_token"`
 	Output     float64 `json:"output_cost_per_token"`
 	CacheRead  float64 `json:"cache_read_input_token_cost"`
 	CacheWrite float64 `json:"cache_creation_input_token_cost"`
+	tiers      []contextPrice
+}
+
+type contextPrice struct {
+	above int64
+	price modelPrice
+}
+
+// UnmarshalJSON also reads LiteLLM's context tiers. Only standard token rates
+// are selected; suffixes such as _priority and _flex describe separate tiers
+// that cannot be inferred from a transcript's token counts.
+func (p *modelPrice) UnmarshalJSON(data []byte) error {
+	type basePrice modelPrice
+	var base basePrice
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	*p = modelPrice(base)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	thresholds := map[int64]bool{}
+	for key := range fields {
+		_, suffix, ok := strings.Cut(key, "_above_")
+		if !ok || !strings.HasSuffix(suffix, "k_tokens") {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSuffix(suffix, "k_tokens"), 10, 64)
+		if err == nil && n > 0 {
+			thresholds[n*1000] = true
+		}
+	}
+	for threshold := range thresholds {
+		tier := *p
+		tier.tiers = nil
+		suffix := "_above_" + strconv.FormatInt(threshold/1000, 10) + "k_tokens"
+		for key, dest := range map[string]*float64{
+			"input_cost_per_token": &tier.Input, "output_cost_per_token": &tier.Output,
+			"cache_read_input_token_cost": &tier.CacheRead, "cache_creation_input_token_cost": &tier.CacheWrite,
+		} {
+			if raw, ok := fields[key+suffix]; ok && string(raw) != "null" {
+				if err := json.Unmarshal(raw, dest); err != nil {
+					return err
+				}
+			}
+		}
+		p.tiers = append(p.tiers, contextPrice{above: threshold, price: tier})
+	}
+	sort.Slice(p.tiers, func(i, j int) bool { return p.tiers[i].above < p.tiers[j].above })
+	return nil
 }
 
 // Pricer computes costs from token counts.
@@ -48,6 +101,14 @@ func (p *Pricer) Cost(model string, in, out, cacheRead, cacheWrite int64) float6
 	mp, ok := p.lookup(model)
 	if !ok {
 		mp = fallback(model)
+	}
+	// Normalized input excludes cache reads/writes; all three contribute to
+	// request prompt length. Output tokens do not select a context tier.
+	promptTokens := in + cacheRead + cacheWrite
+	for _, tier := range mp.tiers {
+		if promptTokens > tier.above {
+			mp = tier.price
+		}
 	}
 	return float64(in)*mp.Input + float64(out)*mp.Output +
 		float64(cacheRead)*mp.CacheRead + float64(cacheWrite)*mp.CacheWrite

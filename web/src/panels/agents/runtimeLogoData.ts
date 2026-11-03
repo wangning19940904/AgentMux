@@ -16,6 +16,7 @@ const logos = {
 const aliases: Record<string, keyof typeof logos> = {
   codex: "codex",
   "codex-app": "codex",
+  "codex-agentmux": "codex",
   "codex-vscode": "codex",
   "codex-unknown": "codex",
   claude: "claude",
