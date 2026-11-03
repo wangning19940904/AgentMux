@@ -287,6 +287,18 @@ type channelPeerHTTPError struct {
 
 func (e *channelPeerHTTPError) Error() string { return e.Message }
 
+// channelClaimScanError keeps the peer status for writeChannelClaimError while
+// showing a user-facing message; the transport detail goes to the server log.
+type channelClaimScanError struct {
+	cause error
+}
+
+func (e *channelClaimScanError) Error() string {
+	return "Unable to determine whether this bot is already connected on the remote machine."
+}
+
+func (e *channelClaimScanError) Unwrap() error { return e.cause }
+
 type channelClaimRequest struct {
 	TargetID string       `json:"target_id,omitempty"`
 	Channel  core.Channel `json:"channel"`
@@ -395,7 +407,10 @@ func (s *Server) findChannelClaimConflicts(
 	for _, target := range s.channelPeers.Targets() {
 		channels, err := s.channelPeers.ListChannels(ctx, target.ID)
 		if err != nil {
-			return nil, fmt.Errorf("check remote %s before opening the new connection: %w", target.Name, err)
+			if s.log != nil {
+				s.log.Warn("channel claim scan failed", "target_id", target.ID, "target_name", target.Name, "error", err)
+			}
+			return nil, &channelClaimScanError{cause: err}
 		}
 		conflicts = collectChannelClaimConflicts(conflicts, target.ID, target.Name, targetID, claimed, channels)
 	}
