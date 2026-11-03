@@ -242,30 +242,34 @@ func (s newlineStripper) Read(data []byte) (int, error) {
 	return kept, err
 }
 
-// ChannelLookup resolves a channel's credentials for document subscriptions.
+// ChannelLookup resolves a channel's credentials for Feishu API calls.
 type ChannelLookup func(ctx context.Context, id string) (*core.Channel, error)
 
-// FeishuDocuments is the production DocumentSubscriber.
-type FeishuDocuments struct {
+// FeishuAPI calls Feishu as a channel's app. It is the production
+// DocumentSubscriber and FeishuDirectory.
+type FeishuAPI struct {
 	Channels ChannelLookup
 	HTTP     *http.Client
 	Base     string
 }
 
-func (f *FeishuDocuments) client() *http.Client {
+func (f *FeishuAPI) client() *http.Client {
 	if f.HTTP != nil {
 		return f.HTTP
 	}
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-func (f *FeishuDocuments) tenantToken(ctx context.Context, channelID string) (string, string, error) {
+func (f *FeishuAPI) tenantToken(ctx context.Context, channelID string) (string, string, error) {
 	channel, err := f.Channels(ctx, channelID)
 	if err != nil {
 		return "", "", err
 	}
 	if channel == nil {
 		return "", "", fmt.Errorf("channel %q not found", channelID)
+	}
+	if channel.Type != "feishu" && channel.Type != "lark" {
+		return "", "", fmt.Errorf("channel %q is not a Feishu channel", channelID)
 	}
 	base := f.Base
 	if base == "" {
@@ -289,7 +293,7 @@ func (f *FeishuDocuments) tenantToken(ctx context.Context, channelID string) (st
 	return base, result.TenantAccessToken, nil
 }
 
-func (f *FeishuDocuments) call(ctx context.Context, method, target, token string, payload []byte, out any) error {
+func (f *FeishuAPI) call(ctx context.Context, method, target, token string, payload []byte, out any) error {
 	request, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -313,7 +317,7 @@ func (f *FeishuDocuments) call(ctx context.Context, method, target, token string
 	return nil
 }
 
-func (f *FeishuDocuments) Subscribe(ctx context.Context, channelID string, document documentRef) error {
+func (f *FeishuAPI) Subscribe(ctx context.Context, channelID string, document documentRef) error {
 	base, token, err := f.tenantToken(ctx, channelID)
 	if err != nil {
 		return err
@@ -332,7 +336,7 @@ func (f *FeishuDocuments) Subscribe(ctx context.Context, channelID string, docum
 	return nil
 }
 
-func (f *FeishuDocuments) ResolveWikiNode(ctx context.Context, channelID, wikiToken string) (documentRef, error) {
+func (f *FeishuAPI) ResolveWikiNode(ctx context.Context, channelID, wikiToken string) (documentRef, error) {
 	base, token, err := f.tenantToken(ctx, channelID)
 	if err != nil {
 		return documentRef{}, err

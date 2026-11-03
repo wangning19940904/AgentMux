@@ -30,6 +30,9 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/stop"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/retry"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=c"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/members?channel_id=c"},
+		{http.MethodPost, "/api/v1/super-agents/feishu/users?channel_id=c"},
 		{http.MethodPost, "/hook/super-agent/github/src"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -45,6 +48,7 @@ func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
 		{http.MethodGet, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/members"},
 	} {
 		if tenantRouteAllowed(route.method, route.path) {
 			t.Errorf("%s %s must stay Console-only: Super Agents hold credentials and control every worker", route.method, route.path)
@@ -68,6 +72,65 @@ func TestSuperAgentGitHubHookStatusCodes(t *testing.T) {
 }
 
 type emptySuperAgentStore struct{ superagent.Store }
+
+type fakeFeishuDirectory struct {
+	chatIDs []string
+	openIDs []string
+	emails  []string
+	err     error
+}
+
+func (f *fakeFeishuDirectory) Chats(context.Context, string) (superagent.FeishuChatList, error) {
+	return superagent.FeishuChatList{Items: []superagent.FeishuChat{{ChatID: "oc_1", Name: "Team"}}}, f.err
+}
+
+func (f *fakeFeishuDirectory) Members(_ context.Context, _ string, chatIDs []string) (superagent.FeishuUserList, error) {
+	f.chatIDs = chatIDs
+	return superagent.FeishuUserList{Items: []superagent.FeishuUser{{OpenID: "ou_a", Name: "Alice"}}}, f.err
+}
+
+func (f *fakeFeishuDirectory) Users(_ context.Context, _ string, openIDs, emails []string) ([]superagent.FeishuUser, error) {
+	f.openIDs, f.emails = openIDs, emails
+	return []superagent.FeishuUser{{OpenID: "ou_d", Email: "dan@acme.com"}}, f.err
+}
+
+func TestFeishuDirectoryRoutes(t *testing.T) {
+	srv, st := newTestServer(t)
+	directory := &fakeFeishuDirectory{}
+	srv.SetSuperAgents(nil, directory)
+	for _, channel := range []core.Channel{{ID: "fs", Name: "Team bot", Type: "feishu"}, {ID: "sl", Name: "Slack bot", Type: "slack"}} {
+		if err := st.UpsertChannel(context.Background(), &channel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		method, path string
+		body         any
+		status       int
+		contains     string
+	}{
+		{http.MethodGet, "/api/v1/super-agents/feishu/chats", nil, http.StatusBadRequest, "channel_id is required"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=missing", nil, http.StatusNotFound, "channel not found"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=sl", nil, http.StatusBadRequest, "not a Feishu channel"},
+		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=fs", nil, http.StatusOK, `"name":"Team"`},
+		{http.MethodGet, "/api/v1/super-agents/feishu/members?channel_id=fs&chat_ids=oc_1,oc_2,oc_1", nil, http.StatusOK, `"name":"Alice"`},
+		{http.MethodPost, "/api/v1/super-agents/feishu/users?channel_id=fs", map[string]any{"open_ids": []string{"ou_a"}, "emails": []string{"dan@acme.com"}}, http.StatusOK, `"open_id":"ou_d"`},
+	} {
+		recorder := doJSON(t, srv, tc.method, tc.path, tc.body)
+		if recorder.Code != tc.status || !strings.Contains(recorder.Body.String(), tc.contains) {
+			t.Errorf("%s %s: %d %s", tc.method, tc.path, recorder.Code, recorder.Body.String())
+		}
+	}
+	if strings.Join(directory.chatIDs, ",") != "oc_1,oc_2" || strings.Join(directory.openIDs, ",") != "ou_a" || strings.Join(directory.emails, ",") != "dan@acme.com" {
+		t.Fatalf("directory got chats=%v open_ids=%v emails=%v", directory.chatIDs, directory.openIDs, directory.emails)
+	}
+
+	directory.err = errors.New("99991672 Access denied. One of the following scopes is required: [im:chat:readonly]")
+	recorder := doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=fs", nil)
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "im:chat:readonly") {
+		t.Fatalf("a Feishu refusal must reach the Console with its reason: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
 
 // streamingInvokerStub is the remote daemon's Invoker. The rest of this test is
 // the real SSE handler, so a change to that contract breaks the remote fleet here.

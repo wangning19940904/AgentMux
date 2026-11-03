@@ -12,6 +12,9 @@ import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
+  FeishuChatList,
+  FeishuUser,
+  FeishuUserList,
   SuperAgent,
   SuperAgentActivity,
   SuperAgentSetupResult,
@@ -1073,6 +1076,12 @@ export const api = {
   triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
+  feishuChats: (channelID: string) =>
+    getChecked<FeishuChatList>(`/api/v1/super-agents/feishu/chats?channel_id=${encodeURIComponent(channelID)}`),
+  feishuMembers: (channelID: string, chatIDs: string[]) =>
+    getChecked<FeishuUserList>(`/api/v1/super-agents/feishu/members?channel_id=${encodeURIComponent(channelID)}&chat_ids=${encodeURIComponent(chatIDs.join(","))}`),
+  feishuUsers: (channelID: string, lookup: { open_ids?: string[]; emails?: string[] }) =>
+    postChecked<FeishuUser[]>(`/api/v1/super-agents/feishu/users?channel_id=${encodeURIComponent(channelID)}`, lookup),
   remoteAgentInstances: (hostID: string) => getLocal<AgentInstance[] | null>(`/api/v1/remote/proxy/${encodeURIComponent(hostID)}/agent-instances`),
   orchestrations: (active = false) =>
     fleetMode() ? fleetReadArray<Orchestration>(`/api/v1/orchestrations?active=${active}`) : get<Orchestration[] | null>(`/api/v1/orchestrations?active=${active}`),

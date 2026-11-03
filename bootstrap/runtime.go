@@ -111,12 +111,13 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			"guard":  {RuntimeActive: true, Enforced: true},
 		},
 	})
+	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel}
 	superAgents := superagent.New(superagent.Options{
 		Store: st, Invoker: connect, Log: log,
-		Workers: &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
-		Replies: &superagent.Replies{Chats: engine},
-		Mail:    &superagent.IMAPClient{},
-		Docs:    &superagent.FeishuDocuments{Channels: st.GetChannel},
+		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
+		Replies:          &superagent.Replies{Chats: engine},
+		Mail:             &superagent.IMAPClient{},
+		Docs:             feishuAPI,
 		RuntimeAvailable: server.AgentRuntimeAvailable,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {
 			channel, err := st.GetChannel(ctx, id)
@@ -125,7 +126,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	})
 	engine.SetInboundInterceptor(superAgents.InterceptMessage)
 	relay.SetLocalConsumer(superAgents)
-	srv.SetSuperAgents(superAgents)
+	srv.SetSuperAgents(superAgents, feishuAPI)
 	if cfg.Observability.Enabled {
 		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, providerService, usageEngine); obsErr != nil {
 			if strictObservability {

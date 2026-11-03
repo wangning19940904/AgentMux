@@ -55,6 +55,7 @@ type Server struct {
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
 	superAgents        *superagent.Service
+	feishuDirectory    superagent.FeishuDirectory
 	keepAwake          *keepAwakeManager
 	channelPeers       channelPeerClient
 	meetingPeers       meetingPeerClient
