@@ -469,6 +469,10 @@ func ApprovalModeValuesForRuntime(runtimeID string) []string {
 		return []string{ApprovalModeManual, ApprovalModeAutoEdit, ApprovalModePlan, ApprovalModeYolo}
 	case "cursor":
 		return []string{ApprovalModeManual, ApprovalModeAuto, ApprovalModePlan, ApprovalModeYolo}
+	case "dsh":
+		// Headless DSH has nobody to answer a prompt, so manual approval cannot
+		// be enforced; each mode selects a permission preset instead.
+		return []string{ApprovalModeAutoEdit, ApprovalModePlan, ApprovalModeYolo}
 	case "kimi":
 		// Kimi's current --prompt transport always uses its non-interactive auto
 		// policy and rejects --yolo/--plan alongside --prompt.

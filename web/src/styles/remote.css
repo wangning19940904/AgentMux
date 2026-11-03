@@ -1383,3 +1383,34 @@
   border-color: color-mix(in srgb, var(--amber) 25%, var(--border));
   overflow-wrap: anywhere;
 }
+
+.orchestration-detail h4 { margin: 18px 0 8px; font-size: 13px; }
+.super-agent-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.super-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+}
+.super-agent-chip small { color: var(--muted); }
+.super-agent-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.super-agent-chip i.online { background: var(--success, #2f9e5b); }
+.super-agent-request input { flex: 1; min-width: 0; }
+.super-agent-form { display: grid; gap: 12px; align-content: start; }
+.super-agent-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.super-agent-card > .ghost-action { justify-self: start; }
+.super-agent-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.super-agent-section-head h4 { margin: 8px 0 0; font-size: 13px; }
+.super-agent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.super-agent-problems { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.super-agent-save-error { flex: 1 1 100%; }
+.field textarea { width: 100%; font: inherit; }

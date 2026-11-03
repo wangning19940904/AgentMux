@@ -1350,6 +1350,72 @@ export interface OrchestrationTask {
   updated_at: string;
 }
 
+export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook";
+
+export interface SuperAgentWorker {
+  id: string;
+  label?: string;
+  host_id?: string;
+  agent_id: string;
+  capabilities?: string;
+}
+
+export interface SuperAgentSource {
+  id: string;
+  kind: SuperAgentSourceKind;
+  name?: string;
+  enabled: boolean;
+  allowed_actors: string[];
+  config: Record<string, string>;
+}
+
+export interface SuperAgent {
+  id: string;
+  name: string;
+  description?: string;
+  router_agent_id: string;
+  router_prompt?: string;
+  mode: "act" | "observe";
+  max_concurrency: number;
+  workers: SuperAgentWorker[];
+  sources: SuperAgentSource[];
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SuperAgentTrigger {
+  id: string;
+  source_kind: string;
+  actor?: string;
+  actor_name?: string;
+  title?: string;
+  text: string;
+  disposition: string;
+  reason?: string;
+  ticket_id?: string;
+  received_at: string;
+}
+
+export interface SuperAgentTicket {
+  id: string;
+  title: string;
+  actor?: string;
+  worker: SuperAgentWorker;
+  status: "queued" | "running" | "ready" | "failed" | "stopped";
+  output?: string;
+  error?: string;
+  reply_error?: string;
+  updated_at: string;
+}
+
+export interface SuperAgentActivity {
+  tickets: SuperAgentTicket[];
+  triggers: SuperAgentTrigger[];
+  workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
+  sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string }>;
+}
+
 export interface Orchestration {
   id: string;
   name: string;

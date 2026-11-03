@@ -12,6 +12,9 @@ import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
+  SuperAgent,
+  SuperAgentActivity,
+  SuperAgentTrigger,
   AgentInstance,
   AgentSession,
   BundleInstallResult,
@@ -1061,6 +1064,14 @@ export const api = {
     const body = { ...feedback }; delete body.target_id;
     return fleetCall<{ ok: boolean }>({ key: "feedback", method: "POST", path: "/api/v1/feedback/detail", body }, writeTargetIDs(feedback.target_id)).then((result) => result.first);
   },
+  superAgents: () => get<SuperAgent[]>("/api/v1/super-agents"),
+  superAgentActivity: (id: string) => get<SuperAgentActivity>(`/api/v1/super-agents/activity?id=${encodeURIComponent(id)}`),
+  saveSuperAgent: (agent: SuperAgent) => post<SuperAgent>("/api/v1/super-agents", agent),
+  deleteSuperAgent: (id: string) => del<{ ok: boolean }>(`/api/v1/super-agents?id=${encodeURIComponent(id)}`),
+  triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
+  stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
+  retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
+  remoteAgentInstances: (hostID: string) => getLocal<AgentInstance[] | null>(`/api/v1/remote/proxy/${encodeURIComponent(hostID)}/agent-instances`),
   orchestrations: (active = false) =>
     fleetMode() ? fleetReadArray<Orchestration>(`/api/v1/orchestrations?active=${active}`) : get<Orchestration[] | null>(`/api/v1/orchestrations?active=${active}`),
   orchestration: (id: string, targetID?: string) => targetID

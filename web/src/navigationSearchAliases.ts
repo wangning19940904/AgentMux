@@ -12,6 +12,11 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "zhinengti", "zhi neng ti", "znt",
     "agent", "agents", "assistant", "bot", "ai agent",
   ],
+  "super-agents": [
+    "超级智能体", "超级 Agent", "工单", "常驻智能体",
+    "chaoji", "chao ji", "cjznt",
+    "super agent", "super agents", "superagent", "ticket", "proactive",
+  ],
   orchestrations: [
     "编排", "多智能体", "多 Agent", "协作", "工作流", "流程", "任务编排",
     "bianpai", "bian pai", "bp", "duozhinengti", "duo zhi neng ti", "dznt",

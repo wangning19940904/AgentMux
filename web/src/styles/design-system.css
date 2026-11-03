@@ -728,6 +728,12 @@ button {
   flex: 0 0 auto;
 }
 
+@media (max-width: 1100px) {
+  .workspace-create-secondary span {
+    display: none;
+  }
+}
+
 .remote-target-selector {
   min-width: 150px;
   height: 28px;

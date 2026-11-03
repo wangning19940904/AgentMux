@@ -150,6 +150,8 @@ export function runtimeLabel(runtime: string, t?: (key: string) => string): stri
       return "Cursor";
     case "gemini":
       return "Gemini CLI";
+    case "dsh":
+      return "DeepSeek Harness";
     case "iflow":
       return "iFlow CLI";
     case "kimi":
@@ -420,6 +422,8 @@ export function approvalModesForRuntime(runtimeID: string) {
       return ["manual", "auto_edit", "plan", "yolo"];
     case "cursor":
       return ["manual", "auto", "plan", "yolo"];
+    case "dsh":
+      return ["auto_edit", "plan", "yolo"];
     case "kimi":
       return ["auto"];
     default:

@@ -16,6 +16,7 @@ type EventSink func(event HookEvent, data map[string]string)
 // it hosts dynamically attached PostgreSQL-managed channels.
 type Engine struct {
 	eventIngress            func(Channel) PlatformEventIngress
+	inboundInterceptor      InboundInterceptor
 	ingressMu               sync.Mutex
 	ingress                 map[string]chan struct{}
 	log                     *slog.Logger
@@ -294,6 +295,16 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 		if rt.duplicateMessage(msg) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
 			return
+		}
+		if e.inboundInterceptor != nil {
+			claimed, err := e.inboundInterceptor(ctx, msg)
+			if err != nil {
+				e.log.Error("inbound interceptor failed", "channel_id", msg.ChannelID, "err", err)
+				_ = rt.platform.Reply(ctx, msg, "读取消息状态失败："+err.Error())
+			}
+			if claimed {
+				return
+			}
 		}
 		if msg.Callback == nil && msg.SourceMessageID != "" {
 			if store, ok := e.conversations.(interface {

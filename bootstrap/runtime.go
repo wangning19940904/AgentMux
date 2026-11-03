@@ -20,6 +20,7 @@ import (
 	"github.com/wangning19940904/AgentMux/server"
 	"github.com/wangning19940904/AgentMux/skills"
 	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/superagent"
 	"github.com/wangning19940904/AgentMux/usage"
 	"github.com/wangning19940904/AgentMux/workspace"
 )
@@ -33,15 +34,16 @@ type runtimeResult struct {
 // It owns startup, cancellation, shutdown, and waiting for every long-running
 // component assembled by bootstrap.
 type Runtime struct {
-	EventRelay *eventrelay.Service
-	ctx        context.Context
-	cancel     context.CancelFunc
-	log        *slog.Logger
-	Server     *server.Server
-	Provider   *provider.Service
-	Usage      *usage.Engine
-	Engine     *core.Engine
-	Connect    *core.ConnectService
+	EventRelay  *eventrelay.Service
+	SuperAgents *superagent.Service
+	ctx         context.Context
+	cancel      context.CancelFunc
+	log         *slog.Logger
+	Server      *server.Server
+	Provider    *provider.Service
+	Usage       *usage.Engine
+	Engine      *core.Engine
+	Connect     *core.ConnectService
 
 	mu          sync.Mutex
 	started     bool
@@ -109,6 +111,20 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			"guard":  {RuntimeActive: true, Enforced: true},
 		},
 	})
+	superAgents := superagent.New(superagent.Options{
+		Store: st, Invoker: connect, Log: log,
+		Workers: &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
+		Replies: &superagent.Replies{Chats: engine},
+		Mail:    &superagent.IMAPClient{},
+		Docs:    &superagent.FeishuDocuments{Channels: st.GetChannel},
+		ChannelHasAgent: func(ctx context.Context, id string) bool {
+			channel, err := st.GetChannel(ctx, id)
+			return err != nil || (channel != nil && channel.AgentID != "")
+		},
+	})
+	engine.SetInboundInterceptor(superAgents.InterceptMessage)
+	relay.SetLocalConsumer(superAgents)
+	srv.SetSuperAgents(superAgents)
 	if cfg.Observability.Enabled {
 		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, providerService, usageEngine); obsErr != nil {
 			if strictObservability {
@@ -119,7 +135,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		}
 	}
 	return &Runtime{
-		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService, EventRelay: relay,
+		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService, EventRelay: relay, SuperAgents: superAgents,
 		Usage: usageEngine, Engine: engine, Connect: connect,
 		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
 	}, nil
@@ -152,6 +168,12 @@ func (r *Runtime) Start() error {
 			r.cancel()
 			return fmt.Errorf("start event relay: %w", err)
 		}
+	}
+	// Before the HTTP server and channels: from their first request and message,
+	// webhook Sources must resolve and claimed chats must not reach channel Agents.
+	if err := r.SuperAgents.Start(r.ctx); err != nil {
+		r.cancel()
+		return fmt.Errorf("start super agents: %w", err)
 	}
 	if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
 		r.log.Warn("local routing restore failed", "err", err)
@@ -213,6 +235,9 @@ func (r *Runtime) Stop() {
 	r.stop.Do(func() {
 		r.cancel()
 		r.authWG.Wait()
+		if r.SuperAgents != nil {
+			r.SuperAgents.Stop()
+		}
 		if r.EventRelay != nil {
 			r.EventRelay.Stop()
 		}

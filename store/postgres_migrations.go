@@ -333,6 +333,34 @@ ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS private_chat_mode TEXT;
 ALTER TABLE agent_instances ADD COLUMN IF NOT EXISTS group_chat_mode TEXT;
 `},
 		{version: 17, name: "event_relay", sql: eventRelaySchema},
+		{version: 18, name: "super_agents", sql: `
+CREATE TABLE IF NOT EXISTS super_agents (id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS super_agent_triggers (
+	id TEXT PRIMARY KEY,
+	super_agent_id TEXT NOT NULL,
+	source_id TEXT NOT NULL,
+	dedupe_key TEXT NOT NULL,
+	thread_key TEXT NOT NULL,
+	disposition TEXT NOT NULL,
+	data TEXT NOT NULL,
+	received_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	UNIQUE(super_agent_id,source_id,dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_super_agent_triggers_pending ON super_agent_triggers(disposition,received_at);
+CREATE TABLE IF NOT EXISTS super_agent_tickets (
+	id TEXT PRIMARY KEY,
+	super_agent_id TEXT NOT NULL,
+	thread_key TEXT NOT NULL,
+	status TEXT NOT NULL,
+	data TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_super_agent_tickets_thread ON super_agent_tickets(super_agent_id,thread_key);
+CREATE INDEX IF NOT EXISTS idx_super_agent_tickets_status ON super_agent_tickets(status);
+CREATE TABLE IF NOT EXISTS super_agent_source_state (source_id TEXT PRIMARY KEY,super_agent_id TEXT NOT NULL,state TEXT NOT NULL);
+`},
 	}
 }
 

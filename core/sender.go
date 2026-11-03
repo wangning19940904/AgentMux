@@ -67,6 +67,32 @@ type ConversationTerminalController interface {
 	ResizeTerminal(ctx context.Context, channelID string, conversation Conversation, columns, rows int) error
 }
 
+// InboundInterceptor may claim a channel message before the channel's own Agent
+// sees it. A claimed message receives no further processing.
+type InboundInterceptor func(context.Context, *Message) (bool, error)
+
+// SetInboundInterceptor is called by bootstrap before channels start.
+func (e *Engine) SetInboundInterceptor(interceptor InboundInterceptor) {
+	e.inboundInterceptor = interceptor
+}
+
+// ReplyToChat posts to any chat of a running channel, with no active turn. With
+// a messageID the text replies under that message, falling back to a plain post
+// when the platform refuses, for example because the message was deleted.
+func (e *Engine) ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) error {
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return fmt.Errorf("channel %q is not running", channelID)
+	}
+	if messageID != "" {
+		msg := &Message{ID: messageID, SourceMessageID: messageID, ChatID: chatID, ChannelID: channelID}
+		if err := rt.platform.Reply(ctx, msg, text); err == nil {
+			return nil
+		}
+	}
+	return rt.platform.Send(ctx, chatID, text)
+}
+
 // SendToChannel delivers text and artifacts to the exact conversation that
 // owns a live turn. It intentionally refuses inactive conversations: callers
 // must obtain channel_id and conversation_key from the injected turn metadata,

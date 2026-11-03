@@ -170,6 +170,14 @@ var catalog = []Spec{
 		UpdateSupported: true, UninstallSupported: true, Supported: true, Note: "Kimi Code CLI", Hidden: true,
 	},
 	{
+		Kind: "dsh", Display: "DeepSeek Harness", Company: "DeepSeek AI", KindType: KindCLI,
+		Bin: "dsh", VersionArgs: []string{"--version"},
+		NPMPackage: "@deepseek-ai/dsh", UpdateCommand: []string{"npm", "install", "-g", "@deepseek-ai/dsh@latest"},
+		InstallSupported: true, InstallRequiresNPM: true,
+		UpdateSupported: true, UninstallSupported: true, Supported: true,
+		Note: "DeepSeek Harness (developer preview); set DEEPSEEK_API_KEY in the Agent environment or $DSH_HOME/.env",
+	},
+	{
 		Kind: "deepagents", Display: "DeepAgents", Company: "LangChain", KindType: KindSDK,
 		Language: "python", Packages: []string{"deepagents", "langgraph"},
 		EnvRequired: []string{"OPENAI_API_KEY"}, Supported: false,
