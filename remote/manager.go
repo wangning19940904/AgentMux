@@ -698,10 +698,9 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (re
 		return nil
 	}
 	address := net.JoinHostPort(host.Host, fmt.Sprintf("%d", host.Port))
-	dialer := net.Dialer{Timeout: m.timeout}
-	raw, err := dialer.DialContext(ctx, "tcp", address)
+	raw, err := m.dialSSHTransport(ctx, host, address)
 	if err != nil {
-		return nil, "", fmt.Errorf("connect SSH %s: %w", address, err)
+		return nil, "", err
 	}
 	deadline := time.Now().Add(m.timeout)
 	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {

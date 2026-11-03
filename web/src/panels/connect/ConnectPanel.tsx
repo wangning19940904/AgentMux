@@ -29,6 +29,7 @@ export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
   const platforms = useAsync(() => api.platforms(), []);
 
   const [notice, setNotice] = useState("");
+  const [noticeError, setNoticeError] = useState(false);
   const [busy, setBusy] = useState("");
   const [channelDraft, setChannelDraft] = useState<Partial<Channel> | null>(null);
   const [triggerDraft, setTriggerDraft] = useState<Partial<Trigger> | null>(null);
@@ -71,12 +72,14 @@ export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
   async function run(action: string, fn: () => Promise<unknown>, doneMessage: string) {
     setBusy(action);
     setNotice("");
+    setNoticeError(false);
     try {
       await fn();
       if (doneMessage) setNotice(doneMessage);
       await Promise.all([channels.reload(), triggers.reload()]);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
+      setNoticeError(true);
     } finally {
       setBusy("");
     }
@@ -121,7 +124,7 @@ export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
         </div>
       )}
 
-      {notice && <div className={`session-notice ${/failed|error|invalid|required|unknown/i.test(notice) ? "error" : ""}`}>{notice}</div>}
+      {notice && <div className={`session-notice${noticeError ? " error" : ""}`} role={noticeError ? "alert" : "status"}>{notice}</div>}
 
       {view === "channels" && unhealthyChannels.length > 0 && (
         <div className="session-notice error channel-health-alert" role="alert">

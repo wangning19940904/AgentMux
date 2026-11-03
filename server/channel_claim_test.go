@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -193,6 +194,15 @@ func TestChannelClaimScanFailureLeavesExistingConnectionRunning(t *testing.T) {
 	})
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("claim: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Unable to determine whether this bot is already connected on the remote machine."; body.Error != want {
+		t.Fatalf("error=%q, want %q", body.Error, want)
 	}
 	stored, err := st.GetChannel(ctx, localOld.ID)
 	if err != nil || stored == nil || !stored.Enabled {

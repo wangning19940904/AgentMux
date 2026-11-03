@@ -30,6 +30,10 @@ type remoteClient interface {
 	Close() error
 }
 
+// A ProxyJump alias can leave a jump subprocess holding stderr after ssh exits;
+// bound how long Wait may block on it.
+const sshProcessWaitDelay = 2 * time.Second
+
 type verifiedHostKeyClient interface {
 	remoteClient
 	VerifiedHostKey() ssh.PublicKey
@@ -190,7 +194,9 @@ func (c *openSSHClient) command(ctx context.Context, extra ...string) (*exec.Cmd
 	}
 	args := append(c.baseArgs(path), extra...)
 	args = append(args, "--", c.target())
-	return exec.CommandContext(ctx, c.executable, args...), cleanup, nil
+	cmd := exec.CommandContext(ctx, c.executable, args...)
+	cmd.WaitDelay = sshProcessWaitDelay
+	return cmd, cleanup, nil
 }
 
 func (c *openSSHClient) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -332,7 +338,8 @@ type sshProcessConn struct {
 
 func (c *sshProcessConn) Read(data []byte) (int, error) {
 	n, err := c.stdout.Read(data)
-	if err == io.EOF {
+	// cmd.Wait closes this pipe on exit, which can beat the reader to the EOF.
+	if err == io.EOF || errors.Is(err, os.ErrClosed) {
 		<-c.done
 		if c.waitErr != nil {
 			return n, fmt.Errorf("system SSH tunnel: %w: %s", c.waitErr, c.stderr.String())

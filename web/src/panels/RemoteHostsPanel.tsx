@@ -639,7 +639,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             {error || message}
           </div>
         )}
-        {!discoveryLoading && discoveredHosts.some((host) => host.proxy_jump || host.proxy_command) && (
+        {!discoveryLoading && discoveredHosts.some((host) => host.proxy_command) && (
           <div className="remote-proxy-note">
             <ShieldAlert size={17} />
             <div>
@@ -665,7 +665,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
           )}
           {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
             const configured = configuredHost(host);
-            const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
+            const requiresProxy = Boolean(host.proxy_command);
             const pendingFingerprint = pendingImportFingerprints[host.name];
             const importing = importingName === host.name;
             return (
