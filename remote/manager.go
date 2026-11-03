@@ -169,7 +169,8 @@ func (m *Manager) Delete(id string) error {
 // import always leaves the host ready for the Console: SSH works, the host key
 // is pinned, and the remote AgentMux status endpoint is reachable. When SSH is
 // healthy but the loopback service is absent, the matching bundled CLI is
-// installed and started automatically.
+// installed and started automatically. An API authentication failure triggers
+// credential discovery over the verified SSH connection before saving.
 func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bool) (ImportResult, error) {
 	if candidate.ID == "" {
 		candidate.ID = "pending-import"
@@ -216,11 +217,18 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
+	previousToken := host.APIToken
 	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, func(fingerprint string) (Host, error) {
 		return m.store.SetHostKeyFingerprint(id, fingerprint)
 	})
 	if err != nil {
 		return TestResult{}, err
+	}
+	if host.APIToken != previousToken {
+		if _, err := m.store.Upsert(host, false); err != nil {
+			_ = client.Close()
+			return TestResult{}, err
+		}
 	}
 	m.cache(host, client)
 	return TestResult{
@@ -254,6 +262,12 @@ func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse boo
 		}
 	}
 	status, installed, err := m.ensureService(ctx, client, host)
+	var response *remoteHTTPError
+	if errors.As(err, &response) && response.status == http.StatusUnauthorized {
+		authCtx, cancel := context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+		host, status, err = recoverRemoteAPIToken(authCtx, client, host)
+	}
 	if err != nil {
 		return host, nil, nil, false, err
 	}
@@ -371,7 +385,7 @@ func (m *Manager) ensureService(ctx context.Context, client remoteClient, host H
 	}
 	status, err = waitForStatus(ctx, client, host, 12*time.Second, "start remote AgentMux")
 	if err != nil {
-		return nil, false, err
+		return nil, true, err
 	}
 	return status, true, nil
 }
@@ -440,6 +454,12 @@ func waitForStatus(ctx context.Context, client remoteClient, host Host, timeout 
 		status, err := requestStatusVia(ctx, transport, host)
 		if err == nil {
 			return status, nil
+		}
+		var response *remoteHTTPError
+		if errors.As(err, &response) && response.status == http.StatusUnauthorized {
+			// The daemon is ready and requires a credential. Preserve the typed
+			// error so import can discover it instead of polling or reading logs.
+			return nil, fmt.Errorf("%s: %w", action, err)
 		}
 		lastErr = err
 		select {
@@ -679,6 +699,12 @@ func (m *Manager) connectionLock(id string) *contextMutex {
 }
 
 func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (remoteClient, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+	proxy, err := sshProxyCommand(ctx, host, m.timeout)
+	if err != nil {
+		return nil, "", err
+	}
 	auth, cleanup, authErr := authMethods(host)
 	defer cleanup()
 	var observedFingerprint string
@@ -698,8 +724,13 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (re
 		return nil
 	}
 	address := net.JoinHostPort(host.Host, fmt.Sprintf("%d", host.Port))
-	dialer := net.Dialer{Timeout: m.timeout}
-	raw, err := dialer.DialContext(ctx, "tcp", address)
+	var raw net.Conn
+	if proxy != nil {
+		raw, err = startSSHProxy(proxy, address)
+	} else {
+		dialer := net.Dialer{Timeout: m.timeout}
+		raw, err = dialer.DialContext(ctx, "tcp", address)
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("connect SSH %s: %w", address, err)
 	}

@@ -644,7 +644,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             <ShieldAlert size={17} />
             <div>
               <strong>{t("remote.proxyRequired")}</strong>
-              <span>{t("remote.proxyUnsupported")}</span>
+              <span>{t("remote.proxySupported")}</span>
             </div>
           </div>
         )}
@@ -708,8 +708,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   <button
                     className={configured?.trusted ? "ghost-action" : "action"}
                     type="button"
-                    disabled={Boolean(configured?.trusted) || requiresProxy || importing}
-                    title={requiresProxy ? t("remote.proxyUnsupported") : undefined}
+                    disabled={Boolean(configured?.trusted) || importing}
                     onClick={() => void importDiscovered(host)}
                   >
                     {configured?.trusted ? <CheckCircle2 size={14} /> : <Plus size={14} />}

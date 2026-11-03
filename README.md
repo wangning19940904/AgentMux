@@ -36,7 +36,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
-- **SSH 远程控制** — 从 SSH Config 一键导入远程机器，验证 SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
 - **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
@@ -575,6 +575,8 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
 - SSH 远程控制优先使用私钥/`ssh-agent`；从 SSH Config 导入的主机也可回退到系统 OpenSSH 的非交互认证（例如 GSSAPI），且不保存 SSH 密码。首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
+- 导入或测试连接遇到远端 API 401 时，会通过已验证的 SSH 连接读取远端配置中的 `[bridge].token`、SSH 环境中的 `AGENTMUX_BRIDGE_TOKEN`，以及标准 launchd / systemd 用户服务的 Token。配置支持 `AMUX_CONFIG`、`XDG_CONFIG_HOME` 和系统默认路径，`${ENV}` 在远端 SSH 环境中展开。Token 通过状态接口验证后才保存，不返回给浏览器或写入日志；自定义启动环境不可读取时仍可手动填写。
+- SSH 代理使用系统 OpenSSH 解析别名的有效配置（包括 `Include`、`Match` 与通配符）；跳板机沿用本机凭据与 `known_hosts`，请先在终端完成跳板机指纹确认或 Cloudflare 登录。`ProxyCommand` 需要 POSIX shell 和已安装的代理程序，通过标准输入/输出转发连接；暂不支持 `ProxyUseFdpass`。代理失败不会改为直连目标机。
 - Console 的机器范围默认是“全部机器”，汇总本机与所有已信任 SSH 主机；列表记录携带来源机器，单台不可达只产生局部告警。批量管理请求逐机执行并保留成功结果，不承诺跨机器事务。
 - **LLM Provider → Provider 同步** 支持把单个 Provider 从本机或 SSH 主机同步到一台或多台目标机器；添加 Provider 时也可从其他机器选择并导入。同步先生成 15 分钟有效的预览，只新增缺失项，不覆盖已有配置或复制机器本地的活跃路由。API Key 默认不复制；显式启用时仅经已认证的 SSH 隧道在内存中传输。
 - 自动安装的远程 AgentMux 会安装/连接 PostgreSQL 16+，并在发现旧 SQLite 数据时先生成备份再迁移；本机与远程运行时均只使用 PostgreSQL。

@@ -190,7 +190,11 @@ func (c *openSSHClient) command(ctx context.Context, extra ...string) (*exec.Cmd
 	}
 	args := append(c.baseArgs(path), extra...)
 	args = append(args, "--", c.target())
-	return exec.CommandContext(ctx, c.executable, args...), cleanup, nil
+	cmd := exec.CommandContext(ctx, c.executable, args...)
+	stop := prepareSSHProxyProcess(cmd)
+	cmd.Cancel = func() error { stop(); return nil }
+	cmd.WaitDelay = time.Second
+	return cmd, func() { stop(); cleanup() }, nil
 }
 
 func (c *openSSHClient) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -320,14 +324,15 @@ func (c *openSSHClient) releaseTunnelStart() {
 }
 
 type sshProcessConn struct {
-	stdin     io.WriteCloser
-	stdout    io.ReadCloser
-	cmd       *exec.Cmd
-	stderr    *sshTunnelLog
-	done      chan struct{}
-	waitErr   error
-	remote    net.Addr
-	closeOnce sync.Once
+	stdin       io.WriteCloser
+	stdout      io.ReadCloser
+	cmd         *exec.Cmd
+	stderr      *sshTunnelLog
+	done        chan struct{}
+	waitErr     error
+	remote      net.Addr
+	closeOnce   sync.Once
+	stopProcess func()
 }
 
 func (c *sshProcessConn) Read(data []byte) (int, error) {
@@ -359,7 +364,11 @@ func (c *sshProcessConn) Close() error {
 	c.closeOnce.Do(func() {
 		_ = c.stdin.Close()
 		_ = c.stdout.Close()
-		if c.cmd.Process != nil {
+		if c.stopProcess != nil {
+			c.stopProcess()
+		} else if c.cmd.Cancel != nil {
+			_ = c.cmd.Cancel()
+		} else if c.cmd.Process != nil {
 			_ = c.cmd.Process.Kill()
 		}
 		<-c.done
@@ -406,7 +415,7 @@ func (l *sshTunnelLog) Write(data []byte) (int, error) {
 				l.channel = channel
 			}
 		}
-		if l.channel != "" && strings.HasPrefix(line, "debug2: channel "+l.channel+": open confirm ") {
+		if l.ready != nil && l.channel != "" && strings.HasPrefix(line, "debug2: channel "+l.channel+": open confirm ") {
 			l.readyOnce.Do(func() { close(l.ready) })
 		}
 	}

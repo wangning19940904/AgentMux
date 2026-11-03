@@ -774,6 +774,10 @@ func startSSHForwarderWithHostKey(t *testing.T, allowedKey ssh.PublicKey) (strin
 }
 
 func startSSHForwarderWithHostSigners(t *testing.T, allowedKey ssh.PublicKey, hostSigners ...ssh.Signer) (string, int) {
+	return startSSHForwarderWithExec(t, allowedKey, nil, hostSigners...)
+}
+
+func startSSHForwarderWithExec(t *testing.T, allowedKey ssh.PublicKey, run func(string, io.Reader) ([]byte, error), hostSigners ...ssh.Signer) (string, int) {
 	t.Helper()
 	if len(hostSigners) == 0 {
 		t.Fatal("at least one SSH host key is required")
@@ -800,7 +804,7 @@ func startSSHForwarderWithHostSigners(t *testing.T, allowedKey ssh.PublicKey, ho
 			if err != nil {
 				return
 			}
-			go serveSSHConnection(raw, config)
+			go serveSSHConnectionWithExec(raw, config, run)
 		}
 	}()
 	host, portRaw, err := net.SplitHostPort(listener.Addr().String())
@@ -815,6 +819,10 @@ func startSSHForwarderWithHostSigners(t *testing.T, allowedKey ssh.PublicKey, ho
 }
 
 func serveSSHConnection(raw net.Conn, config *ssh.ServerConfig) {
+	serveSSHConnectionWithExec(raw, config, nil)
+}
+
+func serveSSHConnectionWithExec(raw net.Conn, config *ssh.ServerConfig, run func(string, io.Reader) ([]byte, error)) {
 	conn, channels, requests, err := ssh.NewServerConn(raw, config)
 	if err != nil {
 		_ = raw.Close()
@@ -836,7 +844,19 @@ func serveSSHConnection(raw net.Conn, config *ssh.ServerConfig) {
 						continue
 					}
 					_ = channelRequest.Reply(true, nil)
-					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+					var status uint32
+					if run != nil {
+						var command struct{ Command string }
+						if err := ssh.Unmarshal(channelRequest.Payload, &command); err != nil {
+							return
+						}
+						output, err := run(command.Command, channel)
+						_, _ = channel.Write(output)
+						if err != nil {
+							status = 1
+						}
+					}
+					_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 					return
 				}
 			}()

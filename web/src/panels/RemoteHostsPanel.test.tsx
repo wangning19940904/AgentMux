@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activeRemoteID, api, notifyRemoteHostsChanged, setActiveMachineScope, type RemoteHost } from "../api";
+import { activeRemoteID, api, notifyRemoteHostsChanged, RemoteConnectionError, setActiveMachineScope, type RemoteHost } from "../api";
 import { I18nProvider } from "../i18n";
 import { RemoteHostsPanel } from "./RemoteHostsPanel";
 
@@ -13,6 +13,8 @@ vi.mock("../api", () => ({
     statusRemoteHost: vi.fn(),
     deleteRemoteHost: vi.fn(),
     syncRemoteHostsFromSSHConfig: vi.fn(),
+    discoveredRemoteHosts: vi.fn(),
+    importRemoteHost: vi.fn(),
   },
   activeRemoteID: vi.fn(),
   setActiveMachineScope: vi.fn(),
@@ -77,6 +79,36 @@ beforeEach(async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel /></I18nProvider>); });
+});
+
+describe("SSH proxy imports", () => {
+  it.each([
+    { proxy_jump: "bastion" },
+    { proxy_command: true },
+  ])("allows import and retains fingerprint confirmation for %j", async (proxy) => {
+    const discovered = {
+      name: "private-box", ssh_alias: "private-box", host: "127.0.0.1", port: 22022,
+      user: "tester", source: "~/.ssh/config", ...proxy,
+    };
+    vi.mocked(api.discoveredRemoteHosts).mockResolvedValue([discovered]);
+    const untrusted = Object.assign(new Error("Confirm host key"), {
+      code: "host_key_untrusted", fingerprint: "SHA256:target-key",
+    });
+    Object.setPrototypeOf(untrusted, RemoteConnectionError.prototype);
+    vi.mocked(api.importRemoteHost).mockRejectedValueOnce(untrusted);
+    await click(button(container, "添加 SSH 机器"));
+    const row = container.querySelector<HTMLElement>(".remote-discovered-card")!;
+    expect(row.textContent).toContain("使用 SSH 代理");
+    expect(button(row, "导入").disabled).toBe(false);
+    await click(button(row, "导入"));
+    expect(api.importRemoteHost).toHaveBeenCalledWith(discovered, false);
+    expect(row.textContent).toContain("SHA256:target-key");
+    expect(api.importRemoteHost).toHaveBeenCalledTimes(1);
+    vi.mocked(api.importRemoteHost).mockResolvedValueOnce({ installed: false } as Awaited<ReturnType<typeof api.importRemoteHost>>);
+    await click(button(row, "信任并继续"));
+    expect(api.importRemoteHost).toHaveBeenLastCalledWith(discovered, true);
+    expect(row.textContent).not.toContain("SHA256:target-key");
+  });
 });
 
 afterEach(async () => {
