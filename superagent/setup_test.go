@@ -119,6 +119,39 @@ func TestSetupReportsWhatASaveWouldRefuse(t *testing.T) {
 	}
 }
 
+func TestSetupRunsOnAFrameworkWithoutASavedAgent(t *testing.T) {
+	h := newHarness(t)
+	var used string
+	h.router.answer = func(request core.InvocationRequest) (string, error) {
+		used = request.AgentID
+		return `{"reply":"ok"}`, nil
+	}
+	result, err := h.service.Setup(context.Background(), SetupRequest{Instruction: "x", Draft: core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != managedRouterID("codex") || result.Draft.RouterAgentID != used || result.Draft.RouterRuntime != "codex" {
+		t.Fatalf("used %q, draft = %+v", used, result.Draft)
+	}
+	stored, _ := h.store.ListSuperAgents(context.Background())
+	for _, agent := range stored {
+		if agent.RouterRuntime == "codex" {
+			t.Fatal("a draft must not be stored")
+		}
+	}
+}
+
+func TestSetupFlagsAMissingWorkDirectory(t *testing.T) {
+	h := newHarness(t)
+	result, err := h.setup(`{"reply":"ok","auto_worker_dir":"/no/such/directory"}`, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Problems) != 1 || !strings.Contains(result.Problems[0], "does not exist") {
+		t.Fatalf("problems = %v", result.Problems)
+	}
+}
+
 func TestSetupRefusals(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

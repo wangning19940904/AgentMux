@@ -273,7 +273,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.service = New(Options{
 		Store: h.store, Invoker: h.router, Workers: h.workers, Replies: h.replies,
-		Now: func() time.Time { return *h.clock },
+		Now: func() time.Time { return *h.clock }, StateDir: t.TempDir(),
 	})
 	saved, err := h.service.Save(context.Background(), core.SuperAgent{
 		Name: "sa", RouterAgentID: "router", Mode: core.SuperAgentModeAct, Enabled: true,

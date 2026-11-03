@@ -212,13 +212,15 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   const agents = useAsync(() => api.agentInstances(), []);
   const hosts = useAsync(() => api.remoteHosts().catch(() => []), []);
   const channels = useAsync(() => api.channels(), []);
+  const frameworks = useAsync(() => api.frameworks(), []);
   const [remoteAgents, setRemoteAgents] = useState<Record<string, AgentInstance[]>>({});
   // In the "all machines" scope the API tags this daemon's resources as "local".
   // An Agent a Super Agent launched for itself is not something to route through.
   const localAgents = useMemo(() => (agents.data ?? []).filter((agent) => isLocalTarget(agent.target_id) && agent.source !== "super_agent"), [agents.data]);
   const feishuChannels = useMemo(() => (channels.data ?? []).filter((channel) => isLocalTarget(channel.target_id) && (channel.type === "feishu" || channel.type === "lark")), [channels.data]);
-  const problems = superAgentProblems(draft);
+  const installedFrameworks = useMemo(() => (frameworks.data?.frameworks ?? []).filter((item) => item.installed && item.spec.supported && item.registered && isLocalTarget(item.target_id)), [frameworks.data]);
   const [instruction, setInstruction] = useState("");
+  const problems = [...superAgentProblems(draft), ...(instruction.trim() ? ["superAgents.problem.pendingInstruction"] : [])];
   const [assisting, setAssisting] = useState(false);
   const [assistError, setAssistError] = useState("");
   const [setup, setSetup] = useState<SuperAgentSetupResult | null>(null);
@@ -275,12 +277,12 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
           </div>
         </div>
         <div className="surface-body provider-builder-body agent-drawer-body super-agent-form">
-          <label className="field"><span>{t("superAgents.router")}</span>
-            <select value={draft.router_agent_id} onChange={(event) => onChange({ ...draft, router_agent_id: event.target.value })}>
-              <option value="">{t("superAgents.chooseAgent")}</option>
-              {localAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} ({agent.runtime_id})</option>)}
+          <label className="field"><span>{t("superAgents.framework")}</span>
+            <select value={draft.router_runtime ?? ""} onChange={(event) => onChange({ ...draft, router_runtime: event.target.value, router_agent_id: "" })}>
+              <option value="">{t(draft.router_agent_id ? "superAgents.usingExistingAgent" : "superAgents.chooseFramework")}</option>
+              {installedFrameworks.map((item) => <option key={item.spec.kind} value={item.spec.kind}>{item.spec.display}</option>)}
             </select>
-            <small>{t("superAgents.routerHelp")}</small>
+            <small>{t(!frameworks.loading && installedFrameworks.length === 0 ? "superAgents.noFramework" : "superAgents.frameworkHelp")}</small>
           </label>
 
           <label className="field"><span>{t("superAgents.instruction")}</span>
@@ -288,7 +290,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             <small>{t("superAgents.instructionHelp")}</small>
           </label>
           <div className="control-row">
-            <button className="ghost-action" disabled={assisting || !draft.router_agent_id || !instruction.trim()} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
+            <button className="ghost-action" disabled={assisting || (!draft.router_runtime && !draft.router_agent_id) || !instruction.trim()} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
           </div>
           {assistError && <div className="session-notice error" role="alert">{assistError}</div>}
           {setup?.reply && <p className="super-agent-assist-reply" role="status">{setup.reply}</p>}
@@ -323,6 +325,13 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
           <details className="super-agent-advanced">
             <summary>{t("superAgents.advanced")}</summary>
             <div className="super-agent-form">
+          <label className="field"><span>{t("superAgents.router")}</span>
+            <select value={draft.router_runtime ? "" : draft.router_agent_id} onChange={(event) => onChange({ ...draft, router_agent_id: event.target.value, router_runtime: "" })}>
+              <option value="">{t("superAgents.chooseAgent")}</option>
+              {localAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} ({agent.runtime_id})</option>)}
+            </select>
+            <small>{t("superAgents.routerHelp")}</small>
+          </label>
           <label className="field"><span>{t("superAgents.name")}</span><input placeholder={t("superAgents.namePlaceholder")} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
           <label className="field"><span>{t("superAgents.routerPrompt")}</span><textarea rows={3} value={draft.router_prompt ?? ""} onChange={(event) => onChange({ ...draft, router_prompt: event.target.value })} /></label>
           <div className="field-grid">

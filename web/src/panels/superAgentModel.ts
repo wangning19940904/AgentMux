@@ -65,7 +65,7 @@ export function parseActors(value: string): string[] {
 
 export function superAgentProblems(agent: SuperAgent): string[] {
   const problems: string[] = [];
-  if (!agent.router_agent_id) problems.push("superAgents.problem.router");
+  if (!agent.router_runtime && !agent.router_agent_id) problems.push("superAgents.problem.router");
   if (agent.workers.length === 0 && !agent.auto_workers) problems.push("superAgents.problem.noWorkers");
   if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
   for (const source of agent.sources) {

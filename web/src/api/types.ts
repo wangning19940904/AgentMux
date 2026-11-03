@@ -1373,6 +1373,7 @@ export interface SuperAgent {
   id: string;
   name: string;
   description?: string;
+  router_runtime?: string;
   router_agent_id: string;
   router_prompt?: string;
   mode: "act" | "observe";

@@ -46,9 +46,12 @@ const (
 // SuperAgent is a persistent router that turns events from its Sources into
 // Tickets and assigns them to local or remote workers.
 type SuperAgent struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Description    string             `json:"description,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// RouterRuntime names an installed framework to route with. The host then
+	// creates the router Agent, and RouterAgentID records which one it is.
+	RouterRuntime  string             `json:"router_runtime,omitempty"`
 	RouterAgentID  string             `json:"router_agent_id"`
 	RouterPrompt   string             `json:"router_prompt,omitempty"`
 	Mode           string             `json:"mode"`

@@ -2,7 +2,9 @@ package superagent
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -201,8 +203,116 @@ func TestSaveAutoWorkers(t *testing.T) {
 	router.WorkDir = ""
 	h.store.local["router"] = router
 	h.store.mu.Unlock()
-	if _, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true}); err == nil || !strings.Contains(err.Error(), "working directory") {
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true, AutoWorkerDir: "/no/such/directory"}); err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	saved, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, Enabled: true, Mode: core.SuperAgentModeAct})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, _ := h.store.GetAgentInstance(ctx, saved.RouterAgentID)
+	if router == nil || !IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModePlan || router.WorkDir == "" {
+		t.Fatalf("router = %+v", router)
+	}
+	if saved.Name != "Super Agent (codex)" || saved.AutoWorkerApprovalMode != core.ApprovalModeAutoEdit {
+		t.Fatalf("saved = %+v", saved)
+	}
+	stored, _ := h.store.GetSuperAgent(ctx, saved.ID)
+	h.agent = *stored
+	h.source = core.SuperAgentSource{ID: "gh", Kind: core.SuperAgentSourceGitHub, Enabled: true, AllowedActors: []string{"alice"}}
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.ingest("alice", "github:o/r#1", "work", true)
+	h.settle()
+	worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(saved.ID))
+	if worker == nil || worker.RuntimeID != "codex" || worker.WorkDir == router.WorkDir || !strings.Contains(worker.WorkDir, saved.ID) {
+		t.Fatalf("workers must not share the router's scratch directory: %+v", worker)
+	}
+	if info, err := os.Stat(worker.WorkDir); err != nil || !info.IsDir() {
+		t.Fatalf("work dir: %v", err)
+	}
+	if h.workers.callCount() != 1 {
+		t.Fatalf("calls = %d", h.workers.callCount())
+	}
+}
+
+func TestManagedRouterIsSharedAndKeepsOperatorChanges(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	first, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, _ := h.store.GetAgentInstance(ctx, first.RouterAgentID)
+	router.DefaultModel = "chosen-on-the-agents-page"
+	if err := h.store.UpsertAgentInstance(ctx, router); err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, _ = h.store.GetAgentInstance(ctx, second.RouterAgentID)
+	if first.RouterAgentID != second.RouterAgentID || router.DefaultModel != "chosen-on-the-agents-page" {
+		t.Fatalf("router = %+v", router)
+	}
+	if err := h.service.Delete(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if router, _ = h.store.GetAgentInstance(ctx, second.RouterAgentID); router == nil {
+		t.Fatal("another Super Agent still routes with it")
+	}
+}
+
+func TestFrameworkRouterRefusals(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.service.runtimeAvailable = func(id string) bool { return id != "gemini" }
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "gemini", AutoWorkers: true}); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "kimi", AutoWorkers: true}); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Errorf("err = %v", err)
+	}
+	if router, _ := h.store.GetAgentInstance(ctx, managedRouterID("kimi")); router != nil {
+		t.Errorf("router = %+v", router)
+	}
+	if _, err := h.service.Save(ctx, core.SuperAgent{AutoWorkers: true}); err == nil {
+		t.Error("expected an error without a framework or router")
+	}
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeManual}); err == nil {
+		t.Error("manual approval must be refused")
+	}
+}
+
+func TestDefaultApprovalFitsTheFramework(t *testing.T) {
+	h := newHarness(t)
+	saved, err := h.service.Save(context.Background(), core.SuperAgent{RouterRuntime: "cursor", AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.AutoWorkerApprovalMode != core.ApprovalModeAuto {
+		t.Fatalf("approval = %q", saved.AutoWorkerApprovalMode)
+	}
+	if _, err := h.service.Save(context.Background(), core.SuperAgent{RouterRuntime: "cursor", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeAutoEdit}); err == nil {
+		t.Fatal("a mode the framework lacks must be refused")
+	}
+}
+
+func TestAutoWorkerDirExpandsHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if got, err := expandHome("~/src/widgets"); err != nil || got != filepath.Join(home, "src", "widgets") {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, _ := expandHome("/abs/path"); got != "/abs/path" {
+		t.Fatalf("got %q", got)
 	}
 }
 

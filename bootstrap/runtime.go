@@ -117,6 +117,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		Replies: &superagent.Replies{Chats: engine},
 		Mail:    &superagent.IMAPClient{},
 		Docs:    &superagent.FeishuDocuments{Channels: st.GetChannel},
+		RuntimeAvailable: server.AgentRuntimeAvailable,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {
 			channel, err := st.GetChannel(ctx, id)
 			return err != nil || (channel != nil && channel.AgentID != "")

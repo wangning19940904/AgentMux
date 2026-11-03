@@ -50,9 +50,9 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent) (
 	if router == nil {
 		return core.SuperAgentWorker{}, fmt.Errorf("router agent %q not found on this machine", agent.RouterAgentID)
 	}
-	workDir := firstNonEmpty(agent.AutoWorkerDir, router.WorkDir)
-	if workDir == "" {
-		return core.SuperAgentWorker{}, errors.New("auto workers need a working directory: set one on the router Agent or on this Super Agent")
+	workDir, err := s.autoWorkerDir(agent, *router)
+	if err != nil {
+		return core.SuperAgentWorker{}, err
 	}
 	id := autoWorkerAgentID(agent.ID)
 	now := s.now().UTC()
@@ -70,7 +70,7 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent) (
 		WorkDir: workDir, WorkspaceMode: autoWorkerWorkspaceMode(ctx, workDir),
 		ProviderTool: router.ProviderTool, ProviderID: router.ProviderID, ProviderName: router.ProviderName,
 		DefaultModel: router.DefaultModel, DefaultReasoningEffort: router.DefaultReasoningEffort, DefaultServiceTier: router.DefaultServiceTier,
-		DefaultApprovalMode: firstNonEmpty(agent.AutoWorkerApprovalMode, core.ApprovalModeAutoEdit),
+		DefaultApprovalMode: firstNonEmpty(agent.AutoWorkerApprovalMode, defaultAutoWorkerApproval(router.RuntimeID)),
 		Env:                 router.Env, Enabled: true, Source: autoWorkerAgentSource,
 		OwnerTenantID: router.OwnerTenantID, OwnerTenantName: router.OwnerTenantName, Visibility: router.Visibility,
 		CreatedAt: createdAt, UpdatedAt: now,

@@ -29,7 +29,8 @@ The router reads untrusted text, so nothing depends on the model behaving:
 - **A decision** can only name a worker on this Super Agent's roster, `auto` when
   auto workers are on, and a Ticket already on the event's thread.
 - **The router Agent** must run on this machine and cannot use the `yolo` approval
-  mode. Use `plan`.
+  mode. Choosing a framework creates a router in `plan` mode, so a framework without
+  a read-only mode, such as Kimi, cannot route. An existing Agent can be chosen instead.
 - **Observe mode** is the default. It records what the router would do, without
   running work or messaging anyone. Switch to Act when the decisions look right.
 
@@ -86,11 +87,19 @@ worker suits a request, and the host starts a worker that was not configured in 
   `<repo>.agentmux-worktrees`. Outside a repository, Tickets share the directory.
 - A decision supplies only the Ticket's title and instructions. The runtime, provider,
   model and environment come from the router Agent. The directory is `auto_worker_dir`,
-  or the router Agent's. The approval mode is `auto_worker_approval_mode`, `auto_edit` by
-  default. MCP servers, skills and channels are not inherited.
+  or an existing router Agent's, or else `~/.agentmux/super-agents/<id>/work`. The approval
+  mode is `auto_worker_approval_mode`, by default `auto_edit`, or `auto` on a framework
+  without it. MCP servers, skills and channels are not inherited.
 - `max_concurrency` limits how many run at once. Auto workers run on this machine only.
 - They share one Agent instance, `saw_<super agent id>`, removed with the Super Agent.
   Worktrees are kept after a Ticket ends.
+
+## Choosing a framework
+
+`router_runtime` names an installed framework, and no Agent has to exist first. The host
+keeps one router Agent per framework, `sar_<framework>`, and uses the framework's active
+provider route. It is shared between Super Agents and stays when one is deleted. Its
+provider or model can be changed on the Agents page, and those changes are kept.
 
 ## Setup assistant
 

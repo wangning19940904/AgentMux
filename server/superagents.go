@@ -24,6 +24,11 @@ func (s *Server) RemoteHosts() superagent.HostDialer {
 	return s.remote
 }
 
+// AgentRuntimeAvailable reports whether an Agent can run on this framework here.
+func AgentRuntimeAvailable(id string) bool {
+	return knownAgentRuntime(id) && agentRuntimeAvailable(id)
+}
+
 func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("GET /api/v1/super-agents", s.handleSuperAgentsList)
 	s.mux.HandleFunc("POST /api/v1/super-agents", s.handleSuperAgentUpsert)

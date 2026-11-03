@@ -75,6 +75,10 @@ type Options struct {
 	// ChannelHasAgent reports whether a channel has its own Agent to take the
 	// messages a Super Agent does not claim.
 	ChannelHasAgent func(context.Context, string) bool
+	// RuntimeAvailable reports whether an agent framework can run on this machine.
+	RuntimeAvailable func(string) bool
+	// StateDir holds directories the service creates. Empty means ~/.agentmux.
+	StateDir string
 }
 
 // Service owns intake, routing and execution for every Super Agent.
@@ -105,6 +109,9 @@ type Service struct {
 	docs            DocumentSubscriber
 	documents       map[string][]documentRef
 	channelHasAgent func(context.Context, string) bool
+
+	runtimeAvailable func(string) bool
+	state            string
 }
 
 // SourceHealth is the latest intake outcome of one Source.
@@ -137,6 +144,7 @@ func New(options Options) *Service {
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
 		routerAttempts: map[string]int{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		mail: options.Mail, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
+		runtimeAvailable: options.RuntimeAvailable, state: options.StateDir,
 	}
 }
 

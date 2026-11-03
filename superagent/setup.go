@@ -79,7 +79,7 @@ func (s *Service) Setup(ctx context.Context, request SetupRequest) (SetupResult,
 	}
 	draft := request.Draft
 	draft.RouterAgentID = strings.TrimSpace(draft.RouterAgentID)
-	if _, err := s.validateRouter(ctx, draft.RouterAgentID); err != nil {
+	if _, err := s.resolveRouter(ctx, &draft); err != nil {
 		return SetupResult{}, err
 	}
 	conversationID := strings.TrimSpace(request.ConversationID)
@@ -212,6 +212,9 @@ func setupProblems(draft core.SuperAgent) []string {
 			problems = append(problems, fmt.Sprintf("%s: %s", source.Kind, err))
 		}
 	}
+	if err := validateAutoWorkerDir(draft.AutoWorkerDir); err != nil {
+		problems = append(problems, err.Error())
+	}
 	return problems
 }
 
@@ -261,7 +264,7 @@ Trigger kinds and their config keys:
 Rules:
 - An enabled trigger needs allowed_actors. You cannot look up a person's open_id from a name: ask for it, or ask whether everyone may use the trigger. Never invent ids, logins, addresses or channels.
 - Never ask for or write passwords, tokens or webhook secrets. AgentMux collects them in a secure field after your reply.
-- Workers are launched automatically; do not plan or list them.
+- Workers are launched automatically; do not plan or list them. When the instruction names a directory to work in, set "auto_worker_dir" to it.
 
 CURRENT CONFIGURATION:
 ` + string(current) + `

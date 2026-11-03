@@ -97,12 +97,15 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if agent.MaxConcurrency < 1 || agent.MaxConcurrency > maxConcurrencyLimit {
 		return fmt.Errorf("max_concurrency must be between 1 and %d", maxConcurrencyLimit)
 	}
-	router, err := s.validateRouter(ctx, agent.RouterAgentID)
+	router, err := s.resolveRouter(ctx, agent)
 	if err != nil {
 		return err
 	}
 	if agent.Name == "" {
 		agent.Name = router.Name
+		if agent.RouterRuntime != "" {
+			agent.Name = fmt.Sprintf("Super Agent (%s)", agent.RouterRuntime)
+		}
 	}
 	if err := s.normalizeWorkers(ctx, agent); err != nil {
 		return err
@@ -118,7 +121,7 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 // approval mode can enforce that.
 func (s *Service) validateRouter(ctx context.Context, id string) (*core.AgentInstance, error) {
 	if id == "" {
-		return nil, errors.New("router_agent_id is required")
+		return nil, errors.New("choose a framework or a router Agent")
 	}
 	router, err := s.store.GetAgentInstance(ctx, id)
 	if err != nil {
@@ -140,15 +143,15 @@ func normalizeAutoWorkers(agent *core.SuperAgent, router *core.AgentInstance) er
 		return nil
 	}
 	if agent.AutoWorkerApprovalMode == "" {
-		agent.AutoWorkerApprovalMode = core.ApprovalModeAutoEdit
+		agent.AutoWorkerApprovalMode = defaultAutoWorkerApproval(router.RuntimeID)
 	}
 	if err := validateAutoWorkerApproval(agent.AutoWorkerApprovalMode); err != nil {
 		return err
 	}
-	if firstNonEmpty(agent.AutoWorkerDir, router.WorkDir) == "" {
-		return errors.New("auto workers need a working directory: set one on the router Agent or on this Super Agent")
+	if modes := core.ApprovalModeValuesForRuntime(router.RuntimeID); len(modes) > 0 && !core.ApprovalModeSupported(router.RuntimeID, agent.AutoWorkerApprovalMode) {
+		return fmt.Errorf("approval mode %q is not supported by %s", agent.AutoWorkerApprovalMode, router.RuntimeID)
 	}
-	return nil
+	return validateAutoWorkerDir(agent.AutoWorkerDir)
 }
 
 func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) error {
