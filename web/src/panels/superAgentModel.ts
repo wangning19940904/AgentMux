@@ -8,6 +8,8 @@ export type SourceField = {
   multiline?: boolean;
   placeholder?: string;
   channel?: boolean;
+  // Picked from the groups the channel's bot is in.
+  chats?: "one" | "many";
 };
 
 export const SOURCE_KINDS: SuperAgentSourceKind[] = ["feishu_message", "feishu_doc", "email", "github_webhook"];
@@ -16,12 +18,12 @@ export const SOURCE_KINDS: SuperAgentSourceKind[] = ["feishu_message", "feishu_d
 export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
   feishu_message: [
     { key: "channel_id", labelKey: "superAgents.field.channel", required: true, channel: true },
-    { key: "chat_ids", labelKey: "superAgents.field.chatIDs", placeholder: "oc_xxx, oc_yyy" },
+    { key: "chat_ids", labelKey: "superAgents.field.chatIDs", chats: "many" },
   ],
   feishu_doc: [
     { key: "channel_id", labelKey: "superAgents.field.channel", required: true, channel: true },
     { key: "documents", labelKey: "superAgents.field.documents", required: true, multiline: true, placeholder: "https://example.feishu.cn/docx/…" },
-    { key: "notify_chat_id", labelKey: "superAgents.field.notifyChat", placeholder: "oc_xxx" },
+    { key: "notify_chat_id", labelKey: "superAgents.field.notifyChat", chats: "one" },
     { key: "instructions", labelKey: "superAgents.field.instructions", multiline: true },
     { key: "debounce_seconds", labelKey: "superAgents.field.debounce", placeholder: "600" },
   ],
@@ -66,6 +68,10 @@ export function newSource(kind: SuperAgentSourceKind): SuperAgentSource {
 
 export function parseActors(value: string): string[] {
   return value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+export function isFeishuSource(kind: SuperAgentSourceKind) {
+  return kind === "feishu_message" || kind === "feishu_doc";
 }
 
 export function superAgentProblems(agent: SuperAgent): string[] {

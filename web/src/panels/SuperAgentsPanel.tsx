@@ -1,11 +1,12 @@
 import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInstance, SuperAgent, SuperAgentSetupResult, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { AgentInstance, Channel, SuperAgent, SuperAgentSetupResult, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
+import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
+import { SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -200,6 +201,70 @@ function ticketStatusClass(status: string) {
 
 function triggerStatusClass(disposition: string) {
   return { pending: "queued", accepted: "succeeded", follow_up: "succeeded", observed: "running", failed: "failed" }[disposition] ?? "cancelled";
+}
+
+// SourceEditor edits one trigger. Feishu triggers pick groups and senders from
+// what the channel's bot can see; members come from the chosen groups, or from
+// every group the bot is in when none are chosen.
+function SourceEditor({ source, feishuChannels, onChange, onRemove }: {
+  source: SuperAgentSource;
+  feishuChannels: Channel[];
+  onChange: (patch: Partial<SuperAgentSource>) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useI18n();
+  const feishu = isFeishuSource(source.kind);
+  const channelID = feishu ? source.config.channel_id ?? "" : "";
+  const memberChats = parseActors(source.config[source.kind === "feishu_doc" ? "notify_chat_id" : "chat_ids"] ?? "");
+  const directory = useFeishuDirectory(channelID, memberChats, feishu ? source.allowed_actors : []);
+  return (
+    <div className="super-agent-card">
+      <div className="super-agent-section-head">
+        <strong>{t(`superAgents.kind.${source.kind}`)}</strong>
+        <span className="control-row">
+          <label className="super-agent-check"><input type="checkbox" checked={source.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} /> {t("common.enabled")}</label>
+          <button className="ghost-action danger-action" onClick={onRemove}><Trash2 size={13} /> {t("superAgents.remove")}</button>
+        </span>
+      </div>
+      <p className="muted">{t(`superAgents.kindHelp.${source.kind}`)}</p>
+      {SOURCE_FIELDS[source.kind].map((field) => {
+        const value = source.config[field.key] ?? "";
+        const setValue = (next: string) => onChange({ config: { ...source.config, [field.key]: next } });
+        if (field.chats) {
+          return (
+            <FeishuChatPicker key={field.key} label={t(field.labelKey)} required={field.required} single={field.chats === "one"}
+              value={value} channelID={channelID} directory={directory} onChange={setValue} />
+          );
+        }
+        return (
+          <label className="field" key={field.key}>
+            <span>{t(field.labelKey)}{field.required ? " *" : ""}</span>
+            {field.channel ? (
+              <select value={value} onChange={(event) => setValue(event.target.value)}>
+                <option value="">{t("superAgents.chooseChannel")}</option>
+                {feishuChannels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+              </select>
+            ) : field.multiline ? (
+              <textarea rows={3} placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
+            ) : (
+              <input type={field.secret ? "password" : "text"} autoComplete="off" placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
+            )}
+          </label>
+        );
+      })}
+      {feishu ? (
+        <FeishuActorPicker label={t("superAgents.allowedActors")} values={source.allowed_actors} allowEveryone={source.kind === "feishu_message"} scoped={memberChats.length > 0}
+          help={t(`superAgents.actorsHelp.${source.kind}`)} channelID={channelID} directory={directory}
+          onChange={(allowed_actors) => onChange({ allowed_actors })} />
+      ) : (
+        <label className="field">
+          <span>{t("superAgents.allowedActors")} *</span>
+          <textarea rows={2} value={source.allowed_actors.join(", ")} onChange={(event) => onChange({ allowed_actors: parseActors(event.target.value) })} />
+          <small>{t(`superAgents.actorsHelp.${source.kind}`)}</small>
+        </label>
+      )}
+    </div>
+  );
 }
 
 function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
@@ -429,40 +494,13 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             </select>
           </div>
           {draft.sources.map((source, index) => (
-            <div className="super-agent-card" key={source.id || `new-${index}`}>
-              <div className="super-agent-section-head">
-                <strong>{t(`superAgents.kind.${source.kind}`)}</strong>
-                <span className="control-row">
-                  <label className="super-agent-check"><input type="checkbox" checked={source.enabled} onChange={(event) => updateSource(index, { enabled: event.target.checked })} /> {t("common.enabled")}</label>
-                  <button className="ghost-action danger-action" onClick={() => onChange({ ...draft, sources: draft.sources.filter((_, position) => position !== index) })}><Trash2 size={13} /> {t("superAgents.remove")}</button>
-                </span>
-              </div>
-              <p className="muted">{t(`superAgents.kindHelp.${source.kind}`)}</p>
-              {SOURCE_FIELDS[source.kind].map((field) => {
-                const value = source.config[field.key] ?? "";
-                const setValue = (next: string) => updateSource(index, { config: { ...source.config, [field.key]: next } });
-                return (
-                  <label className="field" key={field.key}>
-                    <span>{t(field.labelKey)}{field.required ? " *" : ""}</span>
-                    {field.channel ? (
-                      <select value={value} onChange={(event) => setValue(event.target.value)}>
-                        <option value="">{t("superAgents.chooseChannel")}</option>
-                        {feishuChannels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
-                      </select>
-                    ) : field.multiline ? (
-                      <textarea rows={3} placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
-                    ) : (
-                      <input type={field.secret ? "password" : "text"} autoComplete="off" placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
-                    )}
-                  </label>
-                );
-              })}
-              <label className="field">
-                <span>{t("superAgents.allowedActors")} *</span>
-                <textarea rows={2} value={source.allowed_actors.join(", ")} onChange={(event) => updateSource(index, { allowed_actors: parseActors(event.target.value) })} />
-                <small>{t(`superAgents.actorsHelp.${source.kind}`)}</small>
-              </label>
-            </div>
+            <SourceEditor
+              key={source.id || `new-${index}`}
+              source={source}
+              feishuChannels={feishuChannels}
+              onChange={(patch) => updateSource(index, patch)}
+              onRemove={() => onChange({ ...draft, sources: draft.sources.filter((_, position) => position !== index) })}
+            />
           ))}
             </div>
           </details>

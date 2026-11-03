@@ -61,6 +61,16 @@ function click(element: Element | undefined) {
   act(() => { element.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
 }
 
+function press(element: Element, key: string) {
+  act(() => { element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+}
+
+function focus(element: HTMLElement) {
+  act(() => { element.focus(); });
+}
+
+const chips = (label: RegExp) => [...(control(label).closest(".super-agent-picker")?.querySelectorAll(".super-agent-token") ?? [])].map((item) => item.textContent);
+
 const saved: SuperAgent = {
   id: "sa_1", name: "Repo keeper", router_agent_id: "router", mode: "act", max_concurrency: 2, enabled: true,
   workers: [
@@ -104,6 +114,9 @@ beforeEach(() => {
     { id: "c2", name: "Slack bot", type: "slack" } as never,
   ]);
   vi.spyOn(api, "remoteAgentInstances").mockResolvedValue([{ id: "gpu", name: "GPU coder", runtime_id: "dsh", enabled: true } as never]);
+  vi.spyOn(api, "feishuChats").mockResolvedValue({ items: [{ chat_id: "oc_team", name: "Team" }, { chat_id: "oc_ops", name: "Ops", external: true }] });
+  vi.spyOn(api, "feishuMembers").mockResolvedValue({ items: [{ open_id: "ou_a", name: "Alice", chat_ids: ["oc_team"] }, { open_id: "ou_c", name: "Carol", chat_ids: ["oc_ops"] }] });
+  vi.spyOn(api, "feishuUsers").mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -170,7 +183,30 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Slack bot")).toBe(false);
     expect(saveButton().disabled).toBe(true);
     setValue(control(/^Feishu channel/), "c1");
-    setValue(control(/^Allowed senders/), "ou_a, ou_b");
+    await until(() => hasText("The bot is in 2 chats."));
+    expect(api.feishuChats).toHaveBeenCalledWith("c1");
+    expect(api.feishuMembers).not.toHaveBeenCalled();
+
+    const groups = control(/^Only these chats/) as HTMLInputElement;
+    focus(groups);
+    setValue(groups, "tea");
+    press(groups, "Enter");
+    expect(chips(/^Only these chats/)).toEqual(["Team"]);
+
+    vi.mocked(api.feishuUsers).mockResolvedValue([{ open_id: "ou_b", name: "Bob", email: "bob@acme.com" }]);
+    const senders = control(/^Allowed senders/) as HTMLInputElement;
+    focus(senders);
+    await until(() => hasText("2 people in the chosen chats."));
+    expect(api.feishuMembers).toHaveBeenCalledWith("c1", ["oc_team"]);
+    setValue(senders, "ali");
+    await until(() => [...container.querySelectorAll("[role=option]")].some((item) => item.textContent?.includes("Alice")));
+    press(senders, "Enter");
+    setValue(senders, "bob@acme.com, nobody@acme.com");
+    press(senders, "Enter");
+    await until(() => chips(/^Allowed senders/).length === 2);
+    expect(api.feishuUsers).toHaveBeenCalledWith("c1", { emails: ["bob@acme.com", "nobody@acme.com"] });
+    expect(chips(/^Allowed senders/)).toEqual(["Alice", "Bob"]);
+    expect(hasText("No one found for nobody@acme.com")).toBe(true);
     expect(saveButton().disabled).toBe(false);
 
     click(saveButton());
@@ -178,8 +214,43 @@ describe("SuperAgentsPanel", () => {
     const body = save.mock.calls[0][0];
     expect(body).toMatchObject({ name: "Triage", router_agent_id: "router", mode: "observe" });
     expect(body.workers).toEqual([{ id: "", agent_id: "gpu", host_id: "h1" }]);
-    expect(body.sources[0]).toMatchObject({ kind: "feishu_message", allowed_actors: ["ou_a", "ou_b"], config: { channel_id: "c1" } });
+    expect(body.sources[0]).toMatchObject({ kind: "feishu_message", allowed_actors: ["ou_a", "ou_b"], config: { channel_id: "c1", chat_ids: "oc_team" } });
     await until(() => !container.querySelector("[role=dialog]"));
+  });
+
+  it("shows saved Feishu senders and groups by name, and keeps pasted ids", async () => {
+    const feishu: SuperAgent = { ...saved, sources: [{ id: "src_f", kind: "feishu_message", enabled: true, allowed_actors: ["ou_a", "ou_z", "*"], config: { channel_id: "c1", chat_ids: "oc_ops, oc_gone" } }] };
+    vi.spyOn(api, "superAgents").mockResolvedValue([feishu]);
+    vi.mocked(api.feishuUsers).mockResolvedValue([{ open_id: "ou_a", name: "Alice" }]);
+    renderPanel();
+    await until(() => button(/^Edit$/));
+    click(button(/^Edit$/));
+    await until(() => chips(/^Allowed senders/).includes("Alice"));
+    expect(api.feishuUsers).toHaveBeenCalledWith("c1", { open_ids: ["ou_a", "ou_z"] });
+    expect(chips(/^Allowed senders/)).toEqual(["Alice", "ou_z", "Everyone"]);
+    await until(() => chips(/^Only these chats/).includes("Ops"));
+    expect(chips(/^Only these chats/)).toEqual(["Ops", "oc_gone"]);
+
+    const senders = control(/^Allowed senders/) as HTMLInputElement;
+    focus(senders);
+    setValue(senders, "ou_new");
+    act(() => { senders.blur(); });
+    await until(() => chips(/^Allowed senders/).includes("ou_new"));
+    focus(senders);
+    setValue(senders, "car");
+    act(() => { senders.blur(); });
+    expect(chips(/^Allowed senders/)).not.toContain("car");
+  });
+
+  it("shows why Feishu refused to list the bot's chats", async () => {
+    vi.mocked(api.feishuChats).mockRejectedValue(new Error("99991672 Access denied. One of the following scopes is required: [im:chat:readonly]"));
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "feishu_message");
+    await until(() => hasOption("Team bot"));
+    setValue(control(/^Feishu channel/), "c1");
+    await until(() => hasText("Couldn't read the bot's chats: 99991672 Access denied"));
+    expect(hasText("im:chat:readonly")).toBe(true);
   });
 
   it("needs only a framework, and sets up triggers from an instruction", async () => {

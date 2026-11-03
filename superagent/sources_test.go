@@ -285,8 +285,8 @@ func TestDocumentSubscriptionAPI(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	docs := &FeishuDocuments{Base: server.URL, HTTP: server.Client(), Channels: func(context.Context, string) (*core.Channel, error) {
-		return &core.Channel{Config: map[string]string{"app_id": "a", "app_secret": "s"}}, nil
+	docs := &FeishuAPI{Base: server.URL, HTTP: server.Client(), Channels: func(context.Context, string) (*core.Channel, error) {
+		return &core.Channel{Type: "feishu", Config: map[string]string{"app_id": "a", "app_secret": "s"}}, nil
 	}}
 	h := newHarness(t)
 	h.service.docs = docs

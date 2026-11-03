@@ -1422,6 +1422,31 @@ export interface SuperAgentTicket {
   updated_at: string;
 }
 
+export interface FeishuChat {
+  chat_id: string;
+  name: string;
+  description?: string;
+  external?: boolean;
+}
+
+export interface FeishuUser {
+  open_id: string;
+  name?: string;
+  email?: string;
+  chat_ids?: string[];
+}
+
+export interface FeishuChatList {
+  items: FeishuChat[];
+  truncated?: boolean;
+}
+
+export interface FeishuUserList {
+  items: FeishuUser[];
+  truncated?: boolean;
+  warnings?: string[];
+}
+
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];

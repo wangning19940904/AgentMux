@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -12,8 +14,12 @@ import (
 
 const maxGitHubWebhookBytes = 25 << 20 // GitHub's documented payload cap.
 
-// SetSuperAgents attaches the Super Agent runtime.
-func (s *Server) SetSuperAgents(service *superagent.Service) { s.superAgents = service }
+// SetSuperAgents attaches the Super Agent runtime and the Feishu directory its
+// Source form reads groups and people from.
+func (s *Server) SetSuperAgents(service *superagent.Service, directory superagent.FeishuDirectory) {
+	s.superAgents = service
+	s.feishuDirectory = directory
+}
 
 // RemoteHosts exposes the SSH host manager to the Super Agent worker fleet. It
 // returns an untyped nil when remote control is unavailable.
@@ -41,6 +47,23 @@ func (s *Server) registerSuperAgentRoutes() {
 	}))
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/retry", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
 		return s.superAgents.RetryTicket(r.Context(), id)
+	}))
+	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/chats", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
+		return s.feishuDirectory.Chats(r.Context(), channelID)
+	}))
+	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/members", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
+		return s.feishuDirectory.Members(r.Context(), channelID, splitQueryList(r.URL.Query().Get("chat_ids")))
+	}))
+	// POST keeps the email addresses being looked up out of URLs and access logs.
+	s.mux.HandleFunc("POST /api/v1/super-agents/feishu/users", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
+		var body struct {
+			OpenIDs []string `json:"open_ids"`
+			Emails  []string `json:"emails"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+			return nil, errBadDirectoryRequest
+		}
+		return s.feishuDirectory.Users(r.Context(), channelID, body.OpenIDs, body.Emails)
 	}))
 	// Outside /api: GitHub cannot present a bridge token. Each delivery proves
 	// itself with the HMAC signature of its Source's webhook secret instead.
@@ -193,6 +216,56 @@ func (s *Server) handleSuperAgentGitHubHook(w http.ResponseWriter, r *http.Reque
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 	}
+}
+
+var errBadDirectoryRequest = errors.New("invalid JSON body")
+
+// handleFeishuDirectory checks the channel before asking Feishu, so a wrong id
+// is a 4xx here and only Feishu's own refusals, such as a missing app scope,
+// come back as 502 with Feishu's message.
+func (s *Server) handleFeishuDirectory(lookup func(*http.Request, string) (any, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.feishuDirectory == nil || s.st == nil {
+			writeErr(w, http.StatusServiceUnavailable, "feishu directory unavailable")
+			return
+		}
+		channelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+		if channelID == "" {
+			writeErr(w, http.StatusBadRequest, "channel_id is required")
+			return
+		}
+		channel, err := s.st.GetChannel(r.Context(), channelID)
+		switch {
+		case err != nil:
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		case channel == nil:
+			writeErr(w, http.StatusNotFound, "channel not found")
+			return
+		case channel.Type != "feishu" && channel.Type != "lark":
+			writeErr(w, http.StatusBadRequest, "channel is not a Feishu channel")
+			return
+		}
+		result, err := lookup(r, channelID)
+		switch {
+		case errors.Is(err, errBadDirectoryRequest):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case err != nil:
+			writeErr(w, http.StatusBadGateway, err.Error())
+		default:
+			writeJSON(w, http.StatusOK, result)
+		}
+	}
+}
+
+func splitQueryList(value string) []string {
+	var items []string
+	for _, item := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' }) {
+		if !slices.Contains(items, item) {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func writeSuperAgentError(w http.ResponseWriter, err error) {
