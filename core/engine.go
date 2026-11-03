@@ -16,6 +16,7 @@ type EventSink func(event HookEvent, data map[string]string)
 // it hosts dynamically attached PostgreSQL-managed channels.
 type Engine struct {
 	eventIngress            func(Channel) PlatformEventIngress
+	inboundInterceptor      InboundInterceptor
 	ingressMu               sync.Mutex
 	ingress                 map[string]chan struct{}
 	log                     *slog.Logger
@@ -295,10 +296,26 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 			e.log.Info("duplicate channel message ignored", "channel_id", msg.ChannelID, "platform", msg.Platform, "message_id", msg.ID)
 			return
 		}
-		admitted, err := rt.admitsMessage(ctx, msg)
-		if err != nil {
+		// Admission only reads state. Super Agent Sources apply their own
+		// addressing rules (for example require_mention=false), so they still
+		// see messages outside the channel's reply scope, but nothing may reply
+		// to such a message, not even with an error.
+		admitted, admissionErr := rt.admitsMessage(ctx, msg)
+		if e.inboundInterceptor != nil {
+			claimed, err := e.inboundInterceptor(ctx, msg)
+			if err != nil {
+				e.log.Error("inbound interceptor failed", "channel_id", msg.ChannelID, "err", err)
+				if admissionErr == nil && admitted && !msg.LogOnly {
+					_ = rt.platform.Reply(ctx, msg, "读取消息状态失败："+err.Error())
+				}
+			}
+			if claimed {
+				return
+			}
+		}
+		if admissionErr != nil {
 			e.log.Warn("channel message admission failed; ignoring without reply",
-				"channel_id", msg.ChannelID, "chat_id", msg.ChatID, "message_id", msg.ID, "err", err)
+				"channel_id", msg.ChannelID, "chat_id", msg.ChatID, "message_id", msg.ID, "err", admissionErr)
 			return
 		}
 		if !admitted {

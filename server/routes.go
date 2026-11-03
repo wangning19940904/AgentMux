@@ -126,6 +126,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /channel-avatar", s.handleChannelAvatar)
 	s.mux.HandleFunc("GET /api/v1/channel-avatar", s.handleChannelAvatar)
 	s.mux.HandleFunc("POST /hook/{id}", s.handleInboundHook)
+	s.registerSuperAgentRoutes()
 	s.mux.HandleFunc("POST "+consoleSessionEndpoint, s.handleConsoleSessionCreate)
 	s.mux.HandleFunc("GET "+consoleEnterPath, s.handleConsoleEnter)
 	s.registerModuleRoutes()

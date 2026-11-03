@@ -177,10 +177,21 @@ type Service struct {
 	types       map[string][]string
 	health      map[string]core.EventIngestionHealth
 	unsubscribe func()
+	local       LocalConsumer
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 	once        sync.Once
 }
+
+// LocalConsumer receives raw platform events in-process, with no subscription
+// row or HTTP callback. Returning an error makes the platform redeliver.
+type LocalConsumer interface {
+	EventTypes(ref, source string) []string
+	HandleRelayEvent(ctx context.Context, event core.RelayEvent) error
+}
+
+// SetLocalConsumer is called by bootstrap before channels start.
+func (s *Service) SetLocalConsumer(consumer LocalConsumer) { s.local = consumer }
 
 func New(st *store.Store, log *slog.Logger, engine *core.Engine) *Service {
 	if log == nil {
@@ -211,7 +222,15 @@ func New(st *store.Store, log *slog.Logger, engine *core.Engine) *Service {
 	}
 	return s
 }
-func (s *Service) Publish(ctx context.Context, e core.RelayEvent) error { return s.publish(ctx, e, "") }
+func (s *Service) Publish(ctx context.Context, e core.RelayEvent) error {
+	if s.local != nil && e.Source != "agentmux" {
+		if err := s.local.HandleRelayEvent(ctx, e); err != nil {
+			s.log.Error("local event consumer failed", "source_ref", e.SourceRef, "type", e.Type, "err", err)
+			return err
+		}
+	}
+	return s.publish(ctx, e, "")
+}
 func (s *Service) publish(ctx context.Context, e core.RelayEvent, target string) error {
 	ctx, cancel := context.WithTimeout(ctx, IngestionTimeout)
 	defer cancel()
@@ -254,7 +273,13 @@ func (s *Service) Health(ref string) core.EventIngestionHealth {
 func (s *Service) EventTypes(ref, source string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return slices.Clone(s.types[source+"|"+ref])
+	types := slices.Clone(s.types[source+"|"+ref])
+	if s.local != nil {
+		types = append(types, s.local.EventTypes(ref, source)...)
+		slices.Sort(types)
+		types = slices.Compact(types)
+	}
+	return types
 }
 func (s *Service) Refresh(ctx context.Context) error {
 	subs, err := s.store.ListEventSubscriptions(ctx, nil)

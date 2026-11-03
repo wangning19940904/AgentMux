@@ -31,6 +31,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Network,
   Workflow,
   Video,
   Zap,
@@ -109,6 +110,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Bot,
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
+      { id: "super-agents", labelKey: "nav.superAgents", icon: Network },
       { id: "orchestrations", labelKey: "nav.orchestrations", icon: Workflow },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
       { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
@@ -367,6 +369,8 @@ function Shell({
   const [remoteAddRequest, setRemoteAddRequest] = useState(0);
   const [createAgentRequested, setCreateAgentRequested] = useState(false);
   const handleCreateAgentRequest = useCallback(() => setCreateAgentRequested(false), []);
+  const [createSuperAgentRequested, setCreateSuperAgentRequested] = useState(false);
+  const handleCreateSuperAgentRequest = useCallback(() => setCreateSuperAgentRequested(false), []);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -572,6 +576,11 @@ function Shell({
   function requestNewAgent() {
     setCreateAgentRequested(true);
     setTab("agents");
+  }
+
+  function requestNewSuperAgent() {
+    setCreateSuperAgentRequested(true);
+    setTab("super-agents");
   }
 
   function selectGroup(group: NavGroup) {
@@ -949,14 +958,26 @@ function Shell({
 			    />
 		      )}
               {visibleTab === "agents" && (
-                <button
-                  className="action workspace-create-action"
-                  type="button"
-                  onClick={requestNewAgent}
-                >
-                  <Plus size={14} />
-                  {t("agents.new")}
-                </button>
+                <>
+                  <button
+                    className="ghost-action workspace-create-action workspace-create-secondary"
+                    type="button"
+                    title={t("agents.newSuper")}
+                    aria-label={t("agents.newSuper")}
+                    onClick={requestNewSuperAgent}
+                  >
+                    <Network size={14} />
+                    <span>{t("agents.newSuper")}</span>
+                  </button>
+                  <button
+                    className="action workspace-create-action"
+                    type="button"
+                    onClick={requestNewAgent}
+                  >
+                    <Plus size={14} />
+                    {t("agents.new")}
+                  </button>
+                </>
               )}
 		    </div>
           </header>
@@ -996,7 +1017,13 @@ function Shell({
                 </section>
               ) : (
                 <>
-				  <RegisteredPanel tab={visibleTab} createRequested={createAgentRequested} onCreateRequestHandled={handleCreateAgentRequest} />
+				  <RegisteredPanel
+				    tab={visibleTab}
+				    createRequested={createAgentRequested}
+				    onCreateRequestHandled={handleCreateAgentRequest}
+				    createSuperAgentRequested={createSuperAgentRequested}
+				    onCreateSuperAgentRequestHandled={handleCreateSuperAgentRequest}
+				  />
 				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}

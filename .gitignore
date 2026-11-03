@@ -24,6 +24,7 @@ sdk/python/**/__pycache__/
 sdk/python/.pytest_cache/
 
 # Local third-party reference checkouts
+/tmp/
 /external/cc-connect/
 /external/cc-switch/
 /external/ccusage/

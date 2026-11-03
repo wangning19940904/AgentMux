@@ -23,6 +23,7 @@ import (
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/superagent"
 	ttspkg "github.com/wangning19940904/AgentMux/tts"
 )
 
@@ -53,6 +54,7 @@ type Server struct {
 	obs                *observabilityRuntime
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
+	superAgents        *superagent.Service
 	keepAwake          *keepAwakeManager
 	channelPeers       channelPeerClient
 	meetingPeers       meetingPeerClient

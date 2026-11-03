@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Provider, ProviderProbeCheck } from "../../api";
 
-export const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "traecli", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi"];
+export const TOOL_ORDER = ["claudecode", "claude-desktop", "codex", "codex-app", "traecli", "gemini", "cursor", "qoder", "opencode", "iflow", "kimi", "dsh"];
 export const DEFAULT_ROUTE_TOOLS = ["claudecode", "claude-desktop", "codex", "codex-app", "gemini"];
 export const CURATED_PRESET_IDS = [
   "traex-bridge",
@@ -675,6 +675,7 @@ export function toolLabel(tool: string) {
   if (normalized === "opencode") return "OpenCode";
   if (normalized === "qoder") return "Qoder";
   if (normalized === "iflow") return "iFlow";
+  if (normalized === "dsh") return "DeepSeek Harness";
   if (normalized === "kimi") return "Kimi";
   if (normalized === "gemini") return "Gemini";
   if (normalized === "codex") return "Codex CLI";

@@ -4,6 +4,7 @@ import type { NavigationTabID } from "./navigationSearchAliases";
 import type { AgentsPanelProps } from "./panels/agents/AgentsPanel";
 
 const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel })));
+const SuperAgentsPanel = lazy(() => import("./panels/SuperAgentsPanel").then((module) => ({ default: module.SuperAgentsPanel })));
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
@@ -22,8 +23,15 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
 };
 
-export function RegisteredPanel({ tab, ...agentProps }: { tab: NavigationTabID } & AgentsPanelProps) {
+export function RegisteredPanel({ tab, createSuperAgentRequested, onCreateSuperAgentRequestHandled, ...agentProps }: {
+  tab: NavigationTabID;
+  createSuperAgentRequested?: boolean;
+  onCreateSuperAgentRequestHandled?: () => void;
+} & AgentsPanelProps) {
   if (tab === "agents") return <AgentsPanel {...agentProps} />;
+  if (tab === "super-agents") {
+    return <SuperAgentsPanel createRequested={createSuperAgentRequested} onCreateRequestHandled={onCreateSuperAgentRequestHandled} />;
+  }
   const Panel = STATIC_PANELS[tab];
   return Panel ? <Panel /> : null;
 }

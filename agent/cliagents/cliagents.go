@@ -60,6 +60,9 @@ func init() {
 	// iFlow CLI.
 	register("iflow", "iflow", false, core.ApprovalModeManual, iflowArgs, iflowApprovalEnv, partialPlainTextMapper, true)
 
+	// DeepSeek Harness: headless profile with newline-delimited run events.
+	registerDSH()
+
 	// Kimi CLI.
 	register("kimi", "kimi", false, core.ApprovalModeAuto, func(p, _, _, _ string) []string {
 		return []string{"-p", p, "--output-format", "stream-json"}
