@@ -4,7 +4,7 @@
 import AppKit
 import Darwin
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let client = UsageClient()
     private var timer: Timer?
@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusButton()
 
         let menu = NSMenu()
+        menu.delegate = self
         menu.addItem(NSMenuItem(title: "Refreshing…", action: nil, keyEquivalent: ""))
         statusItem.menu = menu
 
@@ -161,6 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu(report: UsageReport?) {
         let menu = NSMenu()
+        menu.delegate = self
         if let report = report {
             let t = report.totals
             if settings.show_cost {
@@ -183,10 +185,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(NSMenuItem(title: "Start: amux serve", action: nil, keyEquivalent: ""))
         }
         menu.addItem(NSMenuItem.separator())
-        if parentPID != nil {
-            menu.addItem(NSMenuItem(title: "Show AgentMux",
-                                    action: #selector(showAgentMux), keyEquivalent: "o"))
-        }
         menu.addItem(NSMenuItem(title: "Open WebUI",
                                 action: #selector(openWeb), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Quit",
@@ -267,7 +265,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return fmt.string(from: NSNumber(value: value)) ?? String(format: "%.\(fraction)f", value)
     }
 
-    @objc private func showAgentMux() {
+    func menuWillOpen(_ menu: NSMenu) {
+        // Reuse the desktop reopen path so a closed or minimised window is
+        // restored whenever the status menu is opened, even without the daemon.
+        guard parentPID != nil else { return }
+        showAgentMux()
+    }
+
+    private func showAgentMux() {
         if let bundlePath = ProcessInfo.processInfo.environment["AMUX_APP_BUNDLE"],
            NSWorkspace.shared.open(URL(fileURLWithPath: bundlePath)) {
             return
