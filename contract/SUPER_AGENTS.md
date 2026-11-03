@@ -26,8 +26,8 @@ The router reads untrusted text, so nothing depends on the model behaving:
 
 - **Allowed senders** are checked before the router sees an event, and an empty
   list admits nobody. `*` is accepted only for Feishu messages.
-- **A decision** can only name a worker on this Super Agent's roster, `auto` when
-  auto workers are on, and a Ticket already on the event's thread.
+- **A decision** can only name a worker on this Super Agent's roster, `auto:<framework>`
+  for one of its worker frameworks, and a Ticket already on the event's thread.
 - **The router Agent** must run on this machine and cannot use the `yolo` approval
   mode. Choosing a framework creates a router in `plan` mode, so a framework without
   a read-only mode, such as Kimi, cannot route. An existing Agent can be chosen instead.
@@ -80,26 +80,31 @@ the verified SSH tunnel:
 
 ### Auto workers
 
-With auto workers on, the roster can be empty. The router names `auto` when no listed
-worker suits a request, and the host starts a worker that was not configured in advance:
+With auto workers on, the roster can be empty. `worker_runtimes` lists one or more
+installed frameworks to launch workers with, and defaults to the router's. The roster
+offers `auto:<framework>` for each; the router names one when no listed worker suits a
+request, and the host starts a worker of that framework that was not configured in advance:
 
 - Each Ticket gets its own session and, in a git repository, its own worktree under
   `<repo>.agentmux-worktrees`. Outside a repository, Tickets share the directory.
-- A decision supplies only the Ticket's title and instructions. The runtime, provider,
-  model and environment come from the router Agent. The directory is `auto_worker_dir`,
-  or an existing router Agent's, or else `~/.agentmux/super-agents/<id>/work`. The approval
-  mode is `auto_worker_approval_mode`, by default `auto_edit`, or `auto` on a framework
-  without it. MCP servers, skills and channels are not inherited.
+- A decision supplies only the framework, the Ticket's title and instructions. A worker on
+  the router Agent's framework takes its provider, model and environment; another framework
+  uses its active provider route. Workers need no read-only mode, so Kimi can work but not
+  route. The directory is `auto_worker_dir`, or an existing router Agent's, or else
+  `~/.agentmux/super-agents/<id>/work`. The approval mode is `auto_worker_approval_mode`,
+  which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
+  where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
 - `max_concurrency` limits how many run at once. Auto workers run on this machine only.
-- They share one Agent instance, `saw_<super agent id>`, removed with the Super Agent.
-  Worktrees are kept after a Ticket ends.
+- Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
+  with the Super Agent. Worktrees are kept after a Ticket ends.
 
 ## Choosing a framework
 
 `router_runtime` names an installed framework, and no Agent has to exist first. The host
 keeps one router Agent per framework, `sar_<framework>`, and uses the framework's active
 provider route. It is shared between Super Agents and stays when one is deleted. Its
-provider or model can be changed on the Agents page, and those changes are kept.
+provider or model can be changed on the Agents page, and those changes are kept. Worker
+frameworks are chosen separately, under [Auto workers](#auto-workers).
 
 ## Setup assistant
 
@@ -111,7 +116,8 @@ configuration, using the router Agent:
 - Secrets and `trust_from_header` are never sent to or accepted from the model. The
   response names the secrets the form must collect. Secrets pasted into an instruction
   would reach the model, so the form asks people not to.
-- It cannot change the router, the roster, or the auto worker approval mode.
+- It cannot change the router, the roster, the worker frameworks, or the auto worker
+  approval mode.
 
 ## API
 

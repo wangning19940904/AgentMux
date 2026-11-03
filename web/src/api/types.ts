@@ -1380,6 +1380,7 @@ export interface SuperAgent {
   max_concurrency: number;
   workers: SuperAgentWorker[];
   auto_workers?: boolean;
+  worker_runtimes?: string[];
   auto_worker_dir?: string;
   auto_worker_approval_mode?: string;
   sources: SuperAgentSource[];

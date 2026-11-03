@@ -58,9 +58,11 @@ type SuperAgent struct {
 	MaxConcurrency int                `json:"max_concurrency"`
 	Workers        []SuperAgentWorker `json:"workers"`
 	// AutoWorkers lets the router launch a worker for a Ticket when none on the
-	// roster suits it. AutoWorkerDir and AutoWorkerApprovalMode are the
-	// operator's limits for those workers; a router decision cannot set them.
+	// roster suits it. WorkerRuntimes are the frameworks it may launch one with,
+	// and default to the router's. AutoWorkerDir and AutoWorkerApprovalMode are
+	// the operator's limits for those workers; a router decision cannot set them.
 	AutoWorkers            bool               `json:"auto_workers,omitempty"`
+	WorkerRuntimes         []string           `json:"worker_runtimes,omitempty"`
 	AutoWorkerDir          string             `json:"auto_worker_dir,omitempty"`
 	AutoWorkerApprovalMode string             `json:"auto_worker_approval_mode,omitempty"`
 	Sources                []SuperAgentSource `json:"sources"`

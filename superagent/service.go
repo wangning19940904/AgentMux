@@ -59,6 +59,7 @@ type Store interface {
 	GetAgentInstance(context.Context, string) (*core.AgentInstance, error)
 	UpsertAgentInstance(context.Context, *core.AgentInstance) error
 	DeleteAgentInstance(context.Context, string) error
+	ListAgentInstances(context.Context) ([]core.AgentInstance, error)
 	ListChannels(context.Context) ([]core.Channel, error)
 }
 
@@ -327,6 +328,7 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFiltered, "super agent is disabled", "")
 		return
 	}
+	*agent = s.withWorkerRuntimes(ctx, *agent)
 	tickets, err := s.store.ListSuperAgentThreadTickets(ctx, agent.ID, trigger.ThreadKey)
 	if err != nil {
 		s.log.Error("load thread tickets", "thread", trigger.ThreadKey, "err", err)
@@ -462,8 +464,8 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
-	if workerID == autoWorkerID {
-		return s.launchAutoWorker(ctx, agent)
+	if runtimeID, ok := strings.CutPrefix(workerID, autoWorkerID+":"); ok {
+		return s.launchAutoWorker(ctx, agent, runtimeID)
 	}
 	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID })
 	if index < 0 {

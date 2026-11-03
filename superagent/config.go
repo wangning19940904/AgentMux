@@ -24,7 +24,7 @@ func (s *Service) List(ctx context.Context) ([]core.SuperAgent, error) {
 		return nil, err
 	}
 	for index := range agents {
-		agents[index] = redactAgent(agents[index])
+		agents[index] = redactAgent(s.withWorkerRuntimes(ctx, agents[index]))
 	}
 	return agents, nil
 }
@@ -64,7 +64,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteSuperAgent(ctx, id); err != nil {
 		return err
 	}
-	if err := s.store.DeleteAgentInstance(ctx, autoWorkerAgentID(id)); err != nil {
+	if err := s.deleteAutoWorkers(ctx, id); err != nil {
 		return err
 	}
 	return s.refreshClaims(ctx)
@@ -110,7 +110,7 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if err := s.normalizeWorkers(ctx, agent); err != nil {
 		return err
 	}
-	if err := normalizeAutoWorkers(agent, router); err != nil {
+	if err := s.normalizeAutoWorkers(agent, router); err != nil {
 		return err
 	}
 	return normalizeSources(agent, existing)
@@ -136,20 +136,34 @@ func (s *Service) validateRouter(ctx context.Context, id string) (*core.AgentIns
 	return router, nil
 }
 
-func normalizeAutoWorkers(agent *core.SuperAgent, router *core.AgentInstance) error {
+// normalizeAutoWorkers checks the worker frameworks. Workers need no read-only
+// mode, so a framework that cannot route, such as Kimi, can still work. An empty
+// approval mode gives each framework its own default.
+func (s *Service) normalizeAutoWorkers(agent *core.SuperAgent, router *core.AgentInstance) error {
 	agent.AutoWorkerDir = strings.TrimSpace(agent.AutoWorkerDir)
 	agent.AutoWorkerApprovalMode = strings.TrimSpace(agent.AutoWorkerApprovalMode)
 	if !agent.AutoWorkers {
+		agent.WorkerRuntimes = nil
 		return nil
 	}
-	if agent.AutoWorkerApprovalMode == "" {
-		agent.AutoWorkerApprovalMode = defaultAutoWorkerApproval(router.RuntimeID)
+	agent.WorkerRuntimes = normalizeActors(agent.WorkerRuntimes)
+	if len(agent.WorkerRuntimes) == 0 {
+		agent.WorkerRuntimes = []string{router.RuntimeID}
 	}
-	if err := validateAutoWorkerApproval(agent.AutoWorkerApprovalMode); err != nil {
-		return err
+	mode := agent.AutoWorkerApprovalMode
+	if mode != "" {
+		if err := validateAutoWorkerApproval(mode); err != nil {
+			return err
+		}
 	}
-	if modes := core.ApprovalModeValuesForRuntime(router.RuntimeID); len(modes) > 0 && !core.ApprovalModeSupported(router.RuntimeID, agent.AutoWorkerApprovalMode) {
-		return fmt.Errorf("approval mode %q is not supported by %s", agent.AutoWorkerApprovalMode, router.RuntimeID)
+	for _, runtimeID := range agent.WorkerRuntimes {
+		// The router's own framework already runs here.
+		if runtimeID != router.RuntimeID && s.runtimeAvailable != nil && !s.runtimeAvailable(runtimeID) {
+			return fmt.Errorf("worker framework %q is not installed on this machine", runtimeID)
+		}
+		if modes := core.ApprovalModeValuesForRuntime(runtimeID); mode != "" && len(modes) > 0 && !core.ApprovalModeSupported(runtimeID, mode) {
+			return fmt.Errorf("approval mode %q is not supported by %s; choose another, or leave it empty for each framework's default", mode, runtimeID)
+		}
 	}
 	return validateAutoWorkerDir(agent.AutoWorkerDir)
 }
@@ -173,8 +187,8 @@ func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) 
 			return fmt.Errorf("worker %q is listed twice", worker.AgentID)
 		}
 		seen[key] = true
-		if worker.ID == autoWorkerID {
-			return fmt.Errorf("worker id %q is reserved", autoWorkerID)
+		if isAutoWorkerID(worker.ID) {
+			return fmt.Errorf("worker id %q is reserved", worker.ID)
 		}
 		if worker.ID == "" {
 			worker.ID = "wrk_" + uuid.NewString()

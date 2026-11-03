@@ -5,7 +5,7 @@ import type { AgentInstance, SuperAgent, SuperAgentSetupResult, SuperAgentSource
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems } from "./superAgentModel";
+import { SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -90,7 +90,9 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
 
                 <h4>{t("superAgents.workers")}</h4>
                 <div className="super-agent-chips">
-                  {selected.auto_workers && <span className="super-agent-chip"><i className="online" />{t("superAgents.autoWorkersOn")}</span>}
+                  {selected.auto_workers && (selected.worker_runtimes ?? []).map((runtime) => (
+                    <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{t("superAgents.autoWorkersOn")}</small></span>
+                  ))}
                   {selected.workers.map((worker) => {
                     const status = activity.data?.workers?.find((item) => item.worker_id === worker.id);
                     return (
@@ -219,6 +221,12 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   const localAgents = useMemo(() => (agents.data ?? []).filter((agent) => isLocalTarget(agent.target_id) && agent.source !== "super_agent"), [agents.data]);
   const feishuChannels = useMemo(() => (channels.data ?? []).filter((channel) => isLocalTarget(channel.target_id) && (channel.type === "feishu" || channel.type === "lark")), [channels.data]);
   const installedFrameworks = useMemo(() => (frameworks.data?.frameworks ?? []).filter((item) => item.installed && item.spec.supported && item.registered && isLocalTarget(item.target_id)), [frameworks.data]);
+  const workerRuntimes = draft.worker_runtimes ?? [];
+  // A chosen framework stays visible even when it is no longer detected here.
+  const workerFrameworks = [
+    ...installedFrameworks.map((item) => ({ kind: item.spec.kind, display: item.spec.display })),
+    ...workerRuntimes.filter((kind) => !installedFrameworks.some((item) => item.spec.kind === kind)).map((kind) => ({ kind, display: kind })),
+  ];
   const [instruction, setInstruction] = useState("");
   const problems = [...superAgentProblems(draft), ...(instruction.trim() ? ["superAgents.problem.pendingInstruction"] : [])];
   const [assisting, setAssisting] = useState(false);
@@ -256,6 +264,13 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
     for (const hostID of new Set(hostIDs.split("|"))) void loadRemoteAgents(hostID);
   }, [hostIDs, loadRemoteAgents]);
 
+  // Until any worker is chosen, workers start out on the router's framework.
+  const chooseRouter = (patch: Partial<SuperAgent>, runtime?: string) => {
+    const next = { ...draft, ...patch };
+    onChange(runtime && workerRuntimes.length === 0 && draft.workers.length === 0 ? withWorkerRuntimes(next, [runtime]) : next);
+  };
+  const toggleWorkerRuntime = (kind: string, checked: boolean) =>
+    onChange(withWorkerRuntimes(draft, checked ? [...workerRuntimes, kind] : workerRuntimes.filter((item) => item !== kind)));
   const updateWorker = (index: number, patch: Partial<SuperAgentWorker>) =>
     onChange({ ...draft, workers: draft.workers.map((worker, position) => position === index ? { ...worker, ...patch } : worker) });
   const updateSource = (index: number, patch: Partial<SuperAgentSource>) =>
@@ -278,12 +293,25 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
         </div>
         <div className="surface-body provider-builder-body agent-drawer-body super-agent-form">
           <label className="field"><span>{t("superAgents.framework")}</span>
-            <select value={draft.router_runtime ?? ""} onChange={(event) => onChange({ ...draft, router_runtime: event.target.value, router_agent_id: "" })}>
+            <select value={draft.router_runtime ?? ""} onChange={(event) => chooseRouter({ router_runtime: event.target.value, router_agent_id: "" }, event.target.value)}>
               <option value="">{t(draft.router_agent_id ? "superAgents.usingExistingAgent" : "superAgents.chooseFramework")}</option>
               {installedFrameworks.map((item) => <option key={item.spec.kind} value={item.spec.kind}>{item.spec.display}</option>)}
             </select>
             <small>{t(!frameworks.loading && installedFrameworks.length === 0 ? "superAgents.noFramework" : "superAgents.frameworkHelp")}</small>
           </label>
+
+          <div className="field" role="group" aria-labelledby="super-agent-worker-frameworks">
+            <span id="super-agent-worker-frameworks">{t("superAgents.workerFrameworks")}</span>
+            <div className="super-agent-chips">
+              {workerFrameworks.map((item) => (
+                <label key={item.kind} className="super-agent-chip super-agent-toggle">
+                  <input type="checkbox" checked={workerRuntimes.includes(item.kind)} onChange={(event) => toggleWorkerRuntime(item.kind, event.target.checked)} />
+                  {item.display}
+                </label>
+              ))}
+            </div>
+            <small>{t("superAgents.workerFrameworksHelp")}</small>
+          </div>
 
           <label className="field"><span>{t("superAgents.instruction")}</span>
             <textarea rows={4} placeholder={t("superAgents.instructionPlaceholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
@@ -326,7 +354,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             <summary>{t("superAgents.advanced")}</summary>
             <div className="super-agent-form">
           <label className="field"><span>{t("superAgents.router")}</span>
-            <select value={draft.router_runtime ? "" : draft.router_agent_id} onChange={(event) => onChange({ ...draft, router_agent_id: event.target.value, router_runtime: "" })}>
+            <select value={draft.router_runtime ? "" : draft.router_agent_id} onChange={(event) => chooseRouter({ router_agent_id: event.target.value, router_runtime: "" }, localAgents.find((agent) => agent.id === event.target.value)?.runtime_id)}>
               <option value="">{t("superAgents.chooseAgent")}</option>
               {localAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} ({agent.runtime_id})</option>)}
             </select>
@@ -346,13 +374,12 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
           </div>
           <label className="super-agent-check"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} /> {t("common.enabled")}</label>
 
-          <label className="super-agent-check"><input type="checkbox" checked={Boolean(draft.auto_workers)} onChange={(event) => onChange({ ...draft, auto_workers: event.target.checked })} /> {t("superAgents.autoWorkers")}</label>
-          <p className="muted">{t("superAgents.autoWorkersHelp")}</p>
           {draft.auto_workers && (
             <div className="field-grid">
               <label className="field"><span>{t("superAgents.autoWorkerDir")}</span><input placeholder={t("superAgents.autoWorkerDirPlaceholder")} value={draft.auto_worker_dir ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_dir: event.target.value })} /></label>
               <label className="field"><span>{t("superAgents.autoWorkerApproval")}</span>
-                <select value={draft.auto_worker_approval_mode || "auto_edit"} onChange={(event) => onChange({ ...draft, auto_worker_approval_mode: event.target.value })}>
+                <select value={draft.auto_worker_approval_mode ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_approval_mode: event.target.value })}>
+                  <option value="">{t("superAgents.autoWorkerApprovalDefault")}</option>
                   <option value="auto_edit">auto_edit</option>
                   <option value="auto">auto</option>
                   <option value="yolo">yolo</option>

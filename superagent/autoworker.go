@@ -5,20 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// autoWorkerID is the worker a router names to have a new one launched. It is
-// not a roster entry, so normalizeWorkers keeps it reserved.
+// autoWorkerID prefixes the workers a router names to have a new one launched,
+// one per worker framework, as in "auto:codex". They are not roster entries, so
+// normalizeWorkers keeps the prefix reserved.
 const autoWorkerID = "auto"
 
 const autoWorkerAgentSource = "super_agent"
 
-const autoWorkerGuidance = "Launches a new worker on this machine with its own session and directory. Choose it when no worker above suits the work."
+const autoWorkerGuidance = "Launches a new %s worker on this machine with its own session and directory. Choose it when no worker above suits the work."
 
-func autoWorkerAgentID(superAgentID string) string { return "saw_" + superAgentID }
+func autoWorkerRosterID(runtimeID string) string { return autoWorkerID + ":" + runtimeID }
+
+func isAutoWorkerID(id string) bool {
+	return id == autoWorkerID || strings.HasPrefix(id, autoWorkerID+":")
+}
+
+// autoWorkerAgentID names the Agent instance that runs a Super Agent's auto
+// workers of one framework.
+func autoWorkerAgentID(superAgentID, runtimeID string) string {
+	return "saw_" + superAgentID + "_" + runtimeID
+}
 
 // IsManagedAgent reports whether a Super Agent owns this Agent instance.
 func IsManagedAgent(agent core.AgentInstance) bool { return agent.Source == autoWorkerAgentSource }
@@ -33,15 +45,18 @@ func validateAutoWorkerApproval(mode string) error {
 }
 
 // launchAutoWorker gives a new Ticket a worker that was not configured in
-// advance. A decision can ask for one, but everything that determines what it
-// may do comes from the operator: the runtime, provider and environment of the
-// router Agent, and the Super Agent's directory and approval mode. Tools and
-// channels are not inherited. Each Ticket has its own conversation, and so its
-// own session and, in a git repository, its own worktree. MaxConcurrency bounds
-// how many run at once.
-func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent) (core.SuperAgentWorker, error) {
+// advance. A decision can ask for one of the worker frameworks, but everything
+// that determines what it may do comes from the operator: the Super Agent's
+// directory and approval mode, and for the router's own framework, the router
+// Agent's provider and environment. Tools and channels are not inherited. Each
+// Ticket has its own conversation, and so its own session and, in a git
+// repository, its own worktree. MaxConcurrency bounds how many run at once.
+func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, runtimeID string) (core.SuperAgentWorker, error) {
 	if !agent.AutoWorkers {
 		return core.SuperAgentWorker{}, errors.New("router chose to launch a worker, which this Super Agent does not allow")
+	}
+	if !slices.Contains(agent.WorkerRuntimes, runtimeID) {
+		return core.SuperAgentWorker{}, fmt.Errorf("router chose to launch a %q worker, which is not one of this Super Agent's worker frameworks", runtimeID)
 	}
 	router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
 	if err != nil {
@@ -54,7 +69,7 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent) (
 	if err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	id := autoWorkerAgentID(agent.ID)
+	id := autoWorkerAgentID(agent.ID, runtimeID)
 	now := s.now().UTC()
 	createdAt := now
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -64,21 +79,49 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent) (
 	if existing != nil {
 		createdAt = existing.CreatedAt
 	}
-	name := agent.Name + " auto worker"
+	name := fmt.Sprintf("%s auto worker (%s)", agent.Name, runtimeID)
 	instance := core.AgentInstance{
-		ID: id, Name: name, RuntimeID: router.RuntimeID, SessionBackend: router.SessionBackend,
+		ID: id, Name: name, RuntimeID: runtimeID, SessionBackend: "structured",
 		WorkDir: workDir, WorkspaceMode: autoWorkerWorkspaceMode(ctx, workDir),
-		ProviderTool: router.ProviderTool, ProviderID: router.ProviderID, ProviderName: router.ProviderName,
-		DefaultModel: router.DefaultModel, DefaultReasoningEffort: router.DefaultReasoningEffort, DefaultServiceTier: router.DefaultServiceTier,
-		DefaultApprovalMode: firstNonEmpty(agent.AutoWorkerApprovalMode, defaultAutoWorkerApproval(router.RuntimeID)),
-		Env:                 router.Env, Enabled: true, Source: autoWorkerAgentSource,
+		DefaultApprovalMode: firstNonEmpty(agent.AutoWorkerApprovalMode, defaultAutoWorkerApproval(runtimeID)),
+		Enabled:             true, Source: autoWorkerAgentSource,
 		OwnerTenantID: router.OwnerTenantID, OwnerTenantName: router.OwnerTenantName, Visibility: router.Visibility,
 		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	// The router's provider, model and environment belong to its framework.
+	// Another framework uses its own active provider route.
+	if runtimeID == router.RuntimeID {
+		instance.SessionBackend = router.SessionBackend
+		instance.ProviderTool, instance.ProviderID, instance.ProviderName = router.ProviderTool, router.ProviderID, router.ProviderName
+		instance.DefaultModel, instance.DefaultReasoningEffort, instance.DefaultServiceTier = router.DefaultModel, router.DefaultReasoningEffort, router.DefaultServiceTier
+		instance.Env = router.Env
 	}
 	if err := s.store.UpsertAgentInstance(ctx, &instance); err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	return core.SuperAgentWorker{ID: autoWorkerID, Label: name, AgentID: id}, nil
+	return core.SuperAgentWorker{ID: autoWorkerRosterID(runtimeID), Label: name, AgentID: id}, nil
+}
+
+// deleteAutoWorkers removes the Agent instances a Super Agent launched, including
+// those of frameworks no longer on its list and the single instance used before
+// worker frameworks could be chosen.
+func (s *Service) deleteAutoWorkers(ctx context.Context, superAgentID string) error {
+	instances, err := s.store.ListAgentInstances(ctx)
+	if err != nil {
+		return err
+	}
+	prefix := autoWorkerAgentID(superAgentID, "")
+	for _, instance := range instances {
+		runtimeID, found := strings.CutPrefix(instance.ID, prefix)
+		owned := instance.ID == "saw_"+superAgentID || (found && runtimeID == instance.RuntimeID)
+		if !IsManagedAgent(instance) || !owned {
+			continue
+		}
+		if err := s.store.DeleteAgentInstance(ctx, instance.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // autoWorkerWorkspaceMode isolates parallel Tickets wherever git allows it.

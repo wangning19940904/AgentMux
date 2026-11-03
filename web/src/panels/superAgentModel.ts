@@ -47,8 +47,13 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
 export function newSuperAgent(): SuperAgent {
   return {
     id: "", name: "", router_agent_id: "", mode: "observe", max_concurrency: 2,
-    workers: [], auto_workers: true, sources: [], enabled: true,
+    workers: [], auto_workers: false, worker_runtimes: [], sources: [], enabled: true,
   };
+}
+
+// Auto workers are on exactly when at least one worker framework is chosen.
+export function withWorkerRuntimes(agent: SuperAgent, runtimes: string[]): SuperAgent {
+  return { ...agent, worker_runtimes: runtimes, auto_workers: runtimes.length > 0 };
 }
 
 export function newWorker(): SuperAgentWorker {

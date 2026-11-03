@@ -79,6 +79,18 @@ func (s *Service) ensureManagedRouter(ctx context.Context, runtimeID string) (st
 	return id, nil
 }
 
+// withWorkerRuntimes gives a Super Agent saved before worker frameworks could be
+// chosen the router's framework, which its auto workers used then.
+func (s *Service) withWorkerRuntimes(ctx context.Context, agent core.SuperAgent) core.SuperAgent {
+	if !agent.AutoWorkers || len(agent.WorkerRuntimes) > 0 {
+		return agent
+	}
+	if router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID); err == nil && router != nil {
+		agent.WorkerRuntimes = []string{router.RuntimeID}
+	}
+	return agent
+}
+
 // defaultAutoWorkerApproval is the least permissive unattended mode the
 // framework has, since frameworks differ in which modes they offer.
 func defaultAutoWorkerApproval(runtimeID string) string {

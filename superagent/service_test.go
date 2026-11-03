@@ -178,6 +178,15 @@ func (m *memoryStore) DeleteAgentInstance(_ context.Context, id string) error {
 	delete(m.local, id)
 	return nil
 }
+func (m *memoryStore) ListAgentInstances(context.Context) ([]core.AgentInstance, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]core.AgentInstance, 0, len(m.local))
+	for _, agent := range m.local {
+		out = append(out, agent)
+	}
+	return out, nil
+}
 func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
 	return []core.Channel{{ID: "c1", Name: "Team bot", Type: "feishu"}, {ID: "c2", Name: "Slack bot", Type: "slack"}}, nil
 }

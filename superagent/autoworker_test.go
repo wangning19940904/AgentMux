@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,20 +30,20 @@ func (h *harness) enableAutoWorkers(workDir string) {
 func TestRouterLaunchesAWorkerNoOneConfigured(t *testing.T) {
 	h := newHarness(t)
 	h.enableAutoWorkers(t.TempDir())
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "first job", true)
 	h.ingest("alice", "github:o/r#2", "second job", true)
 	h.settle()
 
-	if !strings.Contains(h.router.prompts[0], `"id": "auto"`) {
+	if !strings.Contains(h.router.prompts[0], `"id": "auto:dsh"`) {
 		t.Fatalf("the roster must offer a new worker:\n%s", h.router.prompts[0])
 	}
 	if h.workers.callCount() != 2 {
 		t.Fatalf("worker calls = %d", h.workers.callCount())
 	}
 	tickets := h.store.allTickets()
-	id := autoWorkerAgentID(h.agent.ID)
-	if tickets[0].Worker.AgentID != id || tickets[1].Worker.AgentID != id || tickets[0].Worker.ID != autoWorkerID {
+	id := autoWorkerAgentID(h.agent.ID, "dsh")
+	if tickets[0].Worker.AgentID != id || tickets[1].Worker.AgentID != id || tickets[0].Worker.ID != "auto:dsh" {
 		t.Fatalf("tickets = %+v", tickets)
 	}
 	if tickets[0].ConversationID == tickets[1].ConversationID {
@@ -68,11 +69,11 @@ func TestRouterDecisionCannotSetWhatAnAutoWorkerMayDo(t *testing.T) {
 	dir := t.TempDir()
 	h.enableAutoWorkers(dir)
 	h.router.answer = func(core.InvocationRequest) (string, error) {
-		return `{"decision":"accept","worker_id":"auto","title":"x","approval_mode":"yolo","default_approval_mode":"yolo","work_dir":"/etc","env":{"A":"b"},"host_id":"host-1"}`, nil
+		return `{"decision":"accept","worker_id":"auto:dsh","title":"x","approval_mode":"yolo","default_approval_mode":"yolo","work_dir":"/etc","env":{"A":"b"},"host_id":"host-1"}`, nil
 	}
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
-	worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID))
+	worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID, "dsh"))
 	if worker.DefaultApprovalMode != core.ApprovalModeAutoEdit || worker.WorkDir != dir || worker.Env["A"] != "" {
 		t.Fatalf("worker = %+v", worker)
 	}
@@ -87,10 +88,10 @@ func TestAutoWorkerUsesOperatorLimits(t *testing.T) {
 	dir := t.TempDir()
 	h.agent.AutoWorkerDir, h.agent.AutoWorkerApprovalMode = dir, core.ApprovalModeYolo
 	h.store.agents[h.agent.ID] = h.agent
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
-	worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID))
+	worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID, "dsh"))
 	if worker.WorkDir != dir || worker.DefaultApprovalMode != core.ApprovalModeYolo {
 		t.Fatalf("worker = %+v", worker)
 	}
@@ -112,16 +113,16 @@ func TestAutoWorkerIsolatesTicketsInAGitRepository(t *testing.T) {
 
 func TestAutoWorkersOffRefusesTheLaunch(t *testing.T) {
 	h := newHarness(t)
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
-	if strings.Contains(h.router.prompts[0], `"id": "auto"`) {
+	if strings.Contains(h.router.prompts[0], `"id": "auto`) {
 		t.Fatalf("the roster must not offer a new worker:\n%s", h.router.prompts[0])
 	}
 	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
 		t.Fatal("a refused launch must not run work")
 	}
-	if worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID)); worker != nil {
+	if worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID, "dsh")); worker != nil {
 		t.Fatalf("worker = %+v", worker)
 	}
 	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionFailed {
@@ -137,10 +138,10 @@ func TestObserveModeLaunchesNothing(t *testing.T) {
 	h.enableAutoWorkers(t.TempDir())
 	h.agent.Mode = core.SuperAgentModeObserve
 	h.store.agents[h.agent.ID] = h.agent
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
-	if worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID)); worker != nil || h.workers.callCount() != 0 {
+	if worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID, "dsh")); worker != nil || h.workers.callCount() != 0 {
 		t.Fatalf("worker = %+v, calls = %d", worker, h.workers.callCount())
 	}
 }
@@ -150,7 +151,7 @@ func TestConcurrencyLimitAppliesToAutoWorkers(t *testing.T) {
 	h.enableAutoWorkers(t.TempDir())
 	h.agent.MaxConcurrency = 1
 	h.store.agents[h.agent.ID] = h.agent
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	release := make(chan struct{})
 	h.workers.run = func(context.Context, workerCall) (string, error) {
 		<-release
@@ -185,13 +186,14 @@ func TestSaveAutoWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Name != "router" || saved.AutoWorkerApprovalMode != core.ApprovalModeAutoEdit || saved.Mode != core.SuperAgentModeObserve {
+	if saved.Name != "router" || !slices.Equal(saved.WorkerRuntimes, []string{"dsh"}) || saved.AutoWorkerApprovalMode != "" || saved.Mode != core.SuperAgentModeObserve {
 		t.Fatalf("saved = %+v", saved)
 	}
 	for name, agent := range map[string]core.SuperAgent{
 		"manual approval": {RouterAgentID: "router", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeManual},
 		"plan approval":   {RouterAgentID: "router", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModePlan},
 		"reserved id":     {RouterAgentID: "router", AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto", AgentID: "coder"}}},
+		"reserved prefix": {RouterAgentID: "router", AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto:dsh", AgentID: "coder"}}},
 		"no workers":      {RouterAgentID: "router"},
 	} {
 		if _, err := h.service.Save(ctx, agent); err == nil {
@@ -219,17 +221,17 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 	if router == nil || !IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModePlan || router.WorkDir == "" {
 		t.Fatalf("router = %+v", router)
 	}
-	if saved.Name != "Super Agent (codex)" || saved.AutoWorkerApprovalMode != core.ApprovalModeAutoEdit {
+	if saved.Name != "Super Agent (codex)" || !slices.Equal(saved.WorkerRuntimes, []string{"codex"}) {
 		t.Fatalf("saved = %+v", saved)
 	}
 	stored, _ := h.store.GetSuperAgent(ctx, saved.ID)
 	h.agent = *stored
 	h.source = core.SuperAgentSource{ID: "gh", Kind: core.SuperAgentSourceGitHub, Enabled: true, AllowedActors: []string{"alice"}}
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:codex"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
-	worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(saved.ID))
-	if worker == nil || worker.RuntimeID != "codex" || worker.WorkDir == router.WorkDir || !strings.Contains(worker.WorkDir, saved.ID) {
+	worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(saved.ID, "codex"))
+	if worker == nil || worker.RuntimeID != "codex" || worker.DefaultApprovalMode != core.ApprovalModeAutoEdit || worker.WorkDir == router.WorkDir || !strings.Contains(worker.WorkDir, saved.ID) {
 		t.Fatalf("workers must not share the router's scratch directory: %+v", worker)
 	}
 	if info, err := os.Stat(worker.WorkDir); err != nil || !info.IsDir() {
@@ -290,14 +292,13 @@ func TestFrameworkRouterRefusals(t *testing.T) {
 }
 
 func TestDefaultApprovalFitsTheFramework(t *testing.T) {
+	if mode := defaultAutoWorkerApproval("cursor"); mode != core.ApprovalModeAuto {
+		t.Errorf("cursor = %q", mode)
+	}
+	if mode := defaultAutoWorkerApproval("codex"); mode != core.ApprovalModeAutoEdit {
+		t.Errorf("codex = %q", mode)
+	}
 	h := newHarness(t)
-	saved, err := h.service.Save(context.Background(), core.SuperAgent{RouterRuntime: "cursor", AutoWorkers: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.AutoWorkerApprovalMode != core.ApprovalModeAuto {
-		t.Fatalf("approval = %q", saved.AutoWorkerApprovalMode)
-	}
 	if _, err := h.service.Save(context.Background(), core.SuperAgent{RouterRuntime: "cursor", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeAutoEdit}); err == nil {
 		t.Fatal("a mode the framework lacks must be refused")
 	}
@@ -319,11 +320,11 @@ func TestAutoWorkerDirExpandsHome(t *testing.T) {
 func TestDeleteRemovesTheManagedWorker(t *testing.T) {
 	h := newHarness(t)
 	h.enableAutoWorkers(t.TempDir())
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto"), nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
 	ctx := context.Background()
-	id := autoWorkerAgentID(h.agent.ID)
+	id := autoWorkerAgentID(h.agent.ID, "dsh")
 	if worker, _ := h.store.GetAgentInstance(ctx, id); worker == nil {
 		t.Fatal("expected a managed worker")
 	}
@@ -332,5 +333,102 @@ func TestDeleteRemovesTheManagedWorker(t *testing.T) {
 	}
 	if worker, _ := h.store.GetAgentInstance(ctx, id); worker != nil {
 		t.Fatalf("worker = %+v", worker)
+	}
+}
+
+func TestSaveWorkerFrameworks(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.service.runtimeAvailable = func(id string) bool { return id != "gemini" }
+	// Kimi cannot route, since it has no read-only mode, but it can work.
+	saved, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, WorkerRuntimes: []string{" kimi ", "cursor", "kimi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(saved.WorkerRuntimes, []string{"kimi", "cursor"}) || saved.AutoWorkerApprovalMode != "" {
+		t.Fatalf("saved = %+v", saved)
+	}
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, WorkerRuntimes: []string{"gemini"}}); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, WorkerRuntimes: []string{"codex", "cursor"}, AutoWorkerApprovalMode: core.ApprovalModeAutoEdit}); err == nil || !strings.Contains(err.Error(), "cursor") {
+		t.Errorf("a mode one worker framework lacks must be refused: %v", err)
+	}
+	off, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", WorkerRuntimes: []string{"kimi"}, Workers: []core.SuperAgentWorker{{AgentID: "coder"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(off.WorkerRuntimes) != 0 {
+		t.Fatalf("worker frameworks must be cleared with auto workers off: %+v", off.WorkerRuntimes)
+	}
+}
+
+func TestRouterChoosesAmongWorkerFrameworks(t *testing.T) {
+	h := newHarness(t)
+	h.enableAutoWorkers(t.TempDir())
+	h.agent.WorkerRuntimes = []string{"dsh", "kimi"}
+	h.store.agents[h.agent.ID] = h.agent
+	h.router.answer = func(request core.InvocationRequest) (string, error) {
+		if strings.Contains(request.Input, "use kimi") {
+			return acceptAnswer("auto:kimi"), nil
+		}
+		return acceptAnswer("auto:codex"), nil
+	}
+	h.ingest("alice", "github:o/r#1", "use kimi", true)
+	h.settle()
+	h.ingest("alice", "github:o/r#2", "use codex", true)
+	h.settle()
+
+	for _, entry := range []string{`"id": "auto:dsh"`, `"id": "auto:kimi"`, "Launches a new kimi worker"} {
+		if !strings.Contains(h.router.prompts[0], entry) {
+			t.Fatalf("the roster must offer %s:\n%s", entry, h.router.prompts[0])
+		}
+	}
+	tickets := h.store.allTickets()
+	id := autoWorkerAgentID(h.agent.ID, "kimi")
+	if len(tickets) != 1 || tickets[0].Worker.ID != "auto:kimi" || tickets[0].Worker.AgentID != id {
+		t.Fatalf("tickets = %+v", tickets)
+	}
+	if trigger := h.disposition(1); trigger.Disposition != core.SuperAgentDispositionFailed {
+		t.Fatalf("a framework that is not on the list must be refused: %+v", trigger)
+	}
+	ctx := context.Background()
+	worker, _ := h.store.GetAgentInstance(ctx, id)
+	if worker == nil || worker.RuntimeID != "kimi" || worker.DefaultApprovalMode != core.ApprovalModeAuto {
+		t.Fatalf("worker = %+v", worker)
+	}
+	if worker.ProviderID != "" || worker.DefaultModel != "" || len(worker.Env) != 0 {
+		t.Fatalf("the router's provider and environment belong to its framework: %+v", worker)
+	}
+
+	legacy := core.AgentInstance{ID: "saw_" + h.agent.ID, RuntimeID: "dsh", Source: autoWorkerAgentSource}
+	other := core.AgentInstance{ID: autoWorkerAgentID("sa_other", "kimi"), RuntimeID: "kimi", Source: autoWorkerAgentSource}
+	for _, instance := range []core.AgentInstance{legacy, other} {
+		if err := h.store.UpsertAgentInstance(ctx, &instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.service.Delete(ctx, h.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{id, legacy.ID} {
+		if found, _ := h.store.GetAgentInstance(ctx, removed); found != nil {
+			t.Errorf("%s was kept", removed)
+		}
+	}
+	if found, _ := h.store.GetAgentInstance(ctx, other.ID); found == nil {
+		t.Error("another Super Agent's worker was removed")
+	}
+}
+
+func TestSuperAgentSavedBeforeWorkerFrameworksUsesTheRouters(t *testing.T) {
+	h := newHarness(t)
+	h.enableAutoWorkers(t.TempDir())
+	agents, err := h.service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 || !slices.Equal(agents[0].WorkerRuntimes, []string{"dsh"}) {
+		t.Fatalf("agents = %+v", agents)
 	}
 }

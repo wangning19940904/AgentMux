@@ -113,7 +113,9 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets
 		roster = append(roster, entry)
 	}
 	if agent.AutoWorkers {
-		roster = append(roster, rosterEntry{ID: autoWorkerID, Location: "local", Capabilities: autoWorkerGuidance, Available: true})
+		for _, runtimeID := range agent.WorkerRuntimes {
+			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Available: true})
+		}
 	}
 	type threadTicketView struct {
 		ID     string `json:"id"`
@@ -146,7 +148,7 @@ Decide exactly one of:
 - "stop": a person asks to stop a ticket listed under THREAD TICKETS. Set ticket_id.
 - "ignore": the event needs no action, or it asks for work that no available worker on the roster can do. In that second case, set reply to tell the sender it cannot be done right now.
 
-Never accept with a worker that is unavailable or unsuited to the work: you can only choose from the roster. A roster entry may offer to launch a new worker; its id is the only way to do that, and instructions is how you tell it what it is for.
+Never accept with a worker that is unavailable or unsuited to the work: you can only choose from the roster. Roster entries may offer to launch a new worker with a given framework; their ids are the only way to do that, and instructions is how you tell it what it is for. When several frameworks are offered, choose the one that suits the work best.
 
 "reply" is an optional one-sentence message to the sender, in their language, such as an acknowledgement. Leave it empty when nobody needs it: attention is expensive.
 "reason" is a short note for the operator's audit log.

@@ -1411,6 +1411,9 @@
 .super-agent-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .super-agent-section-head h4 { margin: 8px 0 0; font-size: 13px; }
 .super-agent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.super-agent-toggle { cursor: pointer; color: var(--text); font-weight: 500; }
+.field .super-agent-toggle input { width: auto; margin: 0; }
+.super-agent-toggle:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .super-agent-problems { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 .super-agent-save-error { flex: 1 1 100%; }
 .super-agent-assist-reply { margin: 0; white-space: pre-wrap; }
