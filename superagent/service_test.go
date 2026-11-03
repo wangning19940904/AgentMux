@@ -159,10 +159,27 @@ func (m *memoryStore) SetSuperAgentSourceState(_ context.Context, _, id, state s
 	return nil
 }
 func (m *memoryStore) GetAgentInstance(_ context.Context, id string) (*core.AgentInstance, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if agent, ok := m.local[id]; ok {
 		return &agent, nil
 	}
 	return nil, nil
+}
+func (m *memoryStore) UpsertAgentInstance(_ context.Context, agent *core.AgentInstance) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.local[agent.ID] = *agent
+	return nil
+}
+func (m *memoryStore) DeleteAgentInstance(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.local, id)
+	return nil
+}
+func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
+	return []core.Channel{{ID: "c1", Name: "Team bot", Type: "feishu"}, {ID: "c2", Name: "Slack bot", Type: "slack"}}, nil
 }
 
 type routerStub struct {
@@ -420,6 +437,68 @@ func TestRouterCannotEscapeRosterOrThread(t *testing.T) {
 	h.settle()
 	if got, _ := h.store.GetSuperAgentTicket(context.Background(), other.ID); got.Status == core.SuperAgentTicketStopped {
 		t.Fatal("a decision must not reach a Ticket on another thread")
+	}
+}
+
+func TestIgnoreDeliversTheRoutersReply(t *testing.T) {
+	h := newHarness(t)
+	h.router.answer = func(core.InvocationRequest) (string, error) {
+		return `{"decision":"ignore","reply":"no worker can do this right now","reason":"no suitable worker"}`, nil
+	}
+	h.ingest("alice", "github:o/r#1", "translate this video", true)
+	h.settle()
+	if got := h.replies.sent(); !slices.Equal(got, []string{"no worker can do this right now"}) {
+		t.Fatalf("replies = %v", got)
+	}
+	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionIgnored || trigger.Reason != "no suitable worker" {
+		t.Fatalf("trigger = %+v", trigger)
+	}
+	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
+		t.Fatal("an ignored event must not run work")
+	}
+	if !strings.Contains(h.router.prompts[0], "you can only choose from the roster") {
+		t.Fatalf("the prompt must say what to do when no worker fits:\n%s", h.router.prompts[0])
+	}
+}
+
+func TestIgnoreWithoutReplyStaysQuiet(t *testing.T) {
+	h := newHarness(t)
+	h.router.answer = func(core.InvocationRequest) (string, error) { return `{"decision":"ignore","reason":"chatter"}`, nil }
+	h.ingest("alice", "github:o/r#1", "thanks", true)
+	h.settle()
+	if got := h.replies.sent(); len(got) != 0 {
+		t.Fatalf("replies = %v", got)
+	}
+}
+
+func TestRejectedDecisionTellsTheSender(t *testing.T) {
+	h := newHarness(t)
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("not-on-roster"), nil }
+	h.ingest("alice", "github:o/r#1", "work", true)
+	h.settle()
+	got := h.replies.sent()
+	if len(got) != 1 || !strings.Contains(got[0], "could not process this request") {
+		t.Fatalf("replies = %v", got)
+	}
+	if strings.Contains(got[0], "not-on-roster") {
+		t.Fatalf("the reply must not repeat what the router named: %q", got[0])
+	}
+	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionFailed {
+		t.Fatalf("trigger = %+v", trigger)
+	}
+}
+
+func TestObserveModeKeepsIgnoreRepliesQuiet(t *testing.T) {
+	h := newHarness(t)
+	h.agent.Mode = core.SuperAgentModeObserve
+	h.store.agents[h.agent.ID] = h.agent
+	h.router.answer = func(core.InvocationRequest) (string, error) {
+		return `{"decision":"ignore","reply":"no worker can do this right now"}`, nil
+	}
+	h.ingest("alice", "github:o/r#1", "work", true)
+	h.settle()
+	if got := h.replies.sent(); len(got) != 0 {
+		t.Fatalf("replies = %v", got)
 	}
 }
 
@@ -692,7 +771,6 @@ func TestSaveValidatesAndKeepsSecretsWriteOnly(t *testing.T) {
 		return core.SuperAgent{Name: "x", RouterAgentID: "router", Workers: []core.SuperAgentWorker{{AgentID: "coder"}}}
 	}
 	cases := map[string]func(*core.SuperAgent){
-		"name":          func(a *core.SuperAgent) { a.Name = " " },
 		"yolo router":   func(a *core.SuperAgent) { a.RouterAgentID = "yolo" },
 		"no router":     func(a *core.SuperAgent) { a.RouterAgentID = "missing" },
 		"no workers":    func(a *core.SuperAgent) { a.Workers = nil },

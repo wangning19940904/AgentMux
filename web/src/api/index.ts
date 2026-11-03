@@ -14,6 +14,7 @@ import { selectSystemDirectory } from "./desktop";
 import type {
   SuperAgent,
   SuperAgentActivity,
+  SuperAgentSetupResult,
   SuperAgentTrigger,
   AgentInstance,
   AgentSession,
@@ -1068,6 +1069,7 @@ export const api = {
   superAgentActivity: (id: string) => get<SuperAgentActivity>(`/api/v1/super-agents/activity?id=${encodeURIComponent(id)}`),
   saveSuperAgent: (agent: SuperAgent) => post<SuperAgent>("/api/v1/super-agents", agent),
   deleteSuperAgent: (id: string) => del<{ ok: boolean }>(`/api/v1/super-agents?id=${encodeURIComponent(id)}`),
+  setupSuperAgent: (draft: SuperAgent, instruction: string, conversationID?: string) => post<SuperAgentSetupResult>("/api/v1/super-agents/setup", { draft, instruction, conversation_id: conversationID }),
   triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),

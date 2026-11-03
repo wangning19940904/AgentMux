@@ -54,10 +54,16 @@ type SuperAgent struct {
 	Mode           string             `json:"mode"`
 	MaxConcurrency int                `json:"max_concurrency"`
 	Workers        []SuperAgentWorker `json:"workers"`
-	Sources        []SuperAgentSource `json:"sources"`
-	Enabled        bool               `json:"enabled"`
-	CreatedAt      time.Time          `json:"created_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
+	// AutoWorkers lets the router launch a worker for a Ticket when none on the
+	// roster suits it. AutoWorkerDir and AutoWorkerApprovalMode are the
+	// operator's limits for those workers; a router decision cannot set them.
+	AutoWorkers            bool               `json:"auto_workers,omitempty"`
+	AutoWorkerDir          string             `json:"auto_worker_dir,omitempty"`
+	AutoWorkerApprovalMode string             `json:"auto_worker_approval_mode,omitempty"`
+	Sources                []SuperAgentSource `json:"sources"`
+	Enabled                bool               `json:"enabled"`
+	CreatedAt              time.Time          `json:"created_at"`
+	UpdatedAt              time.Time          `json:"updated_at"`
 }
 
 // SuperAgentWorker is one Agent the router may assign work to. An empty HostID

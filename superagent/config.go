@@ -64,6 +64,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteSuperAgent(ctx, id); err != nil {
 		return err
 	}
+	if err := s.store.DeleteAgentInstance(ctx, autoWorkerAgentID(id)); err != nil {
+		return err
+	}
 	return s.refreshClaims(ctx)
 }
 
@@ -74,9 +77,6 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	agent.RouterAgentID = strings.TrimSpace(agent.RouterAgentID)
 	if agent.ID == "" {
 		agent.ID = "sa_" + uuid.NewString()
-	}
-	if agent.Name == "" {
-		return errors.New("name is required")
 	}
 	if existing != nil {
 		agent.CreatedAt = existing.CreatedAt
@@ -97,10 +97,17 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if agent.MaxConcurrency < 1 || agent.MaxConcurrency > maxConcurrencyLimit {
 		return fmt.Errorf("max_concurrency must be between 1 and %d", maxConcurrencyLimit)
 	}
-	if err := s.validateRouter(ctx, agent.RouterAgentID); err != nil {
+	router, err := s.validateRouter(ctx, agent.RouterAgentID)
+	if err != nil {
 		return err
 	}
+	if agent.Name == "" {
+		agent.Name = router.Name
+	}
 	if err := s.normalizeWorkers(ctx, agent); err != nil {
+		return err
+	}
+	if err := normalizeAutoWorkers(agent, router); err != nil {
 		return err
 	}
 	return normalizeSources(agent, existing)
@@ -109,26 +116,44 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 // validateRouter keeps the blast radius of a prompt injection small. The router
 // reads untrusted events and is told not to use tools, but only the Agent's own
 // approval mode can enforce that.
-func (s *Service) validateRouter(ctx context.Context, id string) error {
+func (s *Service) validateRouter(ctx context.Context, id string) (*core.AgentInstance, error) {
 	if id == "" {
-		return errors.New("router_agent_id is required")
+		return nil, errors.New("router_agent_id is required")
 	}
 	router, err := s.store.GetAgentInstance(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if router == nil {
-		return fmt.Errorf("router agent %q not found on this machine", id)
+		return nil, fmt.Errorf("router agent %q not found on this machine", id)
 	}
 	if router.DefaultApprovalMode == core.ApprovalModeYolo {
-		return errors.New("the router reads untrusted events, so its Agent cannot use the yolo approval mode; choose plan mode")
+		return nil, errors.New("the router reads untrusted events, so its Agent cannot use the yolo approval mode; choose plan mode")
+	}
+	return router, nil
+}
+
+func normalizeAutoWorkers(agent *core.SuperAgent, router *core.AgentInstance) error {
+	agent.AutoWorkerDir = strings.TrimSpace(agent.AutoWorkerDir)
+	agent.AutoWorkerApprovalMode = strings.TrimSpace(agent.AutoWorkerApprovalMode)
+	if !agent.AutoWorkers {
+		return nil
+	}
+	if agent.AutoWorkerApprovalMode == "" {
+		agent.AutoWorkerApprovalMode = core.ApprovalModeAutoEdit
+	}
+	if err := validateAutoWorkerApproval(agent.AutoWorkerApprovalMode); err != nil {
+		return err
+	}
+	if firstNonEmpty(agent.AutoWorkerDir, router.WorkDir) == "" {
+		return errors.New("auto workers need a working directory: set one on the router Agent or on this Super Agent")
 	}
 	return nil
 }
 
 func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) error {
-	if len(agent.Workers) == 0 {
-		return errors.New("at least one worker is required")
+	if len(agent.Workers) == 0 && !agent.AutoWorkers {
+		return errors.New("at least one worker is required unless auto workers are on")
 	}
 	seen := map[string]bool{}
 	for index := range agent.Workers {
@@ -145,6 +170,9 @@ func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) 
 			return fmt.Errorf("worker %q is listed twice", worker.AgentID)
 		}
 		seen[key] = true
+		if worker.ID == autoWorkerID {
+			return fmt.Errorf("worker id %q is reserved", autoWorkerID)
+		}
 		if worker.ID == "" {
 			worker.ID = "wrk_" + uuid.NewString()
 		}

@@ -152,6 +152,7 @@ describe("SuperAgentsPanel", () => {
     await until(() => hasOption("Router (dsh)"));
     expect(hasOption("Elsewhere (dsh)")).toBe(false);
     setValue(control(/^Router Agent/), "router");
+    click(button(/Add worker/) as HTMLButtonElement);
     await until(() => hasOption("GPU box"));
     setValue(control(/^Machine/), "h1");
     await until(() => hasOption("GPU coder (dsh)"));
@@ -175,6 +176,79 @@ describe("SuperAgentsPanel", () => {
     await until(() => !container.querySelector("[role=dialog]"));
   });
 
+  it("needs only a router, and sets up triggers from an instruction", async () => {
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
+    const setup = vi.spyOn(api, "setupSuperAgent").mockImplementation(async (draft) => ({
+      conversation_id: "superagent-setup-1", reply: "Added GitHub.", missing_secrets: [{ source_id: "src_1", key: "webhook_secret" }], problems: [],
+      // Like the host, a later answer keeps what the form already collected.
+      draft: { ...draft, sources: draft.sources.length ? draft.sources : [{ id: "src_1", kind: "github_webhook", enabled: true, allowed_actors: ["alice"], config: { agent_login: "bot" } }] },
+    }));
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    await until(() => hasOption("Router (dsh)"));
+    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
+    expect(draftButton().disabled).toBe(true);
+    expect(container.querySelector("details")?.open).toBe(false);
+
+    setValue(control(/^Router Agent/), "router");
+    setValue(control(/^What should it do/), "Watch GitHub for alice");
+    await until(() => !draftButton().disabled);
+    click(draftButton());
+    await until(() => hasText("Added GitHub."));
+    expect(setup.mock.calls[0][1]).toBe("Watch GitHub for alice");
+    expect(save).not.toHaveBeenCalled();
+    expect(hasText("GitHub webhook")).toBe(true);
+    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("");
+
+    const secret = [...container.querySelectorAll<HTMLInputElement>(".super-agent-proposal input")][0];
+    expect(secret.type).toBe("password");
+    expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
+    setValue(secret, "s3cret");
+    await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
+
+    setValue(control(/^What should it do/), "Only on weekdays");
+    click(draftButton());
+    await until(() => setup.mock.calls.length === 2);
+    expect(setup.mock.calls[1][2]).toBe("superagent-setup-1");
+    await settle();
+
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ name: "", router_agent_id: "router", mode: "observe", auto_workers: true, workers: [] });
+    expect(save.mock.calls[0][0].sources[0].config.webhook_secret).toBe("s3cret");
+  });
+
+  it("shows an existing Super Agent's triggers without opening advanced settings", async () => {
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    click(button(/^Edit$/));
+    const proposal = await until(() => container.querySelector(".super-agent-proposal"));
+    expect(proposal.textContent).toContain("GitHub webhook");
+    expect(proposal.textContent).toContain("alice");
+  });
+
+  it("does not offer a Super Agent's own workers as routers or workers", async () => {
+    vi.spyOn(api, "agentInstances").mockResolvedValue([
+      { id: "router", name: "Router", runtime_id: "dsh", enabled: true, target_id: "local" } as never,
+      { id: "saw_1", name: "Managed", runtime_id: "dsh", enabled: true, target_id: "local", source: "super_agent" } as never,
+    ]);
+    renderPanel({ createRequested: true });
+    await until(() => hasOption("Router (dsh)"));
+    expect(hasOption("Managed (dsh)")).toBe(false);
+  });
+
+  it("shows why drafting failed and keeps the instruction", async () => {
+    vi.spyOn(api, "setupSuperAgent").mockRejectedValue(new Error("model down"));
+    renderPanel({ createRequested: true });
+    await until(() => hasOption("Router (dsh)"));
+    setValue(control(/^Router Agent/), "router");
+    setValue(control(/^What should it do/), "Watch GitHub");
+    await until(() => !(button(/^Draft settings$/) as HTMLButtonElement).disabled);
+    click(button(/^Draft settings$/) as HTMLButtonElement);
+    await until(() => hasText("model down"));
+    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("Watch GitHub");
+  });
+
   it("keeps the form open and shows the server's reason when saving fails", async () => {
     vi.spyOn(api, "saveSuperAgent").mockRejectedValue(new Error("the router cannot use yolo"));
     vi.spyOn(api, "superAgents").mockResolvedValue([]);
@@ -185,7 +259,6 @@ describe("SuperAgentsPanel", () => {
     setValue(control(/^Name/), "x");
     await until(() => hasOption("Router (dsh)"));
     setValue(control(/^Router Agent/), "router");
-    setValue(control(/^Agent$/), "coder");
     click(button(/^Save$/));
     await until(() => hasText("the router cannot use yolo"));
     expect(container.querySelector("[role=dialog]")).toBeTruthy();
@@ -205,9 +278,13 @@ describe("SuperAgentsPanel", () => {
 describe("superAgentModel", () => {
   it("requires what the backend requires", () => {
     const agent = newSuperAgent();
-    expect(superAgentProblems(agent)).toEqual(expect.arrayContaining(["superAgents.problem.name", "superAgents.problem.router", "superAgents.problem.worker"]));
-    agent.name = "a";
+    expect(superAgentProblems(agent)).toEqual(["superAgents.problem.router"]);
     agent.router_agent_id = "r";
+    expect(superAgentProblems(agent)).toEqual([]);
+    agent.auto_workers = false;
+    expect(superAgentProblems(agent)).toEqual(["superAgents.problem.noWorkers"]);
+    agent.workers = [{ id: "", agent_id: "" }];
+    expect(superAgentProblems(agent)).toEqual(["superAgents.problem.worker"]);
     agent.workers = [{ id: "", agent_id: "w" }];
     expect(superAgentProblems(agent)).toEqual([]);
     const github = newSource("github_webhook");

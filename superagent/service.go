@@ -57,6 +57,9 @@ type Store interface {
 	GetSuperAgentSourceState(context.Context, string) (string, error)
 	SetSuperAgentSourceState(context.Context, string, string, string) error
 	GetAgentInstance(context.Context, string) (*core.AgentInstance, error)
+	UpsertAgentInstance(context.Context, *core.AgentInstance) error
+	DeleteAgentInstance(context.Context, string) error
+	ListChannels(context.Context) ([]core.Channel, error)
 }
 
 // Options holds the service's collaborators.
@@ -340,6 +343,7 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 	if err := s.apply(ctx, *agent, trigger, tickets, decision); err != nil {
 		s.log.Error("apply router decision", "trigger", trigger.ID, "err", err)
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, err.Error(), "")
+		s.sendReply(ctx, *agent, trigger.SourceID, trigger.Reply, "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent.")
 	}
 }
 
@@ -387,6 +391,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 	switch decision.Decision {
 	case decisionIgnore:
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionIgnored, decision.Reason, "")
+		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
 		return nil
 	case decisionAccept:
 		return s.accept(ctx, agent, trigger, decision)
@@ -423,9 +428,9 @@ func threadTicket(tickets []core.SuperAgentTicket, id string) *core.SuperAgentTi
 }
 
 func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
-	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == decision.WorkerID })
-	if index < 0 {
-		return fmt.Errorf("router chose worker %q, which is not on the roster", decision.WorkerID)
+	worker, err := s.assignedWorker(ctx, agent, decision.WorkerID)
+	if err != nil {
+		return err
 	}
 	now := s.now().UTC()
 	id := "tkt_" + uuid.NewString()
@@ -436,7 +441,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 	ticket := core.SuperAgentTicket{
 		ID: id, SuperAgentID: agent.ID, SourceID: trigger.SourceID, SourceKind: trigger.SourceKind,
 		ThreadKey: trigger.ThreadKey, TriggerID: trigger.ID, Title: title, Actor: trigger.Actor,
-		Worker: agent.Workers[index], ConversationID: "superagent-" + id, Status: core.SuperAgentTicketQueued,
+		Worker: worker, ConversationID: "superagent-" + id, Status: core.SuperAgentTicketQueued,
 		Inputs: []string{workerAssignment(trigger, decision)}, Reply: trigger.Reply,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -446,6 +451,17 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 	s.finishTrigger(ctx, trigger, core.SuperAgentDispositionAccepted, decision.Reason, id)
 	s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
 	return nil
+}
+
+func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
+	if workerID == autoWorkerID {
+		return s.launchAutoWorker(ctx, agent)
+	}
+	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID })
+	if index < 0 {
+		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q, which is not on the roster", workerID)
+	}
+	return agent.Workers[index], nil
 }
 
 // attach delivers a Trigger to an existing Ticket on its thread. A running

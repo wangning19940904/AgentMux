@@ -29,6 +29,7 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("POST /api/v1/super-agents", s.handleSuperAgentUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/super-agents", s.handleSuperAgentDelete)
 	s.mux.HandleFunc("GET /api/v1/super-agents/activity", s.handleSuperAgentActivity)
+	s.mux.HandleFunc("POST /api/v1/super-agents/setup", s.handleSuperAgentSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/trigger", s.handleSuperAgentTrigger)
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/stop", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
 		return s.superAgents.StopTicket(r.Context(), id)
@@ -103,6 +104,22 @@ func (s *Server) handleSuperAgentActivity(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, activity)
+}
+
+func (s *Server) handleSuperAgentSetup(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	body, ok := decodeJSON[superagent.SetupRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := s.superAgents.Setup(r.Context(), body)
+	if err != nil {
+		writeSuperAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleSuperAgentTrigger(w http.ResponseWriter, r *http.Request) {

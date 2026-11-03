@@ -1,7 +1,7 @@
-import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Square, Trash2, X } from "lucide-react";
+import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInstance, SuperAgent, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { AgentInstance, SuperAgent, SuperAgentSetupResult, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -69,7 +69,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
             {items.map((item) => (
               <button key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => setSelectedID(item.id)}>
                 <Bot size={16} />
-                <span><strong>{item.name}</strong><small>{t(`superAgents.mode.${item.mode}`)} · {t("superAgents.workerCount", { count: item.workers.length })}</small></span>
+                <span><strong>{item.name}</strong><small>{t(`superAgents.mode.${item.mode}`)} · {item.auto_workers ? t("superAgents.autoWorkersOn") : t("superAgents.workerCount", { count: item.workers.length })}</small></span>
                 <span className={`status-badge status-${item.enabled ? "running" : "cancelled"}`}>{t(item.enabled ? "common.enabled" : "common.disabled")}</span>
               </button>
             ))}
@@ -90,6 +90,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
 
                 <h4>{t("superAgents.workers")}</h4>
                 <div className="super-agent-chips">
+                  {selected.auto_workers && <span className="super-agent-chip"><i className="online" />{t("superAgents.autoWorkersOn")}</span>}
                   {selected.workers.map((worker) => {
                     const status = activity.data?.workers?.find((item) => item.worker_id === worker.id);
                     return (
@@ -213,9 +214,30 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   const channels = useAsync(() => api.channels(), []);
   const [remoteAgents, setRemoteAgents] = useState<Record<string, AgentInstance[]>>({});
   // In the "all machines" scope the API tags this daemon's resources as "local".
-  const localAgents = useMemo(() => (agents.data ?? []).filter((agent) => isLocalTarget(agent.target_id)), [agents.data]);
+  // An Agent a Super Agent launched for itself is not something to route through.
+  const localAgents = useMemo(() => (agents.data ?? []).filter((agent) => isLocalTarget(agent.target_id) && agent.source !== "super_agent"), [agents.data]);
   const feishuChannels = useMemo(() => (channels.data ?? []).filter((channel) => isLocalTarget(channel.target_id) && (channel.type === "feishu" || channel.type === "lark")), [channels.data]);
   const problems = superAgentProblems(draft);
+  const [instruction, setInstruction] = useState("");
+  const [assisting, setAssisting] = useState(false);
+  const [assistError, setAssistError] = useState("");
+  const [setup, setSetup] = useState<SuperAgentSetupResult | null>(null);
+  const sourceField = (source: SuperAgentSource, key: string) => SOURCE_FIELDS[source.kind].find((field) => field.key === key);
+
+  async function assist() {
+    setAssisting(true);
+    setAssistError("");
+    try {
+      const result = await api.setupSuperAgent(draft, instruction, setup?.conversation_id);
+      setSetup(result);
+      setInstruction("");
+      onChange(result.draft);
+    } catch (error) {
+      setAssistError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAssisting(false);
+    }
+  }
 
   const loadRemoteAgents = useCallback(async (hostID: string) => {
     if (!hostID) return;
@@ -253,7 +275,6 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
           </div>
         </div>
         <div className="surface-body provider-builder-body agent-drawer-body super-agent-form">
-          <label className="field"><span>{t("superAgents.name")}</span><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
           <label className="field"><span>{t("superAgents.router")}</span>
             <select value={draft.router_agent_id} onChange={(event) => onChange({ ...draft, router_agent_id: event.target.value })}>
               <option value="">{t("superAgents.chooseAgent")}</option>
@@ -261,6 +282,48 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             </select>
             <small>{t("superAgents.routerHelp")}</small>
           </label>
+
+          <label className="field"><span>{t("superAgents.instruction")}</span>
+            <textarea rows={4} placeholder={t("superAgents.instructionPlaceholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
+            <small>{t("superAgents.instructionHelp")}</small>
+          </label>
+          <div className="control-row">
+            <button className="ghost-action" disabled={assisting || !draft.router_agent_id || !instruction.trim()} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
+          </div>
+          {assistError && <div className="session-notice error" role="alert">{assistError}</div>}
+          {setup?.reply && <p className="super-agent-assist-reply" role="status">{setup.reply}</p>}
+          {(setup || draft.sources.length > 0) && (
+            <div className="super-agent-card super-agent-proposal">
+              <strong>{t("superAgents.proposal")}</strong>
+              <small className="muted">{t(`superAgents.modeHelp.${draft.mode}`)}</small>
+              {draft.sources.length === 0 && <small className="muted">{t("superAgents.noSources")}</small>}
+              {draft.sources.map((source) => (
+                <div key={source.id}>
+                  <div>{t(`superAgents.kind.${source.kind}`)}{source.enabled ? "" : ` (${t("common.disabled")})`}</div>
+                  <small className="muted">{t("superAgents.allowedActors")}: {source.allowed_actors.join(", ") || "-"}</small>
+                </div>
+              ))}
+              {setup?.problems.map((problem) => <small className="super-agent-problem" key={problem}>{problem}</small>)}
+              {setup?.missing_secrets.map((secret) => {
+                const index = draft.sources.findIndex((source) => source.id === secret.source_id);
+                const source = draft.sources[index];
+                const field = source && sourceField(source, secret.key);
+                if (!source || !field) return null;
+                return (
+                  <label className="field" key={`${secret.source_id}/${secret.key}`}>
+                    <span>{t(field.labelKey)} *</span>
+                    <input type="password" autoComplete="off" value={source.config[secret.key] ?? ""} onChange={(event) => updateSource(index, { config: { ...source.config, [secret.key]: event.target.value } })} />
+                  </label>
+                );
+              })}
+              <small className="muted">{t("superAgents.proposalHelp")}</small>
+            </div>
+          )}
+
+          <details className="super-agent-advanced">
+            <summary>{t("superAgents.advanced")}</summary>
+            <div className="super-agent-form">
+          <label className="field"><span>{t("superAgents.name")}</span><input placeholder={t("superAgents.namePlaceholder")} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
           <label className="field"><span>{t("superAgents.routerPrompt")}</span><textarea rows={3} value={draft.router_prompt ?? ""} onChange={(event) => onChange({ ...draft, router_prompt: event.target.value })} /></label>
           <div className="field-grid">
             <label className="field"><span>{t("superAgents.modeLabel")}</span>
@@ -273,6 +336,22 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             <label className="field"><span>{t("superAgents.concurrency")}</span><input type="number" min={1} max={32} value={draft.max_concurrency} onChange={(event) => onChange({ ...draft, max_concurrency: Number(event.target.value) })} /></label>
           </div>
           <label className="super-agent-check"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} /> {t("common.enabled")}</label>
+
+          <label className="super-agent-check"><input type="checkbox" checked={Boolean(draft.auto_workers)} onChange={(event) => onChange({ ...draft, auto_workers: event.target.checked })} /> {t("superAgents.autoWorkers")}</label>
+          <p className="muted">{t("superAgents.autoWorkersHelp")}</p>
+          {draft.auto_workers && (
+            <div className="field-grid">
+              <label className="field"><span>{t("superAgents.autoWorkerDir")}</span><input placeholder={t("superAgents.autoWorkerDirPlaceholder")} value={draft.auto_worker_dir ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_dir: event.target.value })} /></label>
+              <label className="field"><span>{t("superAgents.autoWorkerApproval")}</span>
+                <select value={draft.auto_worker_approval_mode || "auto_edit"} onChange={(event) => onChange({ ...draft, auto_worker_approval_mode: event.target.value })}>
+                  <option value="auto_edit">auto_edit</option>
+                  <option value="auto">auto</option>
+                  <option value="yolo">yolo</option>
+                </select>
+                <small>{t("superAgents.autoWorkerApprovalHelp")}</small>
+              </label>
+            </div>
+          )}
 
           <div className="super-agent-section-head">
             <h4>{t("superAgents.workers")}</h4>
@@ -299,7 +378,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
                   </label>
                 </div>
                 <label className="field"><span>{t("superAgents.capabilities")}</span><input placeholder={t("superAgents.capabilitiesPlaceholder")} value={worker.capabilities ?? ""} onChange={(event) => updateWorker(index, { capabilities: event.target.value })} /></label>
-                {draft.workers.length > 1 && <button className="ghost-action danger-action" onClick={() => onChange({ ...draft, workers: draft.workers.filter((_, position) => position !== index) })}><Trash2 size={13} /> {t("superAgents.remove")}</button>}
+                {(draft.workers.length > 1 || draft.auto_workers) && <button className="ghost-action danger-action" onClick={() => onChange({ ...draft, workers: draft.workers.filter((_, position) => position !== index) })}><Trash2 size={13} /> {t("superAgents.remove")}</button>}
               </div>
             );
           })}
@@ -349,6 +428,8 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
               </label>
             </div>
           ))}
+            </div>
+          </details>
           {problems.length > 0 && <ul className="super-agent-problems">{problems.map((problem) => <li key={problem}>{t(problem)}</li>)}</ul>}
           <div className="agent-drawer-actions">
             {notice && <div className="session-notice error super-agent-save-error" role="alert">{notice}</div>}

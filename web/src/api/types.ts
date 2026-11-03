@@ -1378,10 +1378,21 @@ export interface SuperAgent {
   mode: "act" | "observe";
   max_concurrency: number;
   workers: SuperAgentWorker[];
+  auto_workers?: boolean;
+  auto_worker_dir?: string;
+  auto_worker_approval_mode?: string;
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface SuperAgentSetupResult {
+  conversation_id: string;
+  reply: string;
+  draft: SuperAgent;
+  missing_secrets: { source_id: string; key: string }[];
+  problems: string[];
 }
 
 export interface SuperAgentTrigger {

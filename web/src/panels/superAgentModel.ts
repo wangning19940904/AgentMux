@@ -47,7 +47,7 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
 export function newSuperAgent(): SuperAgent {
   return {
     id: "", name: "", router_agent_id: "", mode: "observe", max_concurrency: 2,
-    workers: [newWorker()], sources: [], enabled: true,
+    workers: [], auto_workers: true, sources: [], enabled: true,
   };
 }
 
@@ -65,9 +65,9 @@ export function parseActors(value: string): string[] {
 
 export function superAgentProblems(agent: SuperAgent): string[] {
   const problems: string[] = [];
-  if (!agent.name.trim()) problems.push("superAgents.problem.name");
   if (!agent.router_agent_id) problems.push("superAgents.problem.router");
-  if (agent.workers.length === 0 || agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
+  if (agent.workers.length === 0 && !agent.auto_workers) problems.push("superAgents.problem.noWorkers");
+  if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
   for (const source of agent.sources) {
     if (source.enabled && source.allowed_actors.length === 0) problems.push("superAgents.problem.actors");
     if (source.allowed_actors.includes("*") && source.kind !== "feishu_message") problems.push("superAgents.problem.wildcard");

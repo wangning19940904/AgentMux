@@ -1413,4 +1413,9 @@
 .super-agent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .super-agent-problems { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 .super-agent-save-error { flex: 1 1 100%; }
+.super-agent-assist-reply { margin: 0; white-space: pre-wrap; }
+.super-agent-proposal > div { display: grid; gap: 2px; }
+.super-agent-problem { color: var(--danger, #c0392b); }
+.super-agent-advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.super-agent-advanced > .super-agent-form { margin-top: 12px; }
 .field textarea { width: 100%; font: inherit; }

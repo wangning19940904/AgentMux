@@ -26,6 +26,7 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents"},
 		{http.MethodDelete, "/api/v1/super-agents?id=x"},
 		{http.MethodGet, "/api/v1/super-agents/activity?id=x"},
+		{http.MethodPost, "/api/v1/super-agents/setup"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/stop"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/retry"},

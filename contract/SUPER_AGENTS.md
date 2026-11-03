@@ -13,10 +13,12 @@ Trigger source -> gate (allowed list) -> stored once -> router Agent decision
   accept  -> new Ticket -> worker (local or remote) -> reply where it came from
   attach  -> input to a Ticket on the same thread
   stop    -> cancel a Ticket on the same thread
-  ignore  -> recorded
+  ignore  -> recorded, and the router's reply is sent if it wrote one
 ```
 
 An addressed event from a sender who is not allowed is recorded with its reason, and stops there. Ordinary traffic that addresses nobody and belongs to no Ticket is not stored.
+
+When no available worker can do the work and auto workers are off, the router ignores the event and tells the sender. A decision the host rejects, such as a worker that is not on the roster, fails the event and also tells the sender.
 
 ## What the host enforces
 
@@ -24,8 +26,8 @@ The router reads untrusted text, so nothing depends on the model behaving:
 
 - **Allowed senders** are checked before the router sees an event, and an empty
   list admits nobody. `*` is accepted only for Feishu messages.
-- **A decision** can only name a worker on this Super Agent's roster and a Ticket
-  already on the event's thread.
+- **A decision** can only name a worker on this Super Agent's roster, `auto` when
+  auto workers are on, and a Ticket already on the event's thread.
 - **The router Agent** must run on this machine and cannot use the `yolo` approval
   mode. Use `plan`.
 - **Observe mode** is the default. It records what the router would do, without
@@ -75,6 +77,33 @@ the verified SSH tunnel:
 - Stopping a Ticket closes the stream, and the remote daemon cancels the turn.
 - Tickets running when the daemon stopped resume on the same conversation.
 
+### Auto workers
+
+With auto workers on, the roster can be empty. The router names `auto` when no listed
+worker suits a request, and the host starts a worker that was not configured in advance:
+
+- Each Ticket gets its own session and, in a git repository, its own worktree under
+  `<repo>.agentmux-worktrees`. Outside a repository, Tickets share the directory.
+- A decision supplies only the Ticket's title and instructions. The runtime, provider,
+  model and environment come from the router Agent. The directory is `auto_worker_dir`,
+  or the router Agent's. The approval mode is `auto_worker_approval_mode`, `auto_edit` by
+  default. MCP servers, skills and channels are not inherited.
+- `max_concurrency` limits how many run at once. Auto workers run on this machine only.
+- They share one Agent instance, `saw_<super agent id>`, removed with the Super Agent.
+  Worktrees are kept after a Ticket ends.
+
+## Setup assistant
+
+`POST /api/v1/super-agents/setup` turns an administrator's instruction into a proposed
+configuration, using the router Agent:
+
+- It returns a draft and stores nothing. Saving it passes the usual validation.
+- Only the Console can reach it, so text in an event cannot change the configuration.
+- Secrets and `trust_from_header` are never sent to or accepted from the model. The
+  response names the secrets the form must collect. Secrets pasted into an instruction
+  would reach the model, so the form asks people not to.
+- It cannot change the router, the roster, or the auto worker approval mode.
+
 ## API
 
 These routes are for Console administrators and are closed to tenant credentials.
@@ -83,6 +112,7 @@ These routes are for Console administrators and are closed to tenant credentials
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete; secrets are write-only |
 | `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health |
+| `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
 
