@@ -71,6 +71,21 @@ func TestParseLoadAvgSysctl(t *testing.T) {
 	}
 }
 
+func TestParseSwapUsage(t *testing.T) {
+	// struct xsw_usage { total, avail, used uint64; pagesize uint32; encrypted int32 }
+	raw := make([]byte, 32)
+	binary.LittleEndian.PutUint64(raw[0:], 2<<30)  // total
+	binary.LittleEndian.PutUint64(raw[8:], 1<<30)  // avail
+	binary.LittleEndian.PutUint64(raw[16:], 1<<30) // used
+	total, used, ok := parseSwapUsage(raw)
+	if !ok || total != 2<<30 || used != 1<<30 {
+		t.Fatalf("swap = %d/%d ok=%v", used, total, ok)
+	}
+	if _, _, ok := parseSwapUsage(raw[:16]); ok {
+		t.Fatal("short buffer must be rejected")
+	}
+}
+
 func TestParseIfList2SumsEthernetInterfaces(t *testing.T) {
 	message := func(msgType byte, flags uint32, ifType byte, rx, tx uint64) []byte {
 		buf := make([]byte, ifMsghdr2Size)
