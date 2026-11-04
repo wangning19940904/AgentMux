@@ -1419,6 +1419,12 @@
 .super-agent-assist-reply { margin: 0; white-space: pre-wrap; }
 .super-agent-proposal > div { display: grid; gap: 2px; }
 .super-agent-problem { color: var(--danger, #c0392b); }
+.super-agent-section { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.super-agent-section > header h3 { margin: 0; font-size: 14px; }
+.super-agent-section > header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.super-agent-section > header.super-agent-section-head { align-items: flex-start; }
+.super-agent-router-summary { gap: 6px; }
+.super-agent-router-editor .field > strong { font-size: 13px; }
 .super-agent-advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .super-agent-advanced > .super-agent-form { margin-top: 12px; }
 .field textarea { width: 100%; font: inherit; }

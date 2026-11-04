@@ -78,6 +78,8 @@ type Options struct {
 	ChannelHasAgent func(context.Context, string) bool
 	// RuntimeAvailable reports whether an agent framework can run on this machine.
 	RuntimeAvailable func(string) bool
+	// MCP lists the MCP servers a router agent may be given.
+	MCP core.MCPRegistry
 	// StateDir holds directories the service creates. Empty means ~/.agentmux.
 	StateDir string
 }
@@ -112,6 +114,7 @@ type Service struct {
 	channelHasAgent func(context.Context, string) bool
 
 	runtimeAvailable func(string) bool
+	mcp              core.MCPRegistry
 	state            string
 }
 
@@ -145,7 +148,7 @@ func New(options Options) *Service {
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
 		routerAttempts: map[string]int{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		mail: options.Mail, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
-		runtimeAvailable: options.RuntimeAvailable, state: options.StateDir,
+		runtimeAvailable: options.RuntimeAvailable, mcp: options.MCP, state: options.StateDir,
 	}
 }
 

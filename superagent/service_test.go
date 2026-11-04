@@ -27,7 +27,7 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		agents: map[string]core.SuperAgent{}, tickets: map[string]core.SuperAgentTicket{}, state: map[string]string{},
 		local: map[string]core.AgentInstance{
-			"router": {ID: "router", Name: "router", Enabled: true, DefaultApprovalMode: core.ApprovalModePlan},
+			"router": {ID: "router", Name: "router", Enabled: true, DefaultApprovalMode: core.ApprovalModePlan, Source: routerAgentSource},
 			"coder":  {ID: "coder", Name: "coder", Enabled: true},
 			"yolo":   {ID: "yolo", Name: "yolo", Enabled: true, DefaultApprovalMode: core.ApprovalModeYolo},
 		},

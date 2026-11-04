@@ -119,6 +119,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		Mail:             &superagent.IMAPClient{},
 		Docs:             feishuAPI,
 		RuntimeAvailable: server.AgentRuntimeAvailable,
+		MCP:              mcpRegistry,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {
 			channel, err := st.GetChannel(ctx, id)
 			return err != nil || (channel != nil && channel.AgentID != "")

@@ -8,7 +8,10 @@ import {
   cliCatalogForAgent,
   composeInjectedPrompt,
   effectiveAgentProvider,
+  isReadOnlyAgent,
+  isRouterAgent,
   newAgent,
+  readOnlyNoticeKey,
   routeToolForRuntime,
   runtimeLabel,
   runtimeOptionValues,
@@ -16,6 +19,16 @@ import {
 } from "./agentUtils";
 
 describe("agent form model", () => {
+  it("keeps Super Agent router agents read-only on the Agents page", () => {
+    const router = { ...newAgent(["codex"]), id: "sar_1", source: "super_agent_router" };
+    const legacy = { ...newAgent(["codex"]), id: "sar_codex", source: "super_agent" };
+    const worker = { ...newAgent(["codex"]), id: "saw_1_codex", source: "super_agent" };
+    expect([router, legacy, worker].map(isRouterAgent)).toEqual([true, true, false]);
+    expect(isReadOnlyAgent(router)).toBe(true);
+    expect(isReadOnlyAgent(worker)).toBe(false);
+    expect(readOnlyNoticeKey(router)).toBe("agents.routerReadOnlyNotice");
+  });
+
   it("creates Agents with safe workspace defaults", () => {
     const agent = newAgent(["codex"]);
     expect(agent.runtime_id).toBe("codex");

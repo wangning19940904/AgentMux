@@ -39,6 +39,9 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("GET /api/v1/super-agents", s.handleSuperAgentsList)
 	s.mux.HandleFunc("POST /api/v1/super-agents", s.handleSuperAgentUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/super-agents", s.handleSuperAgentDelete)
+	s.mux.HandleFunc("GET /api/v1/super-agents/routers", s.handleSuperAgentRoutersList)
+	s.mux.HandleFunc("POST /api/v1/super-agents/routers", s.handleSuperAgentRouterUpsert)
+	s.mux.HandleFunc("DELETE /api/v1/super-agents/routers", s.handleSuperAgentRouterDelete)
 	s.mux.HandleFunc("GET /api/v1/super-agents/activity", s.handleSuperAgentActivity)
 	s.mux.HandleFunc("POST /api/v1/super-agents/setup", s.handleSuperAgentSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/trigger", s.handleSuperAgentTrigger)
@@ -117,6 +120,50 @@ func (s *Server) handleSuperAgentDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.superAgents.Delete(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleSuperAgentRoutersList(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	list, err := s.superAgents.ListRouters(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) handleSuperAgentRouterUpsert(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	router, ok := decodeJSON[superagent.Router](w, r)
+	if !ok {
+		return
+	}
+	saved, err := s.superAgents.SaveRouter(r.Context(), router)
+	if err != nil {
+		writeSuperAgentError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
+func (s *Server) handleSuperAgentRouterDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := s.superAgents.DeleteRouter(r.Context(), id); err != nil {
+		writeSuperAgentError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
