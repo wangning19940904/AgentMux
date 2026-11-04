@@ -126,12 +126,14 @@ separately, under [Auto workers](#auto-workers).
 
 ## The form
 
+The administrator sets every field. The form does not draft a configuration from a
+description.
+
 | Field | What it is for |
 | --- | --- |
 | Name | Shown in the Super Agent list, and the router is told it. Named after the router's framework when empty. |
-| What should it do? | Not saved. The setup assistant turns it into the name, routing rules and triggers on the form, for review. |
 | Router agent | Who judges each request. |
-| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. |
+| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. A template can fill it in, to edit. |
 | Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
 | Triggers | Where requests come from. |
 
@@ -140,14 +142,14 @@ Mode, maximum concurrency and whether the Super Agent is enabled are under Advan
 ## Setup assistant
 
 `POST /api/v1/super-agents/setup` turns an administrator's instruction into a proposed
-configuration, using the router agent. A router agent the form is creating is saved first,
-so the assistant can run on it:
+configuration, using the draft's router agent. The Console form does not use it; it
+remains for API clients:
 
 - It returns a draft and stores nothing. Saving it passes the usual validation.
 - Only the Console can reach it, so text in an event cannot change the configuration.
 - Secrets and `trust_from_header` are never sent to or accepted from the model. The
-  response names the secrets the form must collect. Secrets pasted into an instruction
-  would reach the model, so the form asks people not to.
+  response names the secrets still to collect. Secrets pasted into an instruction would
+  reach the model.
 - It cannot change the router, the roster, the worker frameworks, or the auto worker
   approval mode.
 

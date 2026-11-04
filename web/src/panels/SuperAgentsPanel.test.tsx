@@ -271,14 +271,9 @@ describe("SuperAgentsPanel", () => {
     expect(hasText("im:chat:readonly")).toBe(true);
   });
 
-  it("creates a router agent and sets up triggers from an instruction", async () => {
+  it("configures everything itself, and creates the new router agent when it saves", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
-    const setup = vi.spyOn(api, "setupSuperAgent").mockImplementation(async (draft) => ({
-      conversation_id: "superagent-setup-1", reply: "Added GitHub.", missing_secrets: [{ source_id: "src_1", key: "webhook_secret" }], problems: [],
-      // Like the host, a later answer keeps what the form already collected.
-      draft: { ...draft, sources: draft.sources.length ? draft.sources : [{ id: "src_1", kind: "github_webhook", enabled: true, allowed_actors: ["alice"], config: { agent_login: "bot" } }] },
-    }));
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
     // With no router agent yet, the form configures a new one.
@@ -287,46 +282,28 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Gemini")).toBe(false);
     expect(hasOption("Remote DSH")).toBe(false);
     expect(hasText("Read-only built-in tools, always")).toBe(true);
+    // Nothing drafts the configuration for the operator.
+    expect(hasText("What should it do")).toBe(false);
+    expect(button(/Draft settings/)).toBeUndefined();
     expect(container.querySelector("details")?.open).toBe(false);
-    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
-    expect(draftButton().disabled).toBe(true);
-    expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(false);
 
-    setValue(control(/^What should it do/), "Watch GitHub for alice");
-    await until(() => !draftButton().disabled);
-    expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
-    expect(hasText("Click Draft settings to apply what you typed")).toBe(true);
-    click(draftButton());
-    await until(() => hasText("Added GitHub."));
-    // Drafting runs on the router agent, so it is created first, once.
-    expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", runtime_id: "codex", mcp_servers: [] });
-    expect(setup.mock.calls[0][0]).toMatchObject({ router_agent_id: "sar_new", router_runtime: "" });
-    expect(setup.mock.calls[0][1]).toBe("Watch GitHub for alice");
-    expect(save).not.toHaveBeenCalled();
-    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("");
-    expect(hasText("Enter the secrets marked *")).toBe(true);
-
-    // The drafted trigger is on the form itself, with its secret field.
+    setValue(control(/^Add trigger/), "github_webhook");
+    setValue(control(/^Agent's GitHub login/), "bot");
+    setValue(control(/^Allowed senders/), "alice");
     const secret = control(/^Webhook secret/) as HTMLInputElement;
     expect(secret.type).toBe("password");
     expect(secret.closest("details")).toBeNull();
     expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
     setValue(secret, "s3cret");
     await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
-
-    setValue(control(/^What should it do/), "Only on weekdays");
-    await until(() => !draftButton().disabled);
-    click(draftButton());
-    await until(() => setup.mock.calls.length === 2);
-    expect(setup.mock.calls[1][2]).toBe("superagent-setup-1");
-    await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
+    expect(api.saveSuperAgentRouter).not.toHaveBeenCalled();
 
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
     expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", runtime_id: "codex", mcp_servers: [] });
     expect(save.mock.calls[0][0]).toMatchObject({ name: "", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
-    expect(save.mock.calls[0][0].sources[0].config.webhook_secret).toBe("s3cret");
+    expect(save.mock.calls[0][0].sources[0]).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", webhook_secret: "s3cret" } });
   });
 
   it("creates a router on a framework that can route, with any number of worker frameworks", async () => {
@@ -439,46 +416,21 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Coder (an ordinary Agent, kept)")).toBe(false);
   });
 
-  it("says why Draft settings cannot run, and fills fields from templates", async () => {
+  it("fills the routing rules from a template, replacing them only when asked", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPanel({ createRequested: true });
     await until(() => control(/^Router agent/).value === "router");
-    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
-    const instruction = () => control(/^What should it do/) as HTMLTextAreaElement;
-    expect(draftButton().disabled).toBe(true);
-    expect(hasText("Describe what it should do above, or start from an example.")).toBe(true);
-
-    click(button(/^GitHub issues and PRs$/));
-    expect(instruction().value).toMatch(/^Handle GitHub issues and pull requests in <owner\/repo>/);
-    expect(draftButton().disabled).toBe(false);
-    expect(hasText("Describe what it should do above")).toBe(false);
-    // What was typed is only replaced when the operator agrees.
-    setValue(instruction(), "my own words");
-    click(button(/^Feishu @mention$/));
-    expect(instruction().value).toBe("my own words");
-    confirm.mockReturnValue(true);
-    click(button(/^Feishu @mention$/));
-    expect(instruction().value).toMatch(/^When someone @mentions the bot/);
-
     const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
-    confirm.mockClear();
     click(button(/^Use template$/));
     expect(confirm).not.toHaveBeenCalled();
     expect(rules().value).toMatch(/^Take on: requests about <project>/);
     expect(rules().value.split("\n")).toHaveLength(4);
     setValue(rules(), "only widgets");
-    confirm.mockReturnValue(false);
     click(button(/^Use template$/));
     expect(rules().value).toBe("only widgets");
-  });
-
-  it("says when Draft settings needs a router agent first", async () => {
-    vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [] } as never);
-    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
-    renderPanel({ createRequested: true });
-    await until(() => hasText("Choose or create a router agent below first."));
-    click(button(/^Email requests$/));
-    expect((button(/^Draft settings$/) as HTMLButtonElement).disabled).toBe(true);
+    confirm.mockReturnValue(true);
+    click(button(/^Use template$/));
+    expect(rules().value).toMatch(/^Take on:/);
   });
 
   it("explains when no framework is installed", async () => {
@@ -486,17 +438,6 @@ describe("SuperAgentsPanel", () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     renderPanel({ createRequested: true });
     await until(() => hasText("No framework is installed"));
-  });
-
-  it("shows why drafting failed and keeps the instruction", async () => {
-    vi.spyOn(api, "setupSuperAgent").mockRejectedValue(new Error("model down"));
-    renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "router");
-    setValue(control(/^What should it do/), "Watch GitHub");
-    await until(() => !(button(/^Draft settings$/) as HTMLButtonElement).disabled);
-    click(button(/^Draft settings$/) as HTMLButtonElement);
-    await until(() => hasText("model down"));
-    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("Watch GitHub");
   });
 
   it("keeps the form open and shows the server's reason when saving fails", async () => {

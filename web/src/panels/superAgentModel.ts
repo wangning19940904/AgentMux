@@ -58,10 +58,6 @@ export function withWorkerRuntimes(agent: SuperAgent, runtimes: string[]): Super
   return { ...agent, worker_runtimes: runtimes, auto_workers: runtimes.length > 0 };
 }
 
-// Examples the "What should it do?" field can start from. Their text is
-// translated under superAgents.template.<key>.
-export const INSTRUCTION_TEMPLATES = ["feishu", "github", "email", "doc"] as const;
-
 // The router select's value for creating a router agent instead of choosing one.
 export const NEW_ROUTER = "__new_router__";
 
