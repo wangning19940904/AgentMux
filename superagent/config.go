@@ -45,6 +45,9 @@ func (s *Service) Save(ctx context.Context, agent core.SuperAgent) (core.SuperAg
 	if err := s.store.UpsertSuperAgent(ctx, agent); err != nil {
 		return core.SuperAgent{}, err
 	}
+	if err := s.nameRouter(ctx, agent); err != nil {
+		return core.SuperAgent{}, err
+	}
 	if err := s.refreshClaims(ctx); err != nil {
 		return core.SuperAgent{}, err
 	}
@@ -106,10 +109,7 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 		return err
 	}
 	if agent.Name == "" {
-		agent.Name = router.Name
-		if agent.RouterRuntime != "" {
-			agent.Name = fmt.Sprintf("Super Agent (%s)", agent.RouterRuntime)
-		}
+		agent.Name = defaultSuperAgentName(*router)
 	}
 	if err := s.normalizeWorkers(ctx, agent); err != nil {
 		return err

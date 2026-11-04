@@ -1395,7 +1395,11 @@ export interface SuperAgentRouter {
   id: string;
   name: string;
   runtime_id: string;
+  // Empty values are the framework's defaults. A service tier such as
+  // "priority" is the framework's fast mode.
   model?: string;
+  reasoning_effort?: string;
+  service_tier?: string;
   mcp_servers: string[];
   used_by?: { id: string; name: string }[];
   created_at?: string;

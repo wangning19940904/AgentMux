@@ -212,7 +212,7 @@ func TestSetupResultSavesThroughTheNormalPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Name != "router" || len(saved.Sources) != 1 || saved.Sources[0].Kind != core.SuperAgentSourceFeishuMessage {
+	if saved.Name != "Super Agent (dsh)" || len(saved.Sources) != 1 || saved.Sources[0].Kind != core.SuperAgentSourceFeishuMessage {
 		t.Fatalf("saved = %+v", saved)
 	}
 }

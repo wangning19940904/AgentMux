@@ -6,6 +6,8 @@ import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
+import { describeModelChoice, ModelPicker } from "./superAgentModelPicker";
+import type { ModelChoice } from "./superAgentModelPicker";
 import { NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
@@ -299,7 +301,7 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   const others = (router: SuperAgentRouter) => (router.used_by ?? []).filter((user) => user.id !== draft.id);
   const describe = (router: SuperAgentRouter) => [
     display(router.runtime_id),
-    router.model || t("superAgents.routerModelDefault"),
+    describeModelChoice(t, modelChoice(router)),
     router.mcp_servers.length ? t("superAgents.routerToolsWithMCP", { names: router.mcp_servers.join(", ") }) : t("superAgents.routerToolsReadOnly"),
   ].join(" · ");
 
@@ -314,13 +316,14 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
         </select>
       </label>
       {routerDraft ? (
-        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers} sharedWith={selected ? others(selected) : []} onChange={onRouterDraft} />
+        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers} sharedWith={selected ? others(selected) : []}
+          plannedName={routerNameFor(draft, routerDraft.runtime_id)} onChange={onRouterDraft} />
       ) : selected ? (
         <div className="super-agent-card super-agent-router-summary">
           <span>{describe(selected)}</span>
           {others(selected).length > 0 && <small className="muted">{t("superAgents.routerUsedBy", { names: others(selected).map((user) => user.name).join(", ") })}</small>}
           <span className="control-row">
-            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, model: selected.model ?? "", mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
+            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, ...modelChoice(selected), mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
             {(selected.used_by ?? []).length === 0 && (
               <button className="ghost-action danger-action" type="button" onClick={() => onDelete(selected)}><Trash2 size={13} /> {t("superAgents.deleteRouter")}</button>
             )}
@@ -334,11 +337,22 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   );
 }
 
-function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
+function modelChoice(router: SuperAgentRouter): ModelChoice {
+  return { model: router.model ?? "", reasoning_effort: router.reasoning_effort ?? "", service_tier: router.service_tier ?? "" };
+}
+
+// routerNameFor is the name a router agent takes from the only Super Agent
+// that routes with it. The host names an unnamed Super Agent after the framework.
+function routerNameFor(agent: SuperAgent, runtime: string) {
+  return `${agent.name.trim() || (runtime ? `Super Agent (${runtime})` : "Super Agent")} router`;
+}
+
+function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, onChange }: {
   router: SuperAgentRouter;
   frameworks: FrameworkOption[];
   routers: SuperAgentRouterList | null;
   sharedWith: { id: string; name: string }[];
+  plannedName: string;
   onChange: (next: SuperAgentRouter | null) => void;
 }) {
   const { t } = useI18n();
@@ -355,7 +369,7 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
         <div className="field"><span>{t("superAgents.routerFramework")}</span><strong>{display}</strong><small>{t("superAgents.routerFrameworkFixed")}</small></div>
       ) : (
         <label className="field"><span>{t("superAgents.routerFramework")}</span>
-          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [] })}>
+          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [], model: "", reasoning_effort: "", service_tier: "" })}>
             <option value="">{t("superAgents.chooseFramework")}</option>
             {frameworks.map((item) => (
               <option key={item.kind} value={item.kind} disabled={!canRoute(item.kind)}>
@@ -366,13 +380,12 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
           {frameworks.length === 0 && <small>{t("superAgents.noFramework")}</small>}
         </label>
       )}
-      <div className="field-grid">
-        <label className="field"><span>{t("superAgents.routerName")}</span>
-          <input placeholder={router.runtime_id ? t("superAgents.routerNamePlaceholder", { framework: router.runtime_id }) : ""} value={router.name} onChange={(event) => onChange({ ...router, name: event.target.value })} />
-        </label>
-        <label className="field"><span>{t("superAgents.routerModel")}</span>
-          <input placeholder={t("superAgents.routerModelPlaceholder")} value={router.model ?? ""} onChange={(event) => onChange({ ...router, model: event.target.value })} />
-        </label>
+      <div className="field">
+        <span id="super-agent-router-model">{t("superAgents.routerModel")}</span>
+        {router.runtime_id ? (
+          <ModelPicker runtime={router.runtime_id} labelledBy="super-agent-router-model" value={modelChoice(router)}
+            onChange={(choice) => onChange({ ...router, ...choice })} />
+        ) : <small>{t("superAgents.modelChooseFramework")}</small>}
       </div>
       <div className="field" role="group" aria-labelledby="super-agent-router-tools">
         <span id="super-agent-router-tools">{t("superAgents.routerToolsTitle")}</span>
@@ -398,8 +411,8 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
       </div>
       <small className="muted">
         {router.id
-          ? sharedWith.length ? t("superAgents.routerSharedEdit", { names: sharedWith.map((user) => user.name).join(", ") }) : t("superAgents.routerSavedWithForm")
-          : t("superAgents.routerCreatedOnSave")}
+          ? sharedWith.length ? t("superAgents.routerSharedEdit", { names: sharedWith.map((user) => user.name).join(", ") }) : t("superAgents.routerSavedWithForm", { name: plannedName })
+          : t("superAgents.routerCreatedOnSave", { name: plannedName })}
       </small>
       {router.id && <button className="ghost-action" type="button" onClick={() => onChange(null)}>{t("superAgents.cancelRouterEdit")}</button>}
     </div>
@@ -475,7 +488,10 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   // Agent that routes with it.
   async function commitRouter(): Promise<SuperAgent> {
     if (!routerDraft) return draft;
-    const saved = await api.saveSuperAgentRouter(routerDraft);
+    // Saving the Super Agent names its router after it; this only gives a new
+    // router that name from the start.
+    const name = routerDraft.id ? routerDraft.name : draft.name.trim() ? routerNameFor(draft, routerDraft.runtime_id) : "";
+    const saved = await api.saveSuperAgentRouter({ ...routerDraft, name });
     const next = { ...draft, router_agent_id: saved.id, router_runtime: "" };
     setRouterDraft(null);
     onChange(next);
