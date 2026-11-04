@@ -14,7 +14,8 @@ import {
   boundChannelsForAgent,
   cliCatalogForAgent,
   copyAgent,
-  isConfigManaged,
+  isReadOnlyAgent,
+  readOnlyNoticeKey,
   newAgent,
   ownerBadge,
   routeToolForRuntime,
@@ -225,7 +226,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }
 
   async function remove() {
-    if (!drawerDraft?.id || isConfigManaged(drawerDraft)) return;
+    if (!drawerDraft?.id || isReadOnlyAgent(drawerDraft)) return;
     setBusy("delete");
     setNotice("");
     setNoticeIsError(false);
@@ -244,7 +245,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }
 
   async function toggleAgentEnabled(agent: AgentInstance) {
-    if (isConfigManaged(agent) || rowBusy) return;
+    if (isReadOnlyAgent(agent) || rowBusy) return;
     const operation = `toggle:${targetKey(agent.target_id, agent.id)}`;
     setRowBusy(operation);
     setNotice("");
@@ -262,7 +263,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }
 
   async function removeAgentFromRow(agent: AgentInstance) {
-    if (isConfigManaged(agent) || rowBusy) return;
+    if (isReadOnlyAgent(agent) || rowBusy) return;
     const operation = `delete:${targetKey(agent.target_id, agent.id)}`;
     setRowBusy(operation);
     setNotice("");
@@ -280,7 +281,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     }
   }
 
-  const readOnly = isConfigManaged(draft);
+  const readOnly = isReadOnlyAgent(draft);
   const canSave = Boolean(
     drawerDraft &&
       drawerDraft.name.trim() &&
@@ -324,7 +325,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
 
             <div className="surface-body provider-builder-body agent-drawer-body">
               {notice && <div className={`session-notice${noticeClass}`}>{notice}</div>}
-              {readOnly && <div className="session-notice">{t("agents.readOnlyNotice")}</div>}
+              {readOnly && <div className="session-notice">{t(readOnlyNoticeKey(draft))}</div>}
               <AgentForm
                 canSave={canSave}
                 activeRoutes={draftRoutes}
@@ -416,7 +417,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
               routeModel.mode === "provider" ? "agents.customRouteModel" : "agents.accountLoginModel",
               { model },
             );
-            const itemReadOnly = isConfigManaged(item);
+            const itemReadOnly = isReadOnlyAgent(item);
             const itemKey = targetKey(item.target_id, item.id);
             const toggleOperation = `toggle:${itemKey}`;
             const deleteOperation = `delete:${itemKey}`;
@@ -437,7 +438,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                         role="switch"
                         aria-checked={item.enabled}
                         aria-label={t(item.enabled ? "agents.disableAction" : "agents.enableAction", { name: item.name })}
-                        title={itemReadOnly ? t("agents.readOnlyNotice") : t(item.enabled ? "common.enabled" : "common.disabled")}
+                        title={itemReadOnly ? t(readOnlyNoticeKey(item)) : t(item.enabled ? "common.enabled" : "common.disabled")}
                         disabled={itemReadOnly || Boolean(rowBusy)}
                         onClick={() => void toggleAgentEnabled(item)}
                         onDoubleClick={(event) => event.stopPropagation()}
@@ -446,7 +447,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                           {rowBusy === toggleOperation && <RefreshCw className="spin" size={9} />}
                         </span>
                       </button>
-                      {itemReadOnly && <span className="source-badge config compact">{t("agents.sourceConfig")}</span>}
+                      {itemReadOnly && <span className="source-badge config compact">{t(agentSourceLabelKey(item))}</span>}
                     </span>
                     <small className="agent-runtime"><RuntimeBadge runtime={item.runtime_id} emptyLabel={t("agents.noRuntime")} /></small>
                   </span>
@@ -480,7 +481,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                       setDeleteCandidate(copyAgent(item));
                     }}
                     onDoubleClick={(event) => event.stopPropagation()}
-                    title={itemReadOnly ? t("agents.readOnlyNotice") : t("common.delete")}
+                    title={itemReadOnly ? t(readOnlyNoticeKey(item)) : t("common.delete")}
                   >
                     {rowBusy === deleteOperation ? <RefreshCw className="spin" size={15} /> : <Trash2 size={15} />}
                     {t("common.delete")}

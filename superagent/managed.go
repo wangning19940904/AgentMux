@@ -11,7 +11,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-func managedRouterID(runtimeID string) string { return "sar_" + runtimeID }
+func managedRouterID(runtimeID string) string { return routerIDPrefix + runtimeID }
 
 func (s *Service) stateDir() (string, error) {
 	if s.state != "" {
@@ -24,9 +24,10 @@ func (s *Service) stateDir() (string, error) {
 	return filepath.Join(home, ".agentmux"), nil
 }
 
-// resolveRouter sets RouterAgentID from the chosen framework, creating the
-// router Agent when this framework has none yet, and validates the result.
-func (s *Service) resolveRouter(ctx context.Context, agent *core.SuperAgent) (*core.AgentInstance, error) {
+// resolveRouter sets RouterAgentID from a framework named instead of a router
+// agent, creating that framework's default router agent when it has none yet,
+// and validates the result. current is the router the Super Agent was saved with.
+func (s *Service) resolveRouter(ctx context.Context, agent *core.SuperAgent, current string) (*core.AgentInstance, error) {
 	agent.RouterRuntime = strings.TrimSpace(agent.RouterRuntime)
 	if agent.RouterRuntime != "" {
 		id, err := s.ensureManagedRouter(ctx, agent.RouterRuntime)
@@ -35,20 +36,19 @@ func (s *Service) resolveRouter(ctx context.Context, agent *core.SuperAgent) (*c
 		}
 		agent.RouterAgentID = id
 	}
-	return s.validateRouter(ctx, agent.RouterAgentID)
+	return s.validateRouter(ctx, agent.RouterAgentID, current)
 }
 
-// ensureManagedRouter keeps one read-only router Agent per framework. It holds
-// nothing specific to a Super Agent, since each one's guidance travels in the
-// prompt and each Trigger has its own conversation, so an abandoned form leaves
-// nothing to clean up. An existing one is kept as is, which lets the operator
-// choose its provider or model on the Agents page.
+// ensureManagedRouter keeps a default router agent per framework, for API
+// clients that name a framework instead of a router agent. It holds nothing
+// specific to a Super Agent, since each one's guidance travels in the prompt and
+// each Trigger has its own conversation. An existing one is kept as is.
 func (s *Service) ensureManagedRouter(ctx context.Context, runtimeID string) (string, error) {
 	if s.runtimeAvailable != nil && !s.runtimeAvailable(runtimeID) {
 		return "", fmt.Errorf("agent framework %q is not installed on this machine", runtimeID)
 	}
-	if modes := core.ApprovalModeValuesForRuntime(runtimeID); len(modes) > 0 && !core.ApprovalModeSupported(runtimeID, core.ApprovalModePlan) {
-		return "", fmt.Errorf("the router reads untrusted events, so it needs a read-only mode, which %s does not have; choose another framework", runtimeID)
+	if err := checkRouterRuntime(runtimeID); err != nil {
+		return "", err
 	}
 	id := managedRouterID(runtimeID)
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -70,7 +70,7 @@ func (s *Service) ensureManagedRouter(ctx context.Context, runtimeID string) (st
 	instance := core.AgentInstance{
 		ID: id, Name: fmt.Sprintf("Super Agent router (%s)", runtimeID), RuntimeID: runtimeID,
 		WorkDir: workDir, WorkspaceMode: "shared", SessionBackend: "structured",
-		DefaultApprovalMode: core.ApprovalModePlan, Enabled: true, Source: autoWorkerAgentSource,
+		DefaultApprovalMode: core.ApprovalModePlan, Enabled: true, Source: routerAgentSource,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.UpsertAgentInstance(ctx, &instance); err != nil {
@@ -126,14 +126,14 @@ func validateAutoWorkerDir(path string) error {
 	return nil
 }
 
-// autoWorkerDir prefers the operator's choice, then a router Agent's own
-// directory. A router created from a framework only has a scratch directory, so
-// without a choice the workers get one of their own.
+// autoWorkerDir prefers the operator's choice, then the directory of an
+// ordinary Agent kept as the router. A router agent only has a scratch
+// directory, so without a choice the workers get one of their own.
 func (s *Service) autoWorkerDir(agent core.SuperAgent, router core.AgentInstance) (string, error) {
 	if dir := strings.TrimSpace(agent.AutoWorkerDir); dir != "" {
 		return expandHome(dir)
 	}
-	if !IsManagedAgent(router) && strings.TrimSpace(router.WorkDir) != "" {
+	if !IsManagedAgent(router) && !IsRouterAgent(router) && strings.TrimSpace(router.WorkDir) != "" {
 		return router.WorkDir, nil
 	}
 	state, err := s.stateDir()

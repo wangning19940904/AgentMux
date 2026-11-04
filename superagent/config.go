@@ -97,7 +97,11 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if agent.MaxConcurrency < 1 || agent.MaxConcurrency > maxConcurrencyLimit {
 		return fmt.Errorf("max_concurrency must be between 1 and %d", maxConcurrencyLimit)
 	}
-	router, err := s.resolveRouter(ctx, agent)
+	current := ""
+	if existing != nil {
+		current = existing.RouterAgentID
+	}
+	router, err := s.resolveRouter(ctx, agent, current)
 	if err != nil {
 		return err
 	}
@@ -114,26 +118,6 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 		return err
 	}
 	return normalizeSources(agent, existing)
-}
-
-// validateRouter keeps the blast radius of a prompt injection small. The router
-// reads untrusted events and is told not to use tools, but only the Agent's own
-// approval mode can enforce that.
-func (s *Service) validateRouter(ctx context.Context, id string) (*core.AgentInstance, error) {
-	if id == "" {
-		return nil, errors.New("choose a framework or a router Agent")
-	}
-	router, err := s.store.GetAgentInstance(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if router == nil {
-		return nil, fmt.Errorf("router agent %q not found on this machine", id)
-	}
-	if router.DefaultApprovalMode == core.ApprovalModeYolo {
-		return nil, errors.New("the router reads untrusted events, so its Agent cannot use the yolo approval mode; choose plan mode")
-	}
-	return router, nil
 }
 
 // normalizeAutoWorkers checks the worker frameworks. Workers need no read-only

@@ -28,9 +28,10 @@ The router reads untrusted text, so nothing depends on the model behaving:
   list admits nobody. `*` is accepted only for Feishu messages.
 - **A decision** can only name a worker on this Super Agent's roster, `auto:<framework>`
   for one of its worker frameworks, and a Ticket already on the event's thread.
-- **The router Agent** must run on this machine and cannot use the `yolo` approval
-  mode. Choosing a framework creates a router in `plan` mode, so a framework without
-  a read-only mode, such as Kimi, cannot route. An existing Agent can be chosen instead.
+- **The router** is a [router agent](#router-agents): it runs on this machine in its
+  framework's read-only `plan` mode, with no tools but the MCP servers allowed on it.
+  Ordinary Agents cannot be chosen. The router's limits are checked again before it
+  reads each event, so an edit made through the Agents API cannot loosen them.
 - **Observe mode** is the default. It records what the router would do, without
   running work or messaging anyone. Switch to Act when the decisions look right.
 
@@ -88,28 +89,59 @@ request, and the host starts a worker of that framework that was not configured 
 - Each Ticket gets its own session and, in a git repository, its own worktree under
   `<repo>.agentmux-worktrees`. Outside a repository, Tickets share the directory.
 - A decision supplies only the framework, the Ticket's title and instructions. A worker on
-  the router Agent's framework takes its provider, model and environment; another framework
+  the router agent's framework takes its provider, model and environment; another framework
   uses its active provider route. Workers need no read-only mode, so Kimi can work but not
-  route. The directory is `auto_worker_dir`, or an existing router Agent's, or else
-  `~/.agentmux/super-agents/<id>/work`. The approval mode is `auto_worker_approval_mode`,
+  route. The directory is `auto_worker_dir`, or else `~/.agentmux/super-agents/<id>/work`
+  (a Super Agent that still routes with an ordinary Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
   which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
   where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
 - `max_concurrency` limits how many run at once. Auto workers run on this machine only.
 - Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
   with the Super Agent. Worktrees are kept after a Ticket ends.
 
-## Choosing a framework
+## Router agents
 
-`router_runtime` names an installed framework, and no Agent has to exist first. The host
-keeps one router Agent per framework, `sar_<framework>`, and uses the framework's active
-provider route. It is shared between Super Agents and stays when one is deleted. Its
-provider or model can be changed on the Agents page, and those changes are kept. Worker
-frameworks are chosen separately, under [Auto workers](#auto-workers).
+A router agent is an Agent made only to route, kept apart from ordinary Agents. The
+Super Agent form chooses one, or creates one with a framework, a name, a model and the
+MCP servers it may use. Router agents can be shared between Super Agents.
+
+- It always runs in `plan` mode, so a framework without a read-only mode, such as Kimi,
+  cannot route. Its framework cannot change after it is created.
+- Its only tools beyond the framework's read-only ones are the registered, enabled MCP
+  servers listed on it, none by default. AgentMux can give MCP servers only to Claude Code
+  and Codex routers. Read-only mode does not limit what an MCP server does, so allow
+  lookups only.
+- It never has skills, CLIs, channels, schedules or a system prompt. Saving it restores
+  these limits, whatever was changed elsewhere, and the Agents page shows it read-only.
+- It has its own directory, `~/.agentmux/super-agents/routers/<id>`, where AgentMux writes
+  its MCP configuration. The model is empty for the framework's default, and the provider
+  is the framework's active provider route.
+- It can be deleted only when no Super Agent routes with it.
+
+A Super Agent saved with an ordinary Agent as its router, before router agents existed,
+keeps it until it switches to a router agent. `router_runtime` still names a framework
+instead of a router agent for API clients: the host then uses that framework's default
+router agent, `sar_<framework>`, and creates it when missing. Worker frameworks are chosen
+separately, under [Auto workers](#auto-workers).
+
+## The form
+
+| Field | What it is for |
+| --- | --- |
+| Name | Shown in the Super Agent list, and the router is told it. Named after the router's framework when empty. |
+| What should it do? | Not saved. The setup assistant turns it into the name, routing rules and triggers on the form, for review. |
+| Router agent | Who judges each request. |
+| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. |
+| Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
+| Triggers | Where requests come from. |
+
+Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings.
 
 ## Setup assistant
 
 `POST /api/v1/super-agents/setup` turns an administrator's instruction into a proposed
-configuration, using the router Agent:
+configuration, using the router agent. A router agent the form is creating is saved first,
+so the assistant can run on it:
 
 - It returns a draft and stores nothing. Saving it passes the usual validation.
 - Only the Console can reach it, so text in an event cannot change the configuration.
@@ -127,6 +159,7 @@ These routes are for Console administrators and are closed to tenant credentials
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete; secrets are write-only |
 | `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health |
+| `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |

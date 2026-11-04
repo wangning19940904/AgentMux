@@ -79,7 +79,17 @@ func (s *Service) Setup(ctx context.Context, request SetupRequest) (SetupResult,
 	}
 	draft := request.Draft
 	draft.RouterAgentID = strings.TrimSpace(draft.RouterAgentID)
-	if _, err := s.resolveRouter(ctx, &draft); err != nil {
+	current := ""
+	if id := strings.TrimSpace(draft.ID); id != "" {
+		saved, err := s.store.GetSuperAgent(ctx, id)
+		if err != nil {
+			return SetupResult{}, err
+		}
+		if saved != nil {
+			current = saved.RouterAgentID
+		}
+	}
+	if _, err := s.resolveRouter(ctx, &draft, current); err != nil {
 		return SetupResult{}, err
 	}
 	conversationID := strings.TrimSpace(request.ConversationID)

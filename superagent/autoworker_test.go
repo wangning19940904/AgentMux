@@ -23,7 +23,7 @@ func (h *harness) enableAutoWorkers(workDir string) {
 	router.Env = map[string]string{"DEEPSEEK_API_KEY": "from-router"}
 	router.MCPServers, router.Skills = []string{"mcp-1"}, []string{"skill-1"}
 	h.store.local["router"] = router
-	h.agent.AutoWorkers = true
+	h.agent.AutoWorkers, h.agent.AutoWorkerDir = true, workDir
 	h.store.agents[h.agent.ID] = h.agent
 }
 
@@ -218,7 +218,7 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	router, _ := h.store.GetAgentInstance(ctx, saved.RouterAgentID)
-	if router == nil || !IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModePlan || router.WorkDir == "" {
+	if router == nil || !IsRouterAgent(*router) || IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModePlan || router.WorkDir == "" {
 		t.Fatalf("router = %+v", router)
 	}
 	if saved.Name != "Super Agent (codex)" || !slices.Equal(saved.WorkerRuntimes, []string{"codex"}) {

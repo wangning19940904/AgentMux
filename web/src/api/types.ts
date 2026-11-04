@@ -1389,6 +1389,32 @@ export interface SuperAgent {
   updated_at?: string;
 }
 
+// A router agent is made only to route: the host runs it read-only and gives it
+// no tools but the MCP servers listed here.
+export interface SuperAgentRouter {
+  id: string;
+  name: string;
+  runtime_id: string;
+  model?: string;
+  mcp_servers: string[];
+  used_by?: { id: string; name: string }[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SuperAgentRouterFramework {
+  runtime_id: string;
+  can_route: boolean;
+  mcp_servers: boolean;
+  reason?: string;
+}
+
+export interface SuperAgentRouterList {
+  routers: SuperAgentRouter[];
+  frameworks: SuperAgentRouterFramework[];
+  mcp_servers: string[];
+}
+
 export interface SuperAgentSetupResult {
   conversation_id: string;
   reply: string;

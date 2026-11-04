@@ -48,6 +48,11 @@ func (d routerDecision) summary() string {
 func (s *Service) route(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket) (routerDecision, error) {
 	routerCtx, cancel := context.WithTimeout(ctx, routerTimeout)
 	defer cancel()
+	// The router Agent can be edited after the Super Agent was saved, so its
+	// limits are checked again before it reads an event.
+	if _, err := s.validateRouter(routerCtx, agent.RouterAgentID, agent.RouterAgentID); err != nil {
+		return routerDecision{}, err
+	}
 	result, err := s.invoker.Invoke(routerCtx, core.InvocationRequest{
 		AgentID:        agent.RouterAgentID,
 		ConversationID: routerConversationID(trigger),

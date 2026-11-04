@@ -354,7 +354,23 @@ export function isConfigManaged(agent: AgentInstance): boolean {
   return agent.source === "config.toml" || agent.id.startsWith("config:");
 }
 
+// Router agents are configured under Super Agents, which keep them read-only
+// and without tools; routers made per framework before that were tagged like
+// auto workers.
+export function isRouterAgent(agent: AgentInstance): boolean {
+  return agent.source === "super_agent_router" || (agent.source === "super_agent" && agent.id.startsWith("sar_"));
+}
+
+export function isReadOnlyAgent(agent: AgentInstance): boolean {
+  return isConfigManaged(agent) || isRouterAgent(agent);
+}
+
+export function readOnlyNoticeKey(agent: AgentInstance): string {
+  return isRouterAgent(agent) ? "agents.routerReadOnlyNotice" : "agents.readOnlyNotice";
+}
+
 export function agentSourceLabelKey(agent: AgentInstance): string {
+  if (isRouterAgent(agent)) return "agents.sourceRouter";
   if (isConfigManaged(agent)) return "agents.sourceConfig";
   if (agent.source === "manual") return "agents.sourceManual";
   if (agent.source === "console" || !agent.source) return "agents.sourceConsole";
@@ -362,13 +378,14 @@ export function agentSourceLabelKey(agent: AgentInstance): string {
 }
 
 export function agentSourceDetailKey(agent: AgentInstance): string {
+  if (isRouterAgent(agent)) return "agents.routerManaged";
   if (isConfigManaged(agent)) return "agents.configManaged";
   if (agent.source === "manual") return "agents.manualManagedDetail";
   return "agents.consoleManagedDetail";
 }
 
 export function agentSourceClass(agent: AgentInstance): string {
-  if (isConfigManaged(agent)) return "config";
+  if (isReadOnlyAgent(agent)) return "config";
   if (agent.source === "manual") return "manual";
   return "console";
 }

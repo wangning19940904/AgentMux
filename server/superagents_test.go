@@ -25,6 +25,9 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodGet, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents"},
 		{http.MethodDelete, "/api/v1/super-agents?id=x"},
+		{http.MethodGet, "/api/v1/super-agents/routers"},
+		{http.MethodPost, "/api/v1/super-agents/routers"},
+		{http.MethodDelete, "/api/v1/super-agents/routers?id=x"},
 		{http.MethodGet, "/api/v1/super-agents/activity?id=x"},
 		{http.MethodPost, "/api/v1/super-agents/setup"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
@@ -48,6 +51,7 @@ func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
 		{http.MethodGet, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
+		{http.MethodPost, "/api/v1/super-agents/routers"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members"},
 	} {
 		if tenantRouteAllowed(route.method, route.path) {

@@ -1,4 +1,4 @@
-import type { SuperAgent, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { SuperAgent, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 
 export type SourceField = {
   key: string;
@@ -58,6 +58,17 @@ export function withWorkerRuntimes(agent: SuperAgent, runtimes: string[]): Super
   return { ...agent, worker_runtimes: runtimes, auto_workers: runtimes.length > 0 };
 }
 
+// Examples the "What should it do?" field can start from. Their text is
+// translated under superAgents.template.<key>.
+export const INSTRUCTION_TEMPLATES = ["feishu", "github", "email", "doc"] as const;
+
+// The router select's value for creating a router agent instead of choosing one.
+export const NEW_ROUTER = "__new_router__";
+
+export function newRouter(runtimeID = ""): SuperAgentRouter {
+  return { id: "", name: "", runtime_id: runtimeID, model: "", mcp_servers: [] };
+}
+
 export function newWorker(): SuperAgentWorker {
   return { id: "", agent_id: "" };
 }
@@ -74,9 +85,14 @@ export function isFeishuSource(kind: SuperAgentSourceKind) {
   return kind === "feishu_message" || kind === "feishu_doc";
 }
 
-export function superAgentProblems(agent: SuperAgent): string[] {
+// routerDraft is a router agent the form creates or changes when it saves.
+export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRouter | null): string[] {
   const problems: string[] = [];
-  if (!agent.router_runtime && !agent.router_agent_id) problems.push("superAgents.problem.router");
+  if (routerDraft) {
+    if (!routerDraft.runtime_id) problems.push("superAgents.problem.routerFramework");
+  } else if (!agent.router_runtime && !agent.router_agent_id) {
+    problems.push("superAgents.problem.router");
+  }
   if (agent.workers.length === 0 && !agent.auto_workers) problems.push("superAgents.problem.noWorkers");
   if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
   for (const source of agent.sources) {
