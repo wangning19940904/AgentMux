@@ -348,6 +348,64 @@ export interface MachineTarget {
   error?: string;
 }
 
+export interface HostInfo {
+  hostname: string;
+  os: string;
+  platform: string;
+  platform_id?: string;
+  kernel?: string;
+  arch: string;
+  cpu_cores: number;
+  boot_time?: number;
+}
+
+export interface LoadAverage {
+  one: number;
+  five: number;
+  fifteen: number;
+}
+
+export interface DiskUsage {
+  mount: string;
+  fs_type?: string;
+  total: number;
+  used: number;
+  free: number;
+  percent: number;
+}
+
+export interface MetricPoint {
+  /** Unix time in milliseconds. */
+  t: number;
+  cpu?: number;
+  mem?: number;
+  load?: number;
+  rx?: number;
+  tx?: number;
+}
+
+export interface SessionActivity {
+  needs_input: number;
+  working: number;
+  idle: number;
+}
+
+/** GET /api/v1/system/metrics on one machine. */
+export interface SystemMetrics {
+  supported: boolean;
+  host: HostInfo;
+  collected_at: string;
+  interval_seconds: number;
+  cpu?: { percent?: number; load?: LoadAverage };
+  memory?: { total: number; used: number; percent: number; swap_total?: number; swap_used?: number };
+  disks: DiskUsage[];
+  network?: { rx_bytes_per_sec: number; tx_bytes_per_sec: number };
+  history: MetricPoint[];
+  warnings?: string[];
+  agentmux_version: string;
+  sessions?: SessionActivity;
+}
+
 export interface TargetMetadata {
   target_id?: string;
   target_name?: string;

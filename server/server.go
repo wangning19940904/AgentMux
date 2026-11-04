@@ -18,6 +18,7 @@ import (
 	"github.com/wangning19940904/AgentMux/contract"
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/eventrelay"
+	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -57,6 +58,7 @@ type Server struct {
 	superAgents        *superagent.Service
 	feishuDirectory    superagent.FeishuDirectory
 	keepAwake          *keepAwakeManager
+	hostMetrics        *hostmetrics.Sampler
 	channelPeers       channelPeerClient
 	meetingPeers       meetingPeerClient
 	ttsModels          *ttspkg.Manager
@@ -136,6 +138,7 @@ func New(deps Dependencies) *Server {
 		workspace:         deps.Workspace,
 		sessions:          sessionstore.New(),
 		keepAwake:         newKeepAwakeManager(),
+		hostMetrics:       hostmetrics.New(hostmetrics.Options{}),
 		ttsModels:         ttspkg.NewManager("", log),
 		openAIResponses:   newOpenAIResponseRegistry(),
 		openAIFiles:       newOpenAIFileRegistry(),
@@ -225,6 +228,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer s.keepAwake.Stop()
+	defer s.hostMetrics.Close()
 	if s.remote != nil {
 		defer s.remote.Close()
 	}

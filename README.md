@@ -38,6 +38,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
 - **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
@@ -212,6 +213,7 @@ POST /api/v1/guard/evaluate          # 评估一次工具调用 {tool,action}
 
 GET    /api/v1/remote/hosts                    # 本机保存的 SSH 机器（敏感字段脱敏）
 GET    /api/v1/remote/fleet/targets            # 本机 + 已配置 SSH 机器的在线状态
+GET    /api/v1/system/metrics                  # 本机 CPU/负载/内存/磁盘/网速、近期走势与托管会话数（经 fleet query 读取各机器）
 POST   /api/v1/remote/fleet/query              # 对选定机器批量执行只读 Console 查询
 POST   /api/v1/remote/fleet/execute            # 对选定机器逐机执行管理操作
 POST   /api/v1/remote/sync/preview             # 生成只新增配置同步预览（15 分钟有效）

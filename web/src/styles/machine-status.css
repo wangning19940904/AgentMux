@@ -1,0 +1,382 @@
+/* Machine status: per-machine health cards across the fleet. */
+.machine-status-page {
+  --ms-cpu: #4c7bd9;
+  --ms-memory: #2d9c54;
+  --ms-rx: #e2793a;
+  --ms-tx: #7258d6;
+  --ms-working: #4c7bd9;
+  display: grid;
+  gap: 14px;
+}
+
+:root[data-theme="dark"] .machine-status-page {
+  --ms-cpu: #7fa4ef;
+  --ms-memory: #63be7b;
+  --ms-rx: #f0965f;
+  --ms-tx: #a08cf0;
+  --ms-working: #7fa4ef;
+}
+
+.machine-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  min-height: 30px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.machine-status-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.machine-status-summary-item.warning { color: var(--amber); }
+.machine-status-summary-item.critical { color: var(--red); }
+
+.machine-status-summary-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.machine-status-stale { color: var(--amber); }
+
+.machine-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.machine-status-dot.online { background: var(--green); }
+.machine-status-dot.pulse { animation: machine-status-pulse 1.2s ease-in-out infinite; }
+
+@keyframes machine-status-pulse {
+  50% { opacity: 0.35; }
+}
+.machine-status-dot.offline { background: var(--red); }
+
+.machine-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.machine-status-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+}
+
+.machine-status-card.warning {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 9%, transparent);
+}
+
+.machine-status-card.critical {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.machine-status-card.offline { background: var(--surface-subtle); }
+
+.machine-status-card-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.machine-status-os {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+}
+
+.machine-status-os.os-debian { color: #c22a51; background: #fbe9ee; }
+.machine-status-os.os-ubuntu { color: #d9531e; background: #fcede5; }
+.machine-status-os.os-linux { color: #3b78c4; background: #e8f0fa; }
+.machine-status-os.os-windows { color: #1b7fd1; background: #e5f1fb; }
+
+:root[data-theme="dark"] .machine-status-os.os-debian { color: #f07a98; background: #3d2229; }
+:root[data-theme="dark"] .machine-status-os.os-ubuntu { color: #f39668; background: #3b2a21; }
+:root[data-theme="dark"] .machine-status-os.os-linux,
+:root[data-theme="dark"] .machine-status-os.os-windows { color: #86b2ea; background: #233041; }
+
+.machine-status-card-title {
+  min-width: 0;
+}
+
+.machine-status-card-title h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-status-card-title p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.machine-status-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.machine-status-state.online { color: var(--green); }
+.machine-status-state.offline { color: var(--red); }
+
+.machine-status-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.machine-status-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.3;
+  cursor: default;
+}
+
+/* Tinted chip with readable text; the icon carries the severity colour. */
+.machine-status-alert.critical { background: var(--red-soft); }
+.machine-status-alert.warning { background: var(--amber-soft); }
+.machine-status-alert.critical svg { color: var(--red); }
+.machine-status-alert.warning svg { color: var(--amber); }
+
+.machine-status-sessions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  background: var(--bg-subtle);
+}
+
+.machine-status-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.machine-status-session strong {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.machine-status-session-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.machine-status-session.needs-input.active .machine-status-session-dot { background: var(--amber); }
+.machine-status-session.needs-input.active { color: var(--amber); }
+.machine-status-session.working.active .machine-status-session-dot { background: var(--ms-working); }
+.machine-status-session.idle.active .machine-status-session-dot { background: var(--muted); }
+
+.machine-status-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.machine-status-metric {
+  display: grid;
+  grid-template-rows: auto auto auto 34px;
+  gap: 3px;
+  min-width: 0;
+}
+
+.machine-status-metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.machine-status-metric.warning .machine-status-metric-label svg { color: var(--amber); }
+.machine-status-metric.critical .machine-status-metric-label svg { color: var(--red); }
+
+.machine-status-metric-value {
+  overflow: hidden;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.machine-status-metric.warning .machine-status-metric-value { color: var(--amber); }
+.machine-status-metric.critical .machine-status-metric-value { color: var(--red); }
+
+.machine-status-metric-detail {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.machine-status-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.machine-status-chart {
+  align-self: end;
+  min-width: 0;
+  height: 32px;
+  margin-top: 4px;
+}
+
+.machine-status-sparkline {
+  display: block;
+  width: 100%;
+  height: 32px;
+  overflow: visible;
+}
+
+.machine-status-sparkline .spark-line {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.machine-status-sparkline .spark-area { stroke: none; opacity: 0.16; }
+.machine-status-sparkline .spark-cpu .spark-line { stroke: var(--ms-cpu); }
+.machine-status-sparkline .spark-cpu .spark-area { fill: var(--ms-cpu); }
+.machine-status-sparkline .spark-memory .spark-line { stroke: var(--ms-memory); }
+.machine-status-sparkline .spark-memory .spark-area { fill: var(--ms-memory); }
+.machine-status-sparkline .spark-rx .spark-line { stroke: var(--ms-rx); }
+.machine-status-sparkline .spark-tx .spark-line { stroke: var(--ms-tx); }
+
+.machine-status-disk-bars {
+  display: grid;
+  align-content: end;
+  gap: 4px;
+  height: 100%;
+}
+
+.machine-status-disk-bar {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+}
+
+.machine-status-disk-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ms-cpu);
+}
+
+.machine-status-disk-bar > span.warning { background: var(--amber); }
+.machine-status-disk-bar > span.critical { background: var(--red); }
+
+.machine-status-card-footer {
+  overflow: hidden;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-status-unavailable {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.machine-status-unavailable p { margin: 0; }
+
+.machine-status-unavailable code {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--bg-subtle);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-status-unavailable .ghost-action {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  .machine-status-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .machine-status-summary-meta {
+    margin-left: 0;
+  }
+
+  .machine-status-sessions {
+    padding: 8px 10px;
+  }
+}

@@ -80,6 +80,12 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "openrouter", "azure openai", "bedrock", "vertex ai", "qwen", "通义千问", "dashscope", "kimi", "moonshot",
     "minimax", "groq", "ollama",
   ],
+  "machine-status": [
+    "机器状态", "机器监控", "主机监控", "资源监控", "服务器状态", "负载", "磁盘", "内存", "CPU", "网速",
+    "jiqizhuangtai", "ji qi zhuang tai", "jqzt", "jiqijiankong", "ji qi jian kong", "jqjk",
+    "machine status", "machine monitor", "host monitor", "server status", "fleet health", "resource usage",
+    "cpu", "memory", "disk", "load", "network", "uptime",
+  ],
   observability: [
     "可观测性", "监控", "日志", "链路", "追踪", "指标", "遥测", "告警",
     "keguancexing", "ke guan ce xing", "kgcx", "jiankong", "jian kong", "jk",
