@@ -439,6 +439,48 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Coder (an ordinary Agent, kept)")).toBe(false);
   });
 
+  it("says why Draft settings cannot run, and fills fields from templates", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPanel({ createRequested: true });
+    await until(() => control(/^Router agent/).value === "router");
+    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
+    const instruction = () => control(/^What should it do/) as HTMLTextAreaElement;
+    expect(draftButton().disabled).toBe(true);
+    expect(hasText("Describe what it should do above, or start from an example.")).toBe(true);
+
+    click(button(/^GitHub issues and PRs$/));
+    expect(instruction().value).toMatch(/^Handle GitHub issues and pull requests in <owner\/repo>/);
+    expect(draftButton().disabled).toBe(false);
+    expect(hasText("Describe what it should do above")).toBe(false);
+    // What was typed is only replaced when the operator agrees.
+    setValue(instruction(), "my own words");
+    click(button(/^Feishu @mention$/));
+    expect(instruction().value).toBe("my own words");
+    confirm.mockReturnValue(true);
+    click(button(/^Feishu @mention$/));
+    expect(instruction().value).toMatch(/^When someone @mentions the bot/);
+
+    const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
+    confirm.mockClear();
+    click(button(/^Use template$/));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(rules().value).toMatch(/^Take on: requests about <project>/);
+    expect(rules().value.split("\n")).toHaveLength(4);
+    setValue(rules(), "only widgets");
+    confirm.mockReturnValue(false);
+    click(button(/^Use template$/));
+    expect(rules().value).toBe("only widgets");
+  });
+
+  it("says when Draft settings needs a router agent first", async () => {
+    vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [] } as never);
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    renderPanel({ createRequested: true });
+    await until(() => hasText("Choose or create a router agent below first."));
+    click(button(/^Email requests$/));
+    expect((button(/^Draft settings$/) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("explains when no framework is installed", async () => {
     vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [] } as never);
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);

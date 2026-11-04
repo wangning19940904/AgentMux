@@ -6,7 +6,7 @@ import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
-import { NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
+import { INSTRUCTION_TEMPLATES, NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -500,6 +500,22 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
     }
   }
 
+  // Templates fill a field with an example to edit; what was typed is only
+  // replaced when the operator agrees.
+  const replaces = (current: string, next: string, question: string) =>
+    !current.trim() || current === next || window.confirm(t(question));
+  const applyInstructionTemplate = (text: string) => {
+    if (replaces(instruction, text, "superAgents.replaceInstruction")) setInstruction(text);
+  };
+  const applyRoutingTemplate = () => {
+    const text = t("superAgents.routerPromptTemplateText");
+    if (replaces(draft.router_prompt ?? "", text, "superAgents.replaceRoutingRules")) onChange({ ...draft, router_prompt: text });
+  };
+  // Says why Draft settings cannot run instead of leaving a silent, dimmed button.
+  const assistBlocked = !hasRouter
+    ? routers.loading || frameworks.loading ? "" : "superAgents.assistNeedsRouter"
+    : !instruction.trim() ? "superAgents.assistNeedsInstruction" : "";
+
   async function assist() {
     setAssisting(true);
     setAssistError("");
@@ -566,8 +582,21 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
               <textarea rows={3} placeholder={t("superAgents.instructionPlaceholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
               <small>{t("superAgents.instructionHelp")}</small>
             </label>
-            <div className="control-row">
-              <button className="ghost-action" disabled={assisting || !hasRouter || !instruction.trim()} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
+            <div className="field" role="group" aria-labelledby="super-agent-templates">
+              <small id="super-agent-templates">{t("superAgents.templatesLabel")}</small>
+              <div className="super-agent-chips">
+                {INSTRUCTION_TEMPLATES.map((key) => (
+                  <button key={key} type="button" className="super-agent-chip super-agent-template" onClick={() => applyInstructionTemplate(t(`superAgents.template.${key}.text`))}>
+                    {t(`superAgents.template.${key}.label`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="control-row super-agent-assist-row">
+              <button className="ghost-action" disabled={assisting || Boolean(assistBlocked)} title={assistBlocked ? t(assistBlocked) : undefined} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
+              {assisting
+                ? <small className="muted" role="status">{t("superAgents.assistingHint")}</small>
+                : assistBlocked && <small className="muted">{t(assistBlocked)}</small>}
             </div>
             {assistError && <div className="session-notice error" role="alert">{assistError}</div>}
             {setup && (
@@ -586,9 +615,10 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
               legacyName={legacyRouter?.name} onChoose={chooseRouter} onRouterDraft={changeRouterDraft} onDelete={(router) => void deleteRouter(router)} />
             {(routerError || routers.error) && <div className="session-notice error" role="alert">{routerError || String(routers.error)}</div>}
             <label className="field"><span>{t("superAgents.routerPrompt")}</span>
-              <textarea rows={3} placeholder={t("superAgents.routerPromptPlaceholder")} value={draft.router_prompt ?? ""} onChange={(event) => onChange({ ...draft, router_prompt: event.target.value })} />
+              <textarea rows={4} placeholder={t("superAgents.routerPromptPlaceholder")} value={draft.router_prompt ?? ""} onChange={(event) => onChange({ ...draft, router_prompt: event.target.value })} />
               <small>{t("superAgents.routerPromptHelp")}</small>
             </label>
+            <button className="ghost-action super-agent-template-action" type="button" onClick={applyRoutingTemplate}>{t("superAgents.routerPromptTemplate")}</button>
           </section>
 
           <section className="super-agent-section" aria-labelledby="super-agent-workers">

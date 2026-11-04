@@ -1424,6 +1424,10 @@
 .super-agent-section > header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .super-agent-section > header.super-agent-section-head { align-items: flex-start; }
 .super-agent-router-summary { gap: 6px; }
+.super-agent-template { background: transparent; color: var(--text); cursor: pointer; }
+.super-agent-template:hover { border-color: var(--accent); background: var(--accent-soft); }
+.super-agent-template-action { justify-self: start; }
+.super-agent-assist-row { align-items: center; gap: 10px; }
 .super-agent-router-editor .field > strong { font-size: 13px; }
 .super-agent-advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .super-agent-advanced > .super-agent-form { margin-top: 12px; }
