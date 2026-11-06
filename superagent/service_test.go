@@ -192,14 +192,16 @@ func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
 }
 
 type routerStub struct {
-	mu      sync.Mutex
-	answer  func(core.InvocationRequest) (string, error)
-	prompts []string
+	mu            sync.Mutex
+	answer        func(core.InvocationRequest) (string, error)
+	prompts       []string
+	conversations []string
 }
 
 func (r *routerStub) Invoke(_ context.Context, req core.InvocationRequest) (core.InvocationResult, error) {
 	r.mu.Lock()
 	r.prompts = append(r.prompts, req.Input)
+	r.conversations = append(r.conversations, req.ConversationID)
 	answer := r.answer
 	r.mu.Unlock()
 	text, err := answer(req)
@@ -210,6 +212,7 @@ type workerCall struct {
 	worker core.SuperAgentWorker
 	conv   string
 	input  string
+	dir    string
 }
 
 type workerStub struct {
@@ -218,8 +221,8 @@ type workerStub struct {
 	run   func(context.Context, workerCall) (string, error)
 }
 
-func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv, input string) (string, error) {
-	call := workerCall{worker, conv, input}
+func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv, input, dir string) (string, error) {
+	call := workerCall{worker, conv, input, dir}
 	w.mu.Lock()
 	w.calls = append(w.calls, call)
 	run := w.run
@@ -269,7 +272,7 @@ type harness struct {
 }
 
 func acceptAnswer(worker string) string {
-	return fmt.Sprintf(`{"decision":"accept","worker_id":%q,"title":"Fix it","instructions":"look closely","reply":"on it","reason":"asked"}`, worker)
+	return fmt.Sprintf("on it\n\n<agentmux-action>\n{\"action\":\"accept\",\"worker_id\":%q,\"title\":\"Fix it\",\"instructions\":\"look closely\",\"reason\":\"asked\"}\n</agentmux-action>", worker)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -452,20 +455,20 @@ func TestRouterCannotEscapeRosterOrThread(t *testing.T) {
 func TestIgnoreDeliversTheRoutersReply(t *testing.T) {
 	h := newHarness(t)
 	h.router.answer = func(core.InvocationRequest) (string, error) {
-		return `{"decision":"ignore","reply":"no worker can do this right now","reason":"no suitable worker"}`, nil
+		return "no worker can do this right now\n<agentmux-action>{\"action\":\"none\",\"reason\":\"no suitable worker\"}</agentmux-action>", nil
 	}
 	h.ingest("alice", "github:o/r#1", "translate this video", true)
 	h.settle()
 	if got := h.replies.sent(); !slices.Equal(got, []string{"no worker can do this right now"}) {
 		t.Fatalf("replies = %v", got)
 	}
-	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionIgnored || trigger.Reason != "no suitable worker" {
+	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionAnswered || trigger.Reason != "no suitable worker" {
 		t.Fatalf("trigger = %+v", trigger)
 	}
 	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
 		t.Fatal("an ignored event must not run work")
 	}
-	if !strings.Contains(h.router.prompts[0], "you can only choose from the roster") {
+	if !strings.Contains(h.router.prompts[0], "Choose workers only from the roster") {
 		t.Fatalf("the prompt must say what to do when no worker fits:\n%s", h.router.prompts[0])
 	}
 }
@@ -576,7 +579,9 @@ func TestRouterOutageRetriesThenFallsBackToThreadTicket(t *testing.T) {
 
 func TestUnparseableRouterAnswerFailsWithoutAThreadTicket(t *testing.T) {
 	h := newHarness(t)
-	h.router.answer = func(core.InvocationRequest) (string, error) { return "I think we should do it!", nil }
+	h.router.answer = func(core.InvocationRequest) (string, error) {
+		return "I think we should do it!\n<agentmux-action>{\"action\":\"accept\"", nil
+	}
 	h.ingest("alice", "t1", "work", true)
 	for range maxRouterAttempts {
 		h.settle()
@@ -666,7 +671,7 @@ func TestStopCancelsTurnAndNeverResumes(t *testing.T) {
 		t.Fatalf("ticket = %+v", ticket)
 	}
 	before := len(h.replies.sent())
-	if err := h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "more"}); !errors.Is(err, ErrConflict) {
+	if err := h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "more"}, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("attach to a stopped ticket: %v", err)
 	}
 	h.settle()
@@ -694,7 +699,7 @@ func TestFollowUpDuringTurnRunsBeforeAnyoneIsTold(t *testing.T) {
 	go func() {
 		<-entered
 		id := h.store.allTickets()[0].ID
-		_ = h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "one more thing", Reply: json.RawMessage(`{}`)})
+		_ = h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "one more thing", Reply: json.RawMessage(`{}`)}, "")
 		close(release)
 	}()
 	h.settle()
@@ -725,7 +730,7 @@ func TestRestartResumesInterruptedTicketOnItsConversation(t *testing.T) {
 	}
 
 	h.workers.run = nil
-	restarted := New(Options{Store: h.store, Invoker: h.router, Workers: h.workers, Replies: h.replies})
+	restarted := New(Options{Store: h.store, Invoker: h.router, Workers: h.workers, Replies: h.replies, StateDir: h.service.state})
 	startCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	if err := restarted.Start(startCtx); err != nil {
@@ -776,11 +781,15 @@ func TestSaveValidatesAndKeepsSecretsWriteOnly(t *testing.T) {
 		t.Fatalf("saving the redacted form must keep the secret, got %q", stored.Sources[0].Config["webhook_secret"])
 	}
 
+	spare := h.spareRouter()
 	base := func() core.SuperAgent {
-		return core.SuperAgent{Name: "x", RouterAgentID: "router", Workers: []core.SuperAgentWorker{{AgentID: "coder"}}}
+		return core.SuperAgent{Name: "x", RouterAgentID: spare, Workers: []core.SuperAgentWorker{{AgentID: "coder"}}}
 	}
 	cases := map[string]func(*core.SuperAgent){
 		"yolo router":   func(a *core.SuperAgent) { a.RouterAgentID = "yolo" },
+		"shared router": func(a *core.SuperAgent) { a.RouterAgentID = "router" },
+		"unsafe id":     func(a *core.SuperAgent) { a.ID = "../escape" },
+		"reserved id":   func(a *core.SuperAgent) { a.ID = "routers" },
 		"no router":     func(a *core.SuperAgent) { a.RouterAgentID = "missing" },
 		"no workers":    func(a *core.SuperAgent) { a.Workers = nil },
 		"unknown local": func(a *core.SuperAgent) { a.Workers = []core.SuperAgentWorker{{AgentID: "missing"}} },

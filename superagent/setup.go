@@ -89,7 +89,7 @@ func (s *Service) Setup(ctx context.Context, request SetupRequest) (SetupResult,
 			current = saved.RouterAgentID
 		}
 	}
-	if _, err := s.resolveRouter(ctx, &draft, current); err != nil {
+	if _, err := s.resolveRouter(ctx, &draft, current, false); err != nil {
 		return SetupResult{}, err
 	}
 	conversationID := strings.TrimSpace(request.ConversationID)

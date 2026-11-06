@@ -62,7 +62,7 @@ export function withWorkerRuntimes(agent: SuperAgent, runtimes: string[]): Super
 export const NEW_ROUTER = "__new_router__";
 
 export function newRouter(runtimeID = ""): SuperAgentRouter {
-  return { id: "", name: "", runtime_id: runtimeID, model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] };
+  return { id: "", name: "", runtime_id: runtimeID, model: "", reasoning_effort: "", service_tier: "", approval_mode: "", mcp_servers: [] };
 }
 
 export function newWorker(): SuperAgentWorker {

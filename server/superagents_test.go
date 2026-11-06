@@ -191,7 +191,7 @@ func TestRemoteFleetAgainstRealInvocationStreamHandler(t *testing.T) {
 			server := httptest.NewServer(remoteDaemon.mux)
 			defer server.Close()
 			fleet := &superagent.Fleet{Hosts: dialerToServer{address: server.Listener.Addr().String()}}
-			answer, err := fleet.Run(context.Background(), core.SuperAgentWorker{HostID: "h", AgentID: "a"}, "conv", "input")
+			answer, err := fleet.Run(context.Background(), core.SuperAgentWorker{HostID: "h", AgentID: "a"}, "conv", "input", "")
 			if tc.failure == "" {
 				if err != nil || answer != tc.answer {
 					t.Fatalf("answer=%q err=%v", answer, err)

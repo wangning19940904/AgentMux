@@ -160,6 +160,47 @@ func TestInvokeManagedAgent(t *testing.T) {
 	}
 }
 
+type dirRecordingAgent struct {
+	mu   sync.Mutex
+	dirs []string
+}
+
+func (a *dirRecordingAgent) Name() string { return "dir-recording" }
+func (a *dirRecordingAgent) StartSession(_ context.Context, workDir string) (AgentSession, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.dirs = append(a.dirs, workDir)
+	return &invocationTestSession{id: "dir-session"}, nil
+}
+func (a *dirRecordingAgent) ListSessions(context.Context) ([]string, error) { return nil, nil }
+func (a *dirRecordingAgent) Stop(context.Context) error                     { return nil }
+
+func TestInvokeRunsConversationInChosenDirectory(t *testing.T) {
+	const runtimeID = "invocation-conversation-dir-test"
+	agent := &dirRecordingAgent{}
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return agent, nil })
+	configured := t.TempDir()
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-1": {ID: "agent-1", Name: "Managed", RuntimeID: runtimeID, WorkDir: configured, Enabled: true},
+	}}
+	service := NewConnectService(nil, NewEngine(nil, NewHookRunner(nil, nil)), store)
+
+	chosen := t.TempDir()
+	if _, err := service.Invoke(context.Background(), InvocationRequest{AgentID: "agent-1", ConversationID: "ticket", Input: "hi", ConversationDir: chosen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Invoke(context.Background(), InvocationRequest{AgentID: "agent-1", ConversationID: "other", Input: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.dirs) != 2 || agent.dirs[0] != chosen || agent.dirs[1] != configured {
+		t.Fatalf("session directories = %v, want %q then the configured %q", agent.dirs, chosen, configured)
+	}
+	_, err := service.Invoke(context.Background(), InvocationRequest{AgentID: "agent-1", Input: "hi", ConversationDir: "relative/dir"})
+	if !errors.Is(err, ErrInvalidInvocation) {
+		t.Fatalf("relative conversation directory error = %v", err)
+	}
+}
+
 func TestInvokeMaterializesRichAttachmentsAndPassesOutputSchema(t *testing.T) {
 	const runtimeID = "invocation-rich-test"
 	session := &richInvocationSession{}

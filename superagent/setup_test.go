@@ -199,7 +199,7 @@ func TestSetupConversationContinuesOnlyItsOwnSession(t *testing.T) {
 func TestSetupResultSavesThroughTheNormalPath(t *testing.T) {
 	h := newHarness(t)
 	h.enableAutoWorkers(t.TempDir())
-	result, err := h.setup(`{"reply":"ok","sources":[{"kind":"feishu_message","allowed_actors":["*"],"config":{"channel_id":"c1"}}]}`, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true})
+	result, err := h.setup(`{"reply":"ok","sources":[{"kind":"feishu_message","allowed_actors":["*"],"config":{"channel_id":"c1"}}]}`, core.SuperAgent{RouterAgentID: h.spareRouter(), AutoWorkers: true})
 	if err != nil {
 		t.Fatal(err)
 	}

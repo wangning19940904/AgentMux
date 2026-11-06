@@ -207,7 +207,7 @@ function ticketStatusClass(status: string) {
 }
 
 function triggerStatusClass(disposition: string) {
-  return { pending: "queued", accepted: "succeeded", follow_up: "succeeded", observed: "running", failed: "failed" }[disposition] ?? "cancelled";
+  return { pending: "queued", accepted: "succeeded", follow_up: "succeeded", answered: "succeeded", observed: "running", failed: "failed" }[disposition] ?? "cancelled";
 }
 
 // SourceEditor edits one trigger. Feishu triggers pick groups and senders from
@@ -277,9 +277,11 @@ function SourceEditor({ source, feishuChannels, onChange, onRemove }: {
 type FrameworkOption = { kind: string; display: string };
 
 // RouterPicker chooses a router agent, or configures a new one. Only router
-// agents are offered: the host keeps them read-only, with no tools but the MCP
-// servers allowed here. An ordinary Agent saved as the router before router
-// agents existed stays selectable for that Super Agent only.
+// agents are offered: they run unattended in the approval mode chosen here,
+// with no skills or channels and only the MCP servers allowed here. Each
+// belongs to one Super Agent and works in its home, so routers another Super
+// Agent routes with are not offered. An ordinary Agent saved as the router
+// before router agents existed stays selectable for that Super Agent only.
 function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onChoose, onRouterDraft, onDelete }: {
   draft: SuperAgent;
   routers: SuperAgentRouterList | null;
@@ -291,19 +293,19 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   onDelete: (router: SuperAgentRouter) => void;
 }) {
   const { t } = useI18n();
-  const list = routers?.routers ?? [];
+  const list = (routers?.routers ?? []).filter((router) => routerFree(router, draft.id));
   const selected = list.find((router) => router.id === draft.router_agent_id);
   const display = (kind: string) => frameworks.find((item) => item.kind === kind)?.display ?? kind;
   const capability = (kind: string) => routers?.frameworks.find((item) => item.runtime_id === kind);
   const creating = Boolean(routerDraft && !routerDraft.id);
   const value = creating ? NEW_ROUTER : draft.router_agent_id;
   const legacy = Boolean(draft.router_agent_id && !selected && routers);
-  const others = (router: SuperAgentRouter) => (router.used_by ?? []).filter((user) => user.id !== draft.id);
   const describe = (router: SuperAgentRouter) => [
     display(router.runtime_id),
     describeModelChoice(t, modelChoice(router)),
-    router.mcp_servers.length ? t("superAgents.routerToolsWithMCP", { names: router.mcp_servers.join(", ") }) : t("superAgents.routerToolsReadOnly"),
-  ].join(" · ");
+    router.approval_mode ? t(`superAgents.routerApprovalShort.${router.approval_mode}`) : "",
+    router.mcp_servers.length ? t("superAgents.routerToolsWithMCP", { names: router.mcp_servers.join(", ") }) : "",
+  ].filter(Boolean).join(" · ");
 
   return (
     <>
@@ -316,14 +318,14 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
         </select>
       </label>
       {routerDraft ? (
-        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers} sharedWith={selected ? others(selected) : []}
+        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers}
           plannedName={routerNameFor(draft, routerDraft.runtime_id)} onChange={onRouterDraft} />
       ) : selected ? (
         <div className="super-agent-card super-agent-router-summary">
           <span>{describe(selected)}</span>
-          {others(selected).length > 0 && <small className="muted">{t("superAgents.routerUsedBy", { names: others(selected).map((user) => user.name).join(", ") })}</small>}
+          {selected.approval_mode === "plan" && <small className="muted">{t("superAgents.routerApprovalPlanNotice")}</small>}
           <span className="control-row">
-            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, ...modelChoice(selected), mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
+            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, ...modelChoice(selected), approval_mode: selected.approval_mode ?? "", mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
             {(selected.used_by ?? []).length === 0 && (
               <button className="ghost-action danger-action" type="button" onClick={() => onDelete(selected)}><Trash2 size={13} /> {t("superAgents.deleteRouter")}</button>
             )}
@@ -337,6 +339,12 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   );
 }
 
+// routerFree reports whether a Super Agent may route with a router agent: one
+// no other Super Agent routes with.
+function routerFree(router: SuperAgentRouter, superAgentID: string) {
+  return (router.used_by ?? []).every((user) => user.id === superAgentID);
+}
+
 function modelChoice(router: SuperAgentRouter): ModelChoice {
   return { model: router.model ?? "", reasoning_effort: router.reasoning_effort ?? "", service_tier: router.service_tier ?? "" };
 }
@@ -347,11 +355,10 @@ function routerNameFor(agent: SuperAgent, runtime: string) {
   return `${agent.name.trim() || (runtime ? `Super Agent (${runtime})` : "Super Agent")} router`;
 }
 
-function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, onChange }: {
+function RouterEditor({ router, frameworks, routers, plannedName, onChange }: {
   router: SuperAgentRouter;
   frameworks: FrameworkOption[];
   routers: SuperAgentRouterList | null;
-  sharedWith: { id: string; name: string }[];
   plannedName: string;
   onChange: (next: SuperAgentRouter | null) => void;
 }) {
@@ -360,6 +367,10 @@ function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, on
   const canRoute = (kind: string) => routers?.frameworks.find((item) => item.runtime_id === kind)?.can_route !== false;
   const display = frameworks.find((item) => item.kind === router.runtime_id)?.display ?? router.runtime_id;
   const mcpSupported = capability?.mcp_servers ?? false;
+  // A saved mode the framework no longer lists stays visible until changed.
+  const listed = capability?.approval_modes ?? [];
+  const approval = router.approval_mode || capability?.default_approval_mode || "";
+  const approvalModes = approval && !listed.includes(approval) ? [...listed, approval] : listed;
   const available = [...new Set([...(routers?.mcp_servers ?? []), ...router.mcp_servers])];
   const toggleMCP = (name: string, checked: boolean) =>
     onChange({ ...router, mcp_servers: checked ? [...router.mcp_servers, name] : router.mcp_servers.filter((item) => item !== name) });
@@ -369,7 +380,7 @@ function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, on
         <div className="field"><span>{t("superAgents.routerFramework")}</span><strong>{display}</strong><small>{t("superAgents.routerFrameworkFixed")}</small></div>
       ) : (
         <label className="field"><span>{t("superAgents.routerFramework")}</span>
-          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [], model: "", reasoning_effort: "", service_tier: "" })}>
+          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [], model: "", reasoning_effort: "", service_tier: "", approval_mode: "" })}>
             <option value="">{t("superAgents.chooseFramework")}</option>
             {frameworks.map((item) => (
               <option key={item.kind} value={item.kind} disabled={!canRoute(item.kind)}>
@@ -387,9 +398,15 @@ function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, on
             onChange={(choice) => onChange({ ...router, ...choice })} />
         ) : <small>{t("superAgents.modelChooseFramework")}</small>}
       </div>
+      <label className="field"><span>{t("superAgents.routerApproval")}</span>
+        <select value={approval} onChange={(event) => onChange({ ...router, approval_mode: event.target.value })}>
+          {approvalModes.length === 0 && <option value="">{t("superAgents.routerApprovalDefault")}</option>}
+          {approvalModes.map((mode) => <option key={mode} value={mode}>{t(`superAgents.routerApprovalMode.${mode}`)}</option>)}
+        </select>
+        <small>{approval === "plan" ? t("superAgents.routerApprovalPlanNotice") : t("superAgents.routerApprovalHelp")}</small>
+      </label>
       <div className="field" role="group" aria-labelledby="super-agent-router-tools">
         <span id="super-agent-router-tools">{t("superAgents.routerToolsTitle")}</span>
-        <small>{t("superAgents.routerToolsBuiltIn")}</small>
         {router.runtime_id && !mcpSupported ? (
           <small>{t("superAgents.routerToolsMCPUnsupported")}</small>
         ) : available.length === 0 ? (
@@ -410,9 +427,7 @@ function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, on
         <small>{t("superAgents.routerToolsNever")}</small>
       </div>
       <small className="muted">
-        {router.id
-          ? sharedWith.length ? t("superAgents.routerSharedEdit", { names: sharedWith.map((user) => user.name).join(", ") }) : t("superAgents.routerSavedWithForm", { name: plannedName })
-          : t("superAgents.routerCreatedOnSave", { name: plannedName })}
+        {router.id ? t("superAgents.routerSavedWithForm", { name: plannedName }) : t("superAgents.routerCreatedOnSave", { name: plannedName })}
       </small>
       {router.id && <button className="ghost-action" type="button" onClick={() => onChange(null)}>{t("superAgents.cancelRouterEdit")}</button>}
     </div>
@@ -474,13 +489,13 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
     setRouterDraft(next);
   };
 
-  // A new Super Agent starts with the first router agent, or a new one on the
-  // first framework that can route.
+  // A new Super Agent starts with the first router agent no other Super Agent
+  // routes with, or a new one on the first framework that can route.
   const defaulted = useRef(Boolean(draft.router_agent_id || draft.router_runtime));
   useEffect(() => {
     if (defaulted.current || !routers.data || frameworks.loading) return;
     defaulted.current = true;
-    chooseRouter(routers.data.routers[0]?.id ?? NEW_ROUTER);
+    chooseRouter(routers.data.routers.find((router) => routerFree(router, draft.id))?.id ?? NEW_ROUTER);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routers.data, frameworks.loading]);
 

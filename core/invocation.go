@@ -21,6 +21,12 @@ type InvocationRequest struct {
 	Input          string            `json:"input"`
 	Attachments    []AgentAttachment `json:"attachments,omitempty"`
 	OutputSchema   map[string]any    `json:"output_schema,omitempty"`
+	// ConversationDir places a new conversation's directory, for in-process
+	// callers such as Super Agents that keep each Ticket's work in one place.
+	// In worktree mode the conversation's worktree is created there; otherwise
+	// the conversation runs there instead of in the Agent's directory. The API
+	// never reads it, so a remote caller cannot choose a directory.
+	ConversationDir string `json:"-"`
 }
 
 // InvocationResult is the completed, synchronous result of an Agent turn.
@@ -123,6 +129,17 @@ func (c *ConnectService) invoke(ctx context.Context, req InvocationRequest, sink
 	agent, workDir, workspace := c.resolveAgent(ctx, req.AgentID)
 	if agent == nil {
 		return InvocationResult{}, fmt.Errorf("%w: could not start agent %q", ErrInvocationRuntime, req.AgentID)
+	}
+	if dir := strings.TrimSpace(req.ConversationDir); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return InvocationResult{}, fmt.Errorf("%w: conversation directory %q is not absolute", ErrInvalidInvocation, dir)
+		}
+		dir = filepath.Clean(dir)
+		if strings.EqualFold(strings.TrimSpace(workspace.WorkspaceMode), "worktree") {
+			workspace.WorktreePath = dir
+		} else {
+			workspace.WorkDir, workDir = dir, dir
+		}
 	}
 	runtime := &projectRuntime{
 		owner:             c.eng,

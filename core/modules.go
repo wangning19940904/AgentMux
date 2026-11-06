@@ -75,6 +75,9 @@ type WorkspaceInitOptions struct {
 	// WorktreeBaseRef is the git ref used when a new conversation worktree is
 	// created. Empty means the repository's current HEAD.
 	WorktreeBaseRef string `json:"worktree_base_ref,omitempty"`
+	// WorktreePath, when set, is where a conversation's worktree is created
+	// instead of beside the repository. Only in-process callers set it.
+	WorktreePath string `json:"worktree_path,omitempty"`
 	// ConversationScope and ConversationKey are the stable, transport-neutral
 	// identity used to derive a deterministic worktree path. They are supplied
 	// by the Engine at runtime and are never user-editable settings.

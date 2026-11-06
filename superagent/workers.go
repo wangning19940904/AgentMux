@@ -24,8 +24,11 @@ const remoteIdleTimeout = 2 * time.Minute
 
 // WorkerRunner controls workers wherever they run. Cancelling Run's context
 // cancels the turn; repeating Run with the same conversation continues it.
+// dir, when set, is where a local worker's new conversation gets its
+// directory (core.InvocationRequest.ConversationDir); a remote worker's
+// directory is on its own machine, so it ignores dir.
 type WorkerRunner interface {
-	Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string) (string, error)
+	Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input, dir string) (string, error)
 	Status(ctx context.Context, worker core.SuperAgentWorker) core.SuperAgentWorkerStatus
 }
 
@@ -61,11 +64,11 @@ type Fleet struct {
 	Hosts   HostDialer
 }
 
-func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string) (string, error) {
+func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input, dir string) (string, error) {
 	if worker.HostID != "" {
 		return f.runRemote(ctx, worker, conversationID, input)
 	}
-	result, err := f.Invoker.Invoke(ctx, core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input})
+	result, err := f.Invoker.Invoke(ctx, core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: dir})
 	if err != nil {
 		return "", err
 	}

@@ -1,39 +1,68 @@
 # Super Agents
 
 A Super Agent is a persistent router. Events arrive from its triggers, a router
-Agent decides what each one means, and AgentMux applies that decision to local
-or remote workers. The design follows DeepSeek's
+Agent answers each one or decides what it means, and AgentMux applies that
+decision to local or remote workers. The design follows DeepSeek's
 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype)
 prototype, simplified to run inside the AgentMux daemon.
 
 ## Flow
 
 ```
-Trigger source -> gate (allowed list) -> stored once -> router Agent decision
+Trigger source -> gate (allowed list) -> stored once -> router turn -> reply, and an action
   accept  -> new Ticket -> worker (local or remote) -> reply where it came from
   attach  -> input to a Ticket on the same thread
   stop    -> cancel a Ticket on the same thread
-  ignore  -> recorded, and the router's reply is sent if it wrote one
+  none    -> only the router's reply, if it wrote one ("answered"), or nothing ("ignored")
 ```
 
 An addressed event from a sender who is not allowed is recorded with its reason, and stops there. Ordinary traffic that addresses nobody and belongs to no Ticket is not stored.
 
-When no available worker can do the work and auto workers are off, the router ignores the event and tells the sender. A decision the host rejects, such as a worker that is not on the roster, fails the event and also tells the sender.
+When no available worker can do the work, the router tells the sender. An action the host rejects, such as a worker that is not on the roster, fails the event and also tells the sender.
+
+## The router's turn
+
+- **One conversation per thread.** Events on a thread go, one at a time, to the same
+  router conversation, so it remembers what was said there. What should outlive a thread
+  belongs in its memory.
+- **The charter comes with every event**, not as a system prompt, which Cursor and Gemini
+  ignore. It says what the router is for, what its directory holds, how to keep its
+  memory, how to treat untrusted text, and how to answer. The operator's routing rules,
+  the roster, the thread's Tickets with their folders, `memory/MEMORY.md` (up to 8,000
+  characters) and the event follow it.
+- **The final message is the reply**, sent where the event came from. An empty message
+  sends nothing. To have AgentMux act, the router ends the message with one block, which
+  is removed before the reply is sent:
+
+  ```
+  <agentmux-action>
+  {"action":"accept","worker_id":"auto:codex","title":"…","instructions":"…","reason":"…"}
+  </agentmux-action>
+  ```
+
+  `accept` starts a Ticket, `attach` passes the event to a Ticket on the thread with the
+  router's optional note, and `stop` stops one. `reason` goes to the audit log. A
+  JSON-only answer in the form routers used before is still read as an action.
+- **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
+  keeps. A read-only router can read it but not change it.
 
 ## What the host enforces
 
-The router reads untrusted text, so nothing depends on the model behaving:
+The router reads untrusted text. What limits the harm a crafted event can do:
 
 - **Allowed senders** are checked before the router sees an event, and an empty
-  list admits nobody. `*` is accepted only for Feishu messages.
-- **A decision** can only name a worker on this Super Agent's roster, `auto:<framework>`
+  list admits nobody. `*` is accepted only for Feishu messages. This is the only hard
+  limit on who can reach the router.
+- **An action** can only name a worker on this Super Agent's roster, `auto:<framework>`
   for one of its worker frameworks, and a Ticket already on the event's thread.
-- **The router** is a [router agent](#router-agents): it runs on this machine in its
-  framework's read-only `plan` mode, with no tools but the MCP servers allowed on it.
-  Ordinary Agents cannot be chosen. The router's limits are checked again before it
-  reads each event, so an edit made through the Agents API cannot loosen them.
-- **Observe mode** is the default. It records what the router would do, without
-  running work or messaging anyone. Switch to Act when the decisions look right.
+- **The router** is a [router agent](#router-agents): it runs on this machine in the
+  approval mode chosen for it, YOLO by default. With YOLO it can run any command as the
+  daemon's user, including reading AgentMux's own configuration; its charter, not a
+  sandbox, is what tells it to treat event text as data. Choose `auto`, `auto_edit` or
+  `plan` for a Super Agent whose triggers carry text from people you do not trust.
+- **Observe mode** is the default. It records the router's reply and action without
+  running work or messaging anyone, and tells the router to change nothing; its approval
+  mode still applies. Switch to Act when the decisions look right.
 
 Workers run unattended, and an approval nobody can answer is declined. Give them
 a non-manual approval mode, and per-conversation worktrees so parallel Tickets
@@ -79,6 +108,34 @@ the verified SSH tunnel:
 - Stopping a Ticket closes the stream, and the remote daemon cancels the turn.
 - Tickets running when the daemon stopped resume on the same conversation.
 
+### Directories
+
+Each Super Agent has a home, `~/.agentmux/super-agents/<id>/`. Its router agent works
+there, and every Ticket has a folder below it:
+
+```
+~/.agentmux/super-agents/<id>/
+├── CLAUDE.md, AGENTS.md     what the home holds; written once, then the operator's
+├── memory/MEMORY.md         the router's memory index; the router keeps memory/
+└── tickets/<ticket id>/
+    ├── ticket.json          the Ticket's status, worker and working directory
+    ├── inputs.md            everything AgentMux sent the worker, one section per turn
+    ├── result.md            the worker's final answer after each turn
+    └── work/                the worker's working directory, or a link to it
+```
+
+- A worker whose Agent uses per-conversation worktrees gets its worktree in `work/`, on
+  an `agentmux/…` branch, instead of under `<repo>.agentmux-worktrees`. So does an auto
+  worker with no `auto_worker_dir`, as a plain directory.
+- Any other local worker keeps the directory its Agent is configured with, and `work/`
+  links there. A remote worker's directory is on its own machine; its folder has the
+  record files only.
+- The store stays the source of truth: AgentMux rewrites `ticket.json` on every change and
+  only appends to the logs. Tickets created before homes existed have no folder and keep
+  working where they started.
+- Deleting a Super Agent keeps its home, since worktrees there can hold work that was
+  never pushed.
+
 ### Auto workers
 
 With auto workers on, the roster can be empty. `worker_runtimes` lists one or more
@@ -86,48 +143,57 @@ installed frameworks to launch workers with, and defaults to the router's. The r
 offers `auto:<framework>` for each; the router names one when no listed worker suits a
 request, and the host starts a worker of that framework that was not configured in advance:
 
-- Each Ticket gets its own session and, in a git repository, its own worktree under
-  `<repo>.agentmux-worktrees`. Outside a repository, Tickets share the directory.
-- A decision supplies only the framework, the Ticket's title and instructions. A worker on
+- Each Ticket gets its own session and directory. In a git repository the directory is a
+  worktree in the Ticket's `work/` folder; with no `auto_worker_dir`, it is a new folder
+  there. Another directory outside a repository is shared by the Tickets.
+- An action supplies only the framework, the Ticket's title and instructions. A worker on
   the router agent's framework takes its provider, model and environment; another framework
-  uses its active provider route. Workers need no read-only mode, so Kimi can work but not
-  route. The directory is `auto_worker_dir`, or else `~/.agentmux/super-agents/<id>/work`
+  uses its active provider route. The directory is `auto_worker_dir`, or else `~/.agentmux/super-agents/<id>/work`
   (a Super Agent that still routes with an ordinary Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
   which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
   where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
 - `max_concurrency` limits how many run at once. Auto workers run on this machine only.
 - Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
-  with the Super Agent. Worktrees are kept after a Ticket ends.
+  with the Super Agent. Worktrees are kept after a Ticket ends, and so is the home.
 
 ## Router agents
 
 A router agent is an Agent made only to route, kept apart from ordinary Agents. The
 Super Agent form chooses one, or creates one with a framework, a model, a reasoning effort,
-a speed and the MCP servers it may use. Router agents can be shared between Super Agents.
+a speed, its permissions and the MCP servers it may use. Each router agent belongs to one Super Agent and
+works in its home, so it can read every Ticket's folder; another Super Agent cannot route
+with it.
 
-- It always runs in `plan` mode, so a framework without a read-only mode, such as Kimi,
-  cannot route. Its framework cannot change after it is created.
-- Its only tools beyond the framework's read-only ones are the registered, enabled MCP
-  servers listed on it, none by default. AgentMux can give MCP servers only to Claude Code
-  and Codex routers. Read-only mode does not limit what an MCP server does, so allow
-  lookups only.
+- It runs unattended in any approval mode its framework offers except `manual`: `yolo` by
+  default, or `auto`, `auto_edit` or `plan`. A framework with only `manual` cannot route.
+  Saving without a mode keeps the one it has, so routers saved when routers were
+  read-only stay in `plan` until the operator chooses otherwise. Its framework cannot
+  change after it is created.
+- Its MCP servers are the registered, enabled ones listed on it, none by default. AgentMux
+  can give MCP servers only to Claude Code and Codex routers.
 - It never has skills, CLIs, channels, schedules or a system prompt. Saving it restores
-  these limits, whatever was changed elsewhere, and the Agents page shows it read-only.
+  these limits, and a mode its framework does not offer, whatever was changed elsewhere,
+  and the Agents page shows it read-only.
 - It is named after the Super Agent that routes with it, as `<name> router`, and follows
-  that Super Agent's renames. A router several Super Agents share keeps its name. An unnamed
-  Super Agent is named `Super Agent (<framework>)`.
+  that Super Agent's renames. An unnamed Super Agent is named `Super Agent (<framework>)`.
 - Its provider is the framework's active provider route. The form offers that provider's
   models, reasoning efforts and service tiers, or else those of the framework's own
   sign-in. Empty values are the framework's defaults, and a `priority` or `fast` service
   tier is its fast mode.
-- It has its own directory, `~/.agentmux/super-agents/routers/<id>`, where AgentMux writes
-  its MCP configuration.
-- It can be deleted only when no Super Agent routes with it.
+- It works in its Super Agent's home, where AgentMux also writes its MCP configuration.
+  Until a Super Agent routes with it, it has a scratch directory,
+  `~/.agentmux/super-agents/routers/<id>`, removed once it moves.
+- It is deleted with its Super Agent. Otherwise it can be deleted only when no Super Agent
+  routes with it.
+- Routers shared by several Super Agents before each belonged to one are copied when the
+  daemon starts: the Super Agent created first keeps the original.
 
 A Super Agent saved with an ordinary Agent as its router, before router agents existed,
 keeps it until it switches to a router agent. `router_runtime` still names a framework
-instead of a router agent for API clients: the host then uses that framework's default
-router agent, `sar_<framework>`, and creates it when missing. Worker frameworks are chosen
+instead of a router agent for API clients: saving creates a router agent on that framework
+for the Super Agent, or keeps the one it has there. The setup assistant, which saves
+nothing, uses that framework's default router agent, `sar_<framework>`, and creates it when
+missing. Worker frameworks are chosen
 separately, under [Auto workers](#auto-workers).
 
 ## The form

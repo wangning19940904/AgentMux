@@ -28,6 +28,7 @@ const (
 	SuperAgentDispositionFollowUp = "follow_up"
 	SuperAgentDispositionAccepted = "accepted"
 	SuperAgentDispositionIgnored  = "ignored"
+	SuperAgentDispositionAnswered = "answered"
 	SuperAgentDispositionObserved = "observed"
 	SuperAgentDispositionStopped  = "stopped"
 	SuperAgentDispositionFailed   = "failed"
