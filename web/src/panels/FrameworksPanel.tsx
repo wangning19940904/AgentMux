@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Package, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { Package, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
   activeRemoteID,
@@ -16,21 +16,39 @@ import { groupResources, selectedGroupMember } from "../components/resourceGroup
 import { targetKey } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { FrameworkBusyAction, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
+import { FrameworkBusyAction, FrameworkInstallingRow, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
 import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
 import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
 import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
-
-type FrameworkAction = "install" | "update" | "uninstall";
+import {
+  FrameworkAction,
+  FrameworkOperation,
+  finishFrameworkOperation,
+  startFrameworkOperation,
+  useFrameworkOperations,
+} from "./frameworks/frameworkOperations";
+import { CustomCommandConfirmDialog, CustomCommandEntry, FrameworkInstallSettingsDialog } from "./frameworks/FrameworkInstallSettingsDialog";
 
 export function FrameworksPanel() {
   const { t } = useI18n();
   const frameworks = useAsync(() => api.frameworks(), []);
   const remoteHosts = useAsync(() => api.remoteHosts(), []);
-  const [busy, setBusy] = useState<Record<string, FrameworkBusyAction>>({});
-  const [progress, setProgress] = useState<Record<string, OperationProgress>>({});
+  // Install, update and uninstall run in a module-level store so they survive
+  // navigating away; local state covers short-lived row actions and bulk updates.
+  const operations = useFrameworkOperations();
+  const [localBusy, setBusy] = useState<Record<string, FrameworkBusyAction>>({});
+  const [localProgress, setProgress] = useState<Record<string, OperationProgress>>({});
+  const busy = useMemo(() => ({
+    ...Object.fromEntries(Object.values(operations).map((operation) => [operation.key, operation.action as FrameworkBusyAction])),
+    ...localBusy,
+  }), [operations, localBusy]);
+  const progress = useMemo(() => ({
+    ...localProgress,
+    ...Object.fromEntries(Object.values(operations).map((operation) => [operation.key, operation.progress])),
+  }), [operations, localProgress]);
+  const handledOutcomes = useRef(new Set<FrameworkOperation>());
   const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
@@ -38,6 +56,8 @@ export function FrameworksPanel() {
   const [confirming, setConfirming] = useState<Framework | null>(null);
   const [uninstallCandidate, setUninstallCandidate] = useState<Framework | null>(null);
   const [installerOpen, setInstallerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pendingCustom, setPendingCustom] = useState<{ entries: CustomCommandEntry[]; run: () => void } | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkUpdateProgress | null>(null);
   const [bulkResults, setBulkResults] = useState<BulkUpdateResult<Framework>[]>([]);
   const bulkRunning = useRef(false);
@@ -50,6 +70,7 @@ export function FrameworksPanel() {
   const installableItems = useMemo(() => items
     .filter((item) => !item.installed && item.spec.supported && item.spec.install_supported)
     .sort((left, right) => left.spec.display.localeCompare(right.spec.display)), [items]);
+  const installingItems = installableItems.filter((item) => operations[targetKey(item.target_id, item.spec.kind)]?.action === "install");
   const [selectedInstances, setSelectedInstances] = useState<Record<string, string>>({});
   const installedGroups = groupResources(installedItems, (item) => item.spec.kind, (item) => targetKey(item.target_id, item.spec.kind), activeMachineScope() === "all");
   const frameworkPagination = useCatalogPagination(installedGroups);
@@ -60,6 +81,8 @@ export function FrameworksPanel() {
       ? remoteHosts.data?.find((host) => host.id === selectedRemoteID)?.name || t("remote.currentMachine")
       : t("remote.localMachine");
   const nodeMissing = Boolean(prereqs && (!prereqs.node || !prereqs.npm));
+  // Install settings belong to one machine and are edited on that machine.
+  const settingsEditable = activeMachineScope() === "local";
 
   function markBusy(key: string, action: FrameworkBusyAction) {
     setBusy((current) => ({ ...current, [key]: action }));
@@ -152,39 +175,70 @@ export function FrameworksPanel() {
     }
   }
 
-  async function runFrameworkAction(item: Framework, action: FrameworkAction, acknowledgeInternal = false) {
+  function runFrameworkAction(item: Framework, action: FrameworkAction, acknowledgeInternal = false, confirmedCommand?: string) {
     const key = targetKey(item.target_id, item.spec.kind);
-    markBusy(key, action);
-    beginProgress(key, action === "update" ? "checking" : "preparing");
     setNotice("");
     setNoticeError(false);
     setResult(null);
     setBulkResults([]);
     if (action !== "update") forgetCheck(key);
-    try {
-      const response = await api.installFramework(item.spec.kind, action, (update) => updateProgress(key, update), acknowledgeInternal, item.target_id);
-      setResult(response);
-      setNoticeError(!response.ok);
-      setNotice(response.ok ? frameworkActionSuccessNotice(action, t) : frameworkInstallFailureNotice(response, t));
-      await frameworks.reload();
-      forgetCheck(key);
-      return response.ok;
-    } catch (error) {
-      setNoticeError(true);
-      setNotice(error instanceof Error ? error.message : String(error));
-      return false;
-    } finally {
-      clearProgress(key);
-      clearBusy(key);
-    }
+    return startFrameworkOperation(item, action, acknowledgeInternal, confirmedCommand);
   }
 
-  async function updateAllFrameworks() {
+  // Custom commands from a machine's install settings only run after the user
+  // sees them; `run` receives the confirmed text per framework instance.
+  function confirmCustomCommands(requests: { item: Framework; action: "install" | "update" }[], run: (confirmed: Record<string, string>) => void) {
+    const entries = requests.flatMap(({ item, action }) => {
+      const plan = item.commands?.[action];
+      if (!plan?.custom) return [];
+      const machine = item.target_name || item.target_id;
+      return [{ key: targetKey(item.target_id, item.spec.kind), name: machine ? `${item.spec.display} · ${machine}` : item.spec.display, action, command: plan.command }];
+    });
+    const confirmed = Object.fromEntries(entries.map((entry) => [entry.key, entry.command]));
+    if (entries.length === 0) {
+      run(confirmed);
+      return;
+    }
+    setPendingCustom({ entries, run: () => run(confirmed) });
+  }
+
+  // Report operations that settled, including ones that finished while this
+  // page was not mounted, then refresh the catalog before dropping their rows.
+  useEffect(() => {
+    const settled = Object.values(operations).filter((operation) => operation.outcome && !handledOutcomes.current.has(operation));
+    if (settled.length === 0) return;
+    settled.forEach((operation) => handledOutcomes.current.add(operation));
+    const { action, outcome } = settled[settled.length - 1];
+    if (outcome?.result) {
+      setResult(outcome.result);
+      setNoticeError(!outcome.result.ok);
+      setNotice(outcome.result.ok ? frameworkActionSuccessNotice(action, t) : frameworkInstallFailureNotice(outcome.result, t));
+    } else {
+      setResult(null);
+      setNoticeError(true);
+      setNotice(outcome?.error || t("frameworks.installFailed"));
+    }
+    void frameworks.reload().finally(() => {
+      settled.forEach((operation) => {
+        forgetCheck(operation.key);
+        finishFrameworkOperation(operation.key);
+      });
+    });
+  }, [operations]);
+
+  function requestUpdateAll() {
     if (bulkRunning.current || updateAllBlocked || updateCandidates.length === 0) return;
     // Capture the selection before starting: later scope changes must never
     // redirect a queued update to a different machine (or to the whole fleet).
     const targetID = selectedRemoteID || "local";
     const candidates = [...updateCandidates];
+    confirmCustomCommands(candidates.map((item) => ({ item, action: "update" })), (confirmed) => {
+      void updateAllFrameworks(candidates, targetID, confirmed);
+    });
+  }
+
+  async function updateAllFrameworks(candidates: Framework[], targetID: string, confirmed: Record<string, string>) {
+    if (bulkRunning.current) return;
     bulkRunning.current = true;
     setBulkProgress({ completed: 0, total: candidates.length });
     setBulkResults([]);
@@ -197,7 +251,7 @@ export function FrameworksPanel() {
         markBusy(key, "update");
         beginProgress(key, "checking");
         try {
-          return await api.installFramework(item.spec.kind, "update", (update) => updateProgress(key, update), false, item.target_id || targetID);
+          return await api.installFramework(item.spec.kind, "update", (update) => updateProgress(key, update), false, item.target_id || targetID, confirmed[key]);
         } finally {
           clearProgress(key);
           clearBusy(key);
@@ -214,14 +268,29 @@ export function FrameworksPanel() {
     }
   }
 
+  // Installs can take minutes, so the dialog closes as soon as one starts and
+  // its progress continues in the catalog table.
+  function startInstall(item: Framework, acknowledgeInternal = false) {
+    setInstallerOpen(false);
+    const key = targetKey(item.target_id, item.spec.kind);
+    confirmCustomCommands([{ item, action: "install" }], (confirmed) => {
+      void runFrameworkAction(item, "install", acknowledgeInternal, confirmed[key]);
+    });
+  }
+
+  function requestUpdate(item: Framework) {
+    const key = targetKey(item.target_id, item.spec.kind);
+    confirmCustomCommands([{ item, action: "update" }], (confirmed) => {
+      void runFrameworkAction(item, "update", false, confirmed[key]);
+    });
+  }
+
   function requestInstall(item: Framework) {
     if (item.spec.internal_only) {
       setConfirming(item);
       return;
     }
-    void runFrameworkAction(item, "install").then((ok) => {
-      if (ok) setInstallerOpen(false);
-    });
+    startInstall(item);
   }
 
   function requestUninstall(item: Framework) {
@@ -252,9 +321,18 @@ export function FrameworksPanel() {
               count={updateCandidates.length}
               progress={bulkProgress}
               disabled={updateAllBlocked}
-              onClick={() => void updateAllFrameworks()}
+              onClick={requestUpdateAll}
               hint={t("frameworks.updateAllHint", { machine: currentMachine })}
             />
+            <button
+              className="ghost-action"
+              disabled={!settingsEditable}
+              onClick={() => setSettingsOpen(true)}
+              title={settingsEditable ? undefined : t("frameworks.installSettingsLocalOnly")}
+              type="button"
+            >
+              <Settings2 size={15} />{t("frameworks.installSettings")}
+            </button>
             <button className="action" disabled={Boolean(bulkProgress)} onClick={() => setInstallerOpen(true)} type="button">
               <Plus size={15} />{t("frameworks.installFramework")}
             </button>
@@ -270,6 +348,10 @@ export function FrameworksPanel() {
               <th>{t("common.actions")}</th>
             </tr></thead>
             <tbody>
+              {installingItems.map((item) => {
+                const key = targetKey(item.target_id, item.spec.kind);
+                return <FrameworkInstallingRow key={`installing:${key}`} item={item} progress={progress[key]} />;
+              })}
               {frameworkPagination.pageItems.map((group) => {
                 const item = selectedGroupMember(group, selectedInstances[group.key], (item) => targetKey(item.target_id, item.spec.kind));
                 const key = targetKey(item.target_id, item.spec.kind);
@@ -289,7 +371,7 @@ export function FrameworksPanel() {
                   currentMachine={item.target_name || item.target_id || currentMachine}
                   disabled={!item.spec.supported || Boolean(bulkProgress)}
                   onCheck={() => void checkUpdate(item)}
-                  onInstall={(action) => void runFrameworkAction(item, action)}
+                  onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
                   onUninstall={() => requestUninstall(item)}
                   onAuth={() => void frameworkAuth.startAuth(item)}
                   onLogout={() => void frameworkAuth.logout(item)}
@@ -300,7 +382,7 @@ export function FrameworksPanel() {
                   onCopyCode={(code) => void frameworkAuth.copyCode(item, code)}
                 />
               })}
-              {installedItems.length === 0 && <tr><td className="empty-state" colSpan={3}>{t("frameworks.noInstalled")}</td></tr>}
+              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={3}>{t("frameworks.noInstalled")}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -333,6 +415,30 @@ export function FrameworksPanel() {
           t={t}
         />
       )}
+      {settingsOpen && (
+        <FrameworkInstallSettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => {
+            setSettingsOpen(false);
+            setChecks({});
+            setResult(null);
+            setNoticeError(false);
+            setNotice(t("frameworks.settingsSaved"));
+            void frameworks.reload();
+          }}
+        />
+      )}
+      {pendingCustom && (
+        <CustomCommandConfirmDialog
+          entries={pendingCustom.entries}
+          onCancel={() => setPendingCustom(null)}
+          onConfirm={() => {
+            const { run } = pendingCustom;
+            setPendingCustom(null);
+            run();
+          }}
+        />
+      )}
       {confirming && (
         <InternalOnlyDialog
           name={confirming.spec.display}
@@ -340,9 +446,7 @@ export function FrameworksPanel() {
           onConfirm={() => {
             const item = confirming;
             setConfirming(null);
-            void runFrameworkAction(item, "install", true).then((ok) => {
-              if (ok) setInstallerOpen(false);
-            });
+            startInstall(item, true);
           }}
         />
       )}

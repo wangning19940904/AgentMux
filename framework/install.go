@@ -29,9 +29,17 @@ type InstallResult struct {
 type ProgressFunc func(phase, detail string, percent int)
 
 // InstallOptions carries explicit acknowledgement for restricted catalog
-// entries. Callers cannot override catalog-owned commands or packages.
+// entries and the machine's install settings. Callers cannot supply a command
+// themselves: custom commands come only from the administrator's stored
+// settings and must be echoed back in ConfirmedCommand before they run.
 type InstallOptions struct {
 	AcknowledgeInternal bool
+	Settings            InstallSettings
+	// ConfirmedCommand is the custom command text the user approved.
+	ConfirmedCommand string
+	// Forwarded marks a request relayed from another machine's Console. Such
+	// requests never run this machine's custom commands.
+	Forwarded bool
 }
 
 // InstallWithProgressOptions installs a framework with explicit restricted-
@@ -40,11 +48,16 @@ func InstallWithProgressOptions(ctx context.Context, kind string, options Instal
 	return install(ctx, kind, options, progress)
 }
 
-// UpdateWithProgress updates a framework while reporting the update check,
-// installer execution, and verification stages.
+// UpdateWithProgress updates a framework with the built-in command.
 func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc) InstallResult {
+	return UpdateWithProgressOptions(ctx, kind, InstallOptions{}, progress)
+}
+
+// UpdateWithProgressOptions updates a framework while reporting the update
+// check, installer execution, and verification stages.
+func UpdateWithProgressOptions(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
 	reportProgress(progress, "checking", "", 8)
-	check := CheckUpdate(ctx, kind)
+	check := CheckUpdateWithSettings(ctx, kind, options.Settings)
 	if check.Error != "" {
 		return InstallResult{Kind: kind, Action: "update", Error: check.Error}
 	}
@@ -67,7 +80,7 @@ func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc)
 	if spec.KindType != KindCLI {
 		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("framework %q does not have a runnable adapter", kind)}
 	}
-	return updateCLIWithProgress(ctx, spec, check, progress)
+	return updateCLIWithProgress(ctx, spec, check, options, progress)
 }
 
 // UninstallWithProgress removes a CLI only through a catalog-owned command and
@@ -128,14 +141,23 @@ func UninstallWithProgress(ctx context.Context, kind string, progress ProgressFu
 	return res
 }
 
-func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, progress ProgressFunc) InstallResult {
+func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, options InstallOptions, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: spec.Kind, Action: "update"}
-	command, err := resolvedCLIUpdateCommand(spec)
+	plan, err := PlanCommand(spec, "update", options.Settings)
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
-	res.Command = strings.Join(command, " ")
+	res.Command = plan.Command
+	if err := authorizeCommand(spec, "update", plan, options); err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	command := plan.Argv
+	if _, err := exec.LookPath(command[0]); err != nil {
+		res.Error = fmt.Sprintf("%s not found on PATH", command[0])
+		return res
+	}
 	reportProgress(progress, "updating", res.Command, 30)
 
 	runCtx := ctx
@@ -217,7 +239,7 @@ func install(ctx context.Context, kind string, options InstallOptions, progress 
 		res.Error = fmt.Sprintf("framework %q does not have a runnable adapter", kind)
 		return res
 	}
-	return installCLIWithProgress(ctx, spec, progress)
+	return installCLIWithProgress(ctx, spec, options, progress)
 }
 
 func installPlatformSupported(spec Spec, goos string) bool {
@@ -232,7 +254,7 @@ func installPlatformSupported(spec Spec, goos string) bool {
 	return false
 }
 
-func installCLIWithProgress(ctx context.Context, spec Spec, progress ProgressFunc) InstallResult {
+func installCLIWithProgress(ctx context.Context, spec Spec, options InstallOptions, progress ProgressFunc) InstallResult {
 	res := InstallResult{Kind: spec.Kind, Action: "install"}
 	reportProgress(progress, "preparing", "", 5)
 	if status := Detect(spec, DetectPrereqs()); status.Installed {
@@ -242,14 +264,17 @@ func installCLIWithProgress(ctx context.Context, spec Spec, progress ProgressFun
 		return res
 	}
 
-	command := append([]string(nil), spec.InstallCommand...)
-	if len(command) == 0 && spec.NPMPackage != "" {
-		command = []string{"npm", "install", "-g", spec.NPMPackage + "@latest"}
-	}
-	if len(command) == 0 {
-		res.Error = fmt.Sprintf("framework %q has no install command", spec.Kind)
+	plan, err := PlanCommand(spec, "install", options.Settings)
+	if err != nil {
+		res.Error = err.Error()
 		return res
 	}
+	res.Command = plan.Command
+	if err := authorizeCommand(spec, "install", plan, options); err != nil {
+		res.Error = err.Error()
+		return res
+	}
+	command := plan.Argv
 	if _, err := exec.LookPath(command[0]); err != nil {
 		if command[0] == "npm" {
 			res.Error = "npm not found on PATH; install Node.js first"
@@ -258,7 +283,6 @@ func installCLIWithProgress(ctx context.Context, spec Spec, progress ProgressFun
 		}
 		return res
 	}
-	res.Command = strings.Join(command, " ")
 	reportProgress(progress, "installing", res.Command, 30)
 
 	runCtx := ctx

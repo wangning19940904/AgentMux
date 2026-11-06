@@ -15,6 +15,14 @@ import (
 type frameworkView struct {
 	framework.Status
 	Registered bool `json:"registered"`
+	// Commands previews what install/update will run on this machine after
+	// its install settings, so the Console can ask before a custom command.
+	Commands *frameworkCommands `json:"commands,omitempty"`
+}
+
+type frameworkCommands struct {
+	Install *framework.CommandPlan `json:"install,omitempty"`
+	Update  *framework.CommandPlan `json:"update,omitempty"`
 }
 
 // frameworksResponse is the payload for GET /api/v1/frameworks.
@@ -31,11 +39,13 @@ type frameworkRuntimeSettingsResponse struct {
 
 func (s *Server) handleFrameworksList(w http.ResponseWriter, r *http.Request) {
 	statuses := framework.DetectAll()
+	settings := s.frameworkInstallSettings(r.Context())
 	views := make([]frameworkView, 0, len(statuses))
 	for _, st := range statuses {
 		views = append(views, frameworkView{
 			Status:     st,
 			Registered: core.HasAgent(st.Spec.Kind),
+			Commands:   plannedFrameworkCommands(st, settings),
 		})
 	}
 	writeJSON(w, http.StatusOK, frameworksResponse{
@@ -89,6 +99,17 @@ type frameworkInstallRequest struct {
 	Kind                string `json:"kind"`
 	Action              string `json:"action"`
 	AcknowledgeInternal bool   `json:"acknowledge_internal"`
+	// ConfirmedCommand echoes the custom command the user approved.
+	ConfirmedCommand string `json:"confirmed_command,omitempty"`
+}
+
+func (s *Server) frameworkInstallOptions(r *http.Request, req frameworkInstallRequest) framework.InstallOptions {
+	return framework.InstallOptions{
+		AcknowledgeInternal: req.AcknowledgeInternal,
+		Settings:            s.frameworkInstallSettings(r.Context()),
+		ConfirmedCommand:    strings.TrimSpace(req.ConfirmedCommand),
+		Forwarded:           requestForwardedFromPeer(r),
+	}
 }
 
 func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +127,7 @@ func (s *Server) handleFrameworkInstall(w http.ResponseWriter, r *http.Request) 
 	if action == "" {
 		action = "install"
 	}
-	res := s.runFrameworkInstall(r.Context(), kind, action, req.AcknowledgeInternal, nil)
+	res := s.runFrameworkInstall(r.Context(), kind, action, s.frameworkInstallOptions(r, req), nil)
 	if !res.OK {
 		// Surface the install log/error but keep a 200 envelope so the client
 		// can render the log; the ok flag conveys success.
@@ -131,18 +152,19 @@ func (s *Server) handleFrameworkInstallStream(w http.ResponseWriter, r *http.Req
 	if action == "" {
 		action = "install"
 	}
+	options := s.frameworkInstallOptions(r, req)
 	streamInstall(w, r, func(report func(string, string, int)) any {
-		return s.runFrameworkInstall(r.Context(), kind, action, req.AcknowledgeInternal, framework.ProgressFunc(report))
+		return s.runFrameworkInstall(r.Context(), kind, action, options, framework.ProgressFunc(report))
 	})
 }
 
-func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, acknowledgeInternal bool, progress framework.ProgressFunc) framework.InstallResult {
+func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, options framework.InstallOptions, progress framework.ProgressFunc) framework.InstallResult {
 	var res framework.InstallResult
 	switch action {
 	case "install":
-		res = framework.InstallWithProgressOptions(ctx, kind, framework.InstallOptions{AcknowledgeInternal: acknowledgeInternal}, progress)
+		res = framework.InstallWithProgressOptions(ctx, kind, options, progress)
 	case "update":
-		res = framework.UpdateWithProgress(ctx, kind, progress)
+		res = framework.UpdateWithProgressOptions(ctx, kind, options, progress)
 	case "uninstall":
 		res = framework.UninstallWithProgress(ctx, kind, progress)
 	default:
@@ -161,7 +183,7 @@ func (s *Server) handleFrameworkCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "framework kind is required")
 		return
 	}
-	writeJSON(w, http.StatusOK, framework.CheckUpdate(r.Context(), kind))
+	writeJSON(w, http.StatusOK, framework.CheckUpdateWithSettings(r.Context(), kind, s.frameworkInstallSettings(r.Context())))
 }
 
 func (s *Server) handleFrameworkAuthStatus(w http.ResponseWriter, r *http.Request) {

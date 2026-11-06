@@ -59,7 +59,7 @@ func TestUpdateCodexWrapperReceivesHomebrewPathFromDesktop(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS desktop updater environment")
 	}
-	mockCodexLatestVersion(t, "0.166.0")
+	mockFrameworkLatestVersion(t, "codex", "0.166.0")
 	home := t.TempDir()
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -94,28 +94,71 @@ func TestUpdateCodexWrapperReceivesHomebrewPathFromDesktop(t *testing.T) {
 	}
 }
 
-func mockCodexLatestVersion(t *testing.T, version string) {
+func mockFrameworkLatestVersion(t *testing.T, kind, version string) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"version":%q}`, version)
 	}))
 	t.Cleanup(server.Close)
 	for i := range catalog {
-		if catalog[i].Kind == "codex" {
+		if catalog[i].Kind == kind {
 			previous := catalog[i].LatestURL
 			catalog[i].LatestURL = server.URL
 			t.Cleanup(func() { catalog[i].LatestURL = previous })
 			return
 		}
 	}
-	t.Fatal("Codex catalog entry missing")
+	t.Fatalf("%s catalog entry missing", kind)
+}
+
+// A registry mirror can serve a new @deepseek-ai/dsh before the exact-pinned
+// @deepseek-ai/* siblings it depends on, failing with ETARGET or a tarball
+// E404. Install and update must resolve and download that scope from the
+// publisher (npm otherwise rewrites npmjs tarball URLs to the configured
+// registry), and the version check must read the same registry so it never
+// offers a release the installer can't get.
+func TestDSHResolvesDeepSeekScopeFromPublisherRegistry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	spec, ok := Lookup("dsh")
+	if !ok || !strings.HasPrefix(spec.LatestURL, "https://registry.npmjs.org/") {
+		t.Fatalf("dsh latest-version source = %q", spec.LatestURL)
+	}
+	mockFrameworkLatestVersion(t, "dsh", "0.2.1-rc.5")
+
+	bin := t.TempDir()
+	versionFile := filepath.Join(bin, "dsh-version")
+	writeFrameworkExecutable(t, filepath.Join(bin, "dsh-template"), "#!/bin/sh\ncat '"+versionFile+"'\n")
+	npmScript := "#!/bin/sh\n" +
+		"case \" $* \" in *' install -g @deepseek-ai/dsh@latest --@deepseek-ai:registry=https://registry.npmjs.org/ --replace-registry-host=never '*) ;; *) echo \"unexpected npm $*\" >&2; exit 2 ;; esac\n" +
+		"echo \"$NEXT_DSH_VERSION\" > '" + versionFile + "'\n" +
+		"cp '" + filepath.Join(bin, "dsh-template") + "' '" + filepath.Join(bin, "dsh") + "'\n"
+	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), npmScript)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVM_DIR", "")
+	t.Setenv("PNPM_HOME", "")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
+
+	const want = "npm install -g @deepseek-ai/dsh@latest --@deepseek-ai:registry=https://registry.npmjs.org/ --replace-registry-host=never"
+	t.Setenv("NEXT_DSH_VERSION", "0.2.1-rc.4")
+	res := InstallWithProgressOptions(context.Background(), "dsh", InstallOptions{}, nil)
+	if !res.OK || res.Command != want || res.Version != "0.2.1-rc.4" {
+		t.Fatalf("dsh install = %+v", res)
+	}
+
+	t.Setenv("NEXT_DSH_VERSION", "0.2.1-rc.5")
+	res = UpdateWithProgress(context.Background(), "dsh", nil)
+	if !res.OK || res.Command != want || res.Version != "0.2.1-rc.5" {
+		t.Fatalf("dsh update = %+v", res)
+	}
 }
 
 func TestCheckCodexUpdateWithoutNPM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
-	mockCodexLatestVersion(t, "0.166.0")
+	mockFrameworkLatestVersion(t, "codex", "0.166.0")
 	home := t.TempDir()
 	bin := t.TempDir()
 	writeFrameworkExecutable(t, filepath.Join(bin, "codex"), "#!/bin/sh\necho 'codex-cli 0.161.0'\n")

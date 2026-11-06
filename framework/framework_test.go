@@ -343,7 +343,7 @@ func TestFrameworkCommandsSurviveDeletedDaemonWorkingDirectory(t *testing.T) {
 	if !status.Installed || status.Version != "0.145.0" || status.Detail != "" {
 		t.Fatalf("status from deleted daemon cwd = %+v", status)
 	}
-	latest, err := npmPackageVersion(context.Background(), "@openai/codex")
+	latest, err := npmPackageVersion(context.Background(), "@openai/codex", "")
 	if err != nil || latest != "0.146.0" {
 		t.Fatalf("npm version from deleted daemon cwd = %q, err = %v", latest, err)
 	}
@@ -450,7 +450,7 @@ func TestDetectCLIsAndPrereqsFromNVMForBackgroundService(t *testing.T) {
 }
 
 func TestUpdateCodexConfiguresPNPMHomeForBackgroundService(t *testing.T) {
-	mockCodexLatestVersion(t, "0.146.0")
+	mockFrameworkLatestVersion(t, "codex", "0.146.0")
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script and pnpm layout test")
 	}
@@ -539,7 +539,7 @@ func TestUpdateRunsCataloguedCLICommandAndVerifiesVersion(t *testing.T) {
 }
 
 func TestUpdateCodexUsesHomebrewCommandThroughSymlink(t *testing.T) {
-	mockCodexLatestVersion(t, "0.144.6")
+	mockFrameworkLatestVersion(t, "codex", "0.144.6")
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script and Homebrew layout test")
 	}
@@ -657,7 +657,7 @@ func TestCursorUpdateUsesOfficialInstallerAndExactNativeBuild(t *testing.T) {
 	res := updateCLIWithProgress(context.Background(), spec, UpdateCheck{
 		CurrentVersion: "2026.07.23-fffffff",
 		LatestVersion:  "2026.07.23-0000000",
-	}, nil)
+	}, InstallOptions{}, nil)
 	if !res.OK || res.Error != "" || res.Version != "2026.07.23-0000000" ||
 		res.Command != "bash -c curl https://cursor.com/install -fsS | bash" {
 		t.Fatalf("update result = %+v", res)

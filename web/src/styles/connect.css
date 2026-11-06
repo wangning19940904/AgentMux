@@ -1662,6 +1662,64 @@
   padding-right: 36px;
 }
 
+.framework-settings-dialog {
+  width: min(720px, calc(100vw - 40px));
+}
+
+.framework-settings-dialog .field input.mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+
+.framework-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.framework-settings-item {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.framework-settings-item summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.framework-settings-fields {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.framework-settings-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.framework-custom-command-list {
+  list-style: none;
+  padding-left: 12px;
+}
+
+.framework-custom-command-list li {
+  display: grid;
+  gap: 5px;
+}
+
+.framework-custom-command-list code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--text);
+  font-size: 12px;
+}
+
 .framework-install-dialog-copy > div {
   display: grid;
   gap: 4px;

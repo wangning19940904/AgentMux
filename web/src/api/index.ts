@@ -6,7 +6,7 @@ export * from "./types";
 export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
-import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetQuery, get, getChecked, getLocal, post, put, putLocal, postChecked, postProgress, del } from "./client";
+import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del } from "./client";
 import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
@@ -46,6 +46,8 @@ import type {
   FrameworkAuthStatus,
   FrameworkRuntimeSettings,
   FrameworkInstallResult,
+  FrameworkInstallSettings,
+  FrameworkInstallSettingsResponse,
   FrameworkLoginResult,
   FrameworkLoginSessionStatus,
   FrameworkUpdateCheck,
@@ -704,11 +706,21 @@ export const api = {
     onProgress?: (progress: OperationProgress) => void,
     acknowledgeInternal = false,
     targetID?: string,
-  ) => targetID || fleetMode()
-    ? (onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 }), fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body: { kind, action, acknowledge_internal: acknowledgeInternal } }, targetID ? [targetID] : ["all"], { confirm: Boolean(targetID) ? false : undefined }).then((result) => { onProgress?.({ phase: "complete", percent: 100 }); return result.first; }))
-    : onProgress
-    ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", { kind, action, acknowledge_internal: acknowledgeInternal }, onProgress)
-    : postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", { kind, action, acknowledge_internal: acknowledgeInternal }),
+    confirmedCommand?: string,
+  ) => {
+    const body = { kind, action, acknowledge_internal: acknowledgeInternal, ...(confirmedCommand ? { confirmed_command: confirmedCommand } : {}) };
+    return targetID || fleetMode()
+      ? (onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 }), fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body }, targetID ? [targetID] : ["all"], { confirm: Boolean(targetID) ? false : undefined }).then((result) => { onProgress?.({ phase: "complete", percent: 100 }); return result.first; }))
+      : onProgress
+      ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", body, onProgress)
+      : postChecked<FrameworkInstallResult>("/api/v1/frameworks/install", body);
+  },
+  // Install settings are per machine and always read and written on this
+  // machine; the server refuses changes relayed from another machine.
+  frameworkInstallSettings: () =>
+    getChecked<FrameworkInstallSettingsResponse>("/api/v1/frameworks/install-settings", { local: true }),
+  saveFrameworkInstallSettings: (settings: FrameworkInstallSettings) =>
+    putChecked<FrameworkInstallSettingsResponse>("/api/v1/frameworks/install-settings", settings, { local: true }),
   checkFrameworkUpdate: (kind: string, targetID?: string) => targetID
     ? fleetCall<FrameworkUpdateCheck>({ key: "check", method: "POST", path: "/api/v1/frameworks/check", body: { kind } }, [targetID], { confirm: false }).then((result) => result.first)
     : post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),

@@ -956,6 +956,40 @@ export interface Framework {
   registered: boolean;
   target_id?: string;
   target_name?: string;
+  // What install/update will run on that machine after its install settings.
+  commands?: { install?: FrameworkCommandPlan; update?: FrameworkCommandPlan };
+}
+
+export interface FrameworkCommandPlan {
+  command: string;
+  // A custom command from the machine's install settings; it must be
+  // confirmed (by echoing `command`) before the server runs it.
+  custom?: boolean;
+  registry?: string;
+}
+
+export interface FrameworkInstallOverride {
+  registry?: string;
+  install_command?: string;
+  update_command?: string;
+}
+
+export interface FrameworkInstallSettings {
+  default_registry?: string;
+  frameworks?: Record<string, FrameworkInstallOverride>;
+}
+
+export interface FrameworkInstallDefaults {
+  kind: string;
+  display: string;
+  install_command?: string;
+  update_command?: string;
+  registry_applies: boolean;
+}
+
+export interface FrameworkInstallSettingsResponse {
+  settings: FrameworkInstallSettings;
+  frameworks: FrameworkInstallDefaults[];
 }
 
 export interface FrameworkPrereqs {
