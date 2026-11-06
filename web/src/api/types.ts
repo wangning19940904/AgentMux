@@ -1102,6 +1102,19 @@ export interface FrameworkAuthStatus extends TargetMetadata {
   detail?: string;
   auto_refresh_supported?: boolean;
   expires_at?: string;
+  account?: FrameworkAuthAccount;
+}
+
+// Who a framework CLI is signed in as. Present only while authenticated, and
+// absent when the CLI does not expose its identity (or on older daemons).
+export interface FrameworkAuthAccount {
+  email?: string;
+  user_id?: string;
+  name?: string;
+  organization?: string;
+  plan?: string;
+  method?: string;
+  region?: string;
 }
 
 export interface FrameworkLoginResult {

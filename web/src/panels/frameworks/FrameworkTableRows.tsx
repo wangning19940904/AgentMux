@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Download, ExternalLink, LogIn, LogOut, Package, RefreshCw, Trash2, X } from "lucide-react";
+import { CheckCircle2, Copy, Download, ExternalLink, LogIn, LogOut, Package, RefreshCw, Trash2, UserRound, X } from "lucide-react";
 import type {
   Framework,
   FrameworkAuthStatus,
@@ -10,7 +10,8 @@ import { OperationProgress as OperationProgressView } from "../../components/Ope
 import { useI18n } from "../../i18n";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
 import { TargetBadge } from "../../components/TargetBadge";
-import { frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
+import { frameworkAccountSummary, frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
+import type { FrameworkAccountFieldKey, FrameworkAccountSummary } from "./frameworkPresentation";
 
 export type FrameworkBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "logout" | "complete" | "cancel";
 
@@ -70,6 +71,7 @@ export function FrameworkTableRows({
   const authChecking = supportsLogin && !auth;
   const authenticated = auth?.state === "authenticated";
   const canLogout = Boolean(authenticated && auth?.logout_supported);
+  const account = frameworkAccountSummary(auth);
   const buttonLabel = busy === "check"
     ? t("tools.checkingUpdate")
     : busy === "update"
@@ -81,7 +83,7 @@ export function FrameworkTableRows({
   return (
     <>
       <tr className="catalog-row framework-installed-row">
-        <FrameworkIdentityCell item={item}>{machineInstances}</FrameworkIdentityCell>
+        <FrameworkIdentityCell account={account} item={item}>{machineInstances}</FrameworkIdentityCell>
         <td data-label={t("frameworks.versionAndUpdate")}>
           <span className="framework-version-copy">
             <strong className="mono">{item.version ? `v${item.version}` : "—"}</strong>
@@ -110,7 +112,9 @@ export function FrameworkTableRows({
                 className={`ghost-action${authenticated ? " framework-authenticated-action" : ""}`}
                 disabled={disabled || Boolean(busy) || authActive || authChecking || Boolean(authenticated && !canLogout)}
                 onClick={canLogout ? onLogout : onAuth}
-                title={canLogout ? t("tools.authLogoutHint") : frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
+                title={canLogout
+                  ? account ? t("frameworks.authLogoutAccountHint", { account: account.identity }) : t("tools.authLogoutHint")
+                  : frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
                 type="button"
               >
                 {authChecking || busy === "auth" || busy === "logout"
@@ -189,7 +193,7 @@ export function FrameworkInstallingRow({ item, progress }: { item: Framework; pr
   );
 }
 
-function FrameworkIdentityCell({ item, children }: { item: Framework; children?: React.ReactNode }) {
+function FrameworkIdentityCell({ item, account, children }: { item: Framework; account?: FrameworkAccountSummary | null; children?: React.ReactNode }) {
   const { t } = useI18n();
   const { spec } = item;
   return (
@@ -202,9 +206,35 @@ function FrameworkIdentityCell({ item, children }: { item: Framework; children?:
           <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
           <TargetBadge target_id={item.target_id} target_name={item.target_name} />
         </span>
+        {account && <FrameworkAccountLine account={account} />}
         {children}
       </span>
     </td>
+  );
+}
+
+const accountFieldLabels: Record<FrameworkAccountFieldKey, string> = {
+  email: "frameworks.accountEmail",
+  user_id: "frameworks.accountUserID",
+  name: "frameworks.accountName",
+  organization: "frameworks.accountOrganization",
+  plan: "frameworks.accountPlan",
+  method: "frameworks.accountMethod",
+  region: "frameworks.accountRegion",
+};
+
+function FrameworkAccountLine({ account }: { account: FrameworkAccountSummary }) {
+  const { t } = useI18n();
+  const tooltip = [
+    t("frameworks.accountSignedInAs", { account: account.identity }),
+    ...account.fields.map((field) => `${t(accountFieldLabels[field.key])}: ${field.value}`),
+  ].join("\n");
+  return (
+    <span className="framework-account" title={tooltip}>
+      <UserRound aria-hidden="true" size={12} />
+      <span className="framework-account-identity">{account.identity}</span>
+      {account.details.map((detail) => <span className="framework-account-detail" key={detail}>{detail}</span>)}
+    </span>
   );
 }
 

@@ -26,17 +26,19 @@ const (
 )
 
 // AuthStatus is the configuration-time view of a framework's local login.
-// Detail is deliberately generic so account identifiers and command output do
-// not leak through the HTTP API.
+// Detail is deliberately generic so command output does not leak through the
+// HTTP API; the signed-in identity is exposed only through the structured
+// Account fields, and only while the framework is authenticated.
 type AuthStatus struct {
-	Kind                 string    `json:"kind"`
-	State                AuthState `json:"state"`
-	Installed            bool      `json:"installed"`
-	LoginSupported       bool      `json:"login_supported"`
-	LogoutSupported      bool      `json:"logout_supported"`
-	Detail               string    `json:"detail,omitempty"`
-	AutoRefreshSupported bool      `json:"auto_refresh_supported,omitempty"`
-	ExpiresAt            string    `json:"expires_at,omitempty"`
+	Kind                 string       `json:"kind"`
+	State                AuthState    `json:"state"`
+	Installed            bool         `json:"installed"`
+	LoginSupported       bool         `json:"login_supported"`
+	LogoutSupported      bool         `json:"logout_supported"`
+	Detail               string       `json:"detail,omitempty"`
+	AutoRefreshSupported bool         `json:"auto_refresh_supported,omitempty"`
+	ExpiresAt            string       `json:"expires_at,omitempty"`
+	Account              *AuthAccount `json:"account,omitempty"`
 }
 
 // LoginResult contains the actionable part of a CLI login flow. The command
@@ -155,6 +157,7 @@ func CheckAuth(ctx context.Context, kind string) AuthStatus {
 	switch status.State {
 	case AuthStateAuthenticated:
 		status.Detail = "CLI reports a local login"
+		status.Account = readFrameworkAccount(kind, output)
 	case AuthStateUnauthenticated:
 		status.Detail = "CLI reports that login is required"
 	default:
