@@ -101,6 +101,23 @@ const routerList: SuperAgentRouterList = {
 };
 const noRouters: SuperAgentRouterList = { ...routerList, routers: [] };
 
+const efforts = (...values: string[]) => values.map((value) => ({ value }));
+const codexSettings = {
+  kind: "codex",
+  defaults: { model: "gpt-6", reasoning_effort: "medium", service_tier: "default" },
+  capabilities: {
+    models: [{ value: "gpt-6", label: "GPT-6 Astra" }, { value: "gpt-6-mini" }],
+    model_capabilities: {
+      "gpt-6": { reasoning_efforts: efforts("low", "medium", "high", "xhigh"), service_tiers: efforts("default", "priority") },
+      "gpt-6-mini": { reasoning_efforts: efforts("low", "medium"), service_tiers: efforts("default") },
+    },
+  },
+};
+const picker = () => container.querySelector<HTMLButtonElement>(".model-picker-trigger")!;
+const fastSwitch = () => container.querySelector<HTMLInputElement>(".model-picker input[role=switch]");
+const efforts_ = () => [...container.querySelectorAll(".model-picker-segments button")].map((item) => item.textContent);
+const models = () => [...container.querySelectorAll(".model-picker-option")].map((item) => item.textContent);
+
 function renderPanel(props = {}) {
   mount(<I18nProvider language="en"><SuperAgentsPanel {...props} /></I18nProvider>);
 }
@@ -115,6 +132,9 @@ beforeEach(() => {
     { id: "elsewhere", name: "Elsewhere", runtime_id: "dsh", enabled: true, target_id: "h1" } as never,
   ]);
   vi.spyOn(api, "superAgentRouters").mockResolvedValue(routerList);
+  vi.spyOn(api, "providers").mockResolvedValue([]);
+  vi.spyOn(api, "activeRoutes").mockResolvedValue([]);
+  vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue(codexSettings as never);
   vi.spyOn(api, "saveSuperAgentRouter").mockImplementation(async (router) => ({ ...router, id: router.id || "sar_new", used_by: [] }));
   vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [
     { spec: { kind: "codex", display: "Codex", kind_type: "cli", install_supported: true, install_requires_npm: false, update_supported: true, supported: true }, installed: true, registered: true },
@@ -271,14 +291,9 @@ describe("SuperAgentsPanel", () => {
     expect(hasText("im:chat:readonly")).toBe(true);
   });
 
-  it("creates a router agent and sets up triggers from an instruction", async () => {
+  it("configures everything itself, and creates the new router agent when it saves", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
-    const setup = vi.spyOn(api, "setupSuperAgent").mockImplementation(async (draft) => ({
-      conversation_id: "superagent-setup-1", reply: "Added GitHub.", missing_secrets: [{ source_id: "src_1", key: "webhook_secret" }], problems: [],
-      // Like the host, a later answer keeps what the form already collected.
-      draft: { ...draft, sources: draft.sources.length ? draft.sources : [{ id: "src_1", kind: "github_webhook", enabled: true, allowed_actors: ["alice"], config: { agent_login: "bot" } }] },
-    }));
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
     // With no router agent yet, the form configures a new one.
@@ -287,46 +302,28 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Gemini")).toBe(false);
     expect(hasOption("Remote DSH")).toBe(false);
     expect(hasText("Read-only built-in tools, always")).toBe(true);
+    // Nothing drafts the configuration for the operator.
+    expect(hasText("What should it do")).toBe(false);
+    expect(button(/Draft settings/)).toBeUndefined();
     expect(container.querySelector("details")?.open).toBe(false);
-    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
-    expect(draftButton().disabled).toBe(true);
-    expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(false);
 
-    setValue(control(/^What should it do/), "Watch GitHub for alice");
-    await until(() => !draftButton().disabled);
-    expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
-    expect(hasText("Click Draft settings to apply what you typed")).toBe(true);
-    click(draftButton());
-    await until(() => hasText("Added GitHub."));
-    // Drafting runs on the router agent, so it is created first, once.
-    expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", runtime_id: "codex", mcp_servers: [] });
-    expect(setup.mock.calls[0][0]).toMatchObject({ router_agent_id: "sar_new", router_runtime: "" });
-    expect(setup.mock.calls[0][1]).toBe("Watch GitHub for alice");
-    expect(save).not.toHaveBeenCalled();
-    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("");
-    expect(hasText("Enter the secrets marked *")).toBe(true);
-
-    // The drafted trigger is on the form itself, with its secret field.
+    setValue(control(/^Add trigger/), "github_webhook");
+    setValue(control(/^Agent's GitHub login/), "bot");
+    setValue(control(/^Allowed senders/), "alice");
     const secret = control(/^Webhook secret/) as HTMLInputElement;
     expect(secret.type).toBe("password");
     expect(secret.closest("details")).toBeNull();
     expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
     setValue(secret, "s3cret");
     await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
-
-    setValue(control(/^What should it do/), "Only on weekdays");
-    await until(() => !draftButton().disabled);
-    click(draftButton());
-    await until(() => setup.mock.calls.length === 2);
-    expect(setup.mock.calls[1][2]).toBe("superagent-setup-1");
-    await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
+    expect(api.saveSuperAgentRouter).not.toHaveBeenCalled();
 
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
     expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "", runtime_id: "codex", model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] });
     expect(save.mock.calls[0][0]).toMatchObject({ name: "", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
-    expect(save.mock.calls[0][0].sources[0].config.webhook_secret).toBe("s3cret");
+    expect(save.mock.calls[0][0].sources[0]).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", webhook_secret: "s3cret" } });
   });
 
   it("creates a router on a framework that can route, with any number of worker frameworks", async () => {
@@ -345,7 +342,10 @@ describe("SuperAgentsPanel", () => {
     const oncall = workerFramework("oncall")!;
     expect(oncall.checked).toBe(false);
     click(oncall);
-    setValue(control(/^Model/), "gpt-5-mini");
+    await until(() => !picker().disabled);
+    click(picker());
+    await until(() => models().includes("gpt-6-mini"));
+    click(button(/^gpt-6-mini$/));
 
     click(workerFramework("Kimi")!);
     click(workerFramework("Codex")!);
@@ -356,7 +356,7 @@ describe("SuperAgentsPanel", () => {
     click(workerFramework("Kimi")!);
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ runtime_id: "codex", model: "gpt-5-mini", mcp_servers: ["oncall"] });
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ runtime_id: "codex", model: "gpt-6-mini", mcp_servers: ["oncall"] });
     expect(save.mock.calls[0][0]).toMatchObject({ router_agent_id: "sar_new", auto_workers: true, worker_runtimes: ["kimi"] });
   });
 
@@ -373,7 +373,7 @@ describe("SuperAgentsPanel", () => {
     await until(() => hasText("Fix build"));
     click(button(/^Edit$/));
     await until(() => control(/^Router agent/).value === "router");
-    expect(hasText("Codex · framework's default model · read-only tools")).toBe(true);
+    expect(hasText("Codex · Default model · read-only tools")).toBe(true);
     for (const label of [/^Router agent/, /^Routing rules/, /^Agent$/, /^Agent's GitHub login/, /^Add trigger/]) {
       expect(control(label).closest("details")).toBeNull();
     }
@@ -403,11 +403,12 @@ describe("SuperAgentsPanel", () => {
     setValue(control(/^Router agent/), "router");
     click(button(/^Edit router$/));
     expect(hasText("A router agent's framework can't change")).toBe(true);
-    setValue(control(/^Router name/), "Ops router");
+    // The router has no name of its own to edit.
+    expect(() => control(/^Router name/)).toThrow();
     click(workerFramework("oncall")!);
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "router", name: "Ops router", runtime_id: "codex", mcp_servers: ["oncall"] });
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "router", name: "Router", runtime_id: "codex", mcp_servers: ["oncall"] });
     expect(save.mock.calls[0][0]).toMatchObject({ id: "sa_1", router_agent_id: "router" });
   });
 
@@ -439,46 +440,106 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Coder (an ordinary Agent, kept)")).toBe(false);
   });
 
-  it("says why Draft settings cannot run, and fills fields from templates", async () => {
+  it("fills the routing rules from a template, replacing them only when asked", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     renderPanel({ createRequested: true });
     await until(() => control(/^Router agent/).value === "router");
-    const draftButton = () => button(/^Draft settings$/) as HTMLButtonElement;
-    const instruction = () => control(/^What should it do/) as HTMLTextAreaElement;
-    expect(draftButton().disabled).toBe(true);
-    expect(hasText("Describe what it should do above, or start from an example.")).toBe(true);
-
-    click(button(/^GitHub issues and PRs$/));
-    expect(instruction().value).toMatch(/^Handle GitHub issues and pull requests in <owner\/repo>/);
-    expect(draftButton().disabled).toBe(false);
-    expect(hasText("Describe what it should do above")).toBe(false);
-    // What was typed is only replaced when the operator agrees.
-    setValue(instruction(), "my own words");
-    click(button(/^Feishu @mention$/));
-    expect(instruction().value).toBe("my own words");
-    confirm.mockReturnValue(true);
-    click(button(/^Feishu @mention$/));
-    expect(instruction().value).toMatch(/^When someone @mentions the bot/);
-
     const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
-    confirm.mockClear();
     click(button(/^Use template$/));
     expect(confirm).not.toHaveBeenCalled();
     expect(rules().value).toMatch(/^Take on: requests about <project>/);
     expect(rules().value.split("\n")).toHaveLength(4);
     setValue(rules(), "only widgets");
-    confirm.mockReturnValue(false);
     click(button(/^Use template$/));
     expect(rules().value).toBe("only widgets");
+    confirm.mockReturnValue(true);
+    click(button(/^Use template$/));
+    expect(rules().value).toMatch(/^Take on:/);
   });
 
-  it("says when Draft settings needs a router agent first", async () => {
-    vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [] } as never);
+  it("chooses the router's model, reasoning effort and speed in one picker, and names it after the Super Agent", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
-    await until(() => hasText("Choose or create a router agent below first."));
-    click(button(/^Email requests$/));
-    expect((button(/^Draft settings$/) as HTMLButtonElement).disabled).toBe(true);
+    await until(() => control(/^Router agent/).value === "__new_router__");
+    setValue(control(/^Name/), "Triage");
+    expect(hasText("Created when you save, as “Triage router”.")).toBe(true);
+    expect(picker().textContent).toBe("Default model");
+    click(picker());
+    await until(() => models().length > 0);
+    expect(api.frameworkRuntimeSettings).toHaveBeenCalledWith("codex", "", "local");
+    expect(models()).toEqual(["Default (GPT-6 Astra)", "GPT-6 Astra", "gpt-6-mini"]);
+    expect(efforts_()).toEqual(["Default (Medium)", "Low", "Medium", "High", "Extra high"]);
+    expect(hasText("Models from the framework's own sign-in.")).toBe(true);
+    click(button(/^Extra high$/));
+    click(fastSwitch()!);
+    expect(picker().textContent).toBe("Default model · Extra high · Fast");
+
+    // A model that lacks the chosen effort or fast mode falls back to its defaults.
+    click(button(/^gpt-6-mini$/));
+    expect(picker().textContent).toBe("gpt-6-mini");
+    expect(efforts_()).toEqual(["Default (Medium)", "Low", "Medium"]);
+    expect(fastSwitch()).toBeNull();
+
+    click(button(/^GPT-6 Astra$/));
+    click(button(/^High$/));
+    click(fastSwitch()!);
+    expect(picker().textContent).toBe("GPT-6 Astra · High · Fast");
+    act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(container.querySelector(".model-picker-popover")).toBeNull();
+
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => vi.mocked(api.saveSuperAgentRouter).mock.calls.length > 0);
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({
+      name: "Triage router", runtime_id: "codex", model: "gpt-6", reasoning_effort: "high", service_tier: "priority",
+    });
+  });
+
+  it("offers the framework's efforts and speed when its default model is unknown", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue({
+      ...codexSettings, defaults: {},
+      capabilities: { ...codexSettings.capabilities, reasoning_efforts: efforts("low", "ultra"), service_tiers: efforts("default", "priority") },
+    } as never);
+    renderPanel({ createRequested: true });
+    await until(() => control(/^Router agent/).value === "__new_router__");
+    click(picker());
+    await until(() => models().length > 0);
+    expect(models()[0]).toBe("Default model");
+    expect(efforts_()).toEqual(["Default", "Low", "Ultra"]);
+    expect(fastSwitch()).not.toBeNull();
+  });
+
+  it("takes the router's models from the framework's active provider route", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    vi.spyOn(api, "activeRoutes").mockResolvedValue([{ tool: "codex", provider_id: "p1", configured: true }]);
+    vi.spyOn(api, "providers").mockResolvedValue([{
+      id: "p1", name: "Acme", base_url: "", enabled: true, model: "acme-large",
+      meta: { supported_models: ["acme-large", "acme-small"], supported_reasoning_efforts: ["low", "high"], supported_service_tiers: ["default", "fast"] },
+    }]);
+    renderPanel({ createRequested: true });
+    await until(() => control(/^Router agent/).value === "__new_router__");
+    click(picker());
+    await until(() => models().length > 0);
+    expect(models()).toEqual(["Default (acme-large)", "acme-large", "acme-small"]);
+    expect(efforts_()).toEqual(["Default", "Low", "High"]);
+    expect(hasText("Models from Acme, the framework's active provider.")).toBe(true);
+    expect(api.frameworkRuntimeSettings).not.toHaveBeenCalled();
+    click(fastSwitch()!);
+    expect(picker().textContent).toBe("Default model · Fast");
+  });
+
+  it("lets the router's model be typed when the framework's models cannot be read", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    vi.spyOn(api, "frameworkRuntimeSettings").mockRejectedValue(new Error("not signed in"));
+    renderPanel({ createRequested: true });
+    await until(() => control(/^Router agent/).value === "__new_router__");
+    click(picker());
+    await until(() => hasText("Couldn't read the models: not signed in."));
+    const input = container.querySelector<HTMLInputElement>(".model-picker-popover input")!;
+    setValue(input, "gpt-6");
+    expect(picker().textContent).toBe("gpt-6");
+    expect(fastSwitch()).toBeNull();
   });
 
   it("explains when no framework is installed", async () => {
@@ -486,17 +547,6 @@ describe("SuperAgentsPanel", () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     renderPanel({ createRequested: true });
     await until(() => hasText("No framework is installed"));
-  });
-
-  it("shows why drafting failed and keeps the instruction", async () => {
-    vi.spyOn(api, "setupSuperAgent").mockRejectedValue(new Error("model down"));
-    renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "router");
-    setValue(control(/^What should it do/), "Watch GitHub");
-    await until(() => !(button(/^Draft settings$/) as HTMLButtonElement).disabled);
-    click(button(/^Draft settings$/) as HTMLButtonElement);
-    await until(() => hasText("model down"));
-    expect((control(/^What should it do/) as HTMLTextAreaElement).value).toBe("Watch GitHub");
   });
 
   it("keeps the form open and shows the server's reason when saving fails", async () => {

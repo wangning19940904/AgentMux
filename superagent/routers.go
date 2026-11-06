@@ -37,8 +37,13 @@ type Router struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	RuntimeID string `json:"runtime_id"`
-	// Model is empty for the framework's default.
-	Model string `json:"model,omitempty"`
+	// Name follows the Super Agent that routes with it, as "<name> router",
+	// unless several Super Agents share it.
+	// Model, ReasoningEffort and ServiceTier are empty for the framework's
+	// defaults. A ServiceTier such as "priority" is the framework's fast mode.
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ServiceTier     string `json:"service_tier,omitempty"`
 	// MCPServers are the only tools the router has beyond the framework's
 	// read-only ones. Empty means none.
 	MCPServers []string `json:"mcp_servers"`
@@ -99,6 +104,7 @@ func routerView(instance core.AgentInstance, users []RouterUser) Router {
 	}
 	return Router{
 		ID: instance.ID, Name: instance.Name, RuntimeID: instance.RuntimeID, Model: instance.DefaultModel,
+		ReasoningEffort: instance.DefaultReasoningEffort, ServiceTier: instance.DefaultServiceTier,
 		MCPServers: append([]string{}, instance.MCPServers...), UsedBy: users,
 		CreatedAt: instance.CreatedAt, UpdatedAt: instance.UpdatedAt,
 	}
@@ -166,6 +172,8 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 	router.Name = strings.TrimSpace(router.Name)
 	router.RuntimeID = strings.TrimSpace(router.RuntimeID)
 	router.Model = strings.TrimSpace(router.Model)
+	router.ReasoningEffort = strings.TrimSpace(router.ReasoningEffort)
+	router.ServiceTier = strings.TrimSpace(router.ServiceTier)
 	now := s.now().UTC()
 	var instance core.AgentInstance
 	if router.ID != "" {
@@ -184,6 +192,9 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 		}
 		if router.RuntimeID != existing.RuntimeID {
 			return Router{}, errors.New("a router agent's framework cannot change; create another router agent instead")
+		}
+		if router.Name == "" {
+			router.Name = existing.Name
 		}
 		instance = *existing
 	} else {
@@ -220,6 +231,7 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 	instance.Name = router.Name
 	instance.WorkDir, instance.WorkspaceMode = workDir, "shared"
 	instance.DefaultModel = router.Model
+	instance.DefaultReasoningEffort, instance.DefaultServiceTier = router.ReasoningEffort, router.ServiceTier
 	instance.DefaultApprovalMode = core.ApprovalModePlan
 	instance.MCPServers = servers
 	instance.Skills, instance.CLIs, instance.ChannelBindings, instance.Schedules = nil, nil, nil, nil
@@ -233,6 +245,45 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 		return Router{}, err
 	}
 	return routerView(instance, users[instance.ID]), nil
+}
+
+// routerName is the name of a router agent that one Super Agent routes with.
+func routerName(superAgentName string) string { return superAgentName + " router" }
+
+// defaultSuperAgentName names a Super Agent left unnamed after its router's
+// framework. A router agent is named after its Super Agent, so its own name
+// would only come back with a second suffix.
+func defaultSuperAgentName(router core.AgentInstance) string {
+	if !IsRouterAgent(router) && strings.TrimSpace(router.Name) != "" {
+		return router.Name
+	}
+	if router.RuntimeID == "" {
+		return "Super Agent"
+	}
+	return fmt.Sprintf("Super Agent (%s)", router.RuntimeID)
+}
+
+// nameRouter names a router agent after the only Super Agent that routes
+// with it. A router several Super Agents share keeps its name.
+func (s *Service) nameRouter(ctx context.Context, agent core.SuperAgent) error {
+	router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
+	if err != nil || router == nil || !IsRouterAgent(*router) {
+		return err
+	}
+	users, err := s.routerUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, user := range users[router.ID] {
+		if user.ID != agent.ID {
+			return nil
+		}
+	}
+	if name := routerName(agent.Name); router.Name != name {
+		router.Name, router.UpdatedAt = name, s.now().UTC()
+		return s.store.UpsertAgentInstance(ctx, router)
+	}
+	return nil
 }
 
 // DeleteRouter removes a router agent that no Super Agent routes with.

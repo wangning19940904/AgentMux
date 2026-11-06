@@ -186,7 +186,7 @@ func TestSaveAutoWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Name != "router" || !slices.Equal(saved.WorkerRuntimes, []string{"dsh"}) || saved.AutoWorkerApprovalMode != "" || saved.Mode != core.SuperAgentModeObserve {
+	if saved.Name != "Super Agent (dsh)" || !slices.Equal(saved.WorkerRuntimes, []string{"dsh"}) || saved.AutoWorkerApprovalMode != "" || saved.Mode != core.SuperAgentModeObserve {
 		t.Fatalf("saved = %+v", saved)
 	}
 	for name, agent := range map[string]core.SuperAgent{

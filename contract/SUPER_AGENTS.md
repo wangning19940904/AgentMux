@@ -102,8 +102,8 @@ request, and the host starts a worker of that framework that was not configured 
 ## Router agents
 
 A router agent is an Agent made only to route, kept apart from ordinary Agents. The
-Super Agent form chooses one, or creates one with a framework, a name, a model and the
-MCP servers it may use. Router agents can be shared between Super Agents.
+Super Agent form chooses one, or creates one with a framework, a model, a reasoning effort,
+a speed and the MCP servers it may use. Router agents can be shared between Super Agents.
 
 - It always runs in `plan` mode, so a framework without a read-only mode, such as Kimi,
   cannot route. Its framework cannot change after it is created.
@@ -113,9 +113,15 @@ MCP servers it may use. Router agents can be shared between Super Agents.
   lookups only.
 - It never has skills, CLIs, channels, schedules or a system prompt. Saving it restores
   these limits, whatever was changed elsewhere, and the Agents page shows it read-only.
+- It is named after the Super Agent that routes with it, as `<name> router`, and follows
+  that Super Agent's renames. A router several Super Agents share keeps its name. An unnamed
+  Super Agent is named `Super Agent (<framework>)`.
+- Its provider is the framework's active provider route. The form offers that provider's
+  models, reasoning efforts and service tiers, or else those of the framework's own
+  sign-in. Empty values are the framework's defaults, and a `priority` or `fast` service
+  tier is its fast mode.
 - It has its own directory, `~/.agentmux/super-agents/routers/<id>`, where AgentMux writes
-  its MCP configuration. The model is empty for the framework's default, and the provider
-  is the framework's active provider route.
+  its MCP configuration.
 - It can be deleted only when no Super Agent routes with it.
 
 A Super Agent saved with an ordinary Agent as its router, before router agents existed,
@@ -126,12 +132,14 @@ separately, under [Auto workers](#auto-workers).
 
 ## The form
 
+The administrator sets every field. The form does not draft a configuration from a
+description.
+
 | Field | What it is for |
 | --- | --- |
-| Name | Shown in the Super Agent list, and the router is told it. Named after the router's framework when empty. |
-| What should it do? | Not saved. The setup assistant turns it into the name, routing rules and triggers on the form, for review. |
-| Router agent | Who judges each request. |
-| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. |
+| Name | Shown in the Super Agent list, and the router is told it. A router agent only this Super Agent uses is named after it. Named after the router's framework when empty. |
+| Router agent | Who judges each request, with which model, reasoning effort and speed. |
+| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. A template can fill it in, to edit. |
 | Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
 | Triggers | Where requests come from. |
 
@@ -140,14 +148,14 @@ Mode, maximum concurrency and whether the Super Agent is enabled are under Advan
 ## Setup assistant
 
 `POST /api/v1/super-agents/setup` turns an administrator's instruction into a proposed
-configuration, using the router agent. A router agent the form is creating is saved first,
-so the assistant can run on it:
+configuration, using the draft's router agent. The Console form does not use it; it
+remains for API clients:
 
 - It returns a draft and stores nothing. Saving it passes the usual validation.
 - Only the Console can reach it, so text in an event cannot change the configuration.
 - Secrets and `trust_from_header` are never sent to or accepted from the model. The
-  response names the secrets the form must collect. Secrets pasted into an instruction
-  would reach the model, so the form asks people not to.
+  response names the secrets still to collect. Secrets pasted into an instruction would
+  reach the model.
 - It cannot change the router, the roster, the worker frameworks, or the auto worker
   approval mode.
 

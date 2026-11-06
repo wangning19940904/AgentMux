@@ -1,12 +1,14 @@
-import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Sparkles, Square, Trash2, X } from "lucide-react";
+import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInstance, Channel, SuperAgent, SuperAgentRouter, SuperAgentRouterList, SuperAgentSetupResult, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { AgentInstance, Channel, SuperAgent, SuperAgentRouter, SuperAgentRouterList, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
-import { INSTRUCTION_TEMPLATES, NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
+import { describeModelChoice, ModelPicker } from "./superAgentModelPicker";
+import type { ModelChoice } from "./superAgentModelPicker";
+import { NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -299,7 +301,7 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   const others = (router: SuperAgentRouter) => (router.used_by ?? []).filter((user) => user.id !== draft.id);
   const describe = (router: SuperAgentRouter) => [
     display(router.runtime_id),
-    router.model || t("superAgents.routerModelDefault"),
+    describeModelChoice(t, modelChoice(router)),
     router.mcp_servers.length ? t("superAgents.routerToolsWithMCP", { names: router.mcp_servers.join(", ") }) : t("superAgents.routerToolsReadOnly"),
   ].join(" · ");
 
@@ -314,13 +316,14 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
         </select>
       </label>
       {routerDraft ? (
-        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers} sharedWith={selected ? others(selected) : []} onChange={onRouterDraft} />
+        <RouterEditor router={routerDraft} frameworks={frameworks} routers={routers} sharedWith={selected ? others(selected) : []}
+          plannedName={routerNameFor(draft, routerDraft.runtime_id)} onChange={onRouterDraft} />
       ) : selected ? (
         <div className="super-agent-card super-agent-router-summary">
           <span>{describe(selected)}</span>
           {others(selected).length > 0 && <small className="muted">{t("superAgents.routerUsedBy", { names: others(selected).map((user) => user.name).join(", ") })}</small>}
           <span className="control-row">
-            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, model: selected.model ?? "", mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
+            <button className="ghost-action" type="button" onClick={() => onRouterDraft({ ...selected, ...modelChoice(selected), mcp_servers: [...selected.mcp_servers] })}>{t("superAgents.editRouter")}</button>
             {(selected.used_by ?? []).length === 0 && (
               <button className="ghost-action danger-action" type="button" onClick={() => onDelete(selected)}><Trash2 size={13} /> {t("superAgents.deleteRouter")}</button>
             )}
@@ -334,11 +337,22 @@ function RouterPicker({ draft, routers, routerDraft, frameworks, legacyName, onC
   );
 }
 
-function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
+function modelChoice(router: SuperAgentRouter): ModelChoice {
+  return { model: router.model ?? "", reasoning_effort: router.reasoning_effort ?? "", service_tier: router.service_tier ?? "" };
+}
+
+// routerNameFor is the name a router agent takes from the only Super Agent
+// that routes with it. The host names an unnamed Super Agent after the framework.
+function routerNameFor(agent: SuperAgent, runtime: string) {
+  return `${agent.name.trim() || (runtime ? `Super Agent (${runtime})` : "Super Agent")} router`;
+}
+
+function RouterEditor({ router, frameworks, routers, sharedWith, plannedName, onChange }: {
   router: SuperAgentRouter;
   frameworks: FrameworkOption[];
   routers: SuperAgentRouterList | null;
   sharedWith: { id: string; name: string }[];
+  plannedName: string;
   onChange: (next: SuperAgentRouter | null) => void;
 }) {
   const { t } = useI18n();
@@ -355,7 +369,7 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
         <div className="field"><span>{t("superAgents.routerFramework")}</span><strong>{display}</strong><small>{t("superAgents.routerFrameworkFixed")}</small></div>
       ) : (
         <label className="field"><span>{t("superAgents.routerFramework")}</span>
-          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [] })}>
+          <select value={router.runtime_id} onChange={(event) => onChange({ ...router, runtime_id: event.target.value, mcp_servers: [], model: "", reasoning_effort: "", service_tier: "" })}>
             <option value="">{t("superAgents.chooseFramework")}</option>
             {frameworks.map((item) => (
               <option key={item.kind} value={item.kind} disabled={!canRoute(item.kind)}>
@@ -366,13 +380,12 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
           {frameworks.length === 0 && <small>{t("superAgents.noFramework")}</small>}
         </label>
       )}
-      <div className="field-grid">
-        <label className="field"><span>{t("superAgents.routerName")}</span>
-          <input placeholder={router.runtime_id ? t("superAgents.routerNamePlaceholder", { framework: router.runtime_id }) : ""} value={router.name} onChange={(event) => onChange({ ...router, name: event.target.value })} />
-        </label>
-        <label className="field"><span>{t("superAgents.routerModel")}</span>
-          <input placeholder={t("superAgents.routerModelPlaceholder")} value={router.model ?? ""} onChange={(event) => onChange({ ...router, model: event.target.value })} />
-        </label>
+      <div className="field">
+        <span id="super-agent-router-model">{t("superAgents.routerModel")}</span>
+        {router.runtime_id ? (
+          <ModelPicker runtime={router.runtime_id} labelledBy="super-agent-router-model" value={modelChoice(router)}
+            onChange={(choice) => onChange({ ...router, ...choice })} />
+        ) : <small>{t("superAgents.modelChooseFramework")}</small>}
       </div>
       <div className="field" role="group" aria-labelledby="super-agent-router-tools">
         <span id="super-agent-router-tools">{t("superAgents.routerToolsTitle")}</span>
@@ -398,8 +411,8 @@ function RouterEditor({ router, frameworks, routers, sharedWith, onChange }: {
       </div>
       <small className="muted">
         {router.id
-          ? sharedWith.length ? t("superAgents.routerSharedEdit", { names: sharedWith.map((user) => user.name).join(", ") }) : t("superAgents.routerSavedWithForm")
-          : t("superAgents.routerCreatedOnSave")}
+          ? sharedWith.length ? t("superAgents.routerSharedEdit", { names: sharedWith.map((user) => user.name).join(", ") }) : t("superAgents.routerSavedWithForm", { name: plannedName })
+          : t("superAgents.routerCreatedOnSave", { name: plannedName })}
       </small>
       {router.id && <button className="ghost-action" type="button" onClick={() => onChange(null)}>{t("superAgents.cancelRouterEdit")}</button>}
     </div>
@@ -437,12 +450,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
     ...frameworkOptions,
     ...workerRuntimes.filter((kind) => !frameworkOptions.some((item) => item.kind === kind)).map((kind) => ({ kind, display: kind })),
   ];
-  const [instruction, setInstruction] = useState("");
-  const problems = [...superAgentProblems(draft, routerDraft), ...(instruction.trim() ? ["superAgents.problem.pendingInstruction"] : [])];
-  const [assisting, setAssisting] = useState(false);
-  const [assistError, setAssistError] = useState("");
-  const [setup, setSetup] = useState<SuperAgentSetupResult | null>(null);
-  const hasRouter = Boolean(routerDraft ? routerDraft.runtime_id : draft.router_agent_id || draft.router_runtime);
+  const problems = superAgentProblems(draft, routerDraft);
 
   // Until any worker is chosen, workers start out on the router's framework.
   const withRouterWorkers = (next: SuperAgent, runtime?: string) =>
@@ -467,7 +475,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   };
 
   // A new Super Agent starts with the first router agent, or a new one on the
-  // first framework that can route, so it can draft settings right away.
+  // first framework that can route.
   const defaulted = useRef(Boolean(draft.router_agent_id || draft.router_runtime));
   useEffect(() => {
     if (defaulted.current || !routers.data || frameworks.loading) return;
@@ -480,7 +488,10 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   // Agent that routes with it.
   async function commitRouter(): Promise<SuperAgent> {
     if (!routerDraft) return draft;
-    const saved = await api.saveSuperAgentRouter(routerDraft);
+    // Saving the Super Agent names its router after it; this only gives a new
+    // router that name from the start.
+    const name = routerDraft.id ? routerDraft.name : draft.name.trim() ? routerNameFor(draft, routerDraft.runtime_id) : "";
+    const saved = await api.saveSuperAgentRouter({ ...routerDraft, name });
     const next = { ...draft, router_agent_id: saved.id, router_runtime: "" };
     setRouterDraft(null);
     onChange(next);
@@ -500,38 +511,13 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
     }
   }
 
-  // Templates fill a field with an example to edit; what was typed is only
-  // replaced when the operator agrees.
-  const replaces = (current: string, next: string, question: string) =>
-    !current.trim() || current === next || window.confirm(t(question));
-  const applyInstructionTemplate = (text: string) => {
-    if (replaces(instruction, text, "superAgents.replaceInstruction")) setInstruction(text);
-  };
+  // The template fills the routing rules with an example to edit; what was
+  // typed is only replaced when the operator agrees.
   const applyRoutingTemplate = () => {
     const text = t("superAgents.routerPromptTemplateText");
-    if (replaces(draft.router_prompt ?? "", text, "superAgents.replaceRoutingRules")) onChange({ ...draft, router_prompt: text });
+    const current = draft.router_prompt ?? "";
+    if (!current.trim() || current === text || window.confirm(t("superAgents.replaceRoutingRules"))) onChange({ ...draft, router_prompt: text });
   };
-  // Says why Draft settings cannot run instead of leaving a silent, dimmed button.
-  const assistBlocked = !hasRouter
-    ? routers.loading || frameworks.loading ? "" : "superAgents.assistNeedsRouter"
-    : !instruction.trim() ? "superAgents.assistNeedsInstruction" : "";
-
-  async function assist() {
-    setAssisting(true);
-    setAssistError("");
-    try {
-      const base = await commitRouter();
-      const result = await api.setupSuperAgent(base, instruction, setup?.conversation_id);
-      setSetup(result);
-      setInstruction("");
-      onChange(result.draft);
-    } catch (error) {
-      setAssistError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setAssisting(false);
-    }
-  }
-
   const loadRemoteAgents = useCallback(async (hostID: string) => {
     if (!hostID) return;
     try {
@@ -575,39 +561,6 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             <input placeholder={t("superAgents.namePlaceholder")} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
             <small>{t("superAgents.nameHelp")}</small>
           </label>
-
-          <section className="super-agent-section" aria-labelledby="super-agent-describe">
-            <header><h3 id="super-agent-describe">{t("superAgents.section.describe")}</h3></header>
-            <label className="field"><span>{t("superAgents.instruction")}</span>
-              <textarea rows={3} placeholder={t("superAgents.instructionPlaceholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
-              <small>{t("superAgents.instructionHelp")}</small>
-            </label>
-            <div className="field" role="group" aria-labelledby="super-agent-templates">
-              <small id="super-agent-templates">{t("superAgents.templatesLabel")}</small>
-              <div className="super-agent-chips">
-                {INSTRUCTION_TEMPLATES.map((key) => (
-                  <button key={key} type="button" className="super-agent-chip super-agent-template" onClick={() => applyInstructionTemplate(t(`superAgents.template.${key}.text`))}>
-                    {t(`superAgents.template.${key}.label`)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="control-row super-agent-assist-row">
-              <button className="ghost-action" disabled={assisting || Boolean(assistBlocked)} title={assistBlocked ? t(assistBlocked) : undefined} onClick={() => void assist()}><Sparkles size={14} /> {t(assisting ? "superAgents.assisting" : "superAgents.assist")}</button>
-              {assisting
-                ? <small className="muted" role="status">{t("superAgents.assistingHint")}</small>
-                : assistBlocked && <small className="muted">{t(assistBlocked)}</small>}
-            </div>
-            {assistError && <div className="session-notice error" role="alert">{assistError}</div>}
-            {setup && (
-              <div className="super-agent-card super-agent-proposal" role="status">
-                {setup.reply && <p className="super-agent-assist-reply">{setup.reply}</p>}
-                {setup.problems.map((problem) => <small className="super-agent-problem" key={problem}>{problem}</small>)}
-                {setup.missing_secrets.length > 0 && <small>{t("superAgents.missingSecrets")}</small>}
-                <small className="muted">{t("superAgents.proposalHelp")}</small>
-              </div>
-            )}
-          </section>
 
           <section className="super-agent-section" aria-labelledby="super-agent-router">
             <header><h3 id="super-agent-router">{t("superAgents.section.router")}</h3><p>{t("superAgents.section.routerHelp")}</p></header>

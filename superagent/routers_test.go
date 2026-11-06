@@ -233,3 +233,76 @@ func TestRouterLimitsAreCheckedBeforeEachEvent(t *testing.T) {
 		t.Fatalf("trigger = %+v", trigger)
 	}
 }
+
+func TestSaveRouterKeepsModelEffortAndSpeed(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	saved, err := h.service.SaveRouter(ctx, Router{RuntimeID: "codex", Model: "gpt-6", ReasoningEffort: " xhigh ", ServiceTier: "priority"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, _ := h.store.GetAgentInstance(ctx, saved.ID)
+	if instance.DefaultModel != "gpt-6" || instance.DefaultReasoningEffort != "xhigh" || instance.DefaultServiceTier != "priority" {
+		t.Fatalf("instance = %+v", instance)
+	}
+	if saved.ReasoningEffort != "xhigh" || saved.ServiceTier != "priority" {
+		t.Fatalf("saved = %+v", saved)
+	}
+	// An update without a name keeps the router's name.
+	updated, err := h.service.SaveRouter(ctx, Router{ID: saved.ID, ServiceTier: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != saved.Name || updated.ServiceTier != "" || updated.ReasoningEffort != "" {
+		t.Fatalf("updated = %+v", updated)
+	}
+}
+
+func TestRouterIsNamedAfterItsOnlySuperAgent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if router, _ := h.store.GetAgentInstance(ctx, "router"); router.Name != "sa router" {
+		t.Fatalf("the harness Super Agent's router = %q", router.Name)
+	}
+	created, err := h.service.SaveRouter(ctx, Router{RuntimeID: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Name != "Router (codex)" {
+		t.Fatalf("an unused router keeps a default name: %q", created.Name)
+	}
+	first, err := h.service.Save(ctx, core.SuperAgent{Name: "Triage", RouterAgentID: created.ID, AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := func() string { router, _ := h.store.GetAgentInstance(ctx, created.ID); return router.Name }
+	if got := name(); got != "Triage router" {
+		t.Fatalf("name = %q", got)
+	}
+	first.Name = "Ops triage"
+	if _, err := h.service.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "Ops triage router" {
+		t.Fatalf("renaming the Super Agent renames its router: %q", got)
+	}
+	// Once another Super Agent shares it, the router keeps its name.
+	if _, err := h.service.Save(ctx, core.SuperAgent{Name: "Other", RouterAgentID: created.ID, AutoWorkers: true}); err != nil {
+		t.Fatal(err)
+	}
+	first.Name = "Renamed again"
+	if _, err := h.service.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if got := name(); got != "Ops triage router" {
+		t.Fatalf("a shared router keeps its name: %q", got)
+	}
+	// Left unnamed, a Super Agent is named after the framework, not the router.
+	unnamed, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: created.ID, AutoWorkers: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unnamed.Name != "Super Agent (codex)" {
+		t.Fatalf("unnamed = %q", unnamed.Name)
+	}
+}
