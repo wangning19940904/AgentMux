@@ -1,5 +1,6 @@
 // Package traeauth renews TRAE-managed credentials through the native CLI.
-// AgentMux reads expiry metadata only; the CLI owns tokens and their storage.
+// AgentMux reads expiry and account-identity metadata only; the CLI owns
+// tokens and their storage.
 package traeauth
 
 import (
@@ -23,6 +24,9 @@ type Metadata struct {
 	Managed     bool
 	ExpiresAt   time.Time
 	LastRefresh time.Time
+	UserID      string
+	Region      string
+	LoginMethod string
 	stamp       string
 }
 
@@ -77,13 +81,19 @@ func readMetadata(path string) (Metadata, error) {
 		AuthMode    string    `json:"auth_mode"`
 		LastRefresh time.Time `json:"last_refresh"`
 		Trae        struct {
-			ExpiresAt time.Time `json:"expires_at"`
+			ExpiresAt   time.Time `json:"expires_at"`
+			UserID      string    `json:"user_id"`
+			Region      string    `json:"region"`
+			LoginMethod string    `json:"login_method"`
 		} `json:"trae"`
 	}
 	if err := json.NewDecoder(f).Decode(&payload); err != nil {
 		return Metadata{}, err
 	}
-	meta := Metadata{Managed: payload.AuthMode == "trae", ExpiresAt: payload.Trae.ExpiresAt, LastRefresh: payload.LastRefresh}
+	meta := Metadata{
+		Managed: payload.AuthMode == "trae", ExpiresAt: payload.Trae.ExpiresAt, LastRefresh: payload.LastRefresh,
+		UserID: payload.Trae.UserID, Region: payload.Trae.Region, LoginMethod: payload.Trae.LoginMethod,
+	}
 	if info, err := f.Stat(); err == nil {
 		meta.stamp = info.ModTime().UTC().Format(time.RFC3339Nano)
 	}

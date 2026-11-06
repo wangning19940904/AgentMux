@@ -1645,6 +1645,40 @@
   white-space: nowrap;
 }
 
+.framework-account {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  gap: 5px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.framework-account svg {
+  flex: none;
+  color: var(--green);
+}
+
+.framework-account-identity {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.framework-account-detail {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.framework-account-detail::before {
+  content: "·";
+  margin-right: 5px;
+}
+
 .framework-authenticated-action {
   color: var(--green);
   border-color: color-mix(in srgb, var(--green) 34%, var(--border));
