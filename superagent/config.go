@@ -259,15 +259,9 @@ func validateSource(source core.SuperAgentSource) error {
 	if slices.Contains(source.AllowedActors, "*") && source.Kind != core.SuperAgentSourceFeishuMessage {
 		return errors.New(`"*" is only allowed for Feishu messages; list the allowed senders`)
 	}
-	required := map[string][]string{
-		core.SuperAgentSourceFeishuMessage: {"channel_id"},
-		core.SuperAgentSourceFeishuDoc:     {"channel_id", "documents"},
-		core.SuperAgentSourceEmail:         {"imap_host", "username", "password"},
-		core.SuperAgentSourceGitHub:        {"webhook_secret", "agent_login"},
-	}
-	keys, known := required[source.Kind]
-	if !known {
-		return fmt.Errorf("unknown kind %q", source.Kind)
+	keys, err := requiredConfig(source)
+	if err != nil {
+		return err
 	}
 	for _, key := range keys {
 		if strings.TrimSpace(source.Config[key]) == "" {
@@ -275,6 +269,36 @@ func validateSource(source core.SuperAgentSource) error {
 		}
 	}
 	return nil
+}
+
+// requiredConfig lists the settings a Source cannot run without. A GitHub
+// Source that polls signs in with its token and has no webhook to verify.
+func requiredConfig(source core.SuperAgentSource) ([]string, error) {
+	switch source.Kind {
+	case core.SuperAgentSourceFeishuMessage:
+		return []string{"channel_id"}, nil
+	case core.SuperAgentSourceFeishuDoc:
+		return []string{"channel_id", "documents"}, nil
+	case core.SuperAgentSourceEmail:
+		return []string{"imap_host", "username", "password"}, nil
+	case core.SuperAgentSourceGitHub:
+		switch delivery := strings.TrimSpace(source.Config["delivery"]); delivery {
+		case "", "webhook":
+			return []string{"webhook_secret", "agent_login"}, nil
+		case GitHubDeliveryPoll:
+			return []string{"github_token", "agent_login"}, nil
+		default:
+			return nil, fmt.Errorf(`delivery must be "webhook" or %q, not %q`, GitHubDeliveryPoll, delivery)
+		}
+	}
+	return nil, fmt.Errorf("unknown kind %q", source.Kind)
+}
+
+// requiredSecrets are the secrets among requiredConfig, which only the form
+// collects.
+func requiredSecrets(source core.SuperAgentSource) []string {
+	keys, _ := requiredConfig(source)
+	return slices.DeleteFunc(keys, func(key string) bool { return !slices.Contains(secretConfigKeys, key) })
 }
 
 func restoreSecrets(source *core.SuperAgentSource, existing *core.SuperAgent) {

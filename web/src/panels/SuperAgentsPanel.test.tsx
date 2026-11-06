@@ -152,6 +152,7 @@ beforeEach(() => {
   vi.spyOn(api, "feishuChats").mockResolvedValue({ items: [{ chat_id: "oc_team", name: "Team" }, { chat_id: "oc_ops", name: "Ops", external: true }] });
   vi.spyOn(api, "feishuMembers").mockResolvedValue({ items: [{ open_id: "ou_a", name: "Alice", chat_ids: ["oc_team"] }, { open_id: "ou_c", name: "Carol", chat_ids: ["oc_ops"] }] });
   vi.spyOn(api, "feishuUsers").mockResolvedValue([]);
+  vi.spyOn(api, "superAgentGitHubSetup").mockResolvedValue({ local_url: "http://127.0.0.1:8765", api_protected: false });
 });
 
 afterEach(() => {
@@ -159,6 +160,7 @@ afterEach(() => {
   root = null;
   container.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("SuperAgentsPanel", () => {
@@ -259,6 +261,93 @@ describe("SuperAgentsPanel", () => {
     await until(() => !container.querySelector("[role=dialog]"));
   });
 
+  it("guides a GitHub trigger: the token fills in the login, and a local install gets a forward command", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    const check = vi.spyOn(api, "checkGitHubAccount").mockResolvedValue({ login: "my-agent-bot", scopes: ["read:org"], classic: true });
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "github_webhook");
+    expect(container.querySelector<HTMLAnchorElement>("a.setup-link")?.href).toBe("https://github.com/settings/tokens/new?scopes=repo&description=AgentMux+Super+Agent");
+
+    setValue(control(/^Agent's token/), "ghp_secret");
+    click(button(/^Check token$/));
+    await until(() => control(/^Agent's GitHub login/).value === "my-agent-bot");
+    expect(check).toHaveBeenCalledWith("ghp_secret", "");
+    expect(hasText("Token belongs to @my-agent-bot")).toBe(true);
+    // A classic token without the repo scope cannot reply.
+    expect(hasText("This token can't comment")).toBe(true);
+
+    // The test page is on localhost, which GitHub cannot reach, so the trigger
+    // starts out reading notifications: nothing to set up on GitHub.
+    expect(button(/^Check notifications$/)?.getAttribute("aria-pressed")).toBe("true");
+    expect(hasText("checks the agent account's GitHub notifications")).toBe(true);
+    expect(hasText("can only be read with a classic token")).toBe(false);
+    click(button(/^Webhook$/));
+    expect(hasText("GitHub can't reach this computer directly")).toBe(true);
+    expect(hasText("Enter the repository as owner/name")).toBe(true);
+    setValue(control(/^Only this repository/), "acme/app");
+    const forward = [...container.querySelectorAll(".setup-command")].find((item) => item.querySelector("code")?.textContent?.startsWith("gh webhook forward"))!;
+    // The secret is masked on screen; Copy hands over the real one.
+    expect(forward.querySelector("code")?.textContent).toMatch(/^gh webhook forward --repo=acme\/app --events=issues,issue_comment,pull_request,pull_request_review_comment --url=http:\/\/127\.0\.0\.1:8765\/hook\/super-agent\/github\/src_[0-9a-f-]{36} --secret=•{8}$/);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    click(forward.querySelector("button")!);
+    await until(() => writeText.mock.calls.length > 0);
+    expect(writeText.mock.calls[0][0]).toMatch(/ --secret=[0-9a-f]{64}$/);
+
+    // A public address switches the guide to an ordinary webhook, and warns
+    // that the Console would be reachable there too.
+    setValue(control(/^AgentMux public address/), "https://agent.example.com/");
+    await until(() => hasText("Open webhook settings for acme/app"));
+    expect(hasText(/https:\/\/agent\.example\.com\/hook\/super-agent\/github\/src_/)).toBe(true);
+    expect([...container.querySelectorAll<HTMLAnchorElement>("a.setup-link")].some((link) => link.href === "https://github.com/acme/app/settings/hooks/new")).toBe(true);
+    expect(hasText("The Console API has no password")).toBe(true);
+  });
+
+  it("creates a Feishu bot by scanning, selects it, and lets the scanner ask", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    const created = { id: "c9", name: "Feishu Bot", type: "feishu", config: { app_id: "cli_new" } } as never;
+    vi.mocked(api.channels).mockResolvedValueOnce([]).mockResolvedValue([created]);
+    vi.spyOn(api, "beginFeishuSetup").mockResolvedValue({ device_code: "dev", qr_url: "https://accounts.feishu.cn/qr", interval: 1, expires_in: 600 });
+    vi.spyOn(api, "pollFeishuSetup").mockResolvedValue({ status: "completed", app_id: "cli_new", app_secret: "shh", platform: "feishu", owner_open_id: "ou_me" });
+    const upsert = vi.spyOn(api, "upsertChannel").mockResolvedValue(created);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "feishu_message");
+    expect(hasText("there is no App ID or secret to copy")).toBe(true);
+
+    click(button(/^Scan to create a bot$/));
+    await until(() => hasText("Bot created and selected."));
+    expect(upsert.mock.calls[0][0]).toMatchObject({ type: "feishu", agent_id: "", enabled: true, config: { app_id: "cli_new", app_secret: "shh" } });
+    await until(() => control(/^Feishu channel/).value === "c9");
+    // The next step turns on its events with a second scan.
+    expect(button(/^Scan to set up$/)).toBeTruthy();
+
+    const saveButton = () => button(/^Save$/) as HTMLButtonElement;
+    await until(() => !saveButton().disabled);
+    click(saveButton());
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0].sources[0]).toMatchObject({ kind: "feishu_message", allowed_actors: ["ou_me"], config: { channel_id: "c9" } });
+  });
+
+  it("fills in mail servers from the address and points to the provider's app passwords", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "email");
+    setValue(control(/^Email address/), "agent@gmail.com");
+    expect(control(/^Mail provider/).value).toBe("gmail");
+    expect(control(/^IMAP host/).value).toBe("imap.gmail.com");
+    expect(control(/^SMTP host/).value).toBe("smtp.gmail.com");
+    expect(hasText("Turn on 2-Step Verification")).toBe(true);
+    expect([...container.querySelectorAll<HTMLAnchorElement>("a.setup-link")].map((link) => link.href)).toContain("https://myaccount.google.com/apppasswords");
+    // An address it does not recognise keeps the provider chosen by hand.
+    setValue(control(/^Mail provider/), "feishu");
+    setValue(control(/^Email address/), "agent@gmail.com.cn");
+    expect(control(/^IMAP host/).value).toBe("imap.feishu.cn");
+  });
+
   it("shows saved Feishu senders and groups by name, and keeps pasted ids", async () => {
     const feishu: SuperAgent = { ...saved, sources: [{ id: "src_f", kind: "feishu_message", enabled: true, allowed_actors: ["ou_a", "ou_z", "*"], config: { channel_id: "c1", chat_ids: "oc_ops, oc_gone" } }] };
     vi.spyOn(api, "superAgents").mockResolvedValue([feishu]);
@@ -315,11 +404,10 @@ describe("SuperAgentsPanel", () => {
     setValue(control(/^Add trigger/), "github_webhook");
     setValue(control(/^Agent's GitHub login/), "bot");
     setValue(control(/^Allowed senders/), "alice");
-    const secret = control(/^Webhook secret/) as HTMLInputElement;
-    expect(secret.type).toBe("password");
-    expect(secret.closest("details")).toBeNull();
+    // GitHub cannot reach a page on localhost, so the trigger reads the agent's
+    // notifications, which needs its token.
     expect((button(/^Save$/) as HTMLButtonElement).disabled).toBe(true);
-    setValue(secret, "s3cret");
+    setValue(control(/^Agent's token \*/), "ghp_x");
     await until(() => !(button(/^Save$/) as HTMLButtonElement).disabled);
     expect(api.saveSuperAgentRouter).not.toHaveBeenCalled();
 
@@ -328,7 +416,10 @@ describe("SuperAgentsPanel", () => {
     expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
     expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "", runtime_id: "codex", model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] });
     expect(save.mock.calls[0][0]).toMatchObject({ name: "", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
-    expect(save.mock.calls[0][0].sources[0]).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", webhook_secret: "s3cret" } });
+    const github = save.mock.calls[0][0].sources[0];
+    expect(github).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", delivery: "poll", github_token: "ghp_x" } });
+    expect(github.id).toMatch(/^src_[0-9a-f-]{36}$/);
+    expect(github.config.webhook_secret).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("creates a router on a framework that can route, with any number of worker frameworks", async () => {
@@ -625,6 +716,12 @@ describe("superAgentModel", () => {
     github.config = { agent_login: "b", webhook_secret: "s" };
     expect(superAgentProblems(agent)).toEqual(["superAgents.problem.wildcard"]);
     agent.sources = [{ ...newSource("feishu_message"), allowed_actors: ["*"], config: { channel_id: "c" } }];
+    expect(superAgentProblems(agent)).toEqual([]);
+    // Reading notifications needs the token instead of a webhook secret.
+    const polling = { ...newSource("github_webhook"), allowed_actors: ["alice"], config: { delivery: "poll", agent_login: "b" } as Record<string, string> };
+    agent.sources = [polling];
+    expect(superAgentProblems(agent)).toEqual(["superAgents.problem.sourceField"]);
+    polling.config = { ...polling.config, github_token: "t" };
     expect(superAgentProblems(agent)).toEqual([]);
   });
 

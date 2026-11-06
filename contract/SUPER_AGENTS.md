@@ -76,12 +76,14 @@ stay apart.
 | Feishu document update | The same connection, plus a file subscription | `open_id` of an editor | The configured notify chat |
 | Email | IMAP over TLS, polled every minute | Authenticated `From` address | SMTP over TLS, in the same thread |
 | GitHub webhook | `POST /hook/super-agent/github/{source_id}` | `sender.login` | A comment, with a token |
+| GitHub notifications (`delivery=poll`) | The agent account's notifications, read about once a minute | The comment's or assignment's author | A comment, with the same token |
 
 - **Feishu messages:** mentions and direct messages are claimed, so the channel's
   own Agent does not also answer. `/` commands stay with the channel. Follow-ups
   in a thread with a Ticket reach the router without another mention.
 - **Feishu documents:** the channel's app needs access to each document, and the
-  app must subscribe to `drive.file.edit_v1`. Edits within the debounce window
+  app must subscribe to `drive.file.edit_v1` (the Console's second scan adds it
+  with the document read scopes). Edits within the debounce window
   (10 minutes by default) are one event. An edit counts only when an allowed
   editor made it, which is also what stops a worker's own edits from looping.
 - **Email:** a new source starts from now and never reads old mail. A sender counts
@@ -92,8 +94,41 @@ stay apart.
   `application/json` and the source's secret, and send Issues, Issue comments,
   Pull requests and Pull request review comments. Asking means mentioning the
   agent's login or assigning it. Comments by the agent's own login and by bots are
-  dropped. The daemon must be reachable from GitHub; it listens on loopback by
-  default, so this needs a tunnel or reverse proxy that exposes only `/hook/`.
+  dropped. A webhook needs GitHub to reach the daemon; it listens on loopback by
+  default. On a single machine, `gh webhook forward` (the `cli/gh-webhook`
+  extension) relays one repository's deliveries to the loopback address. Otherwise
+  use a reverse proxy that exposes only `/hook/`: with the bridge token off, the
+  rest of the port is the unauthenticated Console API.
+- **GitHub notifications:** with `delivery=poll` the source reads the agent
+  account's notifications with `github_token` instead (a classic or OAuth token;
+  fine-grained tokens cannot read notifications), so GitHub never has to reach
+  the daemon and no webhook secret is needed. It sees what that account takes part
+  in: mentions, assignments to it, and new comments on Issues and pull requests it
+  has commented on, not every new Issue in the repository. It honors GitHub's
+  `X-Poll-Interval`, starts from now, and reads on GitHub's clock with a minute of
+  overlap; dedupe keys drop the repeats. It never marks notifications read. Give
+  the agent its own account: its own comments never trigger it.
+
+### Setting a trigger up in the Console
+
+Each trigger in the Super Agent form is a list of steps, each with the fields it
+fills in:
+
+- **Feishu:** scanning with the Feishu app creates a bot in the scanner's tenant
+  and saves it as a channel, so no App ID or secret is copied, and the scanner
+  becomes an allowed sender. A second scan signs in to the Open Platform and turns
+  on the scopes, long-connection events and card callbacks, then publishes the
+  bot. Both scans work only from the local Console. Lark bots are configured on
+  the Open Platform by hand, as the form describes.
+- **Email:** the address picks the provider's IMAP and SMTP servers, and the form
+  links to where that provider issues app passwords.
+- **GitHub:** checking the agent's token fills in its login. A trigger added from
+  a page GitHub cannot reach, such as the desktop app, reads notifications; one
+  added from a reachable page uses a webhook. Either can be switched. For a
+  webhook, the source id and secret are generated when the trigger is added, so its
+  address is known before saving; a reachable page shows the values to paste into
+  the repository's webhook settings, and a local one shows the `gh webhook forward`
+  command.
 
 ## Workers
 
@@ -236,6 +271,8 @@ These routes are for Console administrators and are closed to tenant credentials
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
+| `GET /api/v1/super-agents/github/setup` | The loopback address GitHub deliveries reach, and whether the API needs credentials |
+| `POST /api/v1/super-agents/github/account` | The GitHub login, and classic scopes, of a token in the body |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
 
 ## DeepSeek Harness runtime

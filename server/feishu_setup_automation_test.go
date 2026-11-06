@@ -2,11 +2,13 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -157,5 +159,68 @@ func TestFeishuAutomationHTTPFlow(t *testing.T) {
 	server.handleFeishuAutomationConfigure(recorder, request)
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "version-one") {
 		t.Fatalf("configure code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A document trigger's setup also asks for document read scopes and edit
+// events; a message trigger's does not.
+func TestFeishuAutomationDocumentScopesAndEvents(t *testing.T) {
+	for _, documents := range []bool{false, true} {
+		var gotScopes, gotEvents []any
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /app/cli_test/auth", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`<script>window.csrfToken="csrf-one";</script>`))
+		})
+		mux.HandleFunc("POST /developers/v1/scope/all/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			var scopes []any
+			for _, name := range append(slices.Clone(agentMuxFeishuScopes), agentMuxFeishuDocumentScopes...) {
+				scopes = append(scopes, map[string]any{"scope_name": name, "scope_id": "id-" + name})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"appScopes": scopes}})
+		})
+		mux.HandleFunc("POST /developers/v1/scope/update/cli_test", func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotScopes, _ = body["appScopeIDs"].([]any)
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+		})
+		mux.HandleFunc("POST /developers/v1/event/update/cli_test", func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotEvents, _ = body["appEvents"].([]any)
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+		})
+		for _, path := range []string{"robot/switch", "event/switch", "callback/switch", "callback/update"} {
+			mux.HandleFunc("POST /developers/v1/"+path+"/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+			})
+		}
+		mux.HandleFunc("POST /developers/v1/event/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"appEvents": gotEvents}})
+		})
+		mux.HandleFunc("POST /developers/v1/callback/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"callbacks": []string{"card.action.trigger"}}})
+		})
+		server := httptest.NewServer(mux)
+		oldOpen := feishuAutomationOpenOrigin
+		feishuAutomationOpenOrigin = server.URL
+
+		if _, err := configureFeishuOpenPlatform(context.Background(), server.Client(), "cli_test", false, "", documents); err != nil {
+			t.Fatalf("documents=%v: %v", documents, err)
+		}
+		feishuAutomationOpenOrigin = oldOpen
+		server.Close()
+
+		hasDocScope := slices.Contains(gotScopes, any("id-docx:document:readonly"))
+		hasDocEvent := slices.Contains(gotEvents, any(feishuDocumentEditEvent))
+		if hasDocScope != documents || hasDocEvent != documents {
+			t.Errorf("documents=%v: doc scope %v, doc event %v", documents, hasDocScope, hasDocEvent)
+		}
+		if !slices.Contains(gotEvents, any("im.message.receive_v1")) {
+			t.Errorf("documents=%v: message events dropped: %v", documents, gotEvents)
+		}
+	}
+	if slices.Contains(agentMuxFeishuEvents, feishuDocumentEditEvent) {
+		t.Fatal("the shared event list was modified")
 	}
 }

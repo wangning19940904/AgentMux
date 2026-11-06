@@ -1,14 +1,15 @@
 import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInstance, Channel, SuperAgent, SuperAgentRouter, SuperAgentRouterList, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { AgentInstance, SuperAgent, SuperAgentRouter, SuperAgentRouterList, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
+import { SourceEditor, sourceHookAddress } from "./superAgentSetup";
 import { describeModelChoice, ModelPicker } from "./superAgentModelPicker";
 import type { ModelChoice } from "./superAgentModelPicker";
-import { NEW_ROUTER, SOURCE_FIELDS, SOURCE_KINDS, githubWebhookPath, isFeishuSource, newRouter, newSource, newSuperAgent, newWorker, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
+import { isReachableOrigin } from "./superAgentSetupModel";
+import { NEW_ROUTER, SOURCE_KINDS, githubPolls, newRouter, newSource, newSuperAgent, newWorker, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -116,7 +117,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     return (
                       <article key={source.id}>
                         <header><strong>{t(`superAgents.kind.${source.kind}`)}</strong><span className={`status-badge status-${health?.last_error ? "failed" : source.enabled ? "succeeded" : "cancelled"}`}>{t(source.enabled ? "common.enabled" : "common.disabled")}</span></header>
-                        {source.kind === "github_webhook" && <code>{window.location.origin}{githubWebhookPath(source)}</code>}
+                        {source.kind === "github_webhook" && (githubPolls(source) ? <small>{t("superAgents.setup.github.pollSummary")}</small> : <code>{sourceHookAddress(source)}</code>)}
                         {health?.last_error && <div className="error">{health.last_error}</div>}
                         {health?.last_event_at && <time>{t("superAgents.lastEvent")}: {time(health.last_event_at)}</time>}
                       </article>
@@ -213,67 +214,6 @@ function triggerStatusClass(disposition: string) {
 // SourceEditor edits one trigger. Feishu triggers pick groups and senders from
 // what the channel's bot can see; members come from the chosen groups, or from
 // every group the bot is in when none are chosen.
-function SourceEditor({ source, feishuChannels, onChange, onRemove }: {
-  source: SuperAgentSource;
-  feishuChannels: Channel[];
-  onChange: (patch: Partial<SuperAgentSource>) => void;
-  onRemove: () => void;
-}) {
-  const { t } = useI18n();
-  const feishu = isFeishuSource(source.kind);
-  const channelID = feishu ? source.config.channel_id ?? "" : "";
-  const memberChats = parseActors(source.config[source.kind === "feishu_doc" ? "notify_chat_id" : "chat_ids"] ?? "");
-  const directory = useFeishuDirectory(channelID, memberChats, feishu ? source.allowed_actors : []);
-  return (
-    <div className="super-agent-card">
-      <div className="super-agent-section-head">
-        <strong>{t(`superAgents.kind.${source.kind}`)}</strong>
-        <span className="control-row">
-          <label className="super-agent-check"><input type="checkbox" checked={source.enabled} onChange={(event) => onChange({ enabled: event.target.checked })} /> {t("common.enabled")}</label>
-          <button className="ghost-action danger-action" onClick={onRemove}><Trash2 size={13} /> {t("superAgents.remove")}</button>
-        </span>
-      </div>
-      <p className="muted">{t(`superAgents.kindHelp.${source.kind}`)}</p>
-      {SOURCE_FIELDS[source.kind].map((field) => {
-        const value = source.config[field.key] ?? "";
-        const setValue = (next: string) => onChange({ config: { ...source.config, [field.key]: next } });
-        if (field.chats) {
-          return (
-            <FeishuChatPicker key={field.key} label={t(field.labelKey)} required={field.required} single={field.chats === "one"}
-              value={value} channelID={channelID} directory={directory} onChange={setValue} />
-          );
-        }
-        return (
-          <label className="field" key={field.key}>
-            <span>{t(field.labelKey)}{field.required ? " *" : ""}</span>
-            {field.channel ? (
-              <select value={value} onChange={(event) => setValue(event.target.value)}>
-                <option value="">{t("superAgents.chooseChannel")}</option>
-                {feishuChannels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
-              </select>
-            ) : field.multiline ? (
-              <textarea rows={3} placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
-            ) : (
-              <input type={field.secret ? "password" : "text"} autoComplete="off" placeholder={field.placeholder} value={value} onChange={(event) => setValue(event.target.value)} />
-            )}
-          </label>
-        );
-      })}
-      {feishu ? (
-        <FeishuActorPicker label={t("superAgents.allowedActors")} values={source.allowed_actors} allowEveryone={source.kind === "feishu_message"} scoped={memberChats.length > 0}
-          help={t(`superAgents.actorsHelp.${source.kind}`)} channelID={channelID} directory={directory}
-          onChange={(allowed_actors) => onChange({ allowed_actors })} />
-      ) : (
-        <label className="field">
-          <span>{t("superAgents.allowedActors")} *</span>
-          <textarea rows={2} value={source.allowed_actors.join(", ")} onChange={(event) => onChange({ allowed_actors: parseActors(event.target.value) })} />
-          <small>{t(`superAgents.actorsHelp.${source.kind}`)}</small>
-        </label>
-      )}
-    </div>
-  );
-}
-
 type FrameworkOption = { kind: string; display: string };
 
 // RouterPicker chooses a router agent, or configures a new one. Only router
@@ -652,7 +592,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
             <header className="super-agent-section-head">
               <div><h3 id="super-agent-triggers">{t("superAgents.sources")}</h3><p>{t("superAgents.section.triggersHelp")}</p></div>
               <select aria-label={t("superAgents.addSource")} value="" onChange={(event) => {
-                if (event.target.value) onChange({ ...draft, sources: [...draft.sources, newSource(event.target.value as SuperAgentSourceKind)] });
+                if (event.target.value) onChange({ ...draft, sources: [...draft.sources, newSource(event.target.value as SuperAgentSourceKind, isReachableOrigin(window.location.origin))] });
               }}>
                 <option value="">{t("superAgents.addSource")}</option>
                 {SOURCE_KINDS.map((kind) => <option key={kind} value={kind}>{t(`superAgents.kind.${kind}`)}</option>)}
@@ -663,6 +603,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
                 key={source.id || `new-${index}`}
                 source={source}
                 feishuChannels={feishuChannels}
+                onFeishuChannelCreated={async () => { await channels.reload(); }}
                 onChange={(patch) => updateSource(index, patch)}
                 onRemove={() => onChange({ ...draft, sources: draft.sources.filter((_, position) => position !== index) })}
               />

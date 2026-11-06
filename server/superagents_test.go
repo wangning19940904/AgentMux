@@ -36,6 +36,8 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=c"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members?channel_id=c"},
 		{http.MethodPost, "/api/v1/super-agents/feishu/users?channel_id=c"},
+		{http.MethodGet, "/api/v1/super-agents/github/setup"},
+		{http.MethodPost, "/api/v1/super-agents/github/account"},
 		{http.MethodPost, "/hook/super-agent/github/src"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -53,6 +55,7 @@ func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/routers"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members"},
+		{http.MethodPost, "/api/v1/super-agents/github/account"},
 	} {
 		if tenantRouteAllowed(route.method, route.path) {
 			t.Errorf("%s %s must stay Console-only: Super Agents hold credentials and control every worker", route.method, route.path)
@@ -202,5 +205,20 @@ func TestRemoteFleetAgainstRealInvocationStreamHandler(t *testing.T) {
 				t.Fatalf("err=%v retryable=%v", err, superagent.IsRetryable(err))
 			}
 		})
+	}
+}
+
+func TestLoopbackURL(t *testing.T) {
+	for addr, want := range map[string]string{
+		"127.0.0.1:8765": "http://127.0.0.1:8765",
+		":9000":          "http://127.0.0.1:9000",
+		"0.0.0.0:8765":   "http://127.0.0.1:8765",
+		"[::]:8765":      "http://127.0.0.1:8765",
+		"[::1]:8765":     "http://[::1]:8765",
+		"":               "http://127.0.0.1:8765",
+	} {
+		if got := loopbackURL(addr); got != want {
+			t.Errorf("loopbackURL(%q) = %q, want %q", addr, got, want)
+		}
 	}
 }

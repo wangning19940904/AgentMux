@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
@@ -94,58 +95,67 @@ type githubReply struct {
 	Number int    `json:"number"`
 }
 
-// parseGitHubEvent keeps only human messages on Issues and pull requests in
-// the configured repository. The agent's own comments and other bots stop here,
-// so its replies can never trigger it again.
+// githubItem is one message on an Issue or pull request, from a webhook
+// delivery or from reading the agent's notifications.
+type githubItem struct {
+	Key      string // dedupe key
+	Repo     string
+	Number   int
+	Title    string
+	Text     string
+	Sender   githubUser
+	Assigned bool // the message assigns the Issue or pull request to the agent
+	At       time.Time
+}
+
+// githubItemTrigger keeps only human messages in the configured repository. The
+// agent's own comments and other bots stop here, so its replies can never
+// trigger it again.
+func githubItemTrigger(source core.SuperAgentSource, item githubItem) (core.SuperAgentTrigger, bool) {
+	login := strings.TrimSpace(source.Config["agent_login"])
+	sender := item.Sender.Login
+	if sender == "" || strings.EqualFold(sender, login) || item.Sender.Type == "Bot" {
+		return core.SuperAgentTrigger{}, false
+	}
+	if want := strings.TrimSpace(source.Config["repo"]); want != "" && !strings.EqualFold(want, item.Repo) {
+		return core.SuperAgentTrigger{}, false
+	}
+	reply, _ := json.Marshal(githubReply{Repo: item.Repo, Number: item.Number})
+	return core.SuperAgentTrigger{
+		DedupeKey: item.Key,
+		ThreadKey: fmt.Sprintf("github:%s#%d", strings.ToLower(item.Repo), item.Number),
+		Actor:     sender, Addressed: item.Assigned || mentionsLogin(item.Text, login),
+		Title: fmt.Sprintf("%s#%d %s", item.Repo, item.Number, item.Title), Text: item.Text, Reply: reply,
+	}, true
+}
+
+// parseGitHubEvent reads the Issue and pull request events a webhook sends.
 func parseGitHubEvent(source core.SuperAgentSource, delivery GitHubDelivery) (core.SuperAgentTrigger, bool, error) {
 	var payload githubPayload
 	if err := json.Unmarshal(delivery.Body, &payload); err != nil {
 		return core.SuperAgentTrigger{}, false, fmt.Errorf("decode GitHub payload: %w", err)
 	}
 	login := strings.TrimSpace(source.Config["agent_login"])
-	sender := payload.Sender.Login
-	if sender == "" || strings.EqualFold(sender, login) || payload.Sender.Type == "Bot" {
-		return core.SuperAgentTrigger{}, false, nil
+	item := githubItem{Key: delivery.DeliveryID, Repo: payload.Repository.FullName, Sender: payload.Sender}
+	if item.Key == "" {
+		digest := sha256.Sum256(delivery.Body)
+		item.Key = hex.EncodeToString(digest[:])
 	}
-	repo := payload.Repository.FullName
-	if want := strings.TrimSpace(source.Config["repo"]); want != "" && !strings.EqualFold(want, repo) {
-		return core.SuperAgentTrigger{}, false, nil
-	}
-	var number int
-	var title, text string
-	assigned := false
+	assignedToAgent := payload.Action == "assigned" && payload.Assignee != nil && strings.EqualFold(payload.Assignee.Login, login)
 	switch {
 	case delivery.Event == "issue_comment" && payload.Action == "created" && payload.Comment != nil && payload.Issue != nil:
-		number, title, text = payload.Issue.Number, payload.Issue.Title, payload.Comment.Body
+		item.Number, item.Title, item.Text = payload.Issue.Number, payload.Issue.Title, payload.Comment.Body
 	case delivery.Event == "pull_request_review_comment" && payload.Action == "created" && payload.Comment != nil && payload.PullRequest != nil:
-		number, title, text = payload.PullRequest.Number, payload.PullRequest.Title, payload.Comment.Body
-	case delivery.Event == "issues" && payload.Issue != nil && (payload.Action == "opened" || payload.Action == "assigned"):
-		number, title, text = payload.Issue.Number, payload.Issue.Title, payload.Issue.Body
-		assigned = payload.Action == "assigned" && payload.Assignee != nil && strings.EqualFold(payload.Assignee.Login, login)
-		if payload.Action == "assigned" && !assigned {
-			return core.SuperAgentTrigger{}, false, nil
-		}
-	case delivery.Event == "pull_request" && payload.PullRequest != nil && (payload.Action == "opened" || payload.Action == "assigned"):
-		number, title, text = payload.PullRequest.Number, payload.PullRequest.Title, payload.PullRequest.Body
-		assigned = payload.Action == "assigned" && payload.Assignee != nil && strings.EqualFold(payload.Assignee.Login, login)
-		if payload.Action == "assigned" && !assigned {
-			return core.SuperAgentTrigger{}, false, nil
-		}
+		item.Number, item.Title, item.Text = payload.PullRequest.Number, payload.PullRequest.Title, payload.Comment.Body
+	case delivery.Event == "issues" && payload.Issue != nil && (payload.Action == "opened" || assignedToAgent):
+		item.Number, item.Title, item.Text, item.Assigned = payload.Issue.Number, payload.Issue.Title, payload.Issue.Body, assignedToAgent
+	case delivery.Event == "pull_request" && payload.PullRequest != nil && (payload.Action == "opened" || assignedToAgent):
+		item.Number, item.Title, item.Text, item.Assigned = payload.PullRequest.Number, payload.PullRequest.Title, payload.PullRequest.Body, assignedToAgent
 	default:
 		return core.SuperAgentTrigger{}, false, nil
 	}
-	reply, _ := json.Marshal(githubReply{Repo: repo, Number: number})
-	dedupe := delivery.DeliveryID
-	if dedupe == "" {
-		digest := sha256.Sum256(delivery.Body)
-		dedupe = hex.EncodeToString(digest[:])
-	}
-	return core.SuperAgentTrigger{
-		DedupeKey: dedupe,
-		ThreadKey: fmt.Sprintf("github:%s#%d", strings.ToLower(repo), number),
-		Actor:     sender, Addressed: assigned || mentionsLogin(text, login),
-		Title: fmt.Sprintf("%s#%d %s", repo, number, title), Text: text, Reply: reply,
-	}, true, nil
+	trigger, ok := githubItemTrigger(source, item)
+	return trigger, ok, nil
 }
 
 // mentionsLogin matches a GitHub mention, not a prefix of a longer login or an
