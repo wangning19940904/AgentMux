@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { FrameworkRuntimeSettings, Provider, RuntimeOption } from "../api";
 import { useI18n } from "../i18n";
@@ -94,6 +94,56 @@ export function useModelCatalog(runtime: string): ModelCatalog {
   }, [runtime, state]);
 }
 
+// Popover geometry, in CSS pixels. The gap matches the CSS offset from the
+// trigger; the margin keeps the popover off the edge of whatever clips it.
+const POPOVER_GAP = 6;
+const POPOVER_MARGIN = 12;
+const POPOVER_MAX_HEIGHT = 420;
+
+export type PopoverPlacement = { side: "bottom" | "top"; maxHeight: number };
+
+// placePopover opens the popover below its trigger when its content fits
+// there, and otherwise on the side with more room, never taller than that room.
+export function placePopover(trigger: { top: number; bottom: number }, bounds: { top: number; bottom: number }, contentHeight: number): PopoverPlacement {
+  const below = Math.max(0, bounds.bottom - POPOVER_MARGIN - trigger.bottom - POPOVER_GAP);
+  const above = Math.max(0, trigger.top - POPOVER_GAP - bounds.top - POPOVER_MARGIN);
+  const needed = Math.min(contentHeight, POPOVER_MAX_HEIGHT);
+  const side = needed > below && above > below ? "top" : "bottom";
+  return { side, maxHeight: Math.floor(Math.min(POPOVER_MAX_HEIGHT, side === "top" ? above : below)) };
+}
+
+// visibleBounds is the part of the window that the element's scrolling or
+// clipping ancestors, such as a drawer, still show.
+function visibleBounds(element: HTMLElement) {
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (getComputedStyle(node).overflowY === "visible") continue;
+    const rect = node.getBoundingClientRect();
+    top = Math.max(top, rect.top);
+    bottom = Math.min(bottom, rect.bottom);
+  }
+  return { top, bottom };
+}
+
+// contentHeight is how tall the popover would be with nothing scrolled away.
+function contentHeight(popover: HTMLElement) {
+  const list = popover.querySelector<HTMLElement>(".model-picker-list");
+  const listHidden = list ? list.scrollHeight - list.clientHeight : 0;
+  return popover.scrollHeight + (popover.offsetHeight - popover.clientHeight) + listHidden;
+}
+
+// revealSelected scrolls the model list so the chosen model is in view.
+function revealSelected(popover: HTMLElement) {
+  const list = popover.querySelector<HTMLElement>(".model-picker-list");
+  const option = list?.querySelector<HTMLElement>("[aria-selected=true]");
+  if (!list || !option) return;
+  const top = option.offsetTop - list.offsetTop;
+  if (top < list.scrollTop || top + option.offsetHeight > list.scrollTop + list.clientHeight) {
+    list.scrollTop = Math.max(0, top - (list.clientHeight - option.offsetHeight) / 2);
+  }
+}
+
 // describeModelChoice is the one-line form of a choice, as in "gpt-6 · High · Fast".
 export function describeModelChoice(t: (key: string, values?: Record<string, string | number>) => string, value: ModelChoice, catalog?: ModelCatalog) {
   const model = value.model ? catalog?.modelLabel(value.model) ?? value.model : t("superAgents.modelDefaultShort");
@@ -114,18 +164,46 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   const { t } = useI18n();
   const catalog = useModelCatalog(runtime);
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<PopoverPlacement | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
+  const revealed = useRef(false);
+  // place fits the popover into the room the drawer or window leaves it.
+  const place = () => {
+    if (!trigger.current || !popover.current) return;
+    const next = placePopover(trigger.current.getBoundingClientRect(), visibleBounds(trigger.current), contentHeight(popover.current));
+    setPlacement((current) => current?.side === next.side && current.maxHeight === next.maxHeight ? current : next);
+  };
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    // Scrolling the drawer or resizing the window moves the trigger.
+    const reposition = (event: Event) => { if (!popover.current?.contains(event.target as Node)) place(); };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", escape);
+    document.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", escape);
+      document.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      setPlacement(null);
+      revealed.current = false;
     };
   }, [open]);
+  // Content changes, such as the catalog loading, can change the fit, so
+  // measure after every render while open. place only sets a changed fit.
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    if (placement && !revealed.current && !catalog.loading && popover.current) {
+      revealSelected(popover.current);
+      revealed.current = true;
+    }
+  });
 
   const effectiveModel = value.model || catalog.defaults.model;
   const efforts = catalog.efforts(effectiveModel);
@@ -148,14 +226,15 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
 
   return (
     <div className="model-picker" ref={root}>
-      <button type="button" className="model-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-labelledby={labelledBy}
+      <button ref={trigger} type="button" className="model-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-labelledby={labelledBy}
         aria-describedby={labelledBy ? `${labelledBy}-value` : undefined} onClick={() => setOpen((current) => !current)}>
         {fast && <Zap size={13} className="model-picker-fast" />}
         <span id={labelledBy ? `${labelledBy}-value` : undefined}>{describeModelChoice(t, value, catalog)}</span>
         <ChevronDown size={14} />
       </button>
       {open && (
-        <div className="model-picker-popover" role="dialog" aria-label={t("superAgents.routerModel")}>
+        <div ref={popover} className="model-picker-popover" role="dialog" aria-label={t("superAgents.routerModel")}
+          data-side={placement?.side ?? "bottom"} style={placement ? { maxHeight: placement.maxHeight } : undefined}>
           {catalog.loading ? (
             <small className="muted">{t("superAgents.modelLoading")}</small>
           ) : catalog.models.length === 0 ? (
@@ -192,8 +271,8 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
           {fastTier && (
             <label className="model-picker-section model-picker-toggle">
               <span><Zap size={13} /> {t("superAgents.fastMode")}</span>
-              <input type="checkbox" role="switch" checked={fast} onChange={(event) => onChange({ ...value, service_tier: event.target.checked ? fastTier : "" })} />
               <small>{t("superAgents.fastModeHelp")}</small>
+              <input type="checkbox" role="switch" checked={fast} onChange={(event) => onChange({ ...value, service_tier: event.target.checked ? fastTier : "" })} />
             </label>
           )}
           {!catalog.loading && catalog.models.length > 0 && (
