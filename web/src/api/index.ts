@@ -19,6 +19,7 @@ import type {
   SuperAgentActivity,
   SuperAgentRouter,
   SuperAgentRouterList,
+  SuperAgentGitHubSetup,
   SuperAgentSetupResult,
   SuperAgentTrigger,
   AgentInstance,
@@ -40,6 +41,7 @@ import type {
   FeishuAutomationBeginResponse,
   FeishuAutomationPollResponse,
   FeishuAutomationResult,
+  GitHubAccount,
   FeedbackReport,
   FleetBatchResult,
   FleetSyncApplyResult,
@@ -934,12 +936,13 @@ export const api = {
     postChecked<FeishuAutomationBeginResponse>("/api/v1/setup/feishu/automation/begin", {}),
   pollFeishuAutomation: (sessionID: string) =>
     postChecked<FeishuAutomationPollResponse>("/api/v1/setup/feishu/automation/poll", { session_id: sessionID }),
-  configureFeishuAutomation: (sessionID: string, appID: string, visibility: "owner" | "all") =>
+  configureFeishuAutomation: (sessionID: string, appID: string, visibility: "owner" | "all", documents = false) =>
     postChecked<FeishuAutomationResult>("/api/v1/setup/feishu/automation/configure", {
       session_id: sessionID,
       app_id: appID,
       publish: true,
       visibility,
+      documents,
     }),
   triggers: () => fleetMode() ? fleetReadArray<Trigger>("/api/v1/triggers") : get<Trigger[] | null>("/api/v1/triggers"),
   upsertTrigger: async (tr: Partial<Trigger>) => {
@@ -1096,6 +1099,9 @@ export const api = {
   triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
+  superAgentGitHubSetup: () => getChecked<SuperAgentGitHubSetup>("/api/v1/super-agents/github/setup"),
+  checkGitHubAccount: (token: string, apiBase = "") =>
+    postChecked<GitHubAccount>("/api/v1/super-agents/github/account", { token, api_base: apiBase }),
   feishuChats: (channelID: string) =>
     getChecked<FeishuChatList>(`/api/v1/super-agents/feishu/chats?channel_id=${encodeURIComponent(channelID)}`),
   feishuMembers: (channelID: string, chatIDs: string[]) =>

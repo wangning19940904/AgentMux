@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/superagent"
@@ -68,6 +70,8 @@ func (s *Server) registerSuperAgentRoutes() {
 		}
 		return s.feishuDirectory.Users(r.Context(), channelID, body.OpenIDs, body.Emails)
 	}))
+	s.mux.HandleFunc("GET /api/v1/super-agents/github/setup", s.handleSuperAgentGitHubSetup)
+	s.mux.HandleFunc("POST /api/v1/super-agents/github/account", s.handleSuperAgentGitHubAccount)
 	// Outside /api: GitHub cannot present a bridge token. Each delivery proves
 	// itself with the HMAC signature of its Source's webhook secret instead.
 	s.mux.HandleFunc("POST /hook/super-agent/github/{source}", s.handleSuperAgentGitHubHook)
@@ -262,6 +266,58 @@ func (s *Server) handleSuperAgentGitHubHook(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "webhook processing failed", http.StatusInternalServerError)
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}
+}
+
+// handleSuperAgentGitHubSetup tells the setup guide where GitHub deliveries
+// reach this daemon, so it can write a forwarding command for a local install,
+// and whether the API asks for credentials, which decides whether exposing the
+// whole port to the internet would also expose the Console.
+func (s *Server) handleSuperAgentGitHubSetup(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	addr, protected := "", false
+	if s.cfg != nil {
+		addr, protected = s.cfg.Server.Addr, s.cfg.Bridge.Enabled
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"local_url": loopbackURL(addr), "api_protected": protected})
+}
+
+// loopbackURL is how a process on this machine reaches a listen address.
+func loopbackURL(addr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || port == "" {
+		return "http://127.0.0.1:8765"
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
+// handleSuperAgentGitHubAccount checks a token the form holds and says whose
+// it is. The token travels in the body, never in a URL.
+func (s *Server) handleSuperAgentGitHubAccount(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	var input struct {
+		Token   string `json:"token"`
+		APIBase string `json:"api_base"`
+	}
+	if !decodeJSONInto(w, r, &input) {
+		return
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	account, err := superagent.CheckGitHubToken(r.Context(), client, input.APIBase, input.Token)
+	switch {
+	case errors.Is(err, superagent.ErrGitHubTokenRejected):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusBadGateway, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, account)
 	}
 }
 

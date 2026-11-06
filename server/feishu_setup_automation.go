@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,6 +50,12 @@ var agentMuxFeishuEvents = []string{
 	"im.message.receive_v1",
 	"vc.bot.meeting_invited_v1", "vc.bot.meeting_activity_v1", "vc.bot.meeting_ended_v1",
 }
+
+// Document triggers also need to read the documents they watch and to hear
+// about edits. They are asked for only when such a trigger is being set up.
+var agentMuxFeishuDocumentScopes = []string{"drive:drive:readonly", "docx:document:readonly", "docs:doc:readonly", "wiki:wiki:readonly"}
+
+const feishuDocumentEditEvent = "drive.file.edit_v1"
 
 type feishuAutomationSession struct {
 	mu        sync.Mutex
@@ -174,6 +181,7 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 		AppID      string `json:"app_id"`
 		Publish    bool   `json:"publish"`
 		Visibility string `json:"visibility"`
+		Documents  bool   `json:"documents"`
 	}
 	if !decodeJSONInto(w, r, &input) {
 		return
@@ -200,7 +208,7 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 		return
 	}
 
-	result, err := configureFeishuOpenPlatform(r.Context(), session.client, input.AppID, input.Publish, input.Visibility)
+	result, err := configureFeishuOpenPlatform(r.Context(), session.client, input.AppID, input.Publish, input.Visibility, input.Documents)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -211,7 +219,12 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, result)
 }
 
-func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID string, publish bool, visibility string) (map[string]any, error) {
+func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID string, publish bool, visibility string, documents bool) (map[string]any, error) {
+	scopes, events := agentMuxFeishuScopes, agentMuxFeishuEvents
+	if documents {
+		scopes = append(slices.Clone(scopes), agentMuxFeishuDocumentScopes...)
+		events = append(slices.Clone(events), feishuDocumentEditEvent)
+	}
 	html, finalURL, err := feishuAutomationGetWithURL(ctx, client, feishuAutomationOpenOrigin+"/app/"+appID+"/auth")
 	if err != nil {
 		return nil, fmt.Errorf("read Feishu Open Platform: %w", err)
@@ -234,7 +247,7 @@ func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID
 	catalog := map[string]string{}
 	collectFeishuScopeEntries(scopePayload, catalog)
 	var scopeIDs, missingScopes []string
-	for _, name := range agentMuxFeishuScopes {
+	for _, name := range scopes {
 		if id := catalog[name]; id != "" {
 			scopeIDs = append(scopeIDs, id)
 		} else {
@@ -256,7 +269,7 @@ func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID
 		return nil, fmt.Errorf("enable Feishu long connection events: %w", err)
 	}
 	if _, err := post("/developers/v1/event/update/"+appID, map[string]any{
-		"clientId": appID, "operation": "add", "events": []string{}, "appEvents": agentMuxFeishuEvents,
+		"clientId": appID, "operation": "add", "events": []string{}, "appEvents": events,
 		"userEvents": []string{}, "eventMode": feishuLongConnectionMode,
 	}); err != nil {
 		return nil, fmt.Errorf("subscribe Feishu events: %w", err)
@@ -280,6 +293,9 @@ func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID
 	callbackIDs := collectFeishuEventIDs(callbackState)
 	if !containsSetupString(eventIDs, "im.message.receive_v1") || !containsSetupString(callbackIDs, "card.action.trigger") {
 		return nil, fmt.Errorf("Feishu core event/callback verification failed after update")
+	}
+	if documents && !containsSetupString(eventIDs, feishuDocumentEditEvent) {
+		return nil, fmt.Errorf("Feishu did not enable document edit events (%s)", feishuDocumentEditEvent)
 	}
 
 	versionID := ""

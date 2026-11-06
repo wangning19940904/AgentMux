@@ -1474,6 +1474,23 @@ export interface SuperAgentSource {
   config: Record<string, string>;
 }
 
+// Who a GitHub token signs in as. Scopes are a classic or OAuth token's; a
+// fine-grained token has permissions instead and lists none.
+export interface GitHubAccount {
+  login: string;
+  name?: string;
+  avatar_url?: string;
+  scopes: string[];
+  classic: boolean;
+}
+
+// Where GitHub deliveries reach this daemon from this machine, and whether its
+// API asks for credentials.
+export interface SuperAgentGitHubSetup {
+  local_url: string;
+  api_protected: boolean;
+}
+
 export interface SuperAgent {
   id: string;
   name: string;

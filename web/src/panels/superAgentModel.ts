@@ -15,6 +15,8 @@ export type SourceField = {
 export const SOURCE_KINDS: SuperAgentSourceKind[] = ["feishu_message", "feishu_doc", "email", "github_webhook"];
 
 // Fields mirror what the backend requires for each kind (superagent/config.go).
+// A GitHub trigger's token or webhook secret is required by its delivery; see
+// requiredKeys.
 export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
   feishu_message: [
     { key: "channel_id", labelKey: "superAgents.field.channel", required: true, channel: true },
@@ -40,8 +42,9 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
   github_webhook: [
     { key: "agent_login", labelKey: "superAgents.field.agentLogin", required: true, placeholder: "my-agent-bot" },
     { key: "repo", labelKey: "superAgents.field.repo", placeholder: "owner/name" },
-    { key: "webhook_secret", labelKey: "superAgents.field.webhookSecret", required: true, secret: true },
+    { key: "webhook_secret", labelKey: "superAgents.field.webhookSecret", secret: true },
     { key: "github_token", labelKey: "superAgents.field.githubToken", secret: true },
+    { key: "public_url", labelKey: "superAgents.field.publicURL", placeholder: "https://agentmux.example.com" },
     { key: "api_base", labelKey: "superAgents.field.apiBase", placeholder: "https://api.github.com" },
   ],
 };
@@ -69,8 +72,42 @@ export function newWorker(): SuperAgentWorker {
   return { id: "", agent_id: "" };
 }
 
-export function newSource(kind: SuperAgentSourceKind): SuperAgentSource {
-  return { id: "", kind, enabled: true, allowed_actors: [], config: {} };
+// A new Source gets its id now, not on save, so the setup guide can show its
+// webhook address while it is being configured. The backend keeps a given id.
+export function newSourceID(): string {
+  return `src_${crypto.randomUUID()}`;
+}
+
+// A webhook secret nobody has to invent: 32 random bytes as hex.
+export function generateSecret(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// A GitHub trigger reads the agent's notifications unless GitHub can reach this
+// page, in which case a webhook answers sooner. The secret is made either way,
+// so switching to a webhook needs nothing new.
+export function newSource(kind: SuperAgentSourceKind, reachableByGitHub = false): SuperAgentSource {
+  const config: Record<string, string> = kind === "github_webhook"
+    ? { delivery: reachableByGitHub ? "webhook" : "poll", webhook_secret: generateSecret() }
+    : {};
+  return { id: newSourceID(), kind, enabled: true, allowed_actors: [], config };
+}
+
+export function githubPolls(source: SuperAgentSource): boolean {
+  return source.kind === "github_webhook" && source.config.delivery === "poll";
+}
+
+export function requiredKeys(source: SuperAgentSource): string[] {
+  const keys = SOURCE_FIELDS[source.kind].filter((field) => field.required).map((field) => field.key);
+  if (source.kind === "github_webhook") keys.push(githubPolls(source) ? "github_token" : "webhook_secret");
+  return keys;
+}
+
+export function sourceField(kind: SuperAgentSourceKind, key: string): SourceField {
+  const field = SOURCE_FIELDS[kind].find((item) => item.key === key);
+  if (!field) throw new Error(`unknown ${kind} field ${key}`);
+  return field;
 }
 
 export function parseActors(value: string): string[] {
@@ -94,7 +131,7 @@ export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRo
   for (const source of agent.sources) {
     if (source.enabled && source.allowed_actors.length === 0) problems.push("superAgents.problem.actors");
     if (source.allowed_actors.includes("*") && source.kind !== "feishu_message") problems.push("superAgents.problem.wildcard");
-    if (SOURCE_FIELDS[source.kind].some((field) => field.required && !source.config[field.key]?.trim())) {
+    if (requiredKeys(source).some((key) => !source.config[key]?.trim())) {
       problems.push("superAgents.problem.sourceField");
     }
   }

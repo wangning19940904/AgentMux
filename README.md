@@ -42,7 +42,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
 - **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
-- **Super Agents** — 常驻 Router 把飞书消息、飞书文档更新、邮件和 GitHub Webhook 转成工单，并派给本地或远程（SSH）Worker，在请求来源处回复。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行，事件文本和模型都无法改变；新建时默认为只记录不执行的观察模式。见 [接入指南](contract/SUPER_AGENTS.md)。
+- **Super Agents** — 常驻 Router 把飞书消息、飞书文档更新、邮件和 GitHub（Webhook 或通知轮询）转成工单，并派给本地或远程（SSH）Worker，在请求来源处回复。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行，事件文本和模型都无法改变；新建时默认为只记录不执行的观察模式。见 [接入指南](contract/SUPER_AGENTS.md)。
 - **DeepSeek Harness** — `dsh` 作为 Agent Runtime 接入，使用 `dsh --profile headless --json`，支持会话恢复；审批模式映射到 DSH 权限预设。
 - **Orchestrations** — 通过持久 DAG 跨 Agent/Project 分派任务，支持依赖输出传递、并发上限、失败阻断、取消和 daemon 重启恢复。
 

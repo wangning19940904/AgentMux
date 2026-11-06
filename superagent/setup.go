@@ -20,12 +20,7 @@ var setupConfigKeys = map[string][]string{
 	core.SuperAgentSourceFeishuMessage: {"channel_id", "chat_ids"},
 	core.SuperAgentSourceFeishuDoc:     {"channel_id", "documents", "notify_chat_id", "instructions", "debounce_seconds"},
 	core.SuperAgentSourceEmail:         {"imap_host", "imap_port", "username", "mailbox", "smtp_host", "smtp_port", "from_address"},
-	core.SuperAgentSourceGitHub:        {"agent_login", "repo", "api_base"},
-}
-
-var setupSecretKeys = map[string][]string{
-	core.SuperAgentSourceEmail:  {"password"},
-	core.SuperAgentSourceGitHub: {"webhook_secret"},
+	core.SuperAgentSourceGitHub:        {"agent_login", "repo", "api_base", "delivery"},
 }
 
 // SetupRequest is one instruction from a Console administrator. Draft is the
@@ -194,7 +189,7 @@ func applySetupAnswer(draft *core.SuperAgent, answer setupAnswer) error {
 func missingSecrets(draft core.SuperAgent) []SetupSecret {
 	missing := []SetupSecret{}
 	for _, source := range draft.Sources {
-		for _, key := range setupSecretKeys[source.Kind] {
+		for _, key := range requiredSecrets(source) {
 			if strings.TrimSpace(source.Config[key]) == "" {
 				missing = append(missing, SetupSecret{SourceID: source.ID, Key: key})
 			}
@@ -213,7 +208,7 @@ func setupProblems(draft core.SuperAgent) []string {
 		for key, value := range source.Config {
 			check.Config[key] = value
 		}
-		for _, key := range setupSecretKeys[source.Kind] {
+		for _, key := range requiredSecrets(source) {
 			if strings.TrimSpace(check.Config[key]) == "" {
 				check.Config[key] = redactedValue
 			}
@@ -269,7 +264,7 @@ Trigger kinds and their config keys:
 - feishu_message: channel_id (required, from FEISHU CHANNELS), chat_ids (comma separated; empty means every chat). allowed_actors are open_ids, or "*" for everyone who can reach the bot.
 - feishu_doc: channel_id (required), documents (required, URLs or tokens), notify_chat_id, instructions (what to do on a change), debounce_seconds. allowed_actors are open_ids; "*" is refused.
 - email: imap_host (required), imap_port, username (required), mailbox, smtp_host, smtp_port, from_address. allowed_actors are email addresses; "*" is refused.
-- github_webhook: agent_login (required, the agent's GitHub account), repo (owner/name), api_base. allowed_actors are GitHub logins; "*" is refused.
+- github_webhook: agent_login (required, the agent's GitHub account), repo (owner/name), api_base, delivery ("poll" reads the account's notifications and needs no public address; "webhook" or empty needs GitHub to reach this machine). allowed_actors are GitHub logins; "*" is refused.
 
 Rules:
 - An enabled trigger needs allowed_actors. You cannot look up a person's open_id from a name: ask for it, or ask whether everyone may use the trigger. Never invent ids, logins, addresses or channels.

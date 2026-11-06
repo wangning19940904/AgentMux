@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
-import { Channel, FeishuAutomationResult, OperationProgress, TTSCatalogStatus, TTSModel, api } from "../../api";
+import { Channel, OperationProgress, TTSCatalogStatus, TTSModel, api } from "../../api";
 import { OperationProgress as OperationProgressView } from "../../components/OperationProgress";
 import { useI18n } from "../../i18n";
 import {
@@ -25,9 +25,9 @@ import {
   configValue,
   defaultChannelConfig,
   platformLabel,
-  sleep,
 } from "./connectShared";
 import { shouldAutoStartChannelSetup } from "./channelSetupModel";
+import { useFeishuAutomation, useFeishuRegistration } from "./feishuScan";
 
 export function ChannelEditor({
   draft,
@@ -53,33 +53,20 @@ export function ChannelEditor({
   const isFeishuLike = draft.type === "feishu" || draft.type === "lark";
   const selectedAgent = agents.find((agent) => agent.id === draft.agent_id);
 	const isCodexAgent = selectedAgent?.runtime_id === "codex" || selectedAgent?.runtime_id === "codex-app" || selectedAgent?.runtime_id === "traecli";
-  const setupRef = useRef({ deviceCode: "", baseUrl: "", interval: 5, cancelled: false, polling: false });
   const autoSetupPlatformRef = useRef("");
-  const automationRef = useRef({ sessionID: "", cancelled: false, polling: false });
   const draftRef = useRef<Partial<Channel>>(draft);
-  const [setup, setSetup] = useState<{ phase: FeishuSetupPhase; qrUrl: string; error: string }>({
-    phase: "idle",
-    qrUrl: "",
-    error: "",
-  });
-  const [automation, setAutomation] = useState<{
-    phase: "idle" | "loading" | "scanning" | "configuring" | "completed" | "expired" | "error";
-    qrPayload: string;
-    error: string;
-    result?: FeishuAutomationResult;
-  }>({ phase: "idle", qrPayload: "", error: "" });
+  const setup = useFeishuRegistration(async (res) => {
+    const nextDraft = completeFeishuDraft(draftRef.current ?? draft, res);
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    await onAutoSave(nextDraft);
+  }, t("connect.scanError"));
+  const automation = useFeishuAutomation(t("connect.openPlatformMissingApp"));
   const [automationVisibility, setAutomationVisibility] = useState<"owner" | "all">("owner");
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
-
-  useEffect(() => {
-    return () => {
-      setupRef.current.cancelled = true;
-      automationRef.current.cancelled = true;
-    };
-  }, []);
 
   const update = (patch: Partial<Channel>) =>
     setDraft((current) => ({ ...((current ?? draft) as Partial<Channel>), ...patch }));
@@ -89,131 +76,12 @@ export function ChannelEditor({
       return { ...base, config: { ...(base.config ?? {}), [key]: value } };
     });
 
-  async function startFeishuSetup() {
-    setupRef.current.cancelled = false;
-    setupRef.current.polling = false;
-    setSetup({ phase: "loading", qrUrl: "", error: "" });
-    try {
-      const res = await api.beginFeishuSetup();
-      setupRef.current = {
-        deviceCode: res.device_code,
-        baseUrl: "",
-        interval: res.interval || 5,
-        cancelled: false,
-        polling: false,
-      };
-      setSetup({ phase: "scanning", qrUrl: res.qr_url, error: "" });
-      void pollFeishuSetup();
-    } catch (err) {
-      setSetup({ phase: "error", qrUrl: "", error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  async function pollFeishuSetup() {
-    if (setupRef.current.polling) return;
-    setupRef.current.polling = true;
-    try {
-      while (!setupRef.current.cancelled) {
-        const res = await api.pollFeishuSetup(setupRef.current.deviceCode, setupRef.current.baseUrl);
-        if (setupRef.current.cancelled) return;
-        if (res.base_url) setupRef.current.baseUrl = res.base_url;
-        if (res.slow_down) setupRef.current.interval += 5;
-        switch (res.status) {
-          case "completed":
-            setSetup((current) => ({ ...current, phase: "saving", error: "" }));
-            {
-              const nextDraft = completeFeishuDraft((draftRef.current ?? draft) as Partial<Channel>, res);
-              draftRef.current = nextDraft;
-              setDraft(nextDraft);
-              await onAutoSave(nextDraft);
-            }
-            if (!setupRef.current.cancelled) {
-              setSetup((current) => ({ ...current, phase: "completed", error: "" }));
-            }
-            return;
-          case "denied":
-            setSetup((current) => ({ ...current, phase: "denied", error: "" }));
-            return;
-          case "expired":
-            setSetup((current) => ({ ...current, phase: "expired", error: "" }));
-            return;
-          case "error":
-            setSetup((current) => ({ ...current, phase: "error", error: res.error ?? t("connect.scanError") }));
-            return;
-        }
-        await sleep((setupRef.current.interval || 5) * 1000);
-      }
-    } catch (err) {
-      if (!setupRef.current.cancelled) {
-        setSetup((current) => ({
-          ...current,
-          phase: "error",
-          error: err instanceof Error ? err.message : String(err),
-        }));
-      }
-    } finally {
-      setupRef.current.polling = false;
-    }
-  }
-
-  async function startFeishuAutomation() {
-    const appID = draftRef.current.config?.app_id?.trim();
-    if (!appID) {
-      setAutomation({ phase: "error", qrPayload: "", error: t("connect.openPlatformMissingApp") });
-      return;
-    }
-    automationRef.current.cancelled = false;
-    setAutomation({ phase: "loading", qrPayload: "", error: "" });
-    try {
-      const started = await api.beginFeishuAutomation();
-      automationRef.current = { sessionID: started.session_id, cancelled: false, polling: false };
-      setAutomation({ phase: "scanning", qrPayload: started.qr_payload, error: "" });
-      void pollFeishuAutomation();
-    } catch (error) {
-      setAutomation({ phase: "error", qrPayload: "", error: String(error) });
-    }
-  }
-
-  async function pollFeishuAutomation() {
-    if (automationRef.current.polling) return;
-    automationRef.current.polling = true;
-    try {
-      while (!automationRef.current.cancelled) {
-        const polled = await api.pollFeishuAutomation(automationRef.current.sessionID);
-        if (polled.status === "expired") {
-          setAutomation((current) => ({ ...current, phase: "expired" }));
-          return;
-        }
-        if (polled.status === "completed") {
-          const appID = draftRef.current.config?.app_id?.trim();
-          if (!appID) throw new Error(t("connect.openPlatformMissingApp"));
-          setAutomation((current) => ({ ...current, phase: "configuring", error: "" }));
-          const result = await api.configureFeishuAutomation(automationRef.current.sessionID, appID, automationVisibility);
-          setAutomation({ phase: "completed", qrPayload: "", error: "", result });
-          return;
-        }
-        await sleep(1500);
-      }
-    } catch (error) {
-      if (!automationRef.current.cancelled) {
-        setAutomation((current) => ({ ...current, phase: "error", error: String(error) }));
-      }
-    } finally {
-      automationRef.current.polling = false;
-    }
-  }
-
-  function resetFeishuAutomation() {
-    automationRef.current.cancelled = true;
-    automationRef.current.polling = false;
-    setAutomation({ phase: "idle", qrPayload: "", error: "" });
-  }
+  const startFeishuSetup = setup.start;
+  const startFeishuAutomation = () => automation.start(draftRef.current.config?.app_id ?? "", automationVisibility);
 
   function resetSetup() {
-    setupRef.current.cancelled = true;
-    setupRef.current.polling = false;
-    setSetup({ phase: "idle", qrUrl: "", error: "" });
-    resetFeishuAutomation();
+    setup.reset();
+    automation.reset();
   }
 
   useEffect(() => {
@@ -223,7 +91,7 @@ export function ChannelEditor({
     }
     if (!shouldAutoStartChannelSetup(draft, autoSetupPlatformRef.current)) return;
     autoSetupPlatformRef.current = draft.type ?? "feishu";
-    void startFeishuSetup();
+    startFeishuSetup();
   }, [draft.id, draft.type, isFeishuLike]);
 
   return (
@@ -321,7 +189,7 @@ export function ChannelEditor({
                     {t("connect.openPlatformStart")}
                   </button>
                 ) : automation.phase === "completed" ? (
-                  <button className="ghost-action" type="button" onClick={resetFeishuAutomation}>{t("common.reset")}</button>
+                  <button className="ghost-action" type="button" onClick={automation.reset}>{t("common.reset")}</button>
                 ) : (
                   <span className="muted"><Loader2 className="spin" size={15} /> {automation.phase === "configuring" ? t("connect.openPlatformConfiguring") : t("connect.scanPrompt")}</span>
                 )}

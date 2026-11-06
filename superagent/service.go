@@ -76,6 +76,7 @@ type Options struct {
 	Workers WorkerRunner
 	Replies ReplySender
 	Mail    MailClient
+	GitHub  GitHubInbox
 	Docs    DocumentSubscriber
 	Log     *slog.Logger
 	Now     func() time.Time
@@ -116,6 +117,7 @@ type Service struct {
 
 	claims          claimIndex
 	mail            MailClient
+	github          GitHubInbox
 	docs            DocumentSubscriber
 	documents       map[string][]documentRef
 	channelHasAgent func(context.Context, string) bool
@@ -154,7 +156,7 @@ func New(options Options) *Service {
 		log: log, now: now, wake: make(chan struct{}, 1),
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
 		routerAttempts: map[string]int{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
-		mail: options.Mail, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
+		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, mcp: options.MCP, state: options.StateDir,
 	}
 }

@@ -117,6 +117,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
 		Replies:          &superagent.Replies{Chats: engine},
 		Mail:             &superagent.IMAPClient{},
+		GitHub:           &superagent.GitHubClient{},
 		Docs:             feishuAPI,
 		RuntimeAvailable: server.AgentRuntimeAvailable,
 		MCP:              mcpRegistry,

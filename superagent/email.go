@@ -68,15 +68,8 @@ type emailReply struct {
 }
 
 func (s *Service) startPollers(ctx context.Context) {
-	if s.mail == nil {
-		return
-	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(emailPollInterval)
-		defer ticker.Stop()
-		for {
+	if s.mail != nil {
+		s.every(ctx, emailPollInterval, func(ctx context.Context) {
 			for _, claim := range s.claims.ofKind(core.SuperAgentSourceEmail) {
 				pollCtx, cancel := context.WithTimeout(ctx, emailPollInterval)
 				err := s.pollEmail(pollCtx, claim)
@@ -86,6 +79,23 @@ func (s *Service) startPollers(ctx context.Context) {
 				}
 				s.recordSourceError(claim.source.ID, err)
 			}
+		})
+	}
+	if s.github != nil {
+		next := map[string]time.Time{}
+		s.every(ctx, githubPollInterval, func(ctx context.Context) { s.pollGitHubSources(ctx, next) })
+	}
+}
+
+// every runs poll now and then on each tick until ctx ends.
+func (s *Service) every(ctx context.Context, interval time.Duration, poll func(context.Context)) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			poll(ctx)
 			select {
 			case <-ctx.Done():
 				return
