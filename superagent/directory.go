@@ -67,7 +67,8 @@ func (f *FeishuAPI) Chats(ctx context.Context, channelID string) (FeishuChatList
 	if err != nil {
 		return FeishuChatList{}, err
 	}
-	return f.chats(ctx, base, token)
+	list, err := f.chats(ctx, base, token)
+	return list, f.explainDenied(ctx, channelID, err)
 }
 
 // chats uses the tenant token, which lists the groups the bot itself is in.
@@ -88,12 +89,13 @@ func (f *FeishuAPI) chats(ctx context.Context, base, token string) (FeishuChatLi
 	return list, nil
 }
 
-func (f *FeishuAPI) Members(ctx context.Context, channelID string, chatIDs []string) (FeishuUserList, error) {
+func (f *FeishuAPI) Members(ctx context.Context, channelID string, chatIDs []string) (list FeishuUserList, err error) {
+	defer func() { err = f.explainDenied(ctx, channelID, err) }()
 	base, token, err := f.tenantToken(ctx, channelID)
 	if err != nil {
 		return FeishuUserList{}, err
 	}
-	list := FeishuUserList{Items: []FeishuUser{}}
+	list = FeishuUserList{Items: []FeishuUser{}}
 	if len(chatIDs) == 0 {
 		chats, err := f.chats(ctx, base, token)
 		if err != nil {
@@ -171,12 +173,13 @@ func (f *FeishuAPI) Members(ctx context.Context, channelID string, chatIDs []str
 
 // Users only finds people inside the app's contact scope. An email lookup
 // still answers when names need a scope the app lacks.
-func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails []string) ([]FeishuUser, error) {
+func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails []string) (users []FeishuUser, err error) {
+	defer func() { err = f.explainDenied(ctx, channelID, err) }()
 	openIDs, emails = normalizeActors(openIDs), normalizeActors(emails)
 	if len(openIDs) > maxUserLookup || len(emails) > maxUserLookup {
 		return nil, fmt.Errorf("look up at most %d people at a time", maxUserLookup)
 	}
-	users := []FeishuUser{}
+	users = []FeishuUser{}
 	if len(openIDs)+len(emails) == 0 {
 		return users, nil
 	}
@@ -201,7 +204,7 @@ func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails
 			return nil, err
 		}
 		if result.Code != 0 {
-			return nil, fmt.Errorf("%d %s", result.Code, result.Msg)
+			return nil, feishuError(result.Code, result.Msg)
 		}
 		for _, item := range result.Data.UserList {
 			if item.UserID == "" {
@@ -231,7 +234,7 @@ func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails
 	}
 	err = f.call(ctx, http.MethodGet, base+"/open-apis/contact/v3/users/batch?"+query.Encode(), token, nil, &named)
 	if err == nil && named.Code != 0 {
-		err = fmt.Errorf("%d %s", named.Code, named.Msg)
+		err = feishuError(named.Code, named.Msg)
 	}
 	if err != nil {
 		if len(emailOf) == 0 {
@@ -272,7 +275,7 @@ func feishuPages[T any](ctx context.Context, f *FeishuAPI, target, token string)
 			return nil, false, err
 		}
 		if result.Code != 0 {
-			return nil, false, fmt.Errorf("%d %s", result.Code, result.Msg)
+			return nil, false, feishuError(result.Code, result.Msg)
 		}
 		items = append(items, result.Data.Items...)
 		if !result.Data.HasMore || result.Data.PageToken == "" {

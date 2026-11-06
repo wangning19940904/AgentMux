@@ -1528,3 +1528,7 @@
 .super-agent-picker-note { padding: 6px 8px; color: var(--muted); font-size: 11px; font-weight: 600; }
 .super-agent-picker-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .super-agent-picker-status .icon-action { min-height: 20px; width: 20px; padding: 0; }
+.super-agent-scope-request { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-soft); }
+.super-agent-scope-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.super-agent-scope-list code { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-subtle); font-size: 11px; }
+.super-agent-scope-request .super-agent-scope-apply { min-height: 24px; padding: 0 8px; text-decoration: none; }

@@ -1589,6 +1589,13 @@ export interface FeishuUserList {
   warnings?: string[];
 }
 
+// FeishuScopeRequest is how to request a scope Feishu said the channel's app
+// lacks. Any one of the scopes is enough.
+export interface FeishuScopeRequest {
+  scopes: string[];
+  apply_url: string;
+}
+
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
