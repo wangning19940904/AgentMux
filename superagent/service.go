@@ -39,6 +39,12 @@ var (
 	ErrConflict = errors.New("ticket is not in a state that allows this")
 )
 
+// conflictError is an ErrConflict that says what the conflict is.
+type conflictError string
+
+func (e conflictError) Error() string        { return string(e) }
+func (e conflictError) Is(target error) bool { return target == ErrConflict }
+
 // Store is the persistence surface of the service, implemented by store.Store.
 type Store interface {
 	ListSuperAgents(context.Context) ([]core.SuperAgent, error)
@@ -98,6 +104,7 @@ type Service struct {
 	running        map[string]context.CancelFunc
 	stopping       map[string]bool
 	evaluating     map[string]bool
+	evaluations    uint64 // finished router evaluations
 	routerAttempts map[string]int
 	notBefore      map[string]time.Time
 	health         map[string]SourceHealth
@@ -170,7 +177,9 @@ func (s *Service) Start(parent context.Context) error {
 			cancel()
 			return fmt.Errorf("recover super agent ticket %s: %w", ticket.ID, err)
 		}
+		s.recordTicket(ctx, ticket)
 	}
+	s.adoptRouters(ctx)
 	if err := s.refreshClaims(ctx); err != nil {
 		cancel()
 		return fmt.Errorf("load super agent sources: %w", err)
@@ -280,6 +289,12 @@ func actorAllowed(source core.SuperAgentSource, actor string) bool {
 }
 
 func (s *Service) evaluatePending(ctx context.Context) error {
+	// An evaluation that finishes after the list is read leaves its Trigger in
+	// the list, still pending. Nothing starts from a list that old: the
+	// finished evaluation wakes another pass.
+	s.mu.Lock()
+	finished := s.evaluations
+	s.mu.Unlock()
 	pending, err := s.store.ListPendingSuperAgentTriggers(ctx, pendingBatchSize)
 	if err != nil {
 		return err
@@ -294,7 +309,7 @@ func (s *Service) evaluatePending(ctx context.Context) error {
 		}
 		blocked[key] = true
 		s.mu.Lock()
-		busy := s.evaluating[key] || len(s.evaluating) >= maxRouterEvals || s.now().Before(s.notBefore[trigger.ID])
+		busy := s.evaluating[key] || s.evaluations != finished || len(s.evaluating) >= maxRouterEvals || s.now().Before(s.notBefore[trigger.ID])
 		if !busy {
 			s.evaluating[key] = true
 		}
@@ -308,6 +323,7 @@ func (s *Service) evaluatePending(ctx context.Context) error {
 			defer func() {
 				s.mu.Lock()
 				delete(s.evaluating, key)
+				s.evaluations++
 				s.mu.Unlock()
 				s.notify()
 			}()
@@ -377,7 +393,7 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
 	if live := latestLiveTicket(tickets); live != nil && agent.Mode == core.SuperAgentModeAct {
-		if err := s.attach(ctx, live.ID, trigger); err == nil {
+		if err := s.attach(ctx, live.ID, trigger, ""); err == nil {
 			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFollowUp, "router unavailable; delivered to the thread's ticket", live.ID)
 			return
 		}
@@ -403,7 +419,11 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket, decision routerDecision) error {
 	switch decision.Decision {
 	case decisionIgnore:
-		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionIgnored, decision.Reason, "")
+		disposition := core.SuperAgentDispositionIgnored
+		if strings.TrimSpace(decision.Reply) != "" {
+			disposition = core.SuperAgentDispositionAnswered
+		}
+		s.finishTrigger(ctx, trigger, disposition, decision.Reason, "")
 		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
 		return nil
 	case decisionAccept:
@@ -419,7 +439,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			}
 			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionStopped, decision.Reason, ticket.ID)
 		} else {
-			if err := s.attach(ctx, ticket.ID, trigger); err != nil {
+			if err := s.attach(ctx, ticket.ID, trigger, decision.Instructions); err != nil {
 				return err
 			}
 			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFollowUp, decision.Reason, ticket.ID)
@@ -458,9 +478,13 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		Inputs: []string{workerAssignment(trigger, decision)}, Reply: trigger.Reply,
 		CreatedAt: now, UpdatedAt: now,
 	}
+	if err := s.openTicketFolder(agent.ID, id); err != nil {
+		return err
+	}
 	if err := s.store.UpsertSuperAgentTicket(ctx, ticket); err != nil {
 		return err
 	}
+	s.recordTicket(ctx, ticket)
 	s.finishTrigger(ctx, trigger, core.SuperAgentDispositionAccepted, decision.Reason, id)
 	s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
 	return nil
@@ -480,12 +504,12 @@ func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, wor
 // attach delivers a Trigger to an existing Ticket on its thread. A running
 // Ticket runs again after its current turn with the new input; an ended Ticket
 // resumes on the same conversation.
-func (s *Service) attach(ctx context.Context, ticketID string, trigger core.SuperAgentTrigger) error {
+func (s *Service) attach(ctx context.Context, ticketID string, trigger core.SuperAgentTrigger, note string) error {
 	return s.mutateTicket(ctx, ticketID, func(ticket *core.SuperAgentTicket) error {
 		if ticket.Status == core.SuperAgentTicketStopped {
 			return fmt.Errorf("%w: ticket %s was stopped", ErrConflict, ticket.ID)
 		}
-		ticket.Inputs = append(ticket.Inputs, workerFollowUp(trigger))
+		ticket.Inputs = append(ticket.Inputs, workerFollowUp(trigger, note))
 		ticket.Reply = trigger.Reply
 		if ticket.Status != core.SuperAgentTicketRunning {
 			ticket.Status = core.SuperAgentTicketQueued
@@ -522,6 +546,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
+	s.recordTicket(ctx, *ticket)
 	s.notify()
 	return nil
 }
@@ -599,7 +624,15 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		}
 		return
 	}
-	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input)
+	placement, err := s.placeTicket(ctx, ticket)
+	if err == nil {
+		err = linkTicketWork(s.existingTicketDir(ticket), placement)
+	}
+	if err != nil {
+		s.log.Warn("place super agent ticket", "ticket", ticketID, "err", err)
+	}
+	s.appendTicketLog(ticket, ticketInputsFile, input)
+	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input, placement.ConversationDir)
 	if ctx.Err() != nil {
 		return
 	}
@@ -650,6 +683,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		s.log.Error("finish super agent ticket", "ticket", ticketID, "err", mutateErr)
 		return
 	}
+	if runErr == nil {
+		s.appendTicketLog(ticket, ticketResultFile, answer)
+	}
 	if finished.IsZero() || strings.TrimSpace(reply) == "" {
 		return
 	}
@@ -684,6 +720,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
+	s.recordTicket(ctx, *ticket)
 	if cancel := s.running[ticket.SuperAgentID+"|"+id]; cancel != nil {
 		s.stopping[id] = true
 		cancel()

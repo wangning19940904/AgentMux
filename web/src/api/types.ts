@@ -1492,6 +1492,9 @@ export interface SuperAgentRouter {
   model?: string;
   reasoning_effort?: string;
   service_tier?: string;
+  // What the router may do without asking. Empty keeps a saved router's mode
+  // and gives a new one its framework's default.
+  approval_mode?: string;
   mcp_servers: string[];
   used_by?: { id: string; name: string }[];
   created_at?: string;
@@ -1502,6 +1505,10 @@ export interface SuperAgentRouterFramework {
   runtime_id: string;
   can_route: boolean;
   mcp_servers: boolean;
+  // The approval modes its routers may run in; empty when AgentMux does not
+  // know the framework's modes.
+  approval_modes?: string[];
+  default_approval_mode?: string;
   reason?: string;
 }
 

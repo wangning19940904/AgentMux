@@ -399,6 +399,13 @@ func (i *Initializer) ensureConversationWorktree(
 	branch = "agentmux/" + slug
 	worktreeRoot := repoRoot + ".agentmux-worktrees"
 	worktreePath := filepath.Join(worktreeRoot, slug)
+	if custom := strings.TrimSpace(opts.WorktreePath); custom != "" {
+		if !filepath.IsAbs(custom) {
+			return "", "", false, fmt.Errorf("worktree workspace: worktree path %q is not absolute", custom)
+		}
+		worktreePath = filepath.Clean(custom)
+		worktreeRoot = filepath.Dir(worktreePath)
+	}
 	resolvedWorkDir := worktreePath
 	if rel != "." {
 		resolvedWorkDir = filepath.Join(worktreePath, rel)

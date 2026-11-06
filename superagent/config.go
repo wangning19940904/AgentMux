@@ -42,7 +42,17 @@ func (s *Service) Save(ctx context.Context, agent core.SuperAgent) (core.SuperAg
 	if err := s.normalize(ctx, &agent, existing); err != nil {
 		return core.SuperAgent{}, err
 	}
+	if agent.RouterAgentID == "" {
+		created, err := s.SaveRouter(ctx, Router{RuntimeID: agent.RouterRuntime, Name: routerName(agent.Name)})
+		if err != nil {
+			return core.SuperAgent{}, err
+		}
+		agent.RouterAgentID = created.ID
+	}
 	if err := s.store.UpsertSuperAgent(ctx, agent); err != nil {
+		return core.SuperAgent{}, err
+	}
+	if err := s.bindRouter(ctx, agent); err != nil {
 		return core.SuperAgent{}, err
 	}
 	if err := s.nameRouter(ctx, agent); err != nil {
@@ -54,8 +64,14 @@ func (s *Service) Save(ctx context.Context, agent core.SuperAgent) (core.SuperAg
 	return redactAgent(agent), nil
 }
 
-// Delete stops the Super Agent's running turns and removes its records.
+// Delete stops the Super Agent's running turns and removes its records, its
+// auto workers and its router agent. Its home stays on disk, since tickets'
+// worktrees there can hold work that was never pushed.
 func (s *Service) Delete(ctx context.Context, id string) error {
+	agent, err := s.store.GetSuperAgent(ctx, id)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	for key, cancel := range s.running {
 		if strings.HasPrefix(key, id+"|") {
@@ -70,6 +86,11 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.deleteAutoWorkers(ctx, id); err != nil {
 		return err
 	}
+	if agent != nil {
+		if err := s.deleteOwnedRouter(ctx, agent.RouterAgentID); err != nil {
+			return err
+		}
+	}
 	return s.refreshClaims(ctx)
 }
 
@@ -80,6 +101,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	agent.RouterAgentID = strings.TrimSpace(agent.RouterAgentID)
 	if agent.ID == "" {
 		agent.ID = "sa_" + uuid.NewString()
+	}
+	if err := validSuperAgentID(agent.ID); err != nil {
+		return err
 	}
 	if existing != nil {
 		agent.CreatedAt = existing.CreatedAt
@@ -104,8 +128,11 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if existing != nil {
 		current = existing.RouterAgentID
 	}
-	router, err := s.resolveRouter(ctx, agent, current)
+	router, err := s.resolveRouter(ctx, agent, current, true)
 	if err != nil {
+		return err
+	}
+	if err := s.checkRouterOwner(ctx, agent.ID, router); err != nil {
 		return err
 	}
 	if agent.Name == "" {

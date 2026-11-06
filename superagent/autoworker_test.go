@@ -2,6 +2,7 @@ package superagent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,19 @@ func (h *harness) enableAutoWorkers(workDir string) {
 	h.store.local["router"] = router
 	h.agent.AutoWorkers, h.agent.AutoWorkerDir = true, workDir
 	h.store.agents[h.agent.ID] = h.agent
+}
+
+// spareRouter adds a router agent like the harness's that no Super Agent
+// routes with yet, and returns its id.
+func (h *harness) spareRouter() string {
+	h.t.Helper()
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	router := h.store.local["router"]
+	router.ID = fmt.Sprintf("router-%d", len(h.store.local))
+	router.Name, router.WorkDir = router.ID, ""
+	h.store.local[router.ID] = router
+	return router.ID
 }
 
 func TestRouterLaunchesAWorkerNoOneConfigured(t *testing.T) {
@@ -182,7 +196,7 @@ func TestSaveAutoWorkers(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	h.enableAutoWorkers(t.TempDir())
-	saved, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true})
+	saved, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: h.spareRouter(), AutoWorkers: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,22 +204,17 @@ func TestSaveAutoWorkers(t *testing.T) {
 		t.Fatalf("saved = %+v", saved)
 	}
 	for name, agent := range map[string]core.SuperAgent{
-		"manual approval": {RouterAgentID: "router", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeManual},
-		"plan approval":   {RouterAgentID: "router", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModePlan},
-		"reserved id":     {RouterAgentID: "router", AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto", AgentID: "coder"}}},
-		"reserved prefix": {RouterAgentID: "router", AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto:dsh", AgentID: "coder"}}},
-		"no workers":      {RouterAgentID: "router"},
+		"manual approval": {RouterAgentID: h.spareRouter(), AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeManual},
+		"plan approval":   {RouterAgentID: h.spareRouter(), AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModePlan},
+		"reserved id":     {RouterAgentID: h.spareRouter(), AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto", AgentID: "coder"}}},
+		"reserved prefix": {RouterAgentID: h.spareRouter(), AutoWorkers: true, Workers: []core.SuperAgentWorker{{ID: "auto:dsh", AgentID: "coder"}}},
+		"no workers":      {RouterAgentID: h.spareRouter()},
 	} {
 		if _, err := h.service.Save(ctx, agent); err == nil {
 			t.Errorf("%s: expected a validation error", name)
 		}
 	}
-	h.store.mu.Lock()
-	router := h.store.local["router"]
-	router.WorkDir = ""
-	h.store.local["router"] = router
-	h.store.mu.Unlock()
-	if _, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: "router", AutoWorkers: true, AutoWorkerDir: "/no/such/directory"}); err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if _, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: h.spareRouter(), AutoWorkers: true, AutoWorkerDir: "/no/such/directory"}); err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -218,7 +227,7 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	router, _ := h.store.GetAgentInstance(ctx, saved.RouterAgentID)
-	if router == nil || !IsRouterAgent(*router) || IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModePlan || router.WorkDir == "" {
+	if router == nil || !IsRouterAgent(*router) || IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModeYolo || router.WorkDir == "" {
 		t.Fatalf("router = %+v", router)
 	}
 	if saved.Name != "Super Agent (codex)" || !slices.Equal(saved.WorkerRuntimes, []string{"codex"}) {
@@ -242,7 +251,7 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 	}
 }
 
-func TestManagedRouterIsSharedAndKeepsOperatorChanges(t *testing.T) {
+func TestFrameworkRouterBelongsToItsSuperAgent(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	first, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true})
@@ -254,19 +263,34 @@ func TestManagedRouterIsSharedAndKeepsOperatorChanges(t *testing.T) {
 	if err := h.store.UpsertAgentInstance(ctx, router); err != nil {
 		t.Fatal(err)
 	}
+	// Saving again on the same framework keeps the router and its settings.
+	again, err := h.service.Save(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, _ = h.store.GetAgentInstance(ctx, again.RouterAgentID)
+	if again.RouterAgentID != first.RouterAgentID || router.DefaultModel != "chosen-on-the-agents-page" {
+		t.Fatalf("router = %+v", router)
+	}
 	second, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, _ = h.store.GetAgentInstance(ctx, second.RouterAgentID)
-	if first.RouterAgentID != second.RouterAgentID || router.DefaultModel != "chosen-on-the-agents-page" {
-		t.Fatalf("router = %+v", router)
+	if second.RouterAgentID == first.RouterAgentID {
+		t.Fatal("each Super Agent needs a router of its own")
 	}
 	if err := h.service.Delete(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if router, _ = h.store.GetAgentInstance(ctx, second.RouterAgentID); router == nil {
-		t.Fatal("another Super Agent still routes with it")
+	if gone, _ := h.store.GetAgentInstance(ctx, first.RouterAgentID); gone != nil {
+		t.Fatal("deleting a Super Agent deletes its router")
+	}
+	if kept, _ := h.store.GetAgentInstance(ctx, second.RouterAgentID); kept == nil {
+		t.Fatal("another Super Agent's router was deleted")
+	}
+	home, _ := h.service.homeDir(first.ID)
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("a deleted Super Agent's home stays on disk: %v", err)
 	}
 }
 
@@ -277,10 +301,12 @@ func TestFrameworkRouterRefusals(t *testing.T) {
 	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "gemini", AutoWorkers: true}); err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Errorf("err = %v", err)
 	}
-	if _, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "kimi", AutoWorkers: true}); err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Errorf("err = %v", err)
+	// A framework without a read-only mode can route now, in the mode it has.
+	kimi, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "kimi", AutoWorkers: true})
+	if err != nil {
+		t.Fatalf("kimi: %v", err)
 	}
-	if router, _ := h.store.GetAgentInstance(ctx, managedRouterID("kimi")); router != nil {
+	if router, _ := h.store.GetAgentInstance(ctx, kimi.RouterAgentID); router == nil || router.DefaultApprovalMode != core.ApprovalModeAuto {
 		t.Errorf("router = %+v", router)
 	}
 	if _, err := h.service.Save(ctx, core.SuperAgent{AutoWorkers: true}); err == nil {

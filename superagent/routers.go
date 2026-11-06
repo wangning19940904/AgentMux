@@ -14,12 +14,13 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// Router agents are Agent instances made only to route. The router reads
-// untrusted events, so the host keeps their configuration narrower than an
-// ordinary Agent's: they always run in the framework's read-only mode, get only
+// Router agents are Agent instances made only to route. They run unattended in
+// the approval mode the operator chose, YOLO unless chosen otherwise, get only
 // the MCP servers listed on them, and never have skills, CLIs, channels or
-// schedules. They are kept apart from other Agents, can be shared between Super
-// Agents, and only they can be chosen as a router.
+// schedules. Their charter, sent with every event, is what tells them how to
+// treat untrusted text. They are kept apart from other Agents, and only they
+// can be chosen as a router. Each belongs to one Super Agent and works in its
+// home; until a Super Agent routes with it, it has a scratch directory.
 const routerAgentSource = "super_agent_router"
 
 const routerIDPrefix = "sar_"
@@ -44,8 +45,10 @@ type Router struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	ServiceTier     string `json:"service_tier,omitempty"`
-	// MCPServers are the only tools the router has beyond the framework's
-	// read-only ones. Empty means none.
+	// ApprovalMode is what the router may do without asking. Empty keeps a
+	// saved router's mode, and gives a new one its framework's default.
+	ApprovalMode string `json:"approval_mode,omitempty"`
+	// MCPServers are the MCP servers the router may use. Empty means none.
 	MCPServers []string `json:"mcp_servers"`
 	// UsedBy lists the Super Agents that route with it. It is read only.
 	UsedBy    []RouterUser `json:"used_by"`
@@ -59,13 +62,16 @@ type RouterUser struct {
 	Name string `json:"name"`
 }
 
-// RouterFramework says whether an installed framework can route, and whether
-// AgentMux can give its routers MCP servers.
+// RouterFramework says whether an installed framework can route, which
+// approval modes its routers may run in, and whether AgentMux can give its
+// routers MCP servers.
 type RouterFramework struct {
-	RuntimeID  string `json:"runtime_id"`
-	CanRoute   bool   `json:"can_route"`
-	MCPServers bool   `json:"mcp_servers"`
-	Reason     string `json:"reason,omitempty"`
+	RuntimeID           string   `json:"runtime_id"`
+	CanRoute            bool     `json:"can_route"`
+	MCPServers          bool     `json:"mcp_servers"`
+	ApprovalModes       []string `json:"approval_modes"`
+	DefaultApprovalMode string   `json:"default_approval_mode,omitempty"`
+	Reason              string   `json:"reason,omitempty"`
 }
 
 // RouterList is what the Console needs to choose or create a router agent.
@@ -76,12 +82,57 @@ type RouterList struct {
 	MCPServers []string `json:"mcp_servers"`
 }
 
-// checkRouterRuntime refuses frameworks that cannot be held to read-only.
+// routerApprovalModes are the approval modes a router may run in: any its
+// framework offers but manual, since nobody is there to approve. It is nil for
+// a framework whose modes AgentMux does not know.
+func routerApprovalModes(runtimeID string) []string {
+	var modes []string
+	for _, mode := range core.ApprovalModeValuesForRuntime(runtimeID) {
+		if mode != core.ApprovalModeManual {
+			modes = append(modes, mode)
+		}
+	}
+	return modes
+}
+
+// defaultRouterApproval is the most capable mode the framework offers, so a
+// new router can act on its own: YOLO where there is one.
+func defaultRouterApproval(runtimeID string) string {
+	modes := routerApprovalModes(runtimeID)
+	for _, mode := range []string{core.ApprovalModeYolo, core.ApprovalModeAuto, core.ApprovalModeAutoEdit, core.ApprovalModePlan} {
+		if slices.Contains(modes, mode) {
+			return mode
+		}
+	}
+	return ""
+}
+
+// checkRouterRuntime refuses frameworks that cannot run unattended.
 func checkRouterRuntime(runtimeID string) error {
-	if modes := core.ApprovalModeValuesForRuntime(runtimeID); len(modes) > 0 && !core.ApprovalModeSupported(runtimeID, core.ApprovalModePlan) {
-		return fmt.Errorf("the router reads untrusted events, so it needs a read-only mode, which %s does not have; choose another framework", runtimeID)
+	if modes := core.ApprovalModeValuesForRuntime(runtimeID); len(modes) > 0 && len(routerApprovalModes(runtimeID)) == 0 {
+		return fmt.Errorf("the router runs unattended, so it needs an approval mode other than manual, which %s does not have; choose another framework", runtimeID)
 	}
 	return nil
+}
+
+// routerApproval resolves the approval mode a router is saved with: the one
+// asked for, else the one it has, else its framework's default.
+func routerApproval(runtimeID, requested, current string) (string, error) {
+	modes := routerApprovalModes(runtimeID)
+	mode := strings.TrimSpace(requested)
+	if mode == "" && slices.Contains(modes, current) {
+		mode = current
+	}
+	if mode == "" {
+		return defaultRouterApproval(runtimeID), nil
+	}
+	if len(modes) == 0 {
+		return "", fmt.Errorf("AgentMux does not know %s's approval modes; leave the router's approval mode empty", runtimeID)
+	}
+	if !slices.Contains(modes, mode) {
+		return "", fmt.Errorf("a %s router can run in %s, not %q", runtimeID, strings.Join(modes, ", "), mode)
+	}
+	return mode, nil
 }
 
 // routerMCPSupported mirrors the frameworks whose MCP configuration the
@@ -91,7 +142,13 @@ func routerMCPSupported(runtimeID string) bool {
 }
 
 func routerFramework(runtimeID string) RouterFramework {
-	framework := RouterFramework{RuntimeID: runtimeID, CanRoute: true, MCPServers: routerMCPSupported(runtimeID)}
+	framework := RouterFramework{
+		RuntimeID: runtimeID, CanRoute: true, MCPServers: routerMCPSupported(runtimeID),
+		ApprovalModes: routerApprovalModes(runtimeID), DefaultApprovalMode: defaultRouterApproval(runtimeID),
+	}
+	if framework.ApprovalModes == nil {
+		framework.ApprovalModes = []string{}
+	}
 	if err := checkRouterRuntime(runtimeID); err != nil {
 		framework.CanRoute, framework.Reason = false, err.Error()
 	}
@@ -105,7 +162,8 @@ func routerView(instance core.AgentInstance, users []RouterUser) Router {
 	return Router{
 		ID: instance.ID, Name: instance.Name, RuntimeID: instance.RuntimeID, Model: instance.DefaultModel,
 		ReasoningEffort: instance.DefaultReasoningEffort, ServiceTier: instance.DefaultServiceTier,
-		MCPServers: append([]string{}, instance.MCPServers...), UsedBy: users,
+		ApprovalMode: instance.DefaultApprovalMode,
+		MCPServers:   append([]string{}, instance.MCPServers...), UsedBy: users,
 		CreatedAt: instance.CreatedAt, UpdatedAt: instance.UpdatedAt,
 	}
 }
@@ -166,7 +224,8 @@ func (s *Service) ListRouters(ctx context.Context) (RouterList, error) {
 }
 
 // SaveRouter creates or updates a router agent. Whatever was sent, the result
-// runs read-only, with no tools but the listed MCP servers.
+// runs unattended in a mode its framework offers, with no skills, CLIs,
+// channels or schedules, and only the listed MCP servers.
 func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error) {
 	router.ID = strings.TrimSpace(router.ID)
 	router.Name = strings.TrimSpace(router.Name)
@@ -212,6 +271,10 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 	if err := checkRouterRuntime(router.RuntimeID); err != nil {
 		return Router{}, err
 	}
+	approval, err := routerApproval(router.RuntimeID, router.ApprovalMode, instance.DefaultApprovalMode)
+	if err != nil {
+		return Router{}, err
+	}
 	servers, err := s.validateRouterMCP(ctx, router.RuntimeID, router.MCPServers)
 	if err != nil {
 		return Router{}, err
@@ -220,10 +283,13 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 		router.Name = fmt.Sprintf("Router (%s)", router.RuntimeID)
 	}
 	// Each router has its own directory, since that is where the workspace
-	// writes the MCP configuration it is given.
-	workDir, err := s.routerWorkDir(instance.ID)
-	if err != nil {
-		return Router{}, err
+	// writes the MCP configuration it is given: its Super Agent's home, or a
+	// scratch directory until it has one.
+	workDir := instance.WorkDir
+	if workDir == "" {
+		if workDir, err = s.routerWorkDir(instance.ID); err != nil {
+			return Router{}, err
+		}
 	}
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return Router{}, fmt.Errorf("create router directory: %w", err)
@@ -232,7 +298,7 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 	instance.WorkDir, instance.WorkspaceMode = workDir, "shared"
 	instance.DefaultModel = router.Model
 	instance.DefaultReasoningEffort, instance.DefaultServiceTier = router.ReasoningEffort, router.ServiceTier
-	instance.DefaultApprovalMode = core.ApprovalModePlan
+	instance.DefaultApprovalMode = approval
 	instance.MCPServers = servers
 	instance.Skills, instance.CLIs, instance.ChannelBindings, instance.Schedules = nil, nil, nil, nil
 	instance.SystemPrompt = ""
@@ -249,6 +315,117 @@ func (s *Service) SaveRouter(ctx context.Context, router Router) (Router, error)
 
 // routerName is the name of a router agent that one Super Agent routes with.
 func routerName(superAgentName string) string { return superAgentName + " router" }
+
+// checkRouterOwner refuses a router agent that another Super Agent routes
+// with, since a router works in its Super Agent's home. router is the
+// resolved router; an ordinary Agent kept as the router from before router
+// agents existed is not checked.
+func (s *Service) checkRouterOwner(ctx context.Context, superAgentID string, router *core.AgentInstance) error {
+	if router == nil || router.ID == "" || !IsRouterAgent(*router) {
+		return nil
+	}
+	users, err := s.routerUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, user := range users[router.ID] {
+		if user.ID != superAgentID {
+			return conflictError(fmt.Sprintf("router agent %q belongs to %s; create a router for this Super Agent", router.Name, user.Name))
+		}
+	}
+	return nil
+}
+
+// bindRouter creates the Super Agent's home and makes its router agent work
+// there, so the router can read every Ticket's folder. An ordinary Agent kept
+// as the router keeps its own directory.
+func (s *Service) bindRouter(ctx context.Context, agent core.SuperAgent) error {
+	home, err := s.ensureHome(agent.ID)
+	if err != nil {
+		return err
+	}
+	router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
+	if err != nil || router == nil || !IsRouterAgent(*router) {
+		return err
+	}
+	if router.WorkDir == home && router.WorkspaceMode == "shared" {
+		return nil
+	}
+	previous := router.WorkDir
+	router.WorkDir, router.WorkspaceMode, router.UpdatedAt = home, "shared", s.now().UTC()
+	if err := s.store.UpsertAgentInstance(ctx, router); err != nil {
+		return err
+	}
+	if scratch, err := s.routerWorkDir(router.ID); err == nil && previous == scratch {
+		_ = os.RemoveAll(scratch)
+	}
+	return nil
+}
+
+// deleteOwnedRouter removes a deleted Super Agent's router agent, unless
+// another Super Agent still routes with it.
+func (s *Service) deleteOwnedRouter(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	router, err := s.store.GetAgentInstance(ctx, id)
+	if err != nil || router == nil || !IsRouterAgent(*router) {
+		return err
+	}
+	if err := s.DeleteRouter(ctx, id); err != nil && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+// adoptRouters gives every Super Agent a router agent of its own that works
+// in its home. Super Agents that shared a router before each router belonged
+// to one keep it in the order they were created; the others get a copy.
+func (s *Service) adoptRouters(ctx context.Context) {
+	agents, err := s.store.ListSuperAgents(ctx)
+	if err != nil {
+		s.log.Error("list super agents to adopt routers", "err", err)
+		return
+	}
+	slices.SortFunc(agents, func(a, b core.SuperAgent) int {
+		if order := a.CreatedAt.Compare(b.CreatedAt); order != 0 {
+			return order
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	owners := map[string]bool{}
+	for _, agent := range agents {
+		router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
+		if err != nil {
+			s.log.Error("load router to adopt", "super_agent", agent.ID, "err", err)
+			continue
+		}
+		if router == nil || !IsRouterAgent(*router) {
+			continue
+		}
+		if owners[router.ID] {
+			now := s.now().UTC()
+			copied := *router
+			copied.ID, copied.Name, copied.WorkDir = routerIDPrefix+uuid.NewString(), routerName(agent.Name), ""
+			copied.Source = routerAgentSource
+			copied.CreatedAt, copied.UpdatedAt = now, now
+			if err := s.store.UpsertAgentInstance(ctx, &copied); err != nil {
+				s.log.Error("copy shared router", "super_agent", agent.ID, "router", router.ID, "err", err)
+				continue
+			}
+			agent.RouterAgentID = copied.ID
+			if err := s.store.UpsertSuperAgent(ctx, agent); err != nil {
+				s.log.Error("give super agent its own router", "super_agent", agent.ID, "err", err)
+				continue
+			}
+			router = &copied
+		}
+		owners[router.ID] = true
+		if err := s.bindRouter(ctx, agent); err != nil {
+			s.log.Error("move router to super agent home", "super_agent", agent.ID, "err", err)
+		}
+	}
+}
 
 // defaultSuperAgentName names a Super Agent left unnamed after its router's
 // framework. A router agent is named after its Super Agent, so its own name
@@ -308,7 +485,7 @@ func (s *Service) DeleteRouter(ctx context.Context, id string) error {
 		for _, user := range users[id] {
 			names = append(names, user.Name)
 		}
-		return fmt.Errorf("%s routes with %s; choose another router for it first: %w", strings.Join(names, ", "), instance.Name, ErrConflict)
+		return conflictError(fmt.Sprintf("%s routes with %s; choose another router for it first", strings.Join(names, ", "), instance.Name))
 	}
 	if err := s.store.DeleteAgentInstance(ctx, id); err != nil {
 		return err
@@ -361,11 +538,9 @@ func (s *Service) validateRouterMCP(ctx context.Context, runtimeID string, names
 	return names, nil
 }
 
-// validateRouter keeps the blast radius of a prompt injection small. Only a
-// router agent may route, and only in read-only mode, which it is saved with
-// but which the Agents API could still change. A Super Agent saved before
-// routers had their own configuration may keep the ordinary Agent it routes
-// with, as current; that one only has to stay out of yolo.
+// validateRouter checks that a Super Agent may route with an Agent: only a
+// router agent may route. A Super Agent saved before routers had their own
+// configuration may keep the ordinary Agent it routes with, as current.
 func (s *Service) validateRouter(ctx context.Context, id, current string) (*core.AgentInstance, error) {
 	if id == "" {
 		return nil, errors.New("choose a router agent, or create one")
@@ -377,17 +552,8 @@ func (s *Service) validateRouter(ctx context.Context, id, current string) (*core
 	if router == nil {
 		return nil, fmt.Errorf("router agent %q not found on this machine", id)
 	}
-	if IsRouterAgent(*router) {
-		if router.DefaultApprovalMode != core.ApprovalModePlan {
-			return nil, fmt.Errorf("router agent %q must run in plan mode, and runs in %q; save it again under Super Agents", router.Name, router.DefaultApprovalMode)
-		}
-		return router, nil
-	}
-	if id != current {
+	if !IsRouterAgent(*router) && id != current {
 		return nil, fmt.Errorf("%q is not a router agent; choose a router agent, or create one", router.Name)
-	}
-	if router.DefaultApprovalMode == core.ApprovalModeYolo {
-		return nil, errors.New("the router reads untrusted events, so its Agent cannot use the yolo approval mode; choose plan mode")
 	}
 	return router, nil
 }

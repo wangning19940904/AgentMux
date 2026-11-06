@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -24,25 +25,49 @@ func (s *Service) stateDir() (string, error) {
 	return filepath.Join(home, ".agentmux"), nil
 }
 
-// resolveRouter sets RouterAgentID from a framework named instead of a router
-// agent, creating that framework's default router agent when it has none yet,
-// and validates the result. current is the router the Super Agent was saved with.
-func (s *Service) resolveRouter(ctx context.Context, agent *core.SuperAgent, current string) (*core.AgentInstance, error) {
+// resolveRouter finds the router a Super Agent routes with and validates it.
+// current is the router the Super Agent was saved with. A framework named
+// instead of a router agent means the router agent the Super Agent already has
+// on that framework or, when own is set, a new one: it gets an empty
+// RouterAgentID, and Save creates it once everything else is valid. Setup,
+// which saves nothing, uses the framework's default router agent instead.
+func (s *Service) resolveRouter(ctx context.Context, agent *core.SuperAgent, current string, own bool) (*core.AgentInstance, error) {
 	agent.RouterRuntime = strings.TrimSpace(agent.RouterRuntime)
-	if agent.RouterRuntime != "" {
-		id, err := s.ensureManagedRouter(ctx, agent.RouterRuntime)
+	runtimeID := agent.RouterRuntime
+	if runtimeID == "" {
+		return s.validateRouter(ctx, agent.RouterAgentID, current)
+	}
+	if !own {
+		id, err := s.ensureManagedRouter(ctx, runtimeID)
 		if err != nil {
 			return nil, err
 		}
 		agent.RouterAgentID = id
+		return s.validateRouter(ctx, id, current)
 	}
-	return s.validateRouter(ctx, agent.RouterAgentID, current)
+	if current != "" {
+		router, err := s.store.GetAgentInstance(ctx, current)
+		if err != nil {
+			return nil, err
+		}
+		if router != nil && IsRouterAgent(*router) && router.RuntimeID == runtimeID {
+			agent.RouterAgentID = current
+			return s.validateRouter(ctx, current, current)
+		}
+	}
+	if s.runtimeAvailable != nil && !s.runtimeAvailable(runtimeID) {
+		return nil, fmt.Errorf("agent framework %q is not installed on this machine", runtimeID)
+	}
+	if err := checkRouterRuntime(runtimeID); err != nil {
+		return nil, err
+	}
+	agent.RouterAgentID = ""
+	return &core.AgentInstance{RuntimeID: runtimeID, DefaultApprovalMode: defaultRouterApproval(runtimeID), Source: routerAgentSource}, nil
 }
 
-// ensureManagedRouter keeps a default router agent per framework, for API
-// clients that name a framework instead of a router agent. It holds nothing
-// specific to a Super Agent, since each one's guidance travels in the prompt and
-// each Trigger has its own conversation. An existing one is kept as is.
+// ensureManagedRouter keeps a default router agent per framework, for setting
+// up a Super Agent that names a framework before it has a router of its own.
+// An existing one is kept as is.
 func (s *Service) ensureManagedRouter(ctx context.Context, runtimeID string) (string, error) {
 	if s.runtimeAvailable != nil && !s.runtimeAvailable(runtimeID) {
 		return "", fmt.Errorf("agent framework %q is not installed on this machine", runtimeID)
@@ -70,13 +95,23 @@ func (s *Service) ensureManagedRouter(ctx context.Context, runtimeID string) (st
 	instance := core.AgentInstance{
 		ID: id, Name: fmt.Sprintf("Super Agent router (%s)", runtimeID), RuntimeID: runtimeID,
 		WorkDir: workDir, WorkspaceMode: "shared", SessionBackend: "structured",
-		DefaultApprovalMode: core.ApprovalModePlan, Enabled: true, Source: routerAgentSource,
+		DefaultApprovalMode: setupRouterApproval(runtimeID), Enabled: true, Source: routerAgentSource,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.UpsertAgentInstance(ctx, &instance); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// setupRouterApproval keeps the default router agent read-only where it can
+// be: it serves the setup assistant until a Super Agent adopts it, and the
+// operator chooses its mode then.
+func setupRouterApproval(runtimeID string) string {
+	if slices.Contains(routerApprovalModes(runtimeID), core.ApprovalModePlan) {
+		return core.ApprovalModePlan
+	}
+	return defaultRouterApproval(runtimeID)
 }
 
 // withWorkerRuntimes gives a Super Agent saved before worker frameworks could be

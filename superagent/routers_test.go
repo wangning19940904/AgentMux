@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
@@ -36,7 +35,7 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		t.Fatalf("saved = %+v", saved)
 	}
 	instance, _ := h.store.GetAgentInstance(ctx, saved.ID)
-	if instance == nil || !IsRouterAgent(*instance) || IsManagedAgent(*instance) || instance.DefaultApprovalMode != core.ApprovalModePlan || !instance.Enabled {
+	if instance == nil || !IsRouterAgent(*instance) || IsManagedAgent(*instance) || instance.DefaultApprovalMode != core.ApprovalModeYolo || !instance.Enabled || saved.ApprovalMode != core.ApprovalModeYolo {
 		t.Fatalf("instance = %+v", instance)
 	}
 	if filepath.Base(instance.WorkDir) != saved.ID {
@@ -46,8 +45,10 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		t.Fatalf("work dir: %v", err)
 	}
 
-	// Whatever the Agents API changed, saving it again restores the limits.
-	instance.DefaultApprovalMode = core.ApprovalModeYolo
+	// Whatever the Agents API changed, saving it again restores the limits. A
+	// manual router would wait for approvals nobody gives, so it gets the
+	// framework's default again.
+	instance.DefaultApprovalMode = core.ApprovalModeManual
 	instance.Skills, instance.CLIs = []string{"skill"}, []string{"gh"}
 	instance.ChannelBindings = []core.AgentChannelBinding{{ID: "c1", Type: "feishu"}}
 	instance.SystemPrompt = "do anything"
@@ -59,7 +60,7 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	instance, _ = h.store.GetAgentInstance(ctx, saved.ID)
-	if instance.DefaultApprovalMode != core.ApprovalModePlan || len(instance.Skills) != 0 || len(instance.CLIs) != 0 ||
+	if instance.DefaultApprovalMode != core.ApprovalModeYolo || len(instance.Skills) != 0 || len(instance.CLIs) != 0 ||
 		len(instance.ChannelBindings) != 0 || instance.SystemPrompt != "" || len(instance.MCPServers) != 0 {
 		t.Fatalf("limits not restored: %+v", instance)
 	}
@@ -83,7 +84,8 @@ func TestSaveRouterRefusals(t *testing.T) {
 	}{
 		"no framework":         {Router{}, "choose a framework"},
 		"not installed":        {Router{RuntimeID: "gemini"}, "not installed"},
-		"no read-only mode":    {Router{RuntimeID: "kimi"}, "read-only"},
+		"manual approval":      {Router{RuntimeID: "codex", ApprovalMode: "manual"}, "can run in"},
+		"unsupported mode":     {Router{RuntimeID: "cursor", ApprovalMode: "auto_edit"}, "can run in"},
 		"mcp unsupported":      {Router{RuntimeID: "cursor", MCPServers: []string{"on"}}, "cannot give"},
 		"mcp unknown":          {Router{RuntimeID: "codex", MCPServers: []string{"nope"}}, "not registered"},
 		"mcp disabled":         {Router{RuntimeID: "codex", MCPServers: []string{"off"}}, "disabled"},
@@ -133,14 +135,38 @@ func TestListRoutersShowsOnlyRouterAgents(t *testing.T) {
 }
 
 func TestRouterFrameworkCapabilities(t *testing.T) {
-	if framework := routerFramework("kimi"); framework.CanRoute || framework.Reason == "" {
+	if framework := routerFramework("kimi"); !framework.CanRoute || !slices.Equal(framework.ApprovalModes, []string{"auto"}) || framework.DefaultApprovalMode != "auto" {
 		t.Errorf("kimi = %+v", framework)
 	}
-	if framework := routerFramework("codex"); !framework.CanRoute || !framework.MCPServers {
+	if framework := routerFramework("codex"); !framework.CanRoute || !framework.MCPServers || framework.DefaultApprovalMode != "yolo" || slices.Contains(framework.ApprovalModes, "manual") {
 		t.Errorf("codex = %+v", framework)
 	}
-	if framework := routerFramework("cursor"); !framework.CanRoute || framework.MCPServers {
+	if framework := routerFramework("cursor"); !framework.CanRoute || framework.MCPServers || !slices.Equal(framework.ApprovalModes, []string{"auto", "plan", "yolo"}) {
 		t.Errorf("cursor = %+v", framework)
+	}
+	if framework := routerFramework("unknown-framework"); !framework.CanRoute || len(framework.ApprovalModes) != 0 || framework.DefaultApprovalMode != "" {
+		t.Errorf("unknown = %+v", framework)
+	}
+}
+
+func TestRouterKeepsTheModeTheOperatorChose(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	saved, err := h.service.SaveRouter(ctx, Router{RuntimeID: "codex", ApprovalMode: " plan "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ApprovalMode != core.ApprovalModePlan {
+		t.Fatalf("saved = %+v", saved)
+	}
+	// Saving without a mode, as an older client would, keeps the mode it has.
+	again, err := h.service.SaveRouter(ctx, Router{ID: saved.ID, Model: "gpt-6"})
+	if err != nil || again.ApprovalMode != core.ApprovalModePlan {
+		t.Fatalf("again = %+v, %v", again, err)
+	}
+	changed, err := h.service.SaveRouter(ctx, Router{ID: saved.ID, ApprovalMode: core.ApprovalModeAuto})
+	if err != nil || changed.ApprovalMode != core.ApprovalModeAuto {
+		t.Fatalf("changed = %+v, %v", changed, err)
 	}
 }
 
@@ -213,24 +239,19 @@ func TestOnlyRouterAgentsCanBeChosen(t *testing.T) {
 	}
 }
 
-func TestRouterLimitsAreCheckedBeforeEachEvent(t *testing.T) {
+func TestRouterRoutesInAnyModeItWasGiven(t *testing.T) {
 	h := newHarness(t)
-	h.store.mu.Lock()
-	router := h.store.local["router"]
-	router.DefaultApprovalMode = core.ApprovalModeAuto
-	h.store.local["router"] = router
-	h.store.mu.Unlock()
-	h.ingest("alice", "t1", "work", true)
-	for range maxRouterAttempts {
+	for _, mode := range []string{core.ApprovalModeYolo, core.ApprovalModeAuto} {
+		h.store.mu.Lock()
+		router := h.store.local["router"]
+		router.DefaultApprovalMode = mode
+		h.store.local["router"] = router
+		h.store.mu.Unlock()
+		h.ingest("alice", "t-"+mode, "work", true)
 		h.settle()
-		h.advance(retryDelay + time.Second)
 	}
-	h.settle()
-	if len(h.router.prompts) != 0 {
-		t.Fatalf("a router that is no longer read-only must not see the event: %d calls", len(h.router.prompts))
-	}
-	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionFailed || !strings.Contains(trigger.Reason, "plan mode") {
-		t.Fatalf("trigger = %+v", trigger)
+	if len(h.router.prompts) != 2 || len(h.store.allTickets()) != 2 {
+		t.Fatalf("prompts = %d, tickets = %d", len(h.router.prompts), len(h.store.allTickets()))
 	}
 }
 
@@ -286,19 +307,19 @@ func TestRouterIsNamedAfterItsOnlySuperAgent(t *testing.T) {
 	if got := name(); got != "Ops triage router" {
 		t.Fatalf("renaming the Super Agent renames its router: %q", got)
 	}
-	// Once another Super Agent shares it, the router keeps its name.
-	if _, err := h.service.Save(ctx, core.SuperAgent{Name: "Other", RouterAgentID: created.ID, AutoWorkers: true}); err != nil {
-		t.Fatal(err)
-	}
-	first.Name = "Renamed again"
-	if _, err := h.service.Save(ctx, first); err != nil {
-		t.Fatal(err)
+	// It belongs to that Super Agent, so another one cannot route with it.
+	if _, err := h.service.Save(ctx, core.SuperAgent{Name: "Other", RouterAgentID: created.ID, AutoWorkers: true}); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "belongs to Ops triage") {
+		t.Fatalf("sharing a router: err = %v", err)
 	}
 	if got := name(); got != "Ops triage router" {
-		t.Fatalf("a shared router keeps its name: %q", got)
+		t.Fatalf("a refused Super Agent renamed the router: %q", got)
 	}
 	// Left unnamed, a Super Agent is named after the framework, not the router.
-	unnamed, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: created.ID, AutoWorkers: true})
+	spare, err := h.service.SaveRouter(ctx, Router{RuntimeID: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unnamed, err := h.service.Save(ctx, core.SuperAgent{RouterAgentID: spare.ID, AutoWorkers: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -276,6 +276,30 @@ func TestInitializeWorktreeModes(t *testing.T) {
 		assertFile(t, filepath.Join(res.WorkDir, "CLAUDE.md"))
 	})
 
+	t.Run("places worktree at a chosen path", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "tickets", "tkt_1", "work")
+		res, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+			AgentID: "agent-placed", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
+			ConversationScope: "api-agent:agent-placed", ConversationKey: "api:ticket", WorktreePath: target,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.WorkDir != target || !strings.HasPrefix(res.WorktreeBranch, "agentmux/") {
+			t.Fatalf("placed worktree result = %+v", res)
+		}
+		if got := gitRun(t, target, "branch", "--show-current"); got != res.WorktreeBranch {
+			t.Fatalf("placed worktree branch = %q, want %q", got, res.WorktreeBranch)
+		}
+		again, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
+			AgentID: "agent-placed", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
+			ConversationScope: "api-agent:agent-placed", ConversationKey: "api:ticket", WorktreePath: target,
+		})
+		if err != nil || again.WorkDir != target {
+			t.Fatalf("placed worktree was not reused: err=%v result=%+v", err, again)
+		}
+	})
+
 	t.Run("defers creation without conversation", func(t *testing.T) {
 		res, err := init.InitializeWorkspace(context.Background(), core.WorkspaceInitOptions{
 			AgentID: "agent-deferred", RuntimeID: "codex", WorkDir: repo, WorkspaceMode: "worktree",
