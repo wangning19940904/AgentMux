@@ -150,12 +150,13 @@ async function fleetBatch<T>(
 	requests: FleetOperation[],
 	targetIDs = activeFleetTargetIDs(),
 	tenantScoped = true,
+	recordWarnings = true,
 ) {
   const path = `/api/v1/remote/fleet/${endpoint}`;
-  const updateWarnings = beginFleetWarningUpdate(JSON.stringify([
+  const updateWarnings = recordWarnings ? beginFleetWarningUpdate(JSON.stringify([
     endpoint, tenantScoped, [...targetIDs].sort(),
     requests.map((request) => [request.method || "GET", fleetWarningResourceKey(request.path)]),
-  ]));
+  ])) : () => {};
   try {
     const res = await fetch(path, {
       method: "POST",
@@ -192,6 +193,12 @@ export function fleetAdminQuery<T>(requests: FleetOperation[], targetIDs: string
 
 export function fleetExecute<T>(requests: FleetOperation[], targetIDs?: string[]) {
   return fleetBatch<T>("execute", requests, targetIDs);
+}
+
+// Monitoring reads show unreachable machines in place, so their failures are
+// data rather than a page-level warning. Host metrics are not tenant data.
+export function fleetMonitorQuery<T>(requests: FleetOperation[], targetIDs?: string[]) {
+  return fleetBatch<T>("query", requests, targetIDs, false, false);
 }
 
 export async function get<T>(path: string): Promise<T> {

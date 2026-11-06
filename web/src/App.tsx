@@ -27,6 +27,7 @@ import {
   Search,
   ServerCog,
   MessageSquareText,
+  MonitorDot,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -139,6 +140,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Activity,
     items: [
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
+      { id: "machine-status", labelKey: "nav.machineStatus", icon: MonitorDot },
       { id: "observability", labelKey: "nav.observability", icon: Activity },
       { id: "usage", labelKey: "nav.usage", icon: Gauge },
       { id: "feedback", labelKey: "nav.feedback", icon: MessageSquareText },

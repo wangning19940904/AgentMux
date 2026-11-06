@@ -2,6 +2,7 @@
 @import "./styles/resources.css";
 @import "./styles/meetings.css";
 @import "./styles/remote.css";
+@import "./styles/machine-status.css";
 @import "./styles/connect.css";
 @import "./styles/observability.css";
 @import "./styles/design-system.css";

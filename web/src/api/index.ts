@@ -6,7 +6,7 @@ export * from "./types";
 export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
-import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetQuery, get, getChecked, getLocal, post, put, putLocal, postChecked, postProgress, del } from "./client";
+import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putLocal, postChecked, postProgress, del } from "./client";
 import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
@@ -57,6 +57,7 @@ import type {
   MCPServer,
   MarketplaceSkill,
   MachineTarget,
+  SystemMetrics,
   MemoryEntry,
   MenubarSettings,
   MeetingInvitation,
@@ -395,6 +396,8 @@ export const api = {
   // SSH remote control. These paths intentionally bypass the selected target.
   remoteHosts: () => get<RemoteHost[]>("/api/v1/remote/hosts"),
   fleetTargets: () => getLocal<MachineTarget[]>("/api/v1/remote/fleet/targets"),
+  machineStatus: (targetIDs?: string[]) =>
+    fleetMonitorQuery<SystemMetrics>([{ key: "metrics", path: "/api/v1/system/metrics" }], targetIDs),
   discoveredRemoteHosts: () =>
     get<DiscoveredRemoteHost[]>("/api/v1/remote/discovered-hosts"),
   upsertRemoteHost: (host: Partial<RemoteHost>) =>
