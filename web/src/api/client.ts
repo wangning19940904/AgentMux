@@ -258,6 +258,21 @@ export async function putLocal<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export async function putChecked<T>(path: string, body: unknown, options: { local?: boolean } = {}): Promise<T> {
+  const res = await fetch(options.local ? path : apiPath(path), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  invalidateResourceCache();
+  if (!res.ok) {
+    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
 export async function postChecked<T>(path: string, body: unknown, options: { local?: boolean } = {}): Promise<T> {
   const res = await fetch(options.local ? path : apiPath(path), {
     method: "POST",

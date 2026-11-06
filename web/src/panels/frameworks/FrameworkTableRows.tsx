@@ -81,18 +81,7 @@ export function FrameworkTableRows({
   return (
     <>
       <tr className="catalog-row framework-installed-row">
-        <td className="catalog-primary-cell" data-label={t("common.name")}>
-          <span className="provider-icon"><Package size={16} /></span>
-          <span className="catalog-primary-copy">
-            <strong>{spec.display}</strong>
-            <span className="framework-meta-tags">
-              <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
-              <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
-              <TargetBadge target_id={item.target_id} target_name={item.target_name} />
-            </span>
-            {machineInstances}
-          </span>
-        </td>
+        <FrameworkIdentityCell item={item}>{machineInstances}</FrameworkIdentityCell>
         <td data-label={t("frameworks.versionAndUpdate")}>
           <span className="framework-version-copy">
             <strong className="mono">{item.version ? `v${item.version}` : "—"}</strong>
@@ -173,6 +162,49 @@ export function FrameworkTableRows({
         </tr>
       )}
     </>
+  );
+}
+
+// A framework whose install is running in the background. It is listed in the
+// catalog (not the install dialog) so the dialog can close as soon as the
+// install starts while progress stays visible.
+export function FrameworkInstallingRow({ item, progress }: { item: Framework; progress?: OperationProgress }) {
+  const { t } = useI18n();
+  return (
+    <>
+      <tr className="catalog-row framework-installed-row framework-installing-row" aria-busy="true">
+        <FrameworkIdentityCell item={item} />
+        <td data-label={t("frameworks.versionAndUpdate")}>
+          <span className="framework-version-copy">
+            <strong className="mono">—</strong>
+            <span className="framework-update-state"><RefreshCw className="spin" size={13} />{t("frameworks.installing")}</span>
+          </span>
+        </td>
+        <td className="catalog-action-cell" data-label={t("common.actions")} />
+      </tr>
+      <tr className="catalog-progress-row">
+        <td colSpan={3}><OperationProgressView progress={progress ?? { phase: "preparing", percent: 4 }} /></td>
+      </tr>
+    </>
+  );
+}
+
+function FrameworkIdentityCell({ item, children }: { item: Framework; children?: React.ReactNode }) {
+  const { t } = useI18n();
+  const { spec } = item;
+  return (
+    <td className="catalog-primary-cell" data-label={t("common.name")}>
+      <span className="provider-icon"><Package size={16} /></span>
+      <span className="catalog-primary-copy">
+        <strong>{spec.display}</strong>
+        <span className="framework-meta-tags">
+          <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
+          <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+          <TargetBadge target_id={item.target_id} target_name={item.target_name} />
+        </span>
+        {children}
+      </span>
+    </td>
   );
 }
 

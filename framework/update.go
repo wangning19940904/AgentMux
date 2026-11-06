@@ -27,6 +27,12 @@ type UpdateCheck struct {
 // CheckUpdate compares an installed framework with its catalog-owned latest
 // version source. It never mutates the installation.
 func CheckUpdate(ctx context.Context, kind string) UpdateCheck {
+	return CheckUpdateWithSettings(ctx, kind, InstallSettings{})
+}
+
+// CheckUpdateWithSettings is CheckUpdate reading the latest version from the
+// registry the machine's install settings select.
+func CheckUpdateWithSettings(ctx context.Context, kind string, settings InstallSettings) UpdateCheck {
 	kind = strings.TrimSpace(kind)
 	res := UpdateCheck{Kind: kind, CheckedAt: time.Now()}
 	spec, ok := Lookup(kind)
@@ -54,7 +60,7 @@ func CheckUpdate(ctx context.Context, kind string) UpdateCheck {
 	}
 	res.CurrentVersion = current
 
-	latest, err := latestFrameworkVersion(ctx, spec, pre)
+	latest, err := latestFrameworkVersion(ctx, spec, pre, settings)
 	if err != nil {
 		res.Error = fmt.Sprintf("check update failed: %v", err)
 		return res
@@ -79,32 +85,40 @@ func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
 	return sdkVersionGreater(latest, current)
 }
 
-func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs) (string, error) {
+func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs, settings InstallSettings) (string, error) {
 	switch spec.KindType {
 	case KindSDK:
 		return "", fmt.Errorf("SDK does not have a runnable adapter")
 	case KindCLI:
-		if spec.LatestURL != "" {
+		// A framework-specific registry is what its npm commands install from,
+		// so it also decides the latest version. Otherwise the catalog's
+		// official endpoint wins over the machine default.
+		frameworkRegistry := settings.override(spec.Kind).Registry
+		if spec.LatestURL != "" && (frameworkRegistry == "" || spec.NPMPackage == "") {
 			return officialCLIVersion(ctx, spec.LatestURL)
 		}
 		if spec.NPMPackage != "" {
 			if !pre.NPM {
 				return "", fmt.Errorf("npm not found on PATH; install Node.js first")
 			}
-			return npmPackageVersion(ctx, spec.NPMPackage)
+			return npmPackageVersion(ctx, spec.NPMPackage, latestVersionRegistry(spec, settings))
 		}
 	}
 	return "", fmt.Errorf("no latest-version source configured")
 }
 
-func npmPackageVersion(ctx context.Context, pkg string) (string, error) {
+func npmPackageVersion(ctx context.Context, pkg, registry string) (string, error) {
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	cmd := frameworkCommandContext(runCtx, "npm", "view", pkg, "version", "--silent")
+	args := []string{"view", pkg, "version", "--silent"}
+	if registry != "" {
+		args = append(args, "--registry="+registry)
+	}
+	cmd := frameworkCommandContext(runCtx, "npm", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		detail := strings.TrimSpace(string(out))

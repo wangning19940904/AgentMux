@@ -58,6 +58,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/frameworks/install", s.handleFrameworkInstall)
 	s.mux.HandleFunc("POST /api/v1/frameworks/install/stream", s.handleFrameworkInstallStream)
 	s.mux.HandleFunc("POST /api/v1/frameworks/check", s.handleFrameworkCheck)
+	s.mux.HandleFunc("GET /api/v1/frameworks/install-settings", s.handleFrameworkInstallSettingsGet)
+	s.mux.HandleFunc("PUT /api/v1/frameworks/install-settings", s.handleFrameworkInstallSettingsPut)
 	s.mux.HandleFunc("GET /api/v1/frameworks/login", s.handleFrameworkLoginStatus)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login", s.handleFrameworkLogin)
 	s.mux.HandleFunc("POST /api/v1/frameworks/login/cancel", s.handleFrameworkLoginCancel)

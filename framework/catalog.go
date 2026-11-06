@@ -45,9 +45,10 @@ type Spec struct {
 	VersionArgs []string `json:"-"`
 	// NPMPackage is the registry package used to resolve the latest CLI version.
 	NPMPackage string `json:"-"`
-	// InstallCommand is the catalog-owned command used when a CLI is not
-	// distributed through npm. Callers can select a framework, but cannot
-	// provide or alter the command that is executed.
+	// InstallCommand is the catalog-owned install command. When empty, a CLI
+	// with an NPMPackage installs with `npm install -g <package>@latest`.
+	// Callers can select a framework, but cannot provide or alter the command
+	// that is executed.
 	InstallCommand []string `json:"-"`
 	// InstallSupported reports whether this framework can be installed from the
 	// Console. InstallRequiresNPM lets the UI disable that action when the host
@@ -88,6 +89,23 @@ type Spec struct {
 	// Hidden keeps compatibility for persisted framework references while
 	// excluding the framework from user-facing catalogs and runtime selectors.
 	Hidden bool `json:"-"`
+}
+
+// dshNPMInstallCommand installs DeepSeek Harness with its own scope resolved
+// from the publisher's registry. dsh ships as dozens of exact-pinned
+// @deepseek-ai/* packages, and npm mirrors sync each one independently, so a
+// mirror can serve a new dsh before its siblings and fail with ETARGET (or
+// E404 for a tarball). Third-party dependencies still come from the user's
+// configured registry.
+//
+// npm's default replace-registry-host=npmjs rewrites every registry.npmjs.org
+// tarball URL to the configured registry, which would send the scope's
+// downloads back to the mirror. "never" keeps each tarball on the registry
+// that served its metadata.
+var dshNPMInstallCommand = []string{
+	"npm", "install", "-g", "@deepseek-ai/dsh@latest",
+	"--@deepseek-ai:registry=https://registry.npmjs.org/",
+	"--replace-registry-host=never",
 }
 
 // catalog is the built-in framework registry.
@@ -174,7 +192,9 @@ var catalog = []Spec{
 	{
 		Kind: "dsh", Display: "DeepSeek Harness", Company: "DeepSeek AI", KindType: KindCLI,
 		Bin: "dsh", VersionArgs: []string{"--version"},
-		NPMPackage: "@deepseek-ai/dsh", UpdateCommand: []string{"npm", "install", "-g", "@deepseek-ai/dsh@latest"},
+		NPMPackage:     "@deepseek-ai/dsh",
+		InstallCommand: dshNPMInstallCommand, UpdateCommand: dshNPMInstallCommand,
+		LatestURL:        "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
 		InstallSupported: true, InstallRequiresNPM: true,
 		UpdateSupported: true, UninstallSupported: true, Supported: true,
 		Note: "DeepSeek Harness (developer preview); set DEEPSEEK_API_KEY in the Agent environment or $DSH_HOME/.env",
