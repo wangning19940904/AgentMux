@@ -116,8 +116,8 @@ func TestCodexTakeoverSwitchRefreshesCatalogAndRestores(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"traex", "doubao"} {
-		p := &core.Provider{ID: id, Name: id, BaseURL: "http://127.0.0.1:8317/v1", Model: id + "-model", SettingsConfig: map[string]any{"codex_home": dir}, Meta: core.ProviderMeta{APIFormat: protoResponses}}
+	for _, id := range []string{"provider-a", "provider-b"} {
+		p := &core.Provider{ID: id, Name: id, BaseURL: "http://127.0.0.1:19000/v1", Model: id + "-model", SettingsConfig: map[string]any{"codex_home": dir}, Meta: core.ProviderMeta{APIFormat: protoResponses}}
 		if err := svc.Upsert(ctx, p); err != nil {
 			t.Fatal(err)
 		}

@@ -618,7 +618,7 @@ approval_policy = "never"
 
 [model_providers.agentmux]
 name = "AgentMux Local Routing"
-base_url = "http://127.0.0.1:8787/v1"
+base_url = "http://127.0.0.1:19000/v1"
 wire_api = "chat"
 
 [model_providers.openai]
@@ -654,7 +654,7 @@ wire_api = "chat"
 	if own["wire_api"] != codexWireAPIResponses {
 		t.Fatalf("agentmux wire_api = %v", own["wire_api"])
 	}
-	if own["base_url"] != "http://127.0.0.1:8787/v1" {
+	if own["base_url"] != "http://127.0.0.1:19000/v1" {
 		t.Fatalf("base_url should be preserved: %#v", own)
 	}
 	builtin := providers["openai"].(map[string]any)
