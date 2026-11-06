@@ -1,18 +1,30 @@
-import { RefreshCw, X } from "lucide-react";
+import { ExternalLink, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { api } from "../api";
-import type { FeishuChat, FeishuUser } from "../api";
+import { APIError, api, isDesktopApp, openExternalURL } from "../api";
+import type { FeishuChat, FeishuScopeRequest, FeishuUser } from "../api";
 import { useI18n } from "../i18n";
 import { parseActors } from "./superAgentModel";
 
 const MAX_SHOWN = 50;
 const MAX_NAME_LOOKUP = 50; // Feishu's batch limit.
 
-type Listing<T> = { items: T[]; loading: boolean; error: string; truncated: boolean; warnings: string[] };
+// scope is set when the error is a missing Feishu permission.
+type Listing<T> = { items: T[]; loading: boolean; error: string; scope?: FeishuScopeRequest; truncated: boolean; warnings: string[] };
 const idle = { items: [], loading: false, error: "", truncated: false, warnings: [] };
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+// scopeRequestOf reads the permission the server says Feishu wants, if any.
+function scopeRequestOf(error: unknown): FeishuScopeRequest | undefined {
+  if (!(error instanceof APIError)) return undefined;
+  const { scopes, apply_url: applyURL } = error.body;
+  const request = {
+    scopes: Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [],
+    apply_url: typeof applyURL === "string" && /^https:\/\//.test(applyURL) ? applyURL : "",
+  };
+  return request.apply_url || request.scopes.length ? request : undefined;
+}
 
 export type FeishuDirectory = {
   chats: Listing<FeishuChat>;
@@ -50,7 +62,7 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
     setChats({ ...idle, loading: true });
     api.feishuChats(channelID).then(
       (list) => { if (current) setChats({ ...idle, items: list.items ?? [], truncated: Boolean(list.truncated) }); },
-      (error) => { if (current) setChats({ ...idle, error: errorText(error) }); },
+      (error) => { if (current) setChats({ ...idle, error: errorText(error), scope: scopeRequestOf(error) }); },
     );
     return () => { current = false; };
   }, [channelID, generation]);
@@ -64,7 +76,7 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
     setMembers({ ...idle, loading: true });
     api.feishuMembers(channelID, memberKey ? memberKey.split(",") : []).then(
       (list) => { if (current) setMembers({ ...idle, items: list.items ?? [], truncated: Boolean(list.truncated), warnings: list.warnings ?? [] }); },
-      (error) => { if (current) setMembers({ ...idle, error: errorText(error) }); },
+      (error) => { if (current) setMembers({ ...idle, error: errorText(error), scope: scopeRequestOf(error) }); },
     );
     return () => { current = false; };
   }, [channelID, memberKey, membersWanted, generation]);
@@ -132,6 +144,7 @@ export function TokenPicker({ label, required, values, options, single, placehol
   const [highlighted, setHighlighted] = useState(0);
   const [busy, setBusy] = useState(false);
   const [textError, setTextError] = useState("");
+  const [textScope, setTextScope] = useState<FeishuScopeRequest>();
   const unmatched = useRef("");
   const byValue = useMemo(() => new Map(options.map((option) => [option.value, option])), [options]);
   const matches = useMemo(() => {
@@ -155,6 +168,7 @@ export function TokenPicker({ label, required, values, options, single, placehol
     if (!text || busy) return;
     setBusy(true);
     setTextError("");
+    setTextScope(undefined);
     try {
       const result = onText ? await onText(text) : { values: parseActors(text) };
       if (result.values.length) add(result.values);
@@ -163,6 +177,7 @@ export function TokenPicker({ label, required, values, options, single, placehol
       unmatched.current = result.values.length ? "" : text;
     } catch (error) {
       setTextError(errorText(error));
+      setTextScope(scopeRequestOf(error));
       unmatched.current = text;
     } finally {
       setBusy(false);
@@ -205,7 +220,7 @@ export function TokenPicker({ label, required, values, options, single, placehol
           aria-controls={expanded ? `${id}-list` : undefined}
           aria-activedescendant={expanded && shown[active] ? `${id}-option-${active}` : undefined}
           autoComplete="off" placeholder={values.length && single ? "" : placeholder} value={query} readOnly={busy} aria-busy={busy}
-          onChange={(event) => { setQuery(event.target.value); setHighlighted(0); setOpen(true); setTextError(""); }}
+          onChange={(event) => { setQuery(event.target.value); setHighlighted(0); setOpen(true); setTextError(""); setTextScope(undefined); }}
           onFocus={() => {
             // These fields sit near the bottom of a scrolling drawer, so the
             // list opens upward when the window has more room above.
@@ -236,10 +251,38 @@ export function TokenPicker({ label, required, values, options, single, placehol
           </div>
         )}
       </div>
-      {textError && <small className="super-agent-problem" role="alert">{textError}</small>}
+      {textError && <small className="super-agent-problem" role="alert" title={textScope ? textError : undefined}>{textScope ? t("superAgents.picker.lookupScopeMissing") : textError}</small>}
+      {textScope && <small><ScopeRequest request={textScope} /></small>}
       {status}
       {help && <small>{help}</small>}
     </div>
+  );
+}
+
+// ScopeRequest names the scopes Feishu would accept and links to the app's
+// developer console page, where the operator requests one.
+function ScopeRequest({ request }: { request: FeishuScopeRequest }) {
+  const { t } = useI18n();
+  return (
+    <span className="super-agent-scope-request">
+      {request.scopes.length > 0 && (
+        <span className="super-agent-scope-list">
+          {t("superAgents.picker.scopeOptions")}
+          {request.scopes.map((scope) => <code key={scope}>{scope}</code>)}
+        </span>
+      )}
+      {request.apply_url && (
+        <a className="ghost-action super-agent-scope-apply" href={request.apply_url} target="_blank" rel="noreferrer"
+          onClick={(event) => {
+            if (!isDesktopApp()) return;
+            event.preventDefault();
+            void openExternalURL(request.apply_url);
+          }}>
+          <ExternalLink size={12} />{t("superAgents.picker.requestScope")}
+        </a>
+      )}
+      <span>{t("superAgents.picker.afterScope")}</span>
+    </span>
   );
 }
 
@@ -251,12 +294,16 @@ function ListingStatus({ listing, loadingKey, loadedText, failedKey, onReload }:
   onReload: () => void;
 }) {
   const { t } = useI18n();
-  let text = listing.loading ? t(loadingKey) : listing.error ? t(failedKey, { error: listing.error }) : loadedText;
+  // A missing permission is explained below rather than in Feishu's words,
+  // which repeat the scopes in two languages.
+  const error = listing.scope ? t("superAgents.picker.scopeMissing") : listing.error;
+  let text = listing.loading ? t(loadingKey) : listing.error ? t(failedKey, { error }) : loadedText;
   if (!listing.loading && !listing.error && listing.truncated) text += ` ${t("superAgents.picker.truncated")}`;
   return (
     <small className={`super-agent-picker-status${listing.error ? " super-agent-problem" : ""}`}>
-      <span>{text}</span>
+      <span title={listing.scope ? listing.error : undefined}>{text}</span>
       {!listing.loading && <button type="button" className="ghost-action icon-action" title={t("common.refresh")} aria-label={t("common.refresh")} onClick={onReload}><RefreshCw size={12} /></button>}
+      {!listing.loading && listing.scope && <ScopeRequest request={listing.scope} />}
       {listing.warnings.map((warning) => <span key={warning} className="super-agent-problem">{warning}</span>)}
     </small>
   );

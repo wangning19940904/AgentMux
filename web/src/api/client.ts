@@ -215,12 +215,29 @@ export async function getLocal<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// APIError is a refused request. Body is the server's JSON reply, which can
+// say more than the message, such as where to request a missing permission.
+export class APIError extends Error {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+
+  constructor(message: string, status: number, body: Record<string, unknown>) {
+    super(message);
+    this.name = "APIError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+function checkedError(path: string, status: number, payload: Record<string, unknown>): APIError {
+  return new APIError(typeof payload.error === "string" ? payload.error : `${path}: ${status}`, status, payload);
+}
+
 export async function getChecked<T>(path: string, options: { local?: boolean } = {}): Promise<T> {
   const res = await fetch(options.local ? path : apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
-    throw new Error(message);
+    throw checkedError(path, res.status, payload);
   }
   return payload as T;
 }
@@ -267,8 +284,7 @@ export async function putChecked<T>(path: string, body: unknown, options: { loca
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   invalidateResourceCache();
   if (!res.ok) {
-    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
-    throw new Error(message);
+    throw checkedError(path, res.status, payload);
   }
   return payload as T;
 }
@@ -282,8 +298,7 @@ export async function postChecked<T>(path: string, body: unknown, options: { loc
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   invalidateResourceCache();
   if (!res.ok) {
-    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
-    throw new Error(message);
+    throw checkedError(path, res.status, payload);
   }
   return payload as T;
 }
@@ -300,8 +315,7 @@ export async function postProgress<T>(
   });
   if (!res.ok) {
     const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const message = typeof payload.error === "string" ? payload.error : `${path}: ${res.status}`;
-    throw new Error(message);
+    throw checkedError(path, res.status, payload);
   }
   if (!res.body) throw new Error("Installation progress stream is unavailable.");
 

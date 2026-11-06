@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { APIError, api } from "../api";
 import type { SuperAgent, SuperAgentActivity, SuperAgentRouterList } from "../api";
 import { I18nProvider } from "../i18n";
 import { SuperAgentsPanel } from "./SuperAgentsPanel";
@@ -381,6 +381,38 @@ describe("SuperAgentsPanel", () => {
     setValue(control(/^Feishu channel/), "c1");
     await until(() => hasText("Couldn't read the bot's chats: 99991672 Access denied"));
     expect(hasText("im:chat:readonly")).toBe(true);
+    expect(container.querySelector(".super-agent-scope-apply")).toBeNull();
+  });
+
+  it("links to the Feishu console when the app is missing a permission", async () => {
+    const applyURL = "https://open.feishu.cn/app/cli_a/auth?q=im:chat:readonly,im:chat.members:read&op_from=openapi&token_type=tenant";
+    const message = "99991672 Access denied. One of the following scopes is required: [im:chat:readonly, im:chat.members:read]";
+    vi.mocked(api.feishuMembers).mockRejectedValue(new APIError(message, 502, { error: message, scopes: ["im:chat:readonly", "im:chat.members:read"], apply_url: applyURL }));
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "feishu_message");
+    await until(() => hasOption("Team bot"));
+    setValue(control(/^Feishu channel/), "c1");
+    await until(() => hasText("The bot is in 2 chats."));
+    const senders = control(/^Allowed senders/) as HTMLInputElement;
+    focus(senders);
+    await until(() => hasText("Couldn't read chat members: the Feishu app is missing a permission."));
+    // Feishu's own words repeat the scopes; they are kept for hovering only.
+    expect(hasText("Access denied")).toBe(false);
+    const scopes = () => [...container.querySelectorAll(".super-agent-scope-list code")].map((item) => item.textContent);
+    expect(scopes()).toEqual(["im:chat:readonly", "im:chat.members:read"]);
+    const apply = container.querySelector<HTMLAnchorElement>(".super-agent-scope-apply");
+    expect(apply?.textContent).toBe("Request permission");
+    expect(apply?.href).toBe(applyURL);
+    expect(apply?.target).toBe("_blank");
+
+    const lookupMessage = "99991672 Access denied. One of the following scopes is required: [contact:user.id:readonly]";
+    vi.mocked(api.feishuUsers).mockRejectedValue(new APIError(lookupMessage, 502, { error: lookupMessage, scopes: ["contact:user.id:readonly"], apply_url: "https://open.feishu.cn/app/cli_a/auth?q=contact:user.id:readonly&op_from=openapi&token_type=tenant" }));
+    setValue(senders, "dan@acme.com");
+    press(senders, "Enter");
+    await until(() => hasText("Couldn't look this up: the Feishu app is missing a permission."));
+    expect(scopes()).toContain("contact:user.id:readonly");
+    expect(container.querySelectorAll(".super-agent-scope-apply")).toHaveLength(2);
   });
 
   it("configures everything itself, and creates the new router agent when it saves", async () => {

@@ -325,7 +325,8 @@ var errBadDirectoryRequest = errors.New("invalid JSON body")
 
 // handleFeishuDirectory checks the channel before asking Feishu, so a wrong id
 // is a 4xx here and only Feishu's own refusals, such as a missing app scope,
-// come back as 502 with Feishu's message.
+// come back as 502 with Feishu's message. A missing scope also carries the
+// scopes that would do and the console link to request them.
 func (s *Server) handleFeishuDirectory(lookup func(*http.Request, string) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.feishuDirectory == nil || s.st == nil {
@@ -350,9 +351,13 @@ func (s *Server) handleFeishuDirectory(lookup func(*http.Request, string) (any, 
 			return
 		}
 		result, err := lookup(r, channelID)
+		var denied *superagent.FeishuScopeError
 		switch {
 		case errors.Is(err, errBadDirectoryRequest):
 			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.As(err, &denied):
+			// The Console offers the link so the operator can request the scope.
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "scopes": denied.Scopes, "apply_url": denied.ApplyURL})
 		case err != nil:
 			writeErr(w, http.StatusBadGateway, err.Error())
 		default:

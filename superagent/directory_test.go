@@ -3,6 +3,7 @@ package superagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +38,9 @@ func fakeFeishuDirectory(t *testing.T, namesDenied bool) (*FeishuAPI, func() []s
 			_, _ = io.WriteString(w, `{"code":0,"data":{"items":[{"member_id":"ou_a","name":"Alice"},{"member_id":"ou_b","name":"Bob"}]}}`)
 		case path == "/open-apis/im/v1/chats/oc_2/members":
 			_, _ = io.WriteString(w, `{"code":0,"data":{"items":[{"member_id":"ou_b","name":"Bob"},{"member_id":"ou_c","name":"Carol"}]}}`)
+		case path == "/open-apis/im/v1/chats/oc_denied/members":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"code":99991672,"msg":"Access denied. One of the following scopes is required: [im:chat:readonly, im:chat, im:chat.members:read].应用尚未开通所需的应用身份权限：[im:chat:readonly, im:chat, im:chat.members:read]"}`)
 		case strings.HasPrefix(path, "/open-apis/im/v1/chats/"):
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"code":232011,"msg":"bot is not in the chat"}`)
@@ -155,5 +159,63 @@ func TestFeishuDirectoryUsers(t *testing.T) {
 	}
 	if _, err := api.Users(context.Background(), "c", nil, tooMany); err == nil {
 		t.Fatal("a lookup over Feishu's batch limit must be refused")
+	}
+}
+
+func TestFeishuDirectoryMissingScopeLinksToTheApplyPage(t *testing.T) {
+	api, _ := fakeFeishuDirectory(t, true)
+	_, err := api.Members(context.Background(), "c", []string{"oc_denied"})
+	var denied *FeishuScopeError
+	if !errors.As(err, &denied) {
+		t.Fatalf("a missing scope must be a FeishuScopeError: %T %v", err, err)
+	}
+	if strings.Join(denied.Scopes, " ") != "im:chat:readonly im:chat im:chat.members:read" {
+		t.Fatalf("scopes are read once from Feishu's message: %q", denied.Scopes)
+	}
+	want := "https://open.feishu.cn/app/a/auth?q=im:chat:readonly,im:chat,im:chat.members:read&op_from=openapi&token_type=tenant"
+	if denied.ApplyURL != want {
+		t.Fatalf("apply link = %q, want %q", denied.ApplyURL, want)
+	}
+	if !strings.HasPrefix(err.Error(), "99991672 Access denied.") {
+		t.Fatalf("the message stays Feishu's: %v", err)
+	}
+
+	_, err = api.Users(context.Background(), "c", []string{"ou_a"}, nil)
+	if !errors.As(err, &denied) || denied.ApplyURL != "https://open.feishu.cn/app/a/auth?q=contact:user.base:readonly&op_from=openapi&token_type=tenant" {
+		t.Fatalf("a name lookup links to its scope too: %v", err)
+	}
+	if _, err := api.Members(context.Background(), "c", []string{"oc_gone"}); errors.As(err, &denied) {
+		t.Fatalf("other refusals are not scope errors: %v", err)
+	}
+}
+
+func TestFeishuScopeApplyURL(t *testing.T) {
+	feishu := &core.Channel{Type: "feishu", Config: map[string]string{"app_id": "cli_a8438d773777d00c"}}
+	lark := &core.Channel{Type: "lark", Config: map[string]string{"app_id": "cli_x"}}
+	for _, tc := range []struct {
+		channel *core.Channel
+		scopes  []string
+		want    string
+	}{
+		{feishu, []string{"im:chat:readonly", "im:chat"}, "https://open.feishu.cn/app/cli_a8438d773777d00c/auth?q=im:chat:readonly,im:chat&op_from=openapi&token_type=tenant"},
+		{lark, []string{"im:chat"}, "https://open.larksuite.com/app/cli_x/auth?q=im:chat&op_from=openapi&token_type=tenant"},
+		{feishu, nil, "https://open.feishu.cn/app/cli_a8438d773777d00c/auth"},
+		{&core.Channel{Type: "feishu", Config: map[string]string{"app_id": "../evil?x="}}, []string{"im:chat"}, ""},
+		{&core.Channel{Type: "feishu"}, []string{"im:chat"}, ""},
+		{nil, []string{"im:chat"}, ""},
+	} {
+		if got := FeishuScopeApplyURL(tc.channel, tc.scopes); got != tc.want {
+			t.Errorf("FeishuScopeApplyURL(%+v, %v) = %q, want %q", tc.channel, tc.scopes, got, tc.want)
+		}
+	}
+	if got := feishuScopesIn("required: [ im:chat , bad scope, im:chat, a&b=c ]"); strings.Join(got, ",") != "im:chat" {
+		t.Fatalf("scopes are trimmed, deduplicated and anything that is not a scope name is dropped: %q", got)
+	}
+	if got := feishuScopesIn("Access denied"); got != nil {
+		t.Fatalf("a message without a list names no scopes: %q", got)
+	}
+	var denied *FeishuScopeError
+	if errors.As(feishuError(232011, "bot is not in the chat"), &denied) {
+		t.Fatal("only Feishu's missing-scope code is a scope error")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -136,6 +137,24 @@ func TestFeishuDirectoryRoutes(t *testing.T) {
 	recorder := doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=fs", nil)
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "im:chat:readonly") {
 		t.Fatalf("a Feishu refusal must reach the Console with its reason: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "apply_url") {
+		t.Fatalf("a refusal that is not a typed scope error has no link: %s", recorder.Body.String())
+	}
+
+	applyURL := "https://open.feishu.cn/app/cli_a/auth?q=im:chat:readonly,im:chat&op_from=openapi&token_type=tenant"
+	directory.err = &superagent.FeishuScopeError{Code: 99991672, Msg: "Access denied.", Scopes: []string{"im:chat:readonly", "im:chat"}, ApplyURL: applyURL}
+	recorder = doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/members?channel_id=fs", nil)
+	var body struct {
+		Error    string   `json:"error"`
+		Scopes   []string `json:"scopes"`
+		ApplyURL string   `json:"apply_url"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusBadGateway || body.Error != "99991672 Access denied." || strings.Join(body.Scopes, ",") != "im:chat:readonly,im:chat" || body.ApplyURL != applyURL {
+		t.Fatalf("a missing scope reaches the Console with the link to request it: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 
