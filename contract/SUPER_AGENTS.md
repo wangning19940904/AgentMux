@@ -121,8 +121,8 @@ fills in:
   bot. Both scans work only from the local Console. Lark bots are configured on
   the Open Platform by hand, as the form describes. Choosing a bot checks its
   app's scopes (`GET /open-apis/application/v6/scopes`, with its own tenant
-  token) against what the second scan enables, for the app and for user
-  identity, and shows what is missing with the console link that requests it and
+  token) against what the second scan enables, less the meeting scopes only
+  AgentMux's meeting features use, for the app and for user identity, and shows what is missing with the console link that requests it and
   a QR code of that link; scopes requested but not yet granted are listed as
   waiting for an admin. Feishu counts a scope once a version with it is
   published. The bot picker names each channel with its bot's own name.

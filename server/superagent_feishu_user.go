@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -95,18 +94,14 @@ func (s *Server) registerFeishuUserRoutes() {
 		}
 		return directory.FindUserChats(r.Context(), channelID, body.Query, body.ChatIDs)
 	}))
-	// Which scopes the bot's app still needs: what the second scan would
-	// enable, for the app and for the people who authorize it.
+	// Which scopes the bot's app still needs, for the app and for the people
+	// who authorize it.
 	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/scopes", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
 		checker, ok := s.feishuDirectory.(superagent.FeishuScopeChecker)
 		if !ok {
 			return nil, errFeishuUserUnavailable
 		}
-		tenant := agentMuxFeishuScopes
-		if r.URL.Query().Get("documents") == "true" {
-			tenant = append(slices.Clone(tenant), agentMuxFeishuDocumentScopes...)
-		}
-		return checker.ScopeStatus(r.Context(), channelID, tenant, superagent.FeishuUserScopes)
+		return checker.ScopeStatus(r.Context(), channelID, superAgentFeishuScopes(r.URL.Query().Get("documents") == "true"), superagent.FeishuUserScopes)
 	}))
 	s.mux.HandleFunc("POST /api/v1/super-agents/feishu/my-chats/add-bot", user(func(r *http.Request, channelID string, directory superagent.FeishuUserDirectory) (any, error) {
 		var body struct {
@@ -128,4 +123,20 @@ func (s *Server) registerFeishuUserRoutes() {
 		}
 		return directory.UserContacts(r.Context(), channelID, body.Query, body.OpenIDs)
 	}))
+}
+
+// superAgentFeishuScopes is what a Super Agent trigger's bot needs from its
+// app: what the second scan enables, less the meeting scopes only AgentMux's
+// meeting features use. A document trigger also needs the document scopes.
+func superAgentFeishuScopes(documents bool) []string {
+	var scopes []string
+	for _, scope := range agentMuxFeishuScopes {
+		if !strings.HasPrefix(scope, "vc:meeting") {
+			scopes = append(scopes, scope)
+		}
+	}
+	if documents {
+		scopes = append(scopes, agentMuxFeishuDocumentScopes...)
+	}
+	return scopes
 }
