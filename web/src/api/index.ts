@@ -42,6 +42,9 @@ import type {
   FeishuAutomationPollResponse,
   FeishuAutomationResult,
   GitHubAccount,
+  GitHubAccountRequest,
+  GitHubAgentLogin,
+  GitHubOperator,
   FeedbackReport,
   FleetBatchResult,
   FleetSyncApplyResult,
@@ -1100,8 +1103,16 @@ export const api = {
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
   superAgentGitHubSetup: () => getChecked<SuperAgentGitHubSetup>("/api/v1/super-agents/github/setup"),
-  checkGitHubAccount: (token: string, apiBase = "") =>
-    postChecked<GitHubAccount>("/api/v1/super-agents/github/account", { token, api_base: apiBase }),
+  githubOperator: (apiBase = "") =>
+    getChecked<GitHubOperator>(`/api/v1/super-agents/github/operator?api_base=${encodeURIComponent(apiBase)}`),
+  startGitHubAgentLogin: (apiBase = "") => postChecked<GitHubAgentLogin>("/api/v1/super-agents/github/login", { api_base: apiBase }),
+  pollGitHubAgentLogin: (sessionID: string) => postChecked<GitHubAgentLogin>("/api/v1/super-agents/github/login/poll", { session_id: sessionID }),
+  cancelGitHubAgentLogin: (sessionID: string) => postChecked<{ ok: boolean }>("/api/v1/super-agents/github/login/cancel", { session_id: sessionID }),
+  // invite: false only accepts an invitation the operator sent by hand.
+  inviteGitHubAgent: (request: GitHubAccountRequest & { repo: string; agent_login: string; invite: boolean }) =>
+    postChecked<{ invited: boolean; accepted: boolean }>("/api/v1/super-agents/github/invite", request),
+  checkGitHubAccount: (request: GitHubAccountRequest) =>
+    postChecked<GitHubAccount>("/api/v1/super-agents/github/account", request),
   feishuChats: (channelID: string) =>
     getChecked<FeishuChatList>(`/api/v1/super-agents/feishu/chats?channel_id=${encodeURIComponent(channelID)}`),
   feishuMembers: (channelID: string, chatIDs: string[]) =>

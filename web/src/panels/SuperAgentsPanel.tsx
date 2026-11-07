@@ -602,6 +602,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
               <SourceEditor
                 key={source.id || `new-${index}`}
                 source={source}
+                superAgentID={draft.id}
                 feishuChannels={feishuChannels}
                 onFeishuChannelCreated={async () => { await channels.reload(); }}
                 onChange={(patch) => updateSource(index, patch)}

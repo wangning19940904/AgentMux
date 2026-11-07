@@ -153,6 +153,8 @@ beforeEach(() => {
   vi.spyOn(api, "feishuMembers").mockResolvedValue({ items: [{ open_id: "ou_a", name: "Alice", chat_ids: ["oc_team"] }, { open_id: "ou_c", name: "Carol", chat_ids: ["oc_ops"] }] });
   vi.spyOn(api, "feishuUsers").mockResolvedValue([]);
   vi.spyOn(api, "superAgentGitHubSetup").mockResolvedValue({ local_url: "http://127.0.0.1:8765", api_protected: false });
+  // No GitHub CLI here unless a test says so: the guide offers pasting a token.
+  vi.spyOn(api, "githubOperator").mockResolvedValue({ installed: false, repos: [] });
 });
 
 afterEach(() => {
@@ -267,12 +269,18 @@ describe("SuperAgentsPanel", () => {
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
     setValue(control(/^Add trigger/), "github_webhook");
-    expect(container.querySelector<HTMLAnchorElement>("a.setup-link")?.href).toBe("https://github.com/settings/tokens/new?scopes=repo&description=AgentMux+Super+Agent");
+    const links = () => [...container.querySelectorAll<HTMLAnchorElement>("a.setup-link")].map((link) => link.href);
+    // Step 1 links to signing up, by link or QR code; without the GitHub CLI,
+    // step 2 offers a token instead.
+    expect(links()).toContain("https://github.com/signup");
+    expect(container.querySelector(".setup-qr-link svg")).toBeTruthy();
+    expect(links()).toContain("https://github.com/settings/tokens/new?scopes=repo&description=AgentMux+Super+Agent");
+    await until(() => hasText("Install the GitHub CLI to sign the agent in here"));
 
     setValue(control(/^Agent's token/), "ghp_secret");
     click(button(/^Check token$/));
     await until(() => control(/^Agent's GitHub login/).value === "my-agent-bot");
-    expect(check).toHaveBeenCalledWith("ghp_secret", "");
+    expect(check).toHaveBeenCalledWith({ token: "ghp_secret", api_base: "", super_agent_id: "", source_id: expect.stringMatching(/^src_/) });
     expect(hasText("Token belongs to @my-agent-bot")).toBe(true);
     // A classic token without the repo scope cannot reply.
     expect(hasText("This token can't comment")).toBe(true);
@@ -302,6 +310,100 @@ describe("SuperAgentsPanel", () => {
     expect(hasText(/https:\/\/agent\.example\.com\/hook\/super-agent\/github\/src_/)).toBe(true);
     expect([...container.querySelectorAll<HTMLAnchorElement>("a.setup-link")].some((link) => link.href === "https://github.com/acme/app/settings/hooks/new")).toBe(true);
     expect(hasText("The Console API has no password")).toBe(true);
+  });
+
+  it("checks a pasted token by itself and offers the repositories it reaches", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    const check = vi.spyOn(api, "checkGitHubAccount").mockResolvedValue({ login: "my-agent-bot", scopes: ["repo"], classic: true, repos: [
+      { full_name: "acme/app", private: true, can_push: true },
+      { full_name: "acme/docs", private: false, can_push: false },
+    ] });
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "github_webhook");
+    setValue(control(/^Agent's token/), "ghp_" + "a".repeat(36));
+    // No click: the check runs once typing pauses.
+    expect(check).not.toHaveBeenCalled();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+    await until(() => control(/^Agent's GitHub login/).value === "my-agent-bot");
+    expect(check).toHaveBeenCalledTimes(1);
+
+    const repos = control(/^Only this repository/) as HTMLSelectElement;
+    expect(repos.tagName).toBe("SELECT");
+    expect([...repos.options].map((item) => item.textContent)).toEqual(["Any repository the account can reach", "acme/app · private", "acme/docs · read only", "Other…"]);
+    setValue(repos, "acme/docs");
+    expect(hasText("can read this repository but not push to it")).toBe(true);
+    // A repository the list does not hold can still be typed.
+    setValue(control(/^Only this repository/), "__other__");
+    expect(control(/^Only this repository/).tagName).toBe("INPUT");
+    expect(control(/^Only this repository/).value).toBe("acme/docs");
+  });
+
+  it("signs the agent in with a one-time code, invites it to the repository, and suggests the operator as sender", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    vi.mocked(api.githubOperator).mockResolvedValue({ installed: true, login: "me", repos: ["acme/app"] });
+    const token = "gho_" + "b".repeat(36);
+    vi.spyOn(api, "startGitHubAgentLogin").mockResolvedValue({ id: "", session_id: "s1", phase: "login", state: "waiting", login_url: "https://github.com/login/device", verification_code: "ABCD-1234" });
+    vi.spyOn(api, "pollGitHubAgentLogin").mockResolvedValue({ id: "", session_id: "s1", phase: "login", state: "succeeded", token });
+    const check = vi.spyOn(api, "checkGitHubAccount")
+      .mockResolvedValueOnce({ login: "agent-bot", scopes: ["repo", "notifications"], classic: true, repos: [] })
+      .mockResolvedValue({ login: "agent-bot", scopes: ["repo", "notifications"], classic: true, repos: [{ full_name: "acme/app", private: true, can_push: true }] });
+    const invite = vi.spyOn(api, "inviteGitHubAgent").mockResolvedValue({ invited: true, accepted: true });
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "github_webhook");
+    await until(() => button(/^Sign in as the agent$/));
+    expect(container.querySelector<HTMLDetailsElement>(".setup-details")?.open).toBe(false);
+
+    click(button(/^Sign in as the agent$/));
+    await until(() => hasText("ABCD-1234"));
+    expect(api.startGitHubAgentLogin).toHaveBeenCalledWith("");
+    expect(hasText("not as yourself")).toBe(true);
+    expect(container.querySelectorAll(".qr-frame svg").length).toBe(2);
+    // The token arrives with the finished sign-in and is checked like a pasted one.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2300)); });
+    await until(() => control(/^Agent's GitHub login/).value === "agent-bot");
+    expect(check.mock.calls[0][0]).toMatchObject({ token });
+    expect(button(/^Sign in again$/)).toBeTruthy();
+
+    // The operator administers acme/app, so the agent can be invited in one click.
+    setValue(control(/^Only this repository/), "acme/app");
+    expect(option("acme/app · needs access")).toBeTruthy();
+    click(button(/^Invite @agent-bot and accept$/));
+    await until(() => hasText("@agent-bot can push to acme/app."));
+    expect(invite).toHaveBeenCalledWith(expect.objectContaining({ repo: "acme/app", agent_login: "agent-bot", invite: true, token }));
+
+    click(button(/^Add yourself \(@me\)$/));
+    expect((control(/^Allowed senders/) as HTMLTextAreaElement).value).toBe("me");
+    expect(button(/^Add yourself/)).toBeUndefined();
+  }, 10_000);
+
+  it("warns when the agent is signed in as the operator's own account", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    vi.mocked(api.githubOperator).mockResolvedValue({ installed: true, login: "me", repos: [] });
+    vi.spyOn(api, "checkGitHubAccount").mockResolvedValue({ login: "Me", scopes: ["repo"], classic: true, repos: [] });
+    renderPanel({ createRequested: true });
+    await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Add trigger/), "github_webhook");
+    setValue(control(/^Agent's token/), "ghp_short");
+    click(button(/^Check token$/));
+    await until(() => hasText("is your own GitHub account"));
+    expect(hasText("Token belongs to")).toBe(false);
+    expect(button(/^Add yourself/)).toBeUndefined();
+  });
+
+  it("checks a saved trigger's token when the form opens", async () => {
+    const check = vi.spyOn(api, "checkGitHubAccount").mockResolvedValue({ login: "bot", scopes: ["repo"], classic: true, repos: [{ full_name: "acme/app", private: false, can_push: true }] });
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, sources: [{ id: "src_1", kind: "github_webhook", enabled: true, allowed_actors: ["alice"],
+      config: { agent_login: "bot", delivery: "poll", github_token: "<redacted>", repo: "ACME/app" } }] }]);
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    expect(hasText("Checks the agent's GitHub notifications")).toBe(true);
+    click(button(/^Edit$/));
+    await until(() => check.mock.calls.length > 0);
+    expect(check).toHaveBeenCalledWith({ token: "<redacted>", api_base: "", super_agent_id: "sa_1", source_id: "src_1" });
+    await until(() => control(/^Only this repository/).tagName === "SELECT");
+    expect(control(/^Only this repository/).value).toBe("acme/app");
   });
 
   it("creates a Feishu bot by scanning, selects it, and lets the scanner ask", async () => {
