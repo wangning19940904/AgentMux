@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { APIError, api, openExternalURL } from "../api";
-import type { FeishuAddBotResult, FeishuChat, FeishuScopeRequest, FeishuUser, FeishuUserAuth } from "../api";
+import type { FeishuAddBotResult, FeishuChat, FeishuScopeGap, FeishuScopeRequest, FeishuScopeStatus, FeishuUser, FeishuUserAuth } from "../api";
 import { useI18n } from "../i18n";
 import { sleep } from "./connect/connectShared";
 import { parseActors } from "./superAgentModel";
@@ -11,6 +11,8 @@ import { parseActors } from "./superAgentModel";
 const MAX_SHOWN = 50;
 const MAX_NAME_LOOKUP = 50; // Feishu's batch limit.
 const MAX_SEARCH = 50; // Feishu's people search takes at most 50 characters.
+const MAX_CHAT_SEARCH = 64; // and its chat search 64.
+const MAX_CHAT_LOOKUP = 100;
 const SEARCH_DELAY_MS = 300;
 
 // scope is set when the error is a missing Feishu permission.
@@ -39,8 +41,15 @@ const authRequired = (error: unknown) => error instanceof APIError && error.body
 export type FeishuUserState = { checked: boolean; user: FeishuUserAuth | null; lapsed?: boolean };
 
 export type FeishuDirectory = {
-  // The bot's groups; once someone authorizes, theirs, marked with bot_in.
+  // The bot's groups; once someone authorizes, theirs, most recently active
+  // first and marked with bot_in.
   chats: Listing<FeishuChat>;
+  // The listed groups and any found by search or named for chosen ids.
+  knownChats: FeishuChat[];
+  // chatMatches and peopleMatches name the search each result came from, so a
+  // match Feishu made by pinyin or member name shows for that search.
+  chatMatches: Record<string, string>;
+  peopleMatches: Record<string, string>;
   // Members of the bot's groups; once someone authorizes, the people they
   // have chatted with.
   members: Listing<FeishuUser>;
@@ -53,6 +62,8 @@ export type FeishuDirectory = {
   // searchPeople finds people by name among everyone the authorizing person
   // can see. Results join `people`; without an authorization it does nothing.
   searchPeople: (query: string) => void;
+  // searchChats finds the authorizing person's groups by group or member name.
+  searchChats: (query: string) => void;
   addBot: (chatID: string) => Promise<FeishuAddBotResult>;
   reload: () => void;
 };
@@ -68,8 +79,13 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
   const [looked, setLooked] = useState<Record<string, FeishuUser>>({});
   const [membersWanted, setMembersWanted] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const [extraChats, setExtraChats] = useState<Record<string, FeishuChat>>({});
+  const [chatMatches, setChatMatches] = useState<Record<string, string>>({});
+  const [peopleMatches, setPeopleMatches] = useState<Record<string, string>>({});
   const attempted = useRef(new Set<string>());
+  const chatsAttempted = useRef(new Set<string>());
   const searchTimer = useRef<number | undefined>(undefined);
+  const chatSearchTimer = useRef<number | undefined>(undefined);
   const memberKey = memberChatIDs.join(",");
   const authorized = Boolean(auth.user);
 
@@ -90,10 +106,17 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
 
   useEffect(() => {
     setLooked({});
+    setExtraChats({});
+    setChatMatches({});
+    setPeopleMatches({});
     attempted.current = new Set();
+    chatsAttempted.current = new Set();
   }, [channelID, authorized]);
 
-  useEffect(() => () => window.clearTimeout(searchTimer.current), []);
+  useEffect(() => () => {
+    window.clearTimeout(searchTimer.current);
+    window.clearTimeout(chatSearchTimer.current);
+  }, []);
 
   useEffect(() => {
     if (!channelID) {
@@ -132,11 +155,36 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
     return () => { current = false; };
   }, [channelID, memberKey, membersWanted, generation, auth.checked, authorized, lapsed]);
 
+  // Listed people come first, in Feishu's order, then the ones looked up.
   const people = useMemo(() => {
-    const known: Record<string, FeishuUser> = { ...looked };
-    for (const member of members.items) known[member.open_id] = { ...known[member.open_id], ...member };
+    const known: Record<string, FeishuUser> = {};
+    for (const member of members.items) known[member.open_id] = { ...looked[member.open_id], ...member };
+    for (const [id, person] of Object.entries(looked)) if (!known[id]) known[id] = person;
     return known;
   }, [looked, members.items]);
+
+  const knownChats = useMemo(() => {
+    const listed = new Set(chats.items.map((chat) => chat.chat_id));
+    return [...chats.items, ...Object.values(extraChats).filter((chat) => !listed.has(chat.chat_id))];
+  }, [chats.items, extraChats]);
+
+  const rememberChats = useCallback((found: FeishuChat[]) => {
+    setExtraChats((current) => ({ ...current, ...Object.fromEntries(found.map((chat) => [chat.chat_id, chat])) }));
+  }, []);
+
+  // Chosen groups that no listing named, such as ones past the most recent,
+  // are named once so their chips show names.
+  const knownChatIDs = useMemo(() => new Set(knownChats.map((chat) => chat.chat_id)), [knownChats]);
+  const unnamedChats = authorized && auth.checked && !chats.loading
+    ? memberChatIDs.filter((id) => id.startsWith("oc_") && !knownChatIDs.has(id) && !chatsAttempted.current.has(id)).slice(0, MAX_CHAT_LOOKUP)
+    : [];
+  const unnamedChatsKey = unnamedChats.join(",");
+  useEffect(() => {
+    if (!channelID || !unnamedChatsKey) return;
+    const ids = unnamedChatsKey.split(",");
+    for (const id of ids) chatsAttempted.current.add(id);
+    api.findFeishuMyChats(channelID, { chat_ids: ids }).then((list) => rememberChats(list.items ?? []), () => undefined);
+  }, [channelID, unnamedChatsKey, rememberChats]);
 
   const remember = useCallback((found: FeishuUser[]) => {
     setLooked((current) => ({ ...current, ...Object.fromEntries(found.map((user) => [user.open_id, { ...current[user.open_id], ...user }])) }));
@@ -173,16 +221,39 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
     if (!authorized || !channelID || !text || text.includes("@")) return;
     searchTimer.current = window.setTimeout(() => {
       api.feishuContacts(channelID, { query: Array.from(text).slice(0, MAX_SEARCH).join("") }).then(
-        (list) => remember(list.items ?? []),
+        (list) => {
+          const found = list.items ?? [];
+          remember(found);
+          setPeopleMatches((current) => ({ ...current, ...Object.fromEntries(found.map((person) => [person.open_id, text.toLowerCase()])) }));
+        },
         (error) => { if (authRequired(error)) lapsed(); },
       );
     }, SEARCH_DELAY_MS);
   }, [authorized, channelID, remember, lapsed]);
 
+  const searchChats = useCallback((query: string) => {
+    window.clearTimeout(chatSearchTimer.current);
+    const text = query.trim();
+    if (!authorized || !channelID || !text || text.startsWith("oc_")) return;
+    chatSearchTimer.current = window.setTimeout(() => {
+      api.findFeishuMyChats(channelID, { query: Array.from(text).slice(0, MAX_CHAT_SEARCH).join("") }).then(
+        (list) => {
+          const found = list.items ?? [];
+          rememberChats(found);
+          setChatMatches((current) => ({ ...current, ...Object.fromEntries(found.map((chat) => [chat.chat_id, text.toLowerCase()])) }));
+        },
+        (error) => { if (authRequired(error)) lapsed(); },
+      );
+    }, SEARCH_DELAY_MS);
+  }, [authorized, channelID, rememberChats, lapsed]);
+
   const addBot = useCallback(async (chatID: string) => {
     try {
       const result = await api.addFeishuBotToChat(channelID, chatID);
-      if (result.added) setChats((current) => ({ ...current, items: current.items.map((chat) => chat.chat_id === chatID ? { ...chat, bot_in: true } : chat) }));
+      if (result.added) {
+        setChats((current) => ({ ...current, items: current.items.map((chat) => chat.chat_id === chatID ? { ...chat, bot_in: true } : chat) }));
+        setExtraChats((current) => current[chatID] ? { ...current, [chatID]: { ...current[chatID], bot_in: true } } : current);
+      }
       return result;
     } catch (error) {
       if (authRequired(error)) lapsed();
@@ -191,7 +262,7 @@ export function useFeishuDirectory(channelID: string, memberChatIDs: string[], a
   }, [channelID, lapsed]);
 
   return {
-    chats, members, people, auth, setAuth, lookupEmails, searchPeople, addBot,
+    chats, knownChats, chatMatches, members, people, peopleMatches, auth, setAuth, lookupEmails, searchPeople, searchChats, addBot,
     loadMembers: useCallback(() => setMembersWanted(true), []),
     reload: useCallback(() => setGeneration((value) => value + 1), []),
   };
@@ -332,7 +403,9 @@ export function FeishuUserAuthorize({ channelID, bot, directory }: { channelID: 
   );
 }
 
-export type PickerOption = { value: string; label: string; detail?: string };
+// found is the search, lowercased, that a server found this option for: it
+// shows for that search even when its text does not contain it.
+export type PickerOption = { value: string; label: string; detail?: string; found?: string };
 
 // TokenPicker edits a list of ids as chips. Typing searches the options; Enter
 // adds the highlighted option, or hands the typed text to onText.
@@ -369,8 +442,10 @@ export function TokenPicker({ label, required, values, options, single, placehol
   const byValue = useMemo(() => new Map(options.map((option) => [option.value, option])), [options]);
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return options.filter((option) => !values.includes(option.value) &&
-      (!needle || [option.label, option.detail ?? "", option.value].some((text) => text.toLowerCase().includes(needle))));
+    const shown = options.filter((option) => !values.includes(option.value) &&
+      (!needle || option.found === needle || [option.label, option.detail ?? "", option.value].some((text) => text.toLowerCase().includes(needle))));
+    // What the server found for this search leads, in its order.
+    return needle ? [...shown.filter((option) => option.found === needle), ...shown.filter((option) => option.found !== needle)] : shown;
   }, [options, values, query]);
   const shown = matches.slice(0, MAX_SHOWN);
   const active = Math.min(highlighted, shown.length - 1);
@@ -504,11 +579,13 @@ function ScopeRequest({ request }: { request: FeishuScopeRequest }) {
   );
 }
 
-function ListingStatus({ listing, loadingKey, loadedText, failedKey, onReload }: {
+function ListingStatus({ listing, loadingKey, loadedText, failedKey, truncatedKey = "superAgents.picker.truncated", onReload }: {
   listing: Listing<unknown>;
   loadingKey: string;
   loadedText: string;
   failedKey: string;
+  // Said after loadedText when Feishu had more; "" says nothing.
+  truncatedKey?: string;
   onReload: () => void;
 }) {
   const { t } = useI18n();
@@ -516,7 +593,7 @@ function ListingStatus({ listing, loadingKey, loadedText, failedKey, onReload }:
   // which repeat the scopes in two languages.
   const error = listing.scope ? t("superAgents.picker.scopeMissing") : listing.error;
   let text = listing.loading ? t(loadingKey) : listing.error ? t(failedKey, { error }) : loadedText;
-  if (!listing.loading && !listing.error && listing.truncated) text += ` ${t("superAgents.picker.truncated")}`;
+  if (!listing.loading && !listing.error && listing.truncated && truncatedKey) text += ` ${t(truncatedKey)}`;
   return (
     <small className={`super-agent-picker-status${listing.error ? " super-agent-problem" : ""}`}>
       <span title={listing.scope ? listing.error : undefined}>{text}</span>
@@ -558,17 +635,18 @@ export function FeishuChatPicker({ label, required, value, single, channelID, di
   onChange: (value: string) => void;
 }) {
   const { t } = useI18n();
-  const { chats } = directory;
+  const { chats, knownChats, chatMatches } = directory;
   const authorized = Boolean(directory.auth.user);
   const [joining, setJoining] = useState<Record<string, Joining>>({});
   useEffect(() => setJoining({}), [channelID]);
   const values = parseActors(value);
-  const options = useMemo(() => chats.items.map((chat) => ({
+  const options = useMemo(() => knownChats.map((chat) => ({
     value: chat.chat_id,
     label: chat.name || chat.chat_id,
     detail: [chat.chat_id, chat.external && t("superAgents.picker.external"), chat.bot_in === false && t("superAgents.picker.botAbsent")].filter(Boolean).join(" · "),
-  })), [chats.items, t]);
-  const absent = chats.items.filter((chat) => values.includes(chat.chat_id) && (chat.bot_in === false || joining[chat.chat_id]?.added));
+    found: chatMatches[chat.chat_id],
+  })), [knownChats, chatMatches, t]);
+  const absent = knownChats.filter((chat) => values.includes(chat.chat_id) && (chat.bot_in === false || joining[chat.chat_id]?.added));
 
   async function add(chat: FeishuChat) {
     setJoining((current) => ({ ...current, [chat.chat_id]: { busy: true } }));
@@ -592,11 +670,13 @@ export function FeishuChatPicker({ label, required, value, single, channelID, di
         : single ? "superAgents.picker.searchChat" : "superAgents.picker.searchChats")}
       enterHint={t("superAgents.picker.enterChat")}
       commitOnBlur={/^oc_\S+$/}
+      onQuery={directory.searchChats}
       onChange={(next) => onChange(next.join(", "))}
       status={channelID && (
         <>
           <ListingStatus listing={chats} onReload={directory.reload}
             loadingKey="superAgents.picker.chatsLoading" failedKey="superAgents.picker.chatsFailed"
+            truncatedKey={authorized ? "superAgents.picker.myChatsMore" : undefined}
             loadedText={t(loadedKey, { count: chats.items.length })} />
           {absent.map((chat) => <AddBot key={chat.chat_id} chat={chat} state={joining[chat.chat_id] ?? {}} onAdd={() => void add(chat)} />)}
         </>
@@ -617,7 +697,7 @@ export function FeishuActorPicker({ label, values, allowEveryone, scoped, help, 
   onChange: (values: string[]) => void;
 }) {
   const { t } = useI18n();
-  const { chats, members, people } = directory;
+  const { chats, members, people, peopleMatches } = directory;
   const authorized = Boolean(directory.auth.user);
   const options = useMemo(() => {
     const chatNames = new Map(chats.items.map((chat) => [chat.chat_id, chat.name]));
@@ -626,8 +706,9 @@ export function FeishuActorPicker({ label, values, allowEveryone, scoped, help, 
       value: person.open_id,
       label: person.name || person.email || person.open_id,
       detail: [person.email, person.department, (person.chat_ids ?? []).map((id) => chatNames.get(id) || id).join(", ")].filter(Boolean).join(" · ") || person.open_id,
+      found: peopleMatches[person.open_id],
     }))];
-  }, [allowEveryone, values, people, chats.items, t]);
+  }, [allowEveryone, values, people, peopleMatches, chats.items, t]);
 
   async function onText(text: string) {
     const tokens = parseActors(text);
@@ -656,8 +737,75 @@ export function FeishuActorPicker({ label, values, allowEveryone, scoped, help, 
       status={channelID && (members.loading || members.error || members.items.length > 0) && (
         <ListingStatus listing={members} onReload={directory.reload}
           loadingKey="superAgents.picker.membersLoading" failedKey="superAgents.picker.membersFailed"
+          truncatedKey={authorized ? "" : undefined}
           loadedText={t(loadedKey, { count: members.items.length })} />
       )}
     />
+  );
+}
+
+// FeishuScopeCheck compares the scopes the bot's app has with what AgentMux
+// asks for, and offers the console page that requests the rest: as a link,
+// and as a QR code to open it on a phone.
+export function FeishuScopeCheck({ channelID, documents }: { channelID: string; documents: boolean }) {
+  const { t } = useI18n();
+  const [generation, setGeneration] = useState(0);
+  const [state, setState] = useState<{ loading: boolean; status?: FeishuScopeStatus; error?: string }>({ loading: false });
+  useEffect(() => {
+    if (!channelID) return;
+    let current = true;
+    setState({ loading: true });
+    api.feishuScopeStatus(channelID, documents).then(
+      (status) => { if (current) setState({ loading: false, status }); },
+      (error) => { if (current) setState({ loading: false, error: errorText(error) }); },
+    );
+    return () => { current = false; };
+  }, [channelID, documents, generation]);
+
+  if (!channelID) return null;
+  const recheck = (
+    <button type="button" className="ghost-action icon-action" title={t("superAgents.setup.feishu.scopesRecheck")} aria-label={t("superAgents.setup.feishu.scopesRecheck")}
+      onClick={() => setGeneration((value) => value + 1)}><RefreshCw size={12} /></button>
+  );
+  if (state.loading) return <p className="setup-scan-status"><Loader2 className="spin" size={15} /> {t("superAgents.setup.feishu.scopesChecking")}</p>;
+  if (state.error || !state.status) return <p className="setup-warn super-agent-scope-request">{t("superAgents.setup.feishu.scopesFailed", { error: state.error ?? "" })} {recheck}</p>;
+  const { tenant, user } = state.status;
+  const open = (gap: FeishuScopeGap) => Boolean(gap.missing?.length || gap.pending?.length);
+  if (!open(tenant) && !open(user)) {
+    return <div className="setup-ok" role="status"><CheckCircle2 size={15} /> {t("superAgents.setup.feishu.scopesComplete")} {recheck}</div>;
+  }
+  return (
+    <div className="super-agent-scope-check" role="status">
+      <ScopeGap gap={tenant} missingKey="superAgents.setup.feishu.scopesMissing" />
+      <ScopeGap gap={user} missingKey="superAgents.setup.feishu.scopesMissingUser" />
+      <small className="super-agent-scope-request">{t("superAgents.setup.feishu.scopesAfter")} {recheck}</small>
+    </div>
+  );
+}
+
+function ScopeGap({ gap, missingKey }: { gap: FeishuScopeGap; missingKey: string }) {
+  const { t } = useI18n();
+  const missing = gap.missing ?? [];
+  const pending = gap.pending ?? [];
+  if (!missing.length && !pending.length) return null;
+  return (
+    <div className="super-agent-scope-gap">
+      {missing.length > 0 && (
+        <>
+          <span className="setup-warn super-agent-scope-list">
+            {t(missingKey, { count: missing.length })}
+            {missing.map((scope) => <code key={scope}>{scope}</code>)}
+          </span>
+          {gap.apply_url && (
+            <div className="qr-setup setup-scan-box">
+              <span className="qr-frame"><QRCodeSVG value={gap.apply_url} size={132} level="M" /></span>
+              <span className="setup-scan-status">{t("superAgents.setup.feishu.scopesScan")}</span>
+              <ExternalButton href={gap.apply_url}>{t("superAgents.picker.requestScope")}</ExternalButton>
+            </div>
+          )}
+        </>
+      )}
+      {pending.length > 0 && <span className="setup-warn">{t("superAgents.setup.feishu.scopesPending", { scopes: pending.join(", ") })}</span>}
+    </div>
   );
 }

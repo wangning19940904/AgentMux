@@ -5,13 +5,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/superagent"
 )
 
-var errFeishuUserUnavailable = errors.New("Feishu user authorization is unavailable")
+var errFeishuUserUnavailable = errors.New("this Feishu lookup is unavailable")
 
 // feishuUserAuthSession is an authorization the Console started and is
 // polling. The device code stays here; the Console only holds the id.
@@ -82,6 +83,30 @@ func (s *Server) registerFeishuUserRoutes() {
 	}))
 	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/my-chats", user(func(r *http.Request, channelID string, directory superagent.FeishuUserDirectory) (any, error) {
 		return directory.UserChats(r.Context(), channelID)
+	}))
+	// POST keeps the group names being searched for out of URLs and logs.
+	s.mux.HandleFunc("POST /api/v1/super-agents/feishu/my-chats/find", user(func(r *http.Request, channelID string, directory superagent.FeishuUserDirectory) (any, error) {
+		var body struct {
+			Query   string   `json:"query"`
+			ChatIDs []string `json:"chat_ids"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+			return nil, errBadDirectoryRequest
+		}
+		return directory.FindUserChats(r.Context(), channelID, body.Query, body.ChatIDs)
+	}))
+	// Which scopes the bot's app still needs: what the second scan would
+	// enable, for the app and for the people who authorize it.
+	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/scopes", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
+		checker, ok := s.feishuDirectory.(superagent.FeishuScopeChecker)
+		if !ok {
+			return nil, errFeishuUserUnavailable
+		}
+		tenant := agentMuxFeishuScopes
+		if r.URL.Query().Get("documents") == "true" {
+			tenant = append(slices.Clone(tenant), agentMuxFeishuDocumentScopes...)
+		}
+		return checker.ScopeStatus(r.Context(), channelID, tenant, superagent.FeishuUserScopes)
 	}))
 	s.mux.HandleFunc("POST /api/v1/super-agents/feishu/my-chats/add-bot", user(func(r *http.Request, channelID string, directory superagent.FeishuUserDirectory) (any, error) {
 		var body struct {

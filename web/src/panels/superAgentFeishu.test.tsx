@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { act, useState } from "react";
+import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError, api } from "../api";
 import { I18nProvider } from "../i18n";
-import { FeishuActorPicker, FeishuChatPicker, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
+import { FeishuActorPicker, FeishuChatPicker, FeishuScopeCheck, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
+import { feishuChannelLabels } from "./superAgentSetup";
 
 // Polling waits between requests; here it does not.
 vi.mock("./connect/connectShared", async (original) => ({ ...(await original<object>()), sleep: () => Promise.resolve() }));
@@ -45,10 +46,10 @@ function press(element: Element, key: string) {
 }
 
 // Harness is the Feishu part of a trigger: authorize, pick groups, pick people.
-function Harness() {
-  const [chats, setChats] = useState("");
+function Harness({ initialChats = "" }: { initialChats?: string }) {
+  const [chats, setChats] = useState(initialChats);
   const [actors, setActors] = useState<string[]>(["ou_saved"]);
-  const directory = useFeishuDirectory("c1", [], actors);
+  const directory = useFeishuDirectory("c1", chats ? chats.split(", ") : [], actors);
   return (
     <>
       <FeishuUserAuthorize channelID="c1" bot="Team bot" directory={directory} />
@@ -58,11 +59,11 @@ function Harness() {
   );
 }
 
-function render() {
+function render(initialChats = "", element?: React.ReactElement) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  act(() => root!.render(<I18nProvider language="en"><Harness /></I18nProvider>));
+  act(() => root!.render(<I18nProvider language="en">{element ?? <Harness initialChats={initialChats} />}</I18nProvider>));
 }
 
 const me = { open_id: "ou_me", name: "Wang Ning", scopes: ["im:chat:read", "im:chat.members:write_only", "contact:user:search", "offline_access"] };
@@ -108,7 +109,7 @@ describe("Feishu user authorization", () => {
     expect(poll).toHaveBeenCalledWith("c1", "s1");
 
     // The person's groups replace the bot's, and say where the bot is missing.
-    await until(() => hasText("You're in 2 groups."));
+    await until(() => hasText("Your 2 most recently active groups."));
     const chats = input("Chats");
     act(() => { chats.focus(); });
     type(chats, "si");
@@ -144,7 +145,7 @@ describe("Feishu user authorization", () => {
 
     const senders = input("Senders");
     act(() => { senders.focus(); });
-    await until(() => hasText("2 people you've chatted with."));
+    await until(() => hasText("2 people from your recent 1:1 chats."));
     expect(api.feishuMembers).not.toHaveBeenCalled();
     type(senders, "Zhang");
     await settle(350);
@@ -174,7 +175,7 @@ describe("Feishu user authorization", () => {
     const links = () => [...container.querySelectorAll<HTMLAnchorElement>("a.super-agent-scope-apply")].map((link) => link.href);
     expect(links()).toContain(applyURL);
 
-    await until(() => hasText("You're in 2 groups."));
+    await until(() => hasText("Your 2 most recently active groups."));
     const chats = input("Chats");
     act(() => { chats.focus(); });
     type(chats, "si");
@@ -182,5 +183,59 @@ describe("Feishu user authorization", () => {
     click(await until(() => button(/^Add the bot$/)));
     await until(() => hasText("After the app has it and is published, authorize again."));
     expect(links()).toContain("https://open.feishu.cn/app/cli_a/auth?q=im:chat.members:write_only&op_from=openapi&token_type=user");
+  });
+
+  it("searches the person's groups, shows what Feishu matched, and names chosen groups past the recent ones", async () => {
+    vi.mocked(api.feishuUserAuth).mockResolvedValue({ user: me });
+    const find = vi.spyOn(api, "findFeishuMyChats").mockImplementation(async (_channel, lookup) => lookup.chat_ids
+      ? { items: [{ chat_id: "oc_old", name: "Old project", bot_in: true }] }
+      : { items: [{ chat_id: "oc_member", name: "Weekly sync", bot_in: false }] });
+    render("oc_old");
+    await until(() => (container.querySelector(".super-agent-token")?.textContent ?? "").includes("Old project"));
+    expect(find).toHaveBeenCalledWith("c1", { chat_ids: ["oc_old"] });
+
+    const chats = input("Chats");
+    act(() => { chats.focus(); });
+    type(chats, "zhangsan");
+    await settle(350);
+    // Matched by a member's name, so its own name does not contain the search.
+    const option = await until(() => [...container.querySelectorAll("[role=option]")].find((item) => item.textContent?.includes("Weekly sync")));
+    expect(find).toHaveBeenCalledWith("c1", { query: "zhangsan" });
+    expect(option.textContent).toContain("bot not in it");
+    expect(container.querySelector("[role=option]")?.textContent).toContain("Weekly sync");
+  });
+});
+
+describe("Feishu scope check", () => {
+  it("names what the bot's app is missing, with a QR code and the link that requests it", async () => {
+    const applyURL = "https://open.feishu.cn/app/cli_a/auth?q=im:message,cardkit:card:write&op_from=openapi&token_type=tenant";
+    const check = vi.spyOn(api, "feishuScopeStatus").mockResolvedValue({
+      tenant: { missing: ["im:message", "cardkit:card:write"], pending: ["im:chat:read"], apply_url: applyURL },
+      user: {},
+    });
+    render("", <FeishuScopeCheck channelID="c1" documents />);
+    await until(() => hasText("The bot's app is missing 2 permissions:"));
+    expect(check).toHaveBeenCalledWith("c1", true);
+    expect([...container.querySelectorAll(".super-agent-scope-list code")].map((item) => item.textContent)).toEqual(["im:message", "cardkit:card:write"]);
+    expect(container.querySelector(".qr-frame svg")).not.toBeNull();
+    expect(container.querySelector<HTMLAnchorElement>("a.super-agent-scope-apply")?.href).toBe(applyURL);
+    expect(hasText("Requested, waiting for an admin to approve: im:chat:read")).toBe(true);
+
+    check.mockResolvedValue({ tenant: {}, user: {} });
+    click(container.querySelector("button[aria-label='Check again']") ?? undefined);
+    await until(() => hasText("The bot has every permission AgentMux asks for."));
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Feishu channel labels", () => {
+  it("adds the bot's own name, and the App ID where two still read the same", () => {
+    const labels = feishuChannelLabels([
+      { id: "a", name: "Feishu Bot", type: "feishu", enabled: true, bot_name: "Ops helper", config: { app_id: "cli_a" } },
+      { id: "b", name: "Feishu Bot", type: "feishu", enabled: true, bot_name: "Ops helper", config: { app_id: "cli_b" } },
+      { id: "c", name: "wangning", type: "feishu", enabled: true, bot_name: "wangning" },
+      { id: "d", name: "Docs", type: "feishu", enabled: true },
+    ]);
+    expect([...labels.values()]).toEqual(["Feishu Bot · Ops helper · cli_a", "Feishu Bot · Ops helper · cli_b", "wangning", "Docs"]);
   });
 });

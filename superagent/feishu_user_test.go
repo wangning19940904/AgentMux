@@ -48,14 +48,15 @@ func (m *memoryGrants) DeleteFeishuUserGrant(_ context.Context, channelID string
 // fakeFeishuUser is Feishu's accounts host and OpenAPI for one app, cli_app,
 // whose bot is in oc_team but not oc_side.
 type fakeFeishuUser struct {
-	t           *testing.T
-	mu          sync.Mutex
-	polls       int
-	scope       string
-	refreshFail string
-	refreshes   []string
-	requests    []string
-	searches    []map[string]any
+	t            *testing.T
+	mu           sync.Mutex
+	polls        int
+	scope        string
+	refreshFail  string
+	refreshes    []string
+	requests     []string
+	searches     []map[string]any
+	chatSearches []map[string]any
 }
 
 func (fake *fakeFeishuUser) serve(w http.ResponseWriter, r *http.Request) {
@@ -111,8 +112,43 @@ func (fake *fakeFeishuUser) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/open-apis/im/v1/chats" && auth == "Bearer u-stale":
 		w.WriteHeader(http.StatusBadRequest)
 		write(map[string]any{"code": 99991677, "msg": "token expired"})
+	case path == "/open-apis/im/v1/chats" && strings.HasPrefix(auth, "Bearer u-") && r.URL.Query().Get("types") == "p2p":
+		if r.URL.Query().Get("sort_type") != "ByActiveTimeDesc" {
+			fake.t.Errorf("recent contacts are read most recent first: %s", r.URL)
+		}
+		write(map[string]any{"code": 0, "data": map[string]any{"items": []any{
+			map[string]any{"chat_id": "oc_p1", "name": "Bob", "p2p_target_id": "ou_b", "p2p_target_type": "user"},
+			map[string]any{"chat_id": "oc_p2", "name": "Helper", "p2p_target_id": "ou_bot", "p2p_target_type": "bot"},
+			map[string]any{"chat_id": "oc_p3", "name": "张三", "p2p_target_id": "ou_a", "p2p_target_type": "user"},
+		}}})
 	case path == "/open-apis/im/v1/chats" && strings.HasPrefix(auth, "Bearer u-"):
+		if r.URL.Query().Get("sort_type") != "ByActiveTimeDesc" {
+			fake.t.Errorf("the person's groups are read most recently active first: %s", r.URL)
+		}
 		write(map[string]any{"code": 0, "data": map[string]any{"items": []any{map[string]any{"chat_id": "oc_team", "name": "Team"}, map[string]any{"chat_id": "oc_side", "name": "Side"}}}})
+	case path == "/open-apis/im/v1/chats/batch_query":
+		var lookup map[string][]string
+		_ = json.Unmarshal(body, &lookup)
+		var items []any
+		for _, id := range lookup["chat_ids"] {
+			items = append(items, map[string]any{"chat_id": id, "name": "Name of " + id})
+		}
+		write(map[string]any{"code": 0, "data": map[string]any{"items": items}})
+	case path == "/open-apis/im/v2/chats/search":
+		var search map[string]any
+		_ = json.Unmarshal(body, &search)
+		fake.chatSearches = append(fake.chatSearches, search)
+		write(map[string]any{"code": 0, "data": map[string]any{"items": []any{
+			map[string]any{"meta_data": map[string]any{"chat_id": "oc_team", "name": "Team"}},
+			map[string]any{"meta_data": map[string]any{"chat_id": "oc_found", "name": "Found", "external": true}},
+			map[string]any{"meta_data": map[string]any{"chat_id": "oc_gone", "name": "Gone", "chat_status": "dissolved"}},
+		}, "has_more": true}})
+	case path == "/open-apis/application/v6/scopes" && auth == "Bearer tat":
+		write(map[string]any{"code": 0, "data": map[string]any{"scopes": []any{
+			map[string]any{"scope_name": "im:message", "scope_type": "tenant", "grant_status": 1},
+			map[string]any{"scope_name": "im:chat:read", "scope_type": "tenant", "grant_status": 0},
+			map[string]any{"scope_name": "im:chat:read", "scope_type": "user", "grant_status": 1},
+		}}})
 	case path == "/open-apis/im/v1/chats/oc_side/members" && r.URL.Query().Get("member_id_type") == "app_id":
 		var add map[string][]string
 		_ = json.Unmarshal(body, &add)
@@ -131,6 +167,16 @@ func (fake *fakeFeishuUser) serve(w http.ResponseWriter, r *http.Request) {
 		fake.searches = append(fake.searches, search)
 		person := func(id, zh, en, mail, info string) map[string]any {
 			return map[string]any{"id": id, "display_info": info, "meta_data": map[string]any{"i18n_names": map[string]string{"zh_cn": zh, "en_us": en}, "enterprise_mail_address": mail}}
+		}
+		if filter, _ := search["filter"].(map[string]any); filter["user_ids"] != nil {
+			var items []any
+			for _, id := range filter["user_ids"].([]any) {
+				if id == "ou_a" {
+					items = append(items, person("ou_a", "张三", "San", "san@acme.com", "<h>张三</h>\n研发部\n3 天前聊过"))
+				}
+			}
+			write(map[string]any{"code": 0, "data": map[string]any{"items": items}})
+			return
 		}
 		if r.URL.Query().Get("page_token") == "" {
 			write(map[string]any{"code": 0, "data": map[string]any{"items": []any{person("ou_a", "张三", "San", "san@acme.com", "<h>张三</h>\n研发部\n3 天前聊过")}, "has_more": true, "page_token": "p2"}})
@@ -227,7 +273,7 @@ func TestFeishuUserTokenRefreshes(t *testing.T) {
 	if grant.AccessToken != "u-2" || grant.RefreshToken != "r-2" || !grant.AccessExpiresAt.Equal(now.Add(2*time.Hour)) {
 		t.Fatalf("the refreshed and rotated tokens are kept: %+v", grant)
 	}
-	if !strings.Contains(strings.Join(fake.requests, "\n"), "GET /open-apis/im/v1/chats?page_size=100 Bearer u-2") {
+	if !strings.Contains(strings.Join(fake.requests, "\n"), "GET /open-apis/im/v1/chats?sort_type=ByActiveTimeDesc&page_size=100 Bearer u-2") {
 		t.Fatalf("calls use the new token: %v", fake.requests)
 	}
 
@@ -296,21 +342,24 @@ func TestFeishuUserContacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, second := people.Items[0], people.Items[len(people.Items)-1]
-	if len(people.Items) != 2 || first.OpenID != "ou_a" || first.Name != "张三" || first.Email != "san@acme.com" || first.Department != "研发部" ||
-		second.OpenID != "ou_b" || second.Name != "Bob" || people.Truncated {
-		t.Fatalf("contacts across pages, named in the tenant's language: %+v", people)
+	if len(people.Items) != 2 || people.Items[0].OpenID != "ou_b" || people.Items[0].Name != "Bob" || people.Items[0].Email != "" ||
+		people.Items[1].OpenID != "ou_a" || people.Items[1].Name != "张三" || people.Items[1].Email != "san@acme.com" || people.Items[1].Department != "研发部" {
+		t.Fatalf("with nothing typed, the people of the person's recent 1:1 chats, most recent first, bots left out: %+v", people.Items)
 	}
 	filter, _ := fake.searches[0]["filter"].(map[string]any)
-	if filter["has_contact"] != true || fake.searches[0]["query"] != nil {
-		t.Fatalf("with nothing typed, the people the person has chatted with: %v", fake.searches[0])
+	if ids, _ := filter["user_ids"].([]any); len(ids) != 2 || ids[0] != "ou_b" {
+		t.Fatalf("emails and departments are looked up for them: %v", fake.searches[0])
 	}
 
-	if _, err := api.UserContacts(ctx, "c", " 张 ", nil); err != nil {
+	found, err := api.UserContacts(ctx, "c", " 张 ", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if search := fake.searches[len(fake.searches)-1]; search["query"] != "张" || search["filter"] != nil {
 		t.Fatalf("typed text searches everyone the person can see: %v", search)
+	}
+	if len(found.Items) != 1 || found.Items[0].Name != "张三" || found.Items[0].Department != "研发部" {
+		t.Fatalf("search results, named in the tenant's language: %+v", found.Items)
 	}
 	if _, err := api.UserContacts(ctx, "c", "", []string{"ou_a", "dan@acme.com", "ou_a"}); err != nil {
 		t.Fatal(err)
@@ -322,6 +371,58 @@ func TestFeishuUserContacts(t *testing.T) {
 	}
 	if _, err := api.UserContacts(ctx, "c", strings.Repeat("长", 51), nil); err == nil {
 		t.Fatal("Feishu takes at most 50 characters")
+	}
+}
+
+func TestFeishuUserFindsChats(t *testing.T) {
+	api, fake, grants, now := newFeishuUserTest(t, "")
+	ctx := context.Background()
+	grants.grants["c"] = core.FeishuUserGrant{ChannelID: "c", OpenID: "ou_me", AccessToken: "u-1", AccessExpiresAt: now.Add(time.Hour)}
+
+	found, err := api.FindUserChats(ctx, "c", "ops-team", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found.Items) != 2 || found.Items[0].ChatID != "oc_team" || found.Items[1].ChatID != "oc_found" || !found.Items[1].External || !found.Truncated {
+		t.Fatalf("search results, without dissolved groups: %+v", found)
+	}
+	if found.Items[0].BotIn == nil || !*found.Items[0].BotIn || found.Items[1].BotIn == nil || *found.Items[1].BotIn {
+		t.Fatalf("search results say where the bot is: %+v", found.Items)
+	}
+	search := fake.chatSearches[0]
+	types, _ := search["filter"].(map[string]any)["search_types"].([]any)
+	if search["query"] != `"ops-team"` || len(types) != 3 || types[2] != "public_joined" {
+		t.Fatalf("a hyphenated keyword is quoted, and public groups the person is not in are left out: %v", search)
+	}
+
+	named, err := api.FindUserChats(ctx, "c", "", []string{"oc_x", "nope", "oc_x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(named.Items) != 1 || named.Items[0].Name != "Name of oc_x" {
+		t.Fatalf("chosen chat ids are named: %+v", named)
+	}
+	if empty, err := api.FindUserChats(ctx, "c", "", []string{"nope"}); err != nil || len(empty.Items) != 0 {
+		t.Fatalf("nothing valid to look up: %+v %v", empty, err)
+	}
+	if _, err := api.FindUserChats(ctx, "c", strings.Repeat("群", 65), nil); err == nil {
+		t.Fatal("Feishu's chat search takes at most 64 characters")
+	}
+}
+
+func TestFeishuScopeStatus(t *testing.T) {
+	api, _, _, _ := newFeishuUserTest(t, "")
+	status, err := api.ScopeStatus(context.Background(), "c", []string{"im:message", "im:chat:read", "cardkit:card:write"}, []string{"im:chat:read", "contact:user:search"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(status.Tenant.Missing, ",") != "cardkit:card:write" || strings.Join(status.Tenant.Pending, ",") != "im:chat:read" ||
+		status.Tenant.ApplyURL != "https://open.feishu.cn/app/cli_app/auth?q=cardkit:card:write&op_from=openapi&token_type=tenant" {
+		t.Fatalf("app scopes: %+v", status.Tenant)
+	}
+	if strings.Join(status.User.Missing, ",") != "contact:user:search" || len(status.User.Pending) != 0 ||
+		status.User.ApplyURL != "https://open.feishu.cn/app/cli_app/auth?q=contact:user:search&op_from=openapi&token_type=user" {
+		t.Fatalf("user scopes: %+v", status.User)
 	}
 }
 
