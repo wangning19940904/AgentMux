@@ -120,6 +120,18 @@ fills in:
   on the scopes, long-connection events and card callbacks, then publishes the
   bot. Both scans work only from the local Console. Lark bots are configured on
   the Open Platform by hand, as the form describes.
+  Optionally, the operator then authorizes the bot's app once with their own
+  Feishu account, through Feishu's device flow: they scan a code or open a link and
+  approve, so no redirect address is configured. After that the group and sender
+  pickers list that person's own groups and the people they have chatted with,
+  search everyone they can see, and add the bot to a group it is not in yet, as
+  them. The bot itself needs no scope to read those groups or people. The second
+  scan also enables the four user-identity scopes this takes (`im:chat:read`,
+  `im:chat.members:write_only`, `contact:user:search`, `offline_access`); an
+  authorization that lacks one names it with a link to enable it. The daemon
+  keeps the token per channel (`feishu_user_grants`), refreshes it before it
+  expires and never sends it to the Console. Removing the authorization or the
+  channel drops it; Feishu keeps an access token valid for up to two hours.
 - **Email:** the address picks the provider's IMAP and SMTP servers, and the form
   links to where that provider issues app passwords.
 - **GitHub:** checking the agent's token fills in its login. A trigger added from

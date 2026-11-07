@@ -366,6 +366,10 @@ CREATE INDEX IF NOT EXISTS idx_super_agent_tickets_thread ON super_agent_tickets
 CREATE INDEX IF NOT EXISTS idx_super_agent_tickets_status ON super_agent_tickets(status);
 CREATE TABLE IF NOT EXISTS super_agent_source_state (source_id TEXT PRIMARY KEY,super_agent_id TEXT NOT NULL,state TEXT NOT NULL);
 `},
+		// One person's Feishu authorization per channel; see core.FeishuUserGrant.
+		{version: 20, name: "feishu_user_grants", sql: `
+CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data TEXT NOT NULL,updated_at TEXT NOT NULL);
+`},
 	}
 }
 

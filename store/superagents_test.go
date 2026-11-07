@@ -143,3 +143,34 @@ func TestSuperAgentMigrationRunsOnDatabaseWithVersion18Applied(t *testing.T) {
 		t.Fatalf("super_agents must exist after migrating: %v", err)
 	}
 }
+
+// A channel's user authorization is kept as given and goes with the channel.
+func TestFeishuUserGrantPersistence(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
+	if err := st.UpsertChannel(ctx, &core.Channel{ID: "fs", Name: "bot", Type: "feishu"}); err != nil {
+		t.Fatal(err)
+	}
+	if grant, err := st.GetFeishuUserGrant(ctx, "fs"); grant != nil || err != nil {
+		t.Fatalf("none yet: %+v %v", grant, err)
+	}
+	grant := core.FeishuUserGrant{ChannelID: "fs", OpenID: "ou_me", Name: "Me", AccessToken: "u-1", RefreshToken: "r-1", AccessExpiresAt: now.Add(time.Hour), Scopes: []string{"im:chat:read"}, UpdatedAt: now}
+	if err := st.PutFeishuUserGrant(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	grant.AccessToken = "u-2"
+	if err := st.PutFeishuUserGrant(ctx, grant); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetFeishuUserGrant(ctx, "fs")
+	if err != nil || got == nil || got.AccessToken != "u-2" || got.RefreshToken != "r-1" || !got.AccessExpiresAt.Equal(now.Add(time.Hour)) || got.Scopes[0] != "im:chat:read" {
+		t.Fatalf("grant = %+v %v", got, err)
+	}
+	if err := st.DeleteChannel(ctx, "fs"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetFeishuUserGrant(ctx, "fs"); got != nil || err != nil {
+		t.Fatalf("deleting the channel forgets its grant: %+v %v", got, err)
+	}
+}

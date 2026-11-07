@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,6 +252,14 @@ type FeishuAPI struct {
 	Channels ChannelLookup
 	HTTP     *http.Client
 	Base     string
+	// Grants keeps each channel's user authorization; see feishu_user.go.
+	// Accounts and Now replace Feishu's accounts host and the clock in tests.
+	Grants   FeishuGrantStore
+	Accounts string
+	Now      func() time.Time
+
+	grantMu    sync.Mutex
+	grantLocks map[string]*sync.Mutex
 }
 
 func (f *FeishuAPI) client() *http.Client {
@@ -260,37 +269,65 @@ func (f *FeishuAPI) client() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-func (f *FeishuAPI) tenantToken(ctx context.Context, channelID string) (string, string, error) {
+// feishuApp is a channel's Feishu app and the hosts that serve it.
+type feishuApp struct {
+	channel  *core.Channel
+	id       string
+	secret   string
+	base     string // OpenAPI
+	accounts string // OAuth
+}
+
+func (f *FeishuAPI) app(ctx context.Context, channelID string) (feishuApp, error) {
 	channel, err := f.Channels(ctx, channelID)
+	if err != nil {
+		return feishuApp{}, err
+	}
+	if channel == nil {
+		return feishuApp{}, fmt.Errorf("channel %q not found", channelID)
+	}
+	if channel.Type != "feishu" && channel.Type != "lark" {
+		return feishuApp{}, fmt.Errorf("channel %q is not a Feishu channel", channelID)
+	}
+	app := feishuApp{channel: channel, id: channel.Config["app_id"], secret: channel.Config["app_secret"], base: f.Base, accounts: f.Accounts}
+	if app.base == "" {
+		app.base = feishuOpenBase
+		if channel.Type == "lark" {
+			app.base = larkOpenBase
+		}
+	}
+	if app.accounts == "" {
+		app.accounts = feishuAccountsBase
+		if channel.Type == "lark" {
+			app.accounts = larkAccountsBase
+		}
+	}
+	return app, nil
+}
+
+func (f *FeishuAPI) tenantToken(ctx context.Context, channelID string) (string, string, error) {
+	app, err := f.app(ctx, channelID)
 	if err != nil {
 		return "", "", err
 	}
-	if channel == nil {
-		return "", "", fmt.Errorf("channel %q not found", channelID)
-	}
-	if channel.Type != "feishu" && channel.Type != "lark" {
-		return "", "", fmt.Errorf("channel %q is not a Feishu channel", channelID)
-	}
-	base := f.Base
-	if base == "" {
-		base = feishuOpenBase
-		if channel.Type == "lark" {
-			base = larkOpenBase
-		}
-	}
-	payload, _ := json.Marshal(map[string]string{"app_id": channel.Config["app_id"], "app_secret": channel.Config["app_secret"]})
+	token, err := f.appToken(ctx, app)
+	return app.base, token, err
+}
+
+func (f *FeishuAPI) appToken(ctx context.Context, app feishuApp) (string, error) {
+	payload, _ := json.Marshal(map[string]string{"app_id": app.id, "app_secret": app.secret})
 	var result struct {
 		Code              int    `json:"code"`
 		Msg               string `json:"msg"`
 		TenantAccessToken string `json:"tenant_access_token"`
 	}
-	if err := f.call(ctx, http.MethodPost, base+"/open-apis/auth/v3/tenant_access_token/internal", "", payload, &result); err != nil {
-		return "", "", err
+	if err := f.call(ctx, http.MethodPost, app.base+"/open-apis/auth/v3/tenant_access_token/internal", "", payload, &result); err != nil {
+		return "", err
 	}
 	if result.Code != 0 {
-		return "", "", fmt.Errorf("tenant token: %d %s", result.Code, result.Msg)
+		return "", fmt.Errorf("tenant token: %d %s", result.Code, result.Msg)
 	}
-	return base, result.TenantAccessToken, nil
+	return result.TenantAccessToken, nil
 }
 
 func (f *FeishuAPI) call(ctx context.Context, method, target, token string, payload []byte, out any) error {
@@ -302,6 +339,12 @@ func (f *FeishuAPI) call(ctx context.Context, method, target, token string, payl
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	return f.send(request, out)
+}
+
+// send decodes Feishu's JSON answer whatever the HTTP status, since Feishu
+// puts its error codes in the body.
+func (f *FeishuAPI) send(request *http.Request, out any) error {
 	response, err := f.client().Do(request)
 	if err != nil {
 		return err

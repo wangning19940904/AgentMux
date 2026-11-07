@@ -81,9 +81,17 @@ func upsertChannel(ctx context.Context, executor statementExecutor, ch *core.Cha
 }
 
 // DeleteChannel removes a channel.
+// DeleteChannel also forgets the user authorization made for the channel's
+// app, so its tokens do not outlive the channel. The legacy SQLite store has
+// no Super Agent tables to clean.
 func (s *Store) DeleteChannel(ctx context.Context, id string) error {
-	_, err := s.writer.ExecContext(ctx, `DELETE FROM channels WHERE id=?`, id)
-	return err
+	if _, err := s.writer.ExecContext(ctx, `DELETE FROM channels WHERE id=?`, id); err != nil {
+		return err
+	}
+	if s.dialect == DialectSQLite {
+		return nil
+	}
+	return s.DeleteFeishuUserGrant(ctx, id)
 }
 
 // SetChannelOwner assigns (or with an empty tenantID clears) ownership.

@@ -148,3 +148,19 @@ type SuperAgentWorkerStatus struct {
 	Available bool   `json:"available"`
 	Detail    string `json:"detail,omitempty"`
 }
+
+// FeishuUserGrant is one person's own authorization of a Feishu channel's app.
+// With it the Console lists that person's groups and contacts and adds the
+// channel's bot to a group as them, so the bot needs no scope to read people
+// or chats it is not in. The tokens never leave the daemon.
+type FeishuUserGrant struct {
+	ChannelID        string    `json:"channel_id"`
+	OpenID           string    `json:"open_id"`
+	Name             string    `json:"name,omitempty"`
+	AccessToken      string    `json:"access_token"`
+	RefreshToken     string    `json:"refresh_token,omitempty"`
+	AccessExpiresAt  time.Time `json:"access_expires_at"`
+	RefreshExpiresAt time.Time `json:"refresh_expires_at,omitempty"`
+	Scopes           []string  `json:"scopes,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}

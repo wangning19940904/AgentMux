@@ -20,21 +20,24 @@ const (
 	feishuPageSizeArgs = "page_size=100"
 )
 
-// FeishuChat is a group the channel's bot is in.
+// FeishuChat is a group the channel's bot is in, or one the authorized person
+// is in. BotIn says whether the bot is there too, when that is known.
 type FeishuChat struct {
 	ChatID      string `json:"chat_id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	External    bool   `json:"external,omitempty"`
+	BotIn       *bool  `json:"bot_in,omitempty"`
 }
 
 // FeishuUser is a person the channel's app knows by open_id. ChatIDs lists the
 // bot's groups they are in, when they were found through one.
 type FeishuUser struct {
-	OpenID  string   `json:"open_id"`
-	Name    string   `json:"name,omitempty"`
-	Email   string   `json:"email,omitempty"`
-	ChatIDs []string `json:"chat_ids,omitempty"`
+	OpenID     string   `json:"open_id"`
+	Name       string   `json:"name,omitempty"`
+	Email      string   `json:"email,omitempty"`
+	Department string   `json:"department,omitempty"`
+	ChatIDs    []string `json:"chat_ids,omitempty"`
 }
 
 // FeishuChatList and FeishuUserList stop at a size the Console can show.

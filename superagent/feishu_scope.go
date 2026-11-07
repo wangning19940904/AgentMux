@@ -12,8 +12,18 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// feishuScopeDenied is Feishu's code for a call the app has no scope for.
-const feishuScopeDenied = 99991672
+// Feishu's codes for a call made without a scope it needs: as the app with a
+// tenant token, or as a person with a user token.
+const (
+	feishuScopeDenied     = 99991672
+	feishuUserScopeDenied = 99991679
+)
+
+// Token types, as Feishu's developer console names them in its links.
+const (
+	feishuTenantToken = "tenant"
+	feishuUserToken   = "user"
+)
 
 var (
 	feishuScopeList = regexp.MustCompile(`\[([^\]]*)\]`)
@@ -24,12 +34,15 @@ var (
 // FeishuScopeError is Feishu refusing a call because the channel's app lacks a
 // scope. Scopes lists the ones Feishu would accept; any one is enough.
 // ApplyURL opens the app's permission page in the developer console with
-// those scopes picked, so the operator can request them.
+// those scopes picked, so the operator can request them. TokenType says
+// whether the scope is missing for the app itself or for a person acting
+// through it; a person must also authorize again once the app has it.
 type FeishuScopeError struct {
-	Code     int
-	Msg      string
-	Scopes   []string
-	ApplyURL string
+	Code      int
+	Msg       string
+	Scopes    []string
+	TokenType string
+	ApplyURL  string
 }
 
 func (e *FeishuScopeError) Error() string { return fmt.Sprintf("%d %s", e.Code, e.Msg) }
@@ -37,10 +50,34 @@ func (e *FeishuScopeError) Error() string { return fmt.Sprintf("%d %s", e.Code, 
 // feishuError turns a non-zero Feishu result into an error, typed when it is a
 // missing scope.
 func feishuError(code int, msg string) error {
-	if code != feishuScopeDenied {
-		return fmt.Errorf("%d %s", code, msg)
+	switch code {
+	case feishuScopeDenied:
+		return &FeishuScopeError{Code: code, Msg: msg, Scopes: feishuScopesIn(msg), TokenType: feishuTenantToken}
+	case feishuUserScopeDenied:
+		return &FeishuScopeError{Code: code, Msg: msg, Scopes: feishuScopesIn(msg), TokenType: feishuUserToken}
 	}
-	return &FeishuScopeError{Code: code, Msg: msg, Scopes: feishuScopesIn(msg)}
+	return &feishuAPIError{Code: code, Msg: msg}
+}
+
+// feishuAPIError is any other non-zero Feishu result.
+type feishuAPIError struct {
+	Code int
+	Msg  string
+}
+
+func (e *feishuAPIError) Error() string { return fmt.Sprintf("%d %s", e.Code, e.Msg) }
+
+// feishuCodeOf is the Feishu code behind err, or 0.
+func feishuCodeOf(err error) int {
+	var api *feishuAPIError
+	if errors.As(err, &api) {
+		return api.Code
+	}
+	var denied *FeishuScopeError
+	if errors.As(err, &denied) {
+		return denied.Code
+	}
+	return 0
 }
 
 // feishuScopesIn reads the scopes from Feishu's message, which names them as
@@ -61,8 +98,9 @@ func feishuScopesIn(msg string) []string {
 }
 
 // FeishuScopeApplyURL is the developer console page where the channel's app
-// requests scopes. With no scopes it opens the app's permission list.
-func FeishuScopeApplyURL(channel *core.Channel, scopes []string) string {
+// requests scopes, for itself (tokenType "tenant") or for the people who
+// authorize it ("user"). With no scopes it opens the app's permission list.
+func FeishuScopeApplyURL(channel *core.Channel, scopes []string, tokenType string) string {
 	if channel == nil {
 		return ""
 	}
@@ -80,7 +118,10 @@ func FeishuScopeApplyURL(channel *core.Channel, scopes []string) string {
 	}
 	// Scope names are checked against feishuScopeName, so they need no
 	// escaping, and Feishu's own links keep ":" and "," readable.
-	return link + "?q=" + strings.Join(scopes, ",") + "&op_from=openapi&token_type=tenant"
+	if tokenType != feishuUserToken {
+		tokenType = feishuTenantToken
+	}
+	return link + "?q=" + strings.Join(scopes, ",") + "&op_from=openapi&token_type=" + tokenType
 }
 
 // explainDenied adds the apply link to a missing-scope error from the
@@ -91,7 +132,7 @@ func (f *FeishuAPI) explainDenied(ctx context.Context, channelID string, err err
 		return err
 	}
 	if channel, lookupErr := f.Channels(ctx, channelID); lookupErr == nil {
-		denied.ApplyURL = FeishuScopeApplyURL(channel, denied.Scopes)
+		denied.ApplyURL = FeishuScopeApplyURL(channel, denied.Scopes, denied.TokenType)
 	}
 	return err
 }
