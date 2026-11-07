@@ -150,8 +150,17 @@ func TestFeishuUserRoutes(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"missing":["im:message"]`) || !strings.Contains(recorder.Body.String(), "token_type=tenant") {
 		t.Fatalf("scopes: %d %s", recorder.Code, recorder.Body.String())
 	}
-	if !slices.Equal(directory.tenantScopes, agentMuxFeishuScopes) || !slices.Equal(directory.userScopes, superagent.FeishuUserScopes) {
+	if !slices.Contains(directory.tenantScopes, "im:message") || !slices.Contains(directory.tenantScopes, "contact:user.base:readonly") ||
+		!slices.Equal(directory.userScopes, superagent.FeishuUserScopes) {
 		t.Fatalf("the check asks for what the second scan enables: %v %v", directory.tenantScopes, directory.userScopes)
+	}
+	for _, scope := range directory.tenantScopes {
+		if strings.HasPrefix(scope, "vc:") {
+			t.Fatalf("a Super Agent trigger does not need the meeting scope %s", scope)
+		}
+	}
+	if len(directory.tenantScopes) >= len(agentMuxFeishuScopes) {
+		t.Fatalf("only the meeting scopes are left out: %v", directory.tenantScopes)
 	}
 	doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/scopes?channel_id=fs&documents=true", nil)
 	if !slices.Contains(directory.tenantScopes, "docx:document:readonly") {
