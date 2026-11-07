@@ -1482,6 +1482,39 @@ export interface GitHubAccount {
   avatar_url?: string;
   scopes: string[];
   classic: boolean;
+  // Repositories the account can reach, most recently pushed first.
+  repos?: GitHubRepo[];
+  repos_truncated?: boolean;
+}
+
+export interface GitHubRepo {
+  full_name: string;
+  private: boolean;
+  can_push: boolean;
+}
+
+// Who is signed in to the GitHub CLI on this computer, and the repositories
+// they administer. Only the local Console can read it.
+export interface GitHubOperator {
+  installed: boolean;
+  login?: string;
+  repos: string[];
+  error?: string;
+}
+
+// The agent account's sign-in, run by the GitHub CLI in a profile of its own.
+// token is present once, on the first poll after it succeeds.
+export interface GitHubAgentLogin extends CLIAuthSession {
+  token?: string;
+}
+
+// A token to check: the one the form holds, or, when it shows a saved token
+// redacted, the stored token of this Super Agent's trigger.
+export interface GitHubAccountRequest {
+  token: string;
+  api_base?: string;
+  super_agent_id?: string;
+  source_id?: string;
 }
 
 // Where GitHub deliveries reach this daemon from this machine, and whether its

@@ -299,12 +299,16 @@ func newGitHubAPI(client *http.Client, source core.SuperAgentSource) (githubAPI,
 // get reads a path under the API base, or an absolute URL GitHub returned. The
 // token is only ever sent to the configured API.
 func (a githubAPI) get(ctx context.Context, target string, out any) (http.Header, error) {
+	return a.send(ctx, http.MethodGet, target, out)
+}
+
+func (a githubAPI) send(ctx context.Context, method, target string, out any) (http.Header, error) {
 	if strings.HasPrefix(target, "/") {
 		target = a.base + target
 	} else if !strings.HasPrefix(target, a.base+"/") {
 		return nil, fmt.Errorf("GitHub returned a link outside %s", a.base)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	request, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return nil, err
 	}

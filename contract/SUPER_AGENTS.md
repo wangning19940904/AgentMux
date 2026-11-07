@@ -134,7 +134,21 @@ fills in:
   channel drops it; Feishu keeps an access token valid for up to two hours.
 - **Email:** the address picks the provider's IMAP and SMTP servers, and the form
   links to where that provider issues app passwords.
-- **GitHub:** checking the agent's token fills in its login. A trigger added from
+- **GitHub:** the guide follows dsh-superagent's setup. The agent gets a GitHub
+  user account of its own (a link and QR code to sign up). It signs in with the
+  GitHub CLI's one-time code, shown with a QR code, in a gh profile of its own
+  (`GH_CONFIG_DIR`): the operator's gh login and its environment tokens are not
+  used, the token is stored in that profile in plain text instead of the keychain,
+  and the profile is deleted once the token is handed to the trigger. The page that
+  takes the code should be opened on a phone or in a private window, since the usual
+  browser is signed in as the operator; signing in as the operator's own account is
+  flagged. The operator's gh login then invites the agent to a repository they
+  administer, with write access, and the agent's token accepts; for other
+  repositories the invitation is sent by hand and accepted from the form. The
+  operator's login is offered as the first allowed sender. Pasting a token is the
+  fallback without gh. A token, signed in or pasted, is checked at once, and a saved
+  one when the form opens; that fills in the login and lists what the account can
+  reach. The routes that run gh answer only the local Console. A trigger added from
   a page GitHub cannot reach, such as the desktop app, reads notifications; one
   added from a reachable page uses a webhook. Either can be switched. For a
   webhook, the source id and secret are generated when the trigger is added, so its
@@ -284,7 +298,10 @@ These routes are for Console administrators and are closed to tenant credentials
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
 | `GET /api/v1/super-agents/github/setup` | The loopback address GitHub deliveries reach, and whether the API needs credentials |
-| `POST /api/v1/super-agents/github/account` | The GitHub login, and classic scopes, of a token in the body |
+| `GET /api/v1/super-agents/github/operator` | Local Console only: who is signed in to gh here, and the repositories they administer |
+| `POST /api/v1/super-agents/github/login`, `/login/poll`, `/login/cancel` | Local Console only: sign the agent in with gh's one-time code; the first poll after success carries the token |
+| `POST /api/v1/super-agents/github/invite` | Local Console only: invite the agent to a repository as the operator (unless `invite` is false), then accept as the agent |
+| `POST /api/v1/super-agents/github/account` | The GitHub login, classic scopes and reachable repositories of a token in the body, or of a saved Source's token when the body sends it redacted with `super_agent_id` and `source_id` |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
 
 ## DeepSeek Harness runtime

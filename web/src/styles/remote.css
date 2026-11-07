@@ -1424,6 +1424,11 @@
 .setup-step-body .setup-note { color: var(--muted); }
 .setup-link { justify-self: start; text-decoration: none; }
 .setup-delivery { justify-self: start; }
+.setup-qr-link { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.setup-qr-copy { display: grid; gap: 6px; justify-items: start; flex: 1 1 200px; min-width: 0; }
+.qr-frame.small { width: 116px; height: 116px; padding: 8px; }
+.setup-device { display: grid; gap: 8px; justify-items: start; flex: 1 1 220px; min-width: 0; }
+.setup-device-code { padding: 4px 10px; border-radius: 6px; background: var(--bg-elevated); font-size: 22px; font-weight: 600; letter-spacing: 0.08em; }
 .setup-scan { display: grid; gap: 8px; justify-items: start; }
 .setup-scan-box { align-items: center; }
 .setup-scan-status { display: inline-flex; align-items: center; gap: 6px; }

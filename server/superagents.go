@@ -12,6 +12,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/superagent"
+	toolpkg "github.com/wangning19940904/AgentMux/tools"
 )
 
 const maxGitHubWebhookBytes = 25 << 20 // GitHub's documented payload cap.
@@ -74,6 +75,11 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.registerFeishuUserRoutes()
 	s.mux.HandleFunc("GET /api/v1/super-agents/github/setup", s.handleSuperAgentGitHubSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/github/account", s.handleSuperAgentGitHubAccount)
+	s.mux.HandleFunc("GET /api/v1/super-agents/github/operator", s.handleSuperAgentGitHubOperator)
+	s.mux.HandleFunc("POST /api/v1/super-agents/github/login", s.handleSuperAgentGitHubLogin)
+	s.mux.HandleFunc("POST /api/v1/super-agents/github/login/poll", s.handleSuperAgentGitHubLoginPoll)
+	s.mux.HandleFunc("POST /api/v1/super-agents/github/login/cancel", s.handleSuperAgentGitHubLoginCancel)
+	s.mux.HandleFunc("POST /api/v1/super-agents/github/invite", s.handleSuperAgentGitHubInvite)
 	// Outside /api: GitHub cannot present a bridge token. Each delivery proves
 	// itself with the HMAC signature of its Source's webhook secret instead.
 	s.mux.HandleFunc("POST /hook/super-agent/github/{source}", s.handleSuperAgentGitHubHook)
@@ -298,28 +304,175 @@ func loopbackURL(addr string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
-// handleSuperAgentGitHubAccount checks a token the form holds and says whose
-// it is. The token travels in the body, never in a URL.
+// handleSuperAgentGitHubAccount says whose a token is and which repositories it
+// reaches: one the form holds, or the saved one of a Source. The token travels
+// in the body, never in a URL.
 func (s *Server) handleSuperAgentGitHubAccount(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSuperAgents(w) {
 		return
 	}
-	var input struct {
-		Token   string `json:"token"`
-		APIBase string `json:"api_base"`
-	}
+	var input superagent.GitHubAccountRequest
 	if !decodeJSONInto(w, r, &input) {
 		return
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	account, err := superagent.CheckGitHubToken(r.Context(), client, input.APIBase, input.Token)
+	account, err := s.superAgents.CheckGitHubAccount(r.Context(), client, input)
 	switch {
-	case errors.Is(err, superagent.ErrGitHubTokenRejected):
+	case errors.Is(err, superagent.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "trigger not found; paste the token again")
+	case errors.Is(err, superagent.ErrGitHubTokenRejected), errors.Is(err, superagent.ErrGitHubTokenMissing):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		writeErr(w, http.StatusBadGateway, err.Error())
 	default:
 		writeJSON(w, http.StatusOK, account)
+	}
+}
+
+// The routes below run this computer's GitHub CLI, signed in as the person at
+// the keyboard, so they answer only the local Console.
+func (s *Server) requireLocalGitHubCLI(w http.ResponseWriter, r *http.Request) bool {
+	if !s.requireSuperAgents(w) {
+		return false
+	}
+	if !isLoopbackRequest(r) {
+		writeErr(w, http.StatusForbidden, "GitHub CLI setup is available only from the local Console")
+		return false
+	}
+	return true
+}
+
+func githubHostOrError(w http.ResponseWriter, apiBase string) (string, bool) {
+	host, err := superagent.GitHubHost(apiBase)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return "", false
+	}
+	return host, true
+}
+
+// handleSuperAgentGitHubOperator says who is signed in to gh here and which
+// repositories they administer, so the guide can invite the agent and suggest
+// the operator as its first allowed sender.
+func (s *Server) handleSuperAgentGitHubOperator(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLocalGitHubCLI(w, r) {
+		return
+	}
+	host, ok := githubHostOrError(w, r.URL.Query().Get("api_base"))
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, toolpkg.LookupGitHubOperator(r.Context(), host))
+}
+
+// handleSuperAgentGitHubLogin starts signing the agent's account in with a
+// one-time code, in a gh profile of its own.
+func (s *Server) handleSuperAgentGitHubLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLocalGitHubCLI(w, r) {
+		return
+	}
+	var input struct {
+		APIBase string `json:"api_base"`
+	}
+	if !decodeJSONInto(w, r, &input) {
+		return
+	}
+	host, ok := githubHostOrError(w, input.APIBase)
+	if !ok {
+		return
+	}
+	login, err := toolpkg.StartGitHubAgentLogin(host)
+	switch {
+	case errors.Is(err, toolpkg.ErrGitHubCLIMissing):
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	case err != nil:
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if login.LoginURL == "" {
+		login.LoginURL = "https://" + host + "/login/device"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, login)
+}
+
+// handleSuperAgentGitHubLoginPoll reports a sign-in, and hands over its token
+// once it succeeds, for the form to save with the trigger.
+func (s *Server) handleSuperAgentGitHubLoginPoll(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLocalGitHubCLI(w, r) {
+		return
+	}
+	var input struct {
+		SessionID string `json:"session_id"`
+	}
+	if !decodeJSONInto(w, r, &input) {
+		return
+	}
+	login, ok := toolpkg.GetGitHubAgentLogin(input.SessionID)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "GitHub sign-in expired; start again")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, login)
+}
+
+func (s *Server) handleSuperAgentGitHubLoginCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLocalGitHubCLI(w, r) {
+		return
+	}
+	var input struct {
+		SessionID string `json:"session_id"`
+	}
+	if !decodeJSONInto(w, r, &input) {
+		return
+	}
+	if err := toolpkg.CancelGitHubAgentLogin(input.SessionID); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleSuperAgentGitHubInvite gives the agent write access to a repository:
+// the operator invites it with their own gh login, unless they already did by
+// hand, and the agent accepts with its token.
+func (s *Server) handleSuperAgentGitHubInvite(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLocalGitHubCLI(w, r) {
+		return
+	}
+	var input struct {
+		superagent.GitHubAccountRequest
+		Repo       string `json:"repo"`
+		AgentLogin string `json:"agent_login"`
+		Invite     bool   `json:"invite"`
+	}
+	if !decodeJSONInto(w, r, &input) {
+		return
+	}
+	host, ok := githubHostOrError(w, input.APIBase)
+	if !ok {
+		return
+	}
+	if input.Invite {
+		if err := toolpkg.InviteGitHubCollaborator(r.Context(), host, strings.TrimSpace(input.Repo), strings.TrimSpace(input.AgentLogin)); err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	accepted, err := s.superAgents.AcceptGitHubInvitation(r.Context(), client, input.GitHubAccountRequest, strings.TrimSpace(input.Repo))
+	switch {
+	case errors.Is(err, superagent.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "trigger not found; sign the agent in again")
+	case errors.Is(err, superagent.ErrGitHubTokenRejected), errors.Is(err, superagent.ErrGitHubTokenMissing):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeErr(w, http.StatusBadGateway, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"invited": input.Invite, "accepted": accepted})
 	}
 }
 

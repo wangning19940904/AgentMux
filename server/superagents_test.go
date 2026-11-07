@@ -39,6 +39,11 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/feishu/users?channel_id=c"},
 		{http.MethodGet, "/api/v1/super-agents/github/setup"},
 		{http.MethodPost, "/api/v1/super-agents/github/account"},
+		{http.MethodGet, "/api/v1/super-agents/github/operator"},
+		{http.MethodPost, "/api/v1/super-agents/github/login"},
+		{http.MethodPost, "/api/v1/super-agents/github/login/poll"},
+		{http.MethodPost, "/api/v1/super-agents/github/login/cancel"},
+		{http.MethodPost, "/api/v1/super-agents/github/invite"},
 		{http.MethodPost, "/hook/super-agent/github/src"},
 	} {
 		recorder := httptest.NewRecorder()
@@ -57,6 +62,8 @@ func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/routers"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members"},
 		{http.MethodPost, "/api/v1/super-agents/github/account"},
+		{http.MethodPost, "/api/v1/super-agents/github/login"},
+		{http.MethodPost, "/api/v1/super-agents/github/invite"},
 	} {
 		if tenantRouteAllowed(route.method, route.path) {
 			t.Errorf("%s %s must stay Console-only: Super Agents hold credentials and control every worker", route.method, route.path)
