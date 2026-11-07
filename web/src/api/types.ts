@@ -1675,6 +1675,20 @@ export interface FeishuUserAuthPoll {
   user?: FeishuUserAuth;
 }
 
+// FeishuScopeStatus is what a Feishu channel's app still needs, for itself
+// (tenant) and for the people who authorize it (user). Missing scopes are not
+// requested yet and apply_url requests them; pending ones wait for an admin.
+export interface FeishuScopeGap {
+  missing?: string[];
+  pending?: string[];
+  apply_url?: string;
+}
+
+export interface FeishuScopeStatus {
+  tenant: FeishuScopeGap;
+  user: FeishuScopeGap;
+}
+
 export interface FeishuAddBotResult {
   added: boolean;
   // The group's owner or an admin must approve new members first.

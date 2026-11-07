@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -135,4 +136,82 @@ func (f *FeishuAPI) explainDenied(ctx context.Context, channelID string, err err
 		denied.ApplyURL = FeishuScopeApplyURL(channel, denied.Scopes, denied.TokenType)
 	}
 	return err
+}
+
+// FeishuScopeChecker says which of the scopes AgentMux asks for a channel's
+// app has.
+type FeishuScopeChecker interface {
+	ScopeStatus(ctx context.Context, channelID string, tenantScopes, userScopes []string) (FeishuScopeStatus, error)
+}
+
+// FeishuScopeStatus compares what a channel's app needs, for itself and for
+// the people who authorize it, with what its tenant has granted.
+type FeishuScopeStatus struct {
+	Tenant FeishuScopeGap `json:"tenant"`
+	User   FeishuScopeGap `json:"user"`
+}
+
+// FeishuScopeGap lists scopes the app has not requested yet, with the console
+// link that requests them, and scopes requested but not granted, which wait
+// for the tenant's admin.
+type FeishuScopeGap struct {
+	Missing  []string `json:"missing,omitempty"`
+	Pending  []string `json:"pending,omitempty"`
+	ApplyURL string   `json:"apply_url,omitempty"`
+}
+
+// feishuScopeGranted is Feishu's grant_status for a granted scope.
+const feishuScopeGranted = 1
+
+// ScopeStatus reads the app's scopes with its own tenant token, which needs no
+// scope of its own. Feishu lists only scopes in a published version.
+func (f *FeishuAPI) ScopeStatus(ctx context.Context, channelID string, tenantScopes, userScopes []string) (status FeishuScopeStatus, err error) {
+	defer func() { err = f.explainDenied(ctx, channelID, err) }()
+	app, err := f.app(ctx, channelID)
+	if err != nil {
+		return FeishuScopeStatus{}, err
+	}
+	token, err := f.appToken(ctx, app)
+	if err != nil {
+		return FeishuScopeStatus{}, err
+	}
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Scopes []struct {
+				Name        string `json:"scope_name"`
+				GrantStatus int    `json:"grant_status"`
+				Type        string `json:"scope_type"`
+			} `json:"scopes"`
+		} `json:"data"`
+	}
+	if err := f.call(ctx, http.MethodGet, app.base+"/open-apis/application/v6/scopes", token, nil, &result); err != nil {
+		return FeishuScopeStatus{}, err
+	}
+	if result.Code != 0 {
+		return FeishuScopeStatus{}, feishuError(result.Code, result.Msg)
+	}
+	granted := map[string]map[string]int{feishuTenantToken: {}, feishuUserToken: {}}
+	for _, scope := range result.Data.Scopes {
+		if kind := granted[scope.Type]; kind != nil {
+			kind[scope.Name] = scope.GrantStatus
+		}
+	}
+	gap := func(needed []string, tokenType string) FeishuScopeGap {
+		var out FeishuScopeGap
+		for _, name := range normalizeActors(needed) {
+			switch grant, ok := granted[tokenType][name]; {
+			case !ok:
+				out.Missing = append(out.Missing, name)
+			case grant != feishuScopeGranted:
+				out.Pending = append(out.Pending, name)
+			}
+		}
+		if len(out.Missing) > 0 {
+			out.ApplyURL = FeishuScopeApplyURL(app.channel, out.Missing, tokenType)
+		}
+		return out
+	}
+	return FeishuScopeStatus{Tenant: gap(tenantScopes, feishuTenantToken), User: gap(userScopes, feishuUserToken)}, nil
 }

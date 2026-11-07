@@ -34,9 +34,16 @@ const (
 	feishuTokenMargin = 2 * time.Minute
 	// Feishu's people search returns at most 30 a page.
 	contactPageSize = 30
-	maxContactPages = 7
 	maxContactIDs   = 100
 	maxContactQuery = 50
+	// The person's groups and 1:1 chats are read most recently active first,
+	// and only this many pages of 100: past that they search.
+	maxUserChatPages   = 3
+	maxRecentChatPages = 2
+	chatBatchSize      = 50 // Feishu's limit for chats/batch_query.
+	maxChatLookup      = 100
+	maxChatQuery       = 64
+	chatSearchPageSize = 50
 )
 
 // FeishuUserScopes are what a person grants when they authorize a channel's
@@ -67,11 +74,15 @@ type FeishuUserDirectory interface {
 	PollUserAuth(ctx context.Context, channelID, deviceCode string) (FeishuUserAuthPoll, error)
 	UserAuth(ctx context.Context, channelID string) (*FeishuUserAuth, error)
 	ForgetUserAuth(ctx context.Context, channelID string) error
-	// UserChats lists the person's groups, marking those the bot is in.
+	// UserChats lists the person's groups, most recently active first, marking
+	// those the bot is in.
 	UserChats(ctx context.Context, channelID string) (FeishuChatList, error)
+	// FindUserChats searches the person's groups for query, or names chatIDs.
+	FindUserChats(ctx context.Context, channelID, query string, chatIDs []string) (FeishuChatList, error)
 	AddBotToChat(ctx context.Context, channelID, chatID string) (FeishuAddBotResult, error)
-	// UserContacts lists the people the person has chatted with, searches
-	// everyone they can see for query, or looks up openIDs.
+	// UserContacts lists the people the person has chatted with one to one,
+	// most recent first, searches everyone they can see for query, or looks
+	// up openIDs.
 	UserContacts(ctx context.Context, channelID, query string, openIDs []string) (FeishuUserList, error)
 }
 
@@ -282,36 +293,138 @@ func (f *FeishuAPI) UserChats(ctx context.Context, channelID string) (list Feish
 	if err != nil {
 		return FeishuChatList{}, err
 	}
-	items, truncated, err := feishuPages[struct {
-		ChatID      string `json:"chat_id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		External    bool   `json:"external"`
-	}](ctx, f, app.base+"/open-apis/im/v1/chats?"+feishuPageSizeArgs, token)
+	items, truncated, err := feishuPagesUpTo[feishuChatRecord](ctx, f, app.base+"/open-apis/im/v1/chats?sort_type=ByActiveTimeDesc&"+feishuPageSizeArgs, token, maxUserChatPages)
 	if err != nil {
 		return FeishuChatList{}, err
 	}
-	// Which of them the bot is in already. The bot's own listing can fail,
-	// say for a missing app scope, and the person's groups still show.
-	var botChats map[string]bool
-	botComplete := false
-	if tenant, err := f.appToken(ctx, app); err == nil {
-		if chats, err := f.chats(ctx, app.base, tenant); err == nil {
-			botChats, botComplete = map[string]bool{}, !chats.Truncated
-			for _, chat := range chats.Items {
-				botChats[chat.ChatID] = true
-			}
-		}
-	}
-	list = FeishuChatList{Items: make([]FeishuChat, 0, len(items)), Truncated: truncated}
-	for _, item := range items {
-		chat := FeishuChat{ChatID: item.ChatID, Name: item.Name, Description: item.Description, External: item.External}
-		if in := botChats[item.ChatID]; in || (botChats != nil && botComplete) {
-			chat.BotIn = &in
-		}
-		list.Items = append(list.Items, chat)
-	}
+	list = FeishuChatList{Items: feishuChatsFrom(items), Truncated: truncated}
+	f.markBotIn(ctx, app, list.Items)
 	return list, nil
+}
+
+// FindUserChats searches the person's groups, by group or member name, or
+// names the given chat ids. Public groups they have not joined are left out:
+// they could not add the bot there.
+func (f *FeishuAPI) FindUserChats(ctx context.Context, channelID, query string, chatIDs []string) (list FeishuChatList, err error) {
+	defer func() { err = f.explainUser(ctx, channelID, err) }()
+	query = strings.TrimSpace(query)
+	var ids []string
+	for _, id := range normalizeActors(chatIDs) {
+		if feishuChatIDPattern.MatchString(id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > maxChatLookup {
+		return FeishuChatList{}, fmt.Errorf("look up at most %d chats at a time", maxChatLookup)
+	}
+	if len([]rune(query)) > maxChatQuery {
+		return FeishuChatList{}, fmt.Errorf("search for at most %d characters", maxChatQuery)
+	}
+	list = FeishuChatList{Items: []FeishuChat{}}
+	if len(ids) == 0 && (len(chatIDs) > 0 || query == "") {
+		return list, nil
+	}
+	app, token, err := f.userToken(ctx, channelID)
+	if err != nil {
+		return FeishuChatList{}, err
+	}
+	var records []feishuChatRecord
+	if len(ids) > 0 {
+		for start := 0; start < len(ids); start += chatBatchSize {
+			payload, _ := json.Marshal(map[string]any{"chat_ids": ids[start:min(start+chatBatchSize, len(ids))]})
+			var result struct {
+				Code int    `json:"code"`
+				Msg  string `json:"msg"`
+				Data struct {
+					Items []feishuChatRecord `json:"items"`
+				} `json:"data"`
+			}
+			if err := f.call(ctx, http.MethodPost, app.base+"/open-apis/im/v1/chats/batch_query?user_id_type=open_id", token, payload, &result); err != nil {
+				return FeishuChatList{}, err
+			}
+			if result.Code != 0 {
+				return FeishuChatList{}, feishuError(result.Code, result.Msg)
+			}
+			records = append(records, result.Data.Items...)
+		}
+	} else {
+		// Feishu's search wants a hyphenated keyword quoted.
+		if strings.Contains(query, "-") && !strings.HasPrefix(query, `"`) {
+			query = `"` + query + `"`
+		}
+		payload, _ := json.Marshal(map[string]any{"query": query, "filter": map[string]any{"search_types": []string{"private", "external", "public_joined"}}})
+		var result struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Items []struct {
+					MetaData feishuChatRecord `json:"meta_data"`
+				} `json:"items"`
+				HasMore bool `json:"has_more"`
+			} `json:"data"`
+		}
+		target := fmt.Sprintf("%s/open-apis/im/v2/chats/search?page_size=%d", app.base, chatSearchPageSize)
+		if err := f.call(ctx, http.MethodPost, target, token, payload, &result); err != nil {
+			return FeishuChatList{}, err
+		}
+		if result.Code != 0 {
+			return FeishuChatList{}, feishuError(result.Code, result.Msg)
+		}
+		for _, item := range result.Data.Items {
+			records = append(records, item.MetaData)
+		}
+		list.Truncated = result.Data.HasMore
+	}
+	list.Items = feishuChatsFrom(records)
+	f.markBotIn(ctx, app, list.Items)
+	return list, nil
+}
+
+// feishuChatRecord is a chat as Feishu's chat listings, search and batch
+// lookup describe it.
+type feishuChatRecord struct {
+	ChatID      string `json:"chat_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	External    bool   `json:"external"`
+	ChatStatus  string `json:"chat_status"`
+}
+
+// feishuChatsFrom keeps each live chat once.
+func feishuChatsFrom(records []feishuChatRecord) []FeishuChat {
+	chats := make([]FeishuChat, 0, len(records))
+	seen := map[string]bool{}
+	for _, record := range records {
+		if record.ChatID == "" || seen[record.ChatID] || strings.HasPrefix(record.ChatStatus, "dissolved") {
+			continue
+		}
+		seen[record.ChatID] = true
+		chats = append(chats, FeishuChat{ChatID: record.ChatID, Name: record.Name, Description: record.Description, External: record.External})
+	}
+	return chats
+}
+
+// markBotIn says which chats the bot is in already. The bot's own listing
+// can fail, say for a missing app scope, and the chats still show; when it
+// was cut short only the chats found in it are marked.
+func (f *FeishuAPI) markBotIn(ctx context.Context, app feishuApp, chats []FeishuChat) {
+	tenant, err := f.appToken(ctx, app)
+	if err != nil {
+		return
+	}
+	botChats, err := f.chats(ctx, app.base, tenant)
+	if err != nil {
+		return
+	}
+	in := map[string]bool{}
+	for _, chat := range botChats.Items {
+		in[chat.ChatID] = true
+	}
+	for index := range chats {
+		if present := in[chats[index].ChatID]; present || !botChats.Truncated {
+			chats[index].BotIn = &present
+		}
+	}
 }
 
 func (f *FeishuAPI) AddBotToChat(ctx context.Context, channelID, chatID string) (result FeishuAddBotResult, err error) {
@@ -365,24 +478,70 @@ func (f *FeishuAPI) UserContacts(ctx context.Context, channelID, query string, o
 	if len([]rune(query)) > maxContactQuery {
 		return FeishuUserList{}, fmt.Errorf("search for at most %d characters", maxContactQuery)
 	}
+	if len(openIDs) > 0 && len(ids) == 0 {
+		return FeishuUserList{Items: []FeishuUser{}}, nil
+	}
 	app, token, err := f.userToken(ctx, channelID)
 	if err != nil {
 		return FeishuUserList{}, err
 	}
-	body, pages := map[string]any{}, 1
 	switch {
-	case len(openIDs) > 0:
-		if len(ids) == 0 {
-			return FeishuUserList{Items: []FeishuUser{}}, nil
-		}
-		body["filter"], pages = map[string]any{"user_ids": ids}, (len(ids)+contactPageSize-1)/contactPageSize
+	case len(ids) > 0:
+		return f.searchPeople(ctx, app, token, map[string]any{"filter": map[string]any{"user_ids": ids}}, (len(ids)+contactPageSize-1)/contactPageSize)
 	case query != "":
-		body["query"] = query
-	default:
-		body["filter"], pages = map[string]any{"has_contact": true}, maxContactPages
+		return f.searchPeople(ctx, app, token, map[string]any{"query": query}, 1)
 	}
+	return f.recentContacts(ctx, app, token)
+}
+
+// recentContacts is the people the person last talked to one to one, most
+// recent first. The chats carry their names; emails and departments come from
+// the people search where it can see them.
+func (f *FeishuAPI) recentContacts(ctx context.Context, app feishuApp, token string) (FeishuUserList, error) {
+	chats, more, err := feishuPagesUpTo[struct {
+		Name       string `json:"name"`
+		TargetID   string `json:"p2p_target_id"`
+		TargetType string `json:"p2p_target_type"`
+	}](ctx, f, app.base+"/open-apis/im/v1/chats?types=p2p&sort_type=ByActiveTimeDesc&user_id_type=open_id&"+feishuPageSizeArgs, token, maxRecentChatPages)
+	if err != nil {
+		return FeishuUserList{}, err
+	}
+	list := FeishuUserList{Items: []FeishuUser{}, Truncated: more}
+	position := map[string]int{}
+	for _, chat := range chats {
+		if chat.TargetType != "user" || !strings.HasPrefix(chat.TargetID, "ou_") {
+			continue // bots, and chats with no one else
+		}
+		if _, seen := position[chat.TargetID]; seen {
+			continue
+		}
+		position[chat.TargetID] = len(list.Items)
+		list.Items = append(list.Items, FeishuUser{OpenID: chat.TargetID, Name: strings.TrimSpace(chat.Name)})
+	}
+	for start := 0; start < len(list.Items); start += maxContactIDs {
+		var ids []string
+		for _, person := range list.Items[start:min(start+maxContactIDs, len(list.Items))] {
+			ids = append(ids, person.OpenID)
+		}
+		found, err := f.searchPeople(ctx, app, token, map[string]any{"filter": map[string]any{"user_ids": ids}}, (len(ids)+contactPageSize-1)/contactPageSize)
+		if err != nil {
+			break // the names are enough to pick from
+		}
+		for _, person := range found.Items {
+			if at, ok := position[person.OpenID]; ok {
+				list.Items[at].Email, list.Items[at].Department = person.Email, person.Department
+				list.Items[at].Name = firstNonEmpty(list.Items[at].Name, person.Name)
+			}
+		}
+	}
+	return list, nil
+}
+
+// searchPeople runs Feishu's people search as the person for up to pages
+// pages of 30.
+func (f *FeishuAPI) searchPeople(ctx context.Context, app feishuApp, token string, body map[string]any, pages int) (FeishuUserList, error) {
 	payload, _ := json.Marshal(body)
-	list = FeishuUserList{Items: []FeishuUser{}}
+	list := FeishuUserList{Items: []FeishuUser{}}
 	pageToken := ""
 	for range pages {
 		target := fmt.Sprintf("%s/open-apis/contact/v3/users/search?page_size=%d", app.base, contactPageSize)

@@ -119,13 +119,21 @@ fills in:
   becomes an allowed sender. A second scan signs in to the Open Platform and turns
   on the scopes, long-connection events and card callbacks, then publishes the
   bot. Both scans work only from the local Console. Lark bots are configured on
-  the Open Platform by hand, as the form describes.
+  the Open Platform by hand, as the form describes. Choosing a bot checks its
+  app's scopes (`GET /open-apis/application/v6/scopes`, with its own tenant
+  token) against what the second scan enables, for the app and for user
+  identity, and shows what is missing with the console link that requests it and
+  a QR code of that link; scopes requested but not yet granted are listed as
+  waiting for an admin. Feishu counts a scope once a version with it is
+  published. The bot picker names each channel with its bot's own name.
   Optionally, the operator then authorizes the bot's app once with their own
   Feishu account, through Feishu's device flow: they scan a code or open a link and
-  approve, so no redirect address is configured. After that the group and sender
-  pickers list that person's own groups and the people they have chatted with,
-  search everyone they can see, and add the bot to a group it is not in yet, as
-  them. The bot itself needs no scope to read those groups or people. The second
+  approve, so no redirect address is configured. After that the group picker
+  lists that person's groups most recently active first (the latest 300),
+  searches all of them by group or member name, names chosen groups past those,
+  and adds the bot to a group it is not in yet, as them. The sender picker lists
+  the people of their recent 1:1 chats, most recent first, and searches everyone
+  they can see by name, pinyin or email. The bot itself needs no scope to read those groups or people. The second
   scan also enables the four user-identity scopes this takes (`im:chat:read`,
   `im:chat.members:write_only`, `contact:user:search`, `offline_access`); an
   authorization that lacks one names it with a link to enable it. The daemon

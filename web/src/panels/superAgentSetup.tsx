@@ -8,7 +8,7 @@ import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { completeFeishuDraft, sleep } from "./connect/connectShared";
 import { useFeishuAutomation, useFeishuRegistration } from "./connect/feishuScan";
-import { FeishuActorPicker, FeishuChatPicker, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
+import { FeishuActorPicker, FeishuChatPicker, FeishuScopeCheck, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
 import { generateSecret, githubPolls, githubWebhookPath, isFeishuSource, parseActors, requiredKeys, sourceField } from "./superAgentModel";
 import {
   EMAIL_PROVIDERS, REDACTED, emailProviderByID, emailProviderConfig, emailProviderForAddress, emailProviderForConfig,
@@ -165,6 +165,7 @@ function FeishuSteps({ source, onChange, channels, onChannelCreated }: SourcePro
   const directory = useFeishuDirectory(channelID, memberChats, source.allowed_actors);
   const bot = channel?.name ?? t("superAgents.setup.feishu.theBot");
   const setConfig = (key: string, value: string) => onChange({ config: { ...source.config, [key]: value } });
+  const channelLabels = feishuChannelLabels(channels);
 
   // A bot made from here is selected, and the person who scanned may ask it.
   const created = async (saved: Channel, owner?: string) => {
@@ -184,7 +185,7 @@ function FeishuSteps({ source, onChange, channels, onChannelCreated }: SourcePro
             <span>{t("superAgents.field.channel")} *</span>
             <select value={channelID} onChange={(event) => setConfig("channel_id", event.target.value)}>
               <option value="">{t("superAgents.chooseChannel")}</option>
-              {channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {channels.map((item) => <option key={item.id} value={item.id}>{channelLabels.get(item.id)}</option>)}
             </select>
           </label>
         )}
@@ -223,6 +224,22 @@ function FeishuSteps({ source, onChange, channels, onChannelCreated }: SourcePro
       </Step>
     </Steps>
   );
+}
+
+// feishuChannelLabels names each channel with its bot's own name, which is
+// what people see in Feishu, and adds the App ID where two would still read
+// the same.
+export function feishuChannelLabels(channels: Channel[]): Map<string, string> {
+  const base = new Map(channels.map((channel) => {
+    const bot = channel.bot_name?.trim();
+    return [channel.id, bot && bot !== channel.name ? `${channel.name} · ${bot}` : channel.name];
+  }));
+  const counts = new Map<string, number>();
+  for (const label of base.values()) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return new Map(channels.map((channel) => {
+    const label = base.get(channel.id) ?? channel.name;
+    return [channel.id, (counts.get(label) ?? 0) > 1 ? `${label} · ${channel.config?.app_id || channel.id}` : label];
+  }));
 }
 
 // FeishuBotScan creates a bot by scanning: Feishu makes the app in the
@@ -293,12 +310,15 @@ function FeishuEventsSetup({ channel, documents }: { channel: Channel; documents
       {appID && <LinkButton href={openPlatform}>{t("superAgents.setup.feishu.openPlatform")}</LinkButton>}
     </p>
   );
-  if (lark || !appID) return manual;
+  // The check runs again once the scan has configured the bot.
+  const check = <FeishuScopeCheck key={automation.phase === "completed" ? "configured" : "before"} channelID={channel.id} documents={documents} />;
+  if (lark || !appID) return <>{check}{manual}</>;
 
   const busy = automation.phase === "loading" || automation.phase === "scanning" || automation.phase === "configuring";
   const missing = automation.result?.missing_scopes ?? [];
   return (
     <>
+      {check}
       <p>{t(documents ? "superAgents.setup.feishu.docEventsHelp" : "superAgents.setup.feishu.eventsHelp")}</p>
       {automation.phase === "completed" ? (
         <div className="setup-ok" role="status">

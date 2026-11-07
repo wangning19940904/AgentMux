@@ -14,6 +14,7 @@ import { selectSystemDirectory } from "./desktop";
 import type {
   FeishuAddBotResult,
   FeishuChatList,
+  FeishuScopeStatus,
   FeishuUser,
   FeishuUserAuth,
   FeishuUserAuthPoll,
@@ -1137,6 +1138,10 @@ export const api = {
     del<{ ok: boolean }>(`/api/v1/super-agents/feishu/user-auth?channel_id=${encodeURIComponent(channelID)}`),
   feishuMyChats: (channelID: string) =>
     getChecked<FeishuChatList>(`/api/v1/super-agents/feishu/my-chats?channel_id=${encodeURIComponent(channelID)}`),
+  findFeishuMyChats: (channelID: string, lookup: { query?: string; chat_ids?: string[] }) =>
+    postChecked<FeishuChatList>(`/api/v1/super-agents/feishu/my-chats/find?channel_id=${encodeURIComponent(channelID)}`, lookup),
+  feishuScopeStatus: (channelID: string, documents = false) =>
+    getChecked<FeishuScopeStatus>(`/api/v1/super-agents/feishu/scopes?channel_id=${encodeURIComponent(channelID)}${documents ? "&documents=true" : ""}`),
   addFeishuBotToChat: (channelID: string, chatID: string) =>
     postChecked<FeishuAddBotResult>(`/api/v1/super-agents/feishu/my-chats/add-bot?channel_id=${encodeURIComponent(channelID)}`, { chat_id: chatID }),
   feishuContacts: (channelID: string, lookup: { query?: string; open_ids?: string[] }) =>

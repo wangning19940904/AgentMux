@@ -258,9 +258,13 @@ func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails
 // feishuPages follows page_token pagination for up to maxDirectoryPages pages
 // and reports whether Feishu had more.
 func feishuPages[T any](ctx context.Context, f *FeishuAPI, target, token string) ([]T, bool, error) {
+	return feishuPagesUpTo[T](ctx, f, target, token, maxDirectoryPages)
+}
+
+func feishuPagesUpTo[T any](ctx context.Context, f *FeishuAPI, target, token string, maxPages int) ([]T, bool, error) {
 	var items []T
 	pageToken := ""
-	for range maxDirectoryPages {
+	for range maxPages {
 		next := target
 		if pageToken != "" {
 			next += "&page_token=" + url.QueryEscape(pageToken)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,11 +15,13 @@ import (
 // fakeFeishuUserDirectory adds what the Console does as the authorizing person.
 type fakeFeishuUserDirectory struct {
 	fakeFeishuDirectory
-	approved bool
-	polled   []string
-	added    string
-	query    string
-	userErr  error
+	approved     bool
+	polled       []string
+	added        string
+	query        string
+	userErr      error
+	tenantScopes []string
+	userScopes   []string
 }
 
 func (f *fakeFeishuUserDirectory) StartUserAuth(context.Context, string) (superagent.FeishuUserAuthStart, error) {
@@ -48,6 +51,16 @@ func (f *fakeFeishuUserDirectory) ForgetUserAuth(context.Context, string) error 
 func (f *fakeFeishuUserDirectory) UserChats(context.Context, string) (superagent.FeishuChatList, error) {
 	in := false
 	return superagent.FeishuChatList{Items: []superagent.FeishuChat{{ChatID: "oc_side", Name: "Side", BotIn: &in}}}, f.userErr
+}
+
+func (f *fakeFeishuUserDirectory) FindUserChats(_ context.Context, _, query string, chatIDs []string) (superagent.FeishuChatList, error) {
+	f.query = query + "|" + strings.Join(chatIDs, ",")
+	return superagent.FeishuChatList{Items: []superagent.FeishuChat{{ChatID: "oc_found", Name: "Found"}}}, f.userErr
+}
+
+func (f *fakeFeishuUserDirectory) ScopeStatus(_ context.Context, _ string, tenant, user []string) (superagent.FeishuScopeStatus, error) {
+	f.tenantScopes, f.userScopes = tenant, user
+	return superagent.FeishuScopeStatus{Tenant: superagent.FeishuScopeGap{Missing: []string{"im:message"}, ApplyURL: "https://open.feishu.cn/app/a/auth?q=im:message&op_from=openapi&token_type=tenant"}}, nil
 }
 
 func (f *fakeFeishuUserDirectory) AddBotToChat(_ context.Context, _, chatID string) (superagent.FeishuAddBotResult, error) {
@@ -127,6 +140,22 @@ func TestFeishuUserRoutes(t *testing.T) {
 	recorder = doJSON(t, srv, http.MethodPost, "/api/v1/super-agents/feishu/contacts?channel_id=fs", map[string]any{"query": "张"})
 	if recorder.Code != http.StatusOK || directory.query != "张" || !strings.Contains(recorder.Body.String(), "ou_a") {
 		t.Fatalf("contacts: %d %s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = doJSON(t, srv, http.MethodPost, "/api/v1/super-agents/feishu/my-chats/find?channel_id=fs", map[string]any{"query": "ops", "chat_ids": []string{"oc_1"}})
+	if recorder.Code != http.StatusOK || directory.query != "ops|oc_1" || !strings.Contains(recorder.Body.String(), "oc_found") {
+		t.Fatalf("find chats: %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/scopes?channel_id=fs", nil)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"missing":["im:message"]`) || !strings.Contains(recorder.Body.String(), "token_type=tenant") {
+		t.Fatalf("scopes: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if !slices.Equal(directory.tenantScopes, agentMuxFeishuScopes) || !slices.Equal(directory.userScopes, superagent.FeishuUserScopes) {
+		t.Fatalf("the check asks for what the second scan enables: %v %v", directory.tenantScopes, directory.userScopes)
+	}
+	doJSON(t, srv, http.MethodGet, "/api/v1/super-agents/feishu/scopes?channel_id=fs&documents=true", nil)
+	if !slices.Contains(directory.tenantScopes, "docx:document:readonly") {
+		t.Fatalf("a document trigger also needs the document scopes: %v", directory.tenantScopes)
 	}
 
 	directory.userErr = superagent.ErrFeishuUserAuthRequired
