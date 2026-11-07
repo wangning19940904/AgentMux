@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wangning19940904/AgentMux/superagent"
 )
 
 const (
@@ -182,6 +184,10 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 		Publish    bool   `json:"publish"`
 		Visibility string `json:"visibility"`
 		Documents  bool   `json:"documents"`
+		// UserScopes also enables what a person grants when they authorize
+		// the app as themselves, so a Super Agent trigger can list their
+		// groups and contacts and add the bot to a group.
+		UserScopes bool `json:"user_scopes"`
 	}
 	if !decodeJSONInto(w, r, &input) {
 		return
@@ -208,7 +214,7 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 		return
 	}
 
-	result, err := configureFeishuOpenPlatform(r.Context(), session.client, input.AppID, input.Publish, input.Visibility, input.Documents)
+	result, err := configureFeishuOpenPlatform(r.Context(), session.client, input.AppID, input.Publish, input.Visibility, input.Documents, input.UserScopes)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -219,7 +225,7 @@ func (s *Server) handleFeishuAutomationConfigure(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, result)
 }
 
-func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID string, publish bool, visibility string, documents bool) (map[string]any, error) {
+func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID string, publish bool, visibility string, documents, userScopes bool) (map[string]any, error) {
 	scopes, events := agentMuxFeishuScopes, agentMuxFeishuEvents
 	if documents {
 		scopes = append(slices.Clone(scopes), agentMuxFeishuDocumentScopes...)
@@ -244,9 +250,10 @@ func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID
 	if err != nil {
 		return nil, fmt.Errorf("read Feishu scope catalog: %w", err)
 	}
-	catalog := map[string]string{}
+	catalog, userCatalog := map[string]string{}, map[string]string{}
 	collectFeishuScopeEntries(scopePayload, catalog)
-	var scopeIDs, missingScopes []string
+	collectFeishuUserScopeEntries(scopePayload, userCatalog)
+	var scopeIDs, userScopeIDs, missingScopes []string
 	for _, name := range scopes {
 		if id := catalog[name]; id != "" {
 			scopeIDs = append(scopeIDs, id)
@@ -254,9 +261,18 @@ func configureFeishuOpenPlatform(ctx context.Context, client *http.Client, appID
 			missingScopes = append(missingScopes, name)
 		}
 	}
-	if len(scopeIDs) > 0 {
+	if userScopes {
+		for _, name := range superagent.FeishuUserScopes {
+			if id := firstSessionNonEmpty(userCatalog[name], catalog[name]); id != "" {
+				userScopeIDs = append(userScopeIDs, id)
+			} else {
+				missingScopes = append(missingScopes, name)
+			}
+		}
+	}
+	if len(scopeIDs)+len(userScopeIDs) > 0 {
 		if _, err := post("/developers/v1/scope/update/"+appID, map[string]any{
-			"clientId": appID, "appScopeIDs": uniqueSetupStrings(scopeIDs), "userScopeIDs": []string{},
+			"clientId": appID, "appScopeIDs": uniqueSetupStrings(scopeIDs), "userScopeIDs": uniqueSetupStrings(userScopeIDs),
 			"scopeIds": []string{}, "operation": "add", "isDeveloperPanel": true,
 		}); err != nil {
 			return nil, fmt.Errorf("configure Feishu scopes: %w", err)
@@ -537,6 +553,25 @@ func collectFeishuScopeEntries(value any, out map[string]string) {
 		}
 		for _, child := range typed {
 			collectFeishuScopeEntries(child, out)
+		}
+	}
+}
+
+// collectFeishuUserScopeEntries reads only the catalog's user-identity
+// scopes, which the console lists apart from the app's own.
+func collectFeishuUserScopeEntries(value any, out map[string]string) {
+	switch typed := value.(type) {
+	case []any:
+		for _, child := range typed {
+			collectFeishuUserScopeEntries(child, out)
+		}
+	case map[string]any:
+		for key, child := range typed {
+			if strings.EqualFold(key, "userScopes") || strings.EqualFold(key, "user_scopes") {
+				collectFeishuScopeEntries(child, out)
+			} else {
+				collectFeishuUserScopeEntries(child, out)
+			}
 		}
 	}
 }

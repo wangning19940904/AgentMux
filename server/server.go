@@ -57,6 +57,9 @@ type Server struct {
 	remote             *remotepkg.Manager
 	superAgents        *superagent.Service
 	feishuDirectory    superagent.FeishuDirectory
+	feishuUser         superagent.FeishuUserDirectory
+	feishuUserAuthMu   sync.Mutex
+	feishuUserAuths    map[string]feishuUserAuthSession
 	keepAwake          *keepAwakeManager
 	hostMetrics        *hostmetrics.Sampler
 	channelPeers       channelPeerClient
@@ -144,6 +147,7 @@ func New(deps Dependencies) *Server {
 		openAIFiles:       newOpenAIFileRegistry(),
 		orchestrations:    deps.Orchestrations,
 		feishuAutomations: map[string]*feishuAutomationSession{},
+		feishuUserAuths:   map[string]feishuUserAuthSession{},
 		consoleSessions:   newConsoleSessionManager(),
 		fleetSyncPlans:    map[string]*fleetSyncPlan{},
 		mux:               http.NewServeMux(),

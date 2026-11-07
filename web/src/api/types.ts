@@ -1586,12 +1586,15 @@ export interface FeishuChat {
   name: string;
   description?: string;
   external?: boolean;
+  // Set for the authorizing person's groups: whether the bot is in it too.
+  bot_in?: boolean;
 }
 
 export interface FeishuUser {
   open_id: string;
   name?: string;
   email?: string;
+  department?: string;
   chat_ids?: string[];
 }
 
@@ -1611,6 +1614,38 @@ export interface FeishuUserList {
 export interface FeishuScopeRequest {
   scopes: string[];
   apply_url: string;
+  // "user" when the scope is missing for the authorizing person, who then
+  // authorizes again once the app has it.
+  token_type?: string;
+}
+
+// FeishuUserAuth is who authorized a Feishu channel's app as themselves.
+// Missing names scopes their authorization lacks; apply_url enables them.
+export interface FeishuUserAuth {
+  open_id: string;
+  name?: string;
+  scopes?: string[];
+  missing?: string[];
+  apply_url?: string;
+}
+
+export interface FeishuUserAuthStart {
+  session_id: string;
+  verification_url: string;
+  user_code?: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface FeishuUserAuthPoll {
+  status: "pending" | "slow_down" | "completed" | "denied" | "expired";
+  user?: FeishuUserAuth;
+}
+
+export interface FeishuAddBotResult {
+  added: boolean;
+  // The group's owner or an admin must approve new members first.
+  pending?: boolean;
 }
 
 export interface SuperAgentActivity {

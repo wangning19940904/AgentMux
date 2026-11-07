@@ -204,7 +204,7 @@ func TestFeishuScopeApplyURL(t *testing.T) {
 		{&core.Channel{Type: "feishu"}, []string{"im:chat"}, ""},
 		{nil, []string{"im:chat"}, ""},
 	} {
-		if got := FeishuScopeApplyURL(tc.channel, tc.scopes); got != tc.want {
+		if got := FeishuScopeApplyURL(tc.channel, tc.scopes, "tenant"); got != tc.want {
 			t.Errorf("FeishuScopeApplyURL(%+v, %v) = %q, want %q", tc.channel, tc.scopes, got, tc.want)
 		}
 	}

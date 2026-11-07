@@ -21,6 +21,7 @@ const maxGitHubWebhookBytes = 25 << 20 // GitHub's documented payload cap.
 func (s *Server) SetSuperAgents(service *superagent.Service, directory superagent.FeishuDirectory) {
 	s.superAgents = service
 	s.feishuDirectory = directory
+	s.feishuUser, _ = directory.(superagent.FeishuUserDirectory)
 }
 
 // RemoteHosts exposes the SSH host manager to the Super Agent worker fleet. It
@@ -70,6 +71,7 @@ func (s *Server) registerSuperAgentRoutes() {
 		}
 		return s.feishuDirectory.Users(r.Context(), channelID, body.OpenIDs, body.Emails)
 	}))
+	s.registerFeishuUserRoutes()
 	s.mux.HandleFunc("GET /api/v1/super-agents/github/setup", s.handleSuperAgentGitHubSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/github/account", s.handleSuperAgentGitHubAccount)
 	// Outside /api: GitHub cannot present a bridge token. Each delivery proves
@@ -355,9 +357,14 @@ func (s *Server) handleFeishuDirectory(lookup func(*http.Request, string) (any, 
 		switch {
 		case errors.Is(err, errBadDirectoryRequest):
 			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, errFeishuUserUnavailable):
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+		case errors.Is(err, superagent.ErrFeishuUserAuthRequired):
+			// The Console asks the person to authorize, then retries.
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "user_auth_required": true})
 		case errors.As(err, &denied):
 			// The Console offers the link so the operator can request the scope.
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "scopes": denied.Scopes, "apply_url": denied.ApplyURL})
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "scopes": denied.Scopes, "token_type": denied.TokenType, "apply_url": denied.ApplyURL})
 		case err != nil:
 			writeErr(w, http.StatusBadGateway, err.Error())
 		default:

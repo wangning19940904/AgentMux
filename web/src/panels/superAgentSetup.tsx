@@ -8,7 +8,7 @@ import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { completeFeishuDraft } from "./connect/connectShared";
 import { useFeishuAutomation, useFeishuRegistration } from "./connect/feishuScan";
-import { FeishuActorPicker, FeishuChatPicker, useFeishuDirectory } from "./superAgentFeishu";
+import { FeishuActorPicker, FeishuChatPicker, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
 import { generateSecret, githubPolls, githubWebhookPath, isFeishuSource, parseActors, requiredKeys, sourceField } from "./superAgentModel";
 import {
   EMAIL_PROVIDERS, REDACTED, emailProviderByID, emailProviderConfig, emailProviderForAddress, emailProviderForConfig,
@@ -191,6 +191,9 @@ function FeishuSteps({ source, onChange, channels, onChannelCreated }: SourcePro
       <Step index={++index} title={t(documents ? "superAgents.setup.feishu.docEventsTitle" : "superAgents.setup.feishu.eventsTitle")}>
         {channel ? <FeishuEventsSetup channel={channel} documents={documents} /> : <p>{t("superAgents.setup.feishu.pickFirst")}</p>}
       </Step>
+      <Step index={++index} title={t("superAgents.setup.feishu.userTitle")} done={Boolean(directory.auth.user)}>
+        <FeishuUserAuthorize channelID={channelID} bot={bot} directory={directory} />
+      </Step>
       {documents ? (
         <>
           <Step index={++index} title={t("superAgents.setup.feishu.shareTitle")} done={Boolean(source.config.documents?.trim())}>
@@ -206,7 +209,7 @@ function FeishuSteps({ source, onChange, channels, onChannelCreated }: SourcePro
         </>
       ) : (
         <Step index={++index} title={t("superAgents.setup.feishu.groupTitle")}>
-          <p>{t("superAgents.setup.feishu.groupHelp", { bot })}</p>
+          <p>{t(directory.auth.user ? "superAgents.setup.feishu.groupHelpAuthorized" : "superAgents.setup.feishu.groupHelp", { bot })}</p>
           <FeishuChatPicker label={t("superAgents.field.chatIDs")} value={source.config.chat_ids ?? ""}
             channelID={channelID} directory={directory} onChange={(value) => setConfig("chat_ids", value)} />
         </Step>
@@ -317,7 +320,7 @@ function FeishuEventsSetup({ channel, documents }: { channel: Channel; documents
                   <option value="all">{t("connect.openPlatformAll")}</option>
                 </select>
               </label>
-              <button type="button" className="ghost-action" onClick={() => automation.start(appID, visibility, documents)}>
+              <button type="button" className="ghost-action" onClick={() => automation.start(appID, visibility, documents, true)}>
                 <Smartphone size={14} /> {t("superAgents.setup.feishu.configure")}
               </button>
               {automation.phase === "expired" && <span>{t("superAgents.setup.feishu.expired")}</span>}

@@ -12,8 +12,12 @@ import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
+  FeishuAddBotResult,
   FeishuChatList,
   FeishuUser,
+  FeishuUserAuth,
+  FeishuUserAuthPoll,
+  FeishuUserAuthStart,
   FeishuUserList,
   SuperAgent,
   SuperAgentActivity,
@@ -936,13 +940,16 @@ export const api = {
     postChecked<FeishuAutomationBeginResponse>("/api/v1/setup/feishu/automation/begin", {}),
   pollFeishuAutomation: (sessionID: string) =>
     postChecked<FeishuAutomationPollResponse>("/api/v1/setup/feishu/automation/poll", { session_id: sessionID }),
-  configureFeishuAutomation: (sessionID: string, appID: string, visibility: "owner" | "all", documents = false) =>
+  // userScopes also enables what a person grants when they authorize the app
+  // as themselves, for Super Agent triggers.
+  configureFeishuAutomation: (sessionID: string, appID: string, visibility: "owner" | "all", documents = false, userScopes = false) =>
     postChecked<FeishuAutomationResult>("/api/v1/setup/feishu/automation/configure", {
       session_id: sessionID,
       app_id: appID,
       publish: true,
       visibility,
       documents,
+      user_scopes: userScopes,
     }),
   triggers: () => fleetMode() ? fleetReadArray<Trigger>("/api/v1/triggers") : get<Trigger[] | null>("/api/v1/triggers"),
   upsertTrigger: async (tr: Partial<Trigger>) => {
@@ -1108,6 +1115,21 @@ export const api = {
     getChecked<FeishuUserList>(`/api/v1/super-agents/feishu/members?channel_id=${encodeURIComponent(channelID)}&chat_ids=${encodeURIComponent(chatIDs.join(","))}`),
   feishuUsers: (channelID: string, lookup: { open_ids?: string[]; emails?: string[] }) =>
     postChecked<FeishuUser[]>(`/api/v1/super-agents/feishu/users?channel_id=${encodeURIComponent(channelID)}`, lookup),
+  // As the person who authorized the channel's app with their own account.
+  feishuUserAuth: (channelID: string) =>
+    getChecked<{ user: FeishuUserAuth | null }>(`/api/v1/super-agents/feishu/user-auth?channel_id=${encodeURIComponent(channelID)}`),
+  startFeishuUserAuth: (channelID: string) =>
+    postChecked<FeishuUserAuthStart>(`/api/v1/super-agents/feishu/user-auth/start?channel_id=${encodeURIComponent(channelID)}`, {}),
+  pollFeishuUserAuth: (channelID: string, sessionID: string) =>
+    postChecked<FeishuUserAuthPoll>(`/api/v1/super-agents/feishu/user-auth/poll?channel_id=${encodeURIComponent(channelID)}`, { session_id: sessionID }),
+  forgetFeishuUserAuth: (channelID: string) =>
+    del<{ ok: boolean }>(`/api/v1/super-agents/feishu/user-auth?channel_id=${encodeURIComponent(channelID)}`),
+  feishuMyChats: (channelID: string) =>
+    getChecked<FeishuChatList>(`/api/v1/super-agents/feishu/my-chats?channel_id=${encodeURIComponent(channelID)}`),
+  addFeishuBotToChat: (channelID: string, chatID: string) =>
+    postChecked<FeishuAddBotResult>(`/api/v1/super-agents/feishu/my-chats/add-bot?channel_id=${encodeURIComponent(channelID)}`, { chat_id: chatID }),
+  feishuContacts: (channelID: string, lookup: { query?: string; open_ids?: string[] }) =>
+    postChecked<FeishuUserList>(`/api/v1/super-agents/feishu/contacts?channel_id=${encodeURIComponent(channelID)}`, lookup),
   remoteAgentInstances: (hostID: string) => getLocal<AgentInstance[] | null>(`/api/v1/remote/proxy/${encodeURIComponent(hostID)}/agent-instances`),
   orchestrations: (active = false) =>
     fleetMode() ? fleetReadArray<Orchestration>(`/api/v1/orchestrations?active=${active}`) : get<Orchestration[] | null>(`/api/v1/orchestrations?active=${active}`),

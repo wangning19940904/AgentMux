@@ -152,6 +152,7 @@ beforeEach(() => {
   vi.spyOn(api, "feishuChats").mockResolvedValue({ items: [{ chat_id: "oc_team", name: "Team" }, { chat_id: "oc_ops", name: "Ops", external: true }] });
   vi.spyOn(api, "feishuMembers").mockResolvedValue({ items: [{ open_id: "ou_a", name: "Alice", chat_ids: ["oc_team"] }, { open_id: "ou_c", name: "Carol", chat_ids: ["oc_ops"] }] });
   vi.spyOn(api, "feishuUsers").mockResolvedValue([]);
+  vi.spyOn(api, "feishuUserAuth").mockResolvedValue({ user: null });
   vi.spyOn(api, "superAgentGitHubSetup").mockResolvedValue({ local_url: "http://127.0.0.1:8765", api_protected: false });
 });
 

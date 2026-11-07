@@ -1569,3 +1569,5 @@
 .super-agent-scope-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .super-agent-scope-list code { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-subtle); font-size: 11px; }
 .super-agent-scope-request .super-agent-scope-apply { min-height: 24px; padding: 0 8px; text-decoration: none; }
+.super-agent-add-bot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.super-agent-add-bot .ghost-action { min-height: 24px; padding: 0 8px; }

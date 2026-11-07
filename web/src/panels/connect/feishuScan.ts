@@ -84,21 +84,22 @@ export type FeishuAutomation = {
   qrPayload: string;
   error: string;
   result?: FeishuAutomationResult;
-  start: (appID: string, visibility: "owner" | "all", documents?: boolean) => void;
+  start: (appID: string, visibility: "owner" | "all", documents?: boolean, userScopes?: boolean) => void;
   reset: () => void;
 };
 
 // useFeishuAutomation runs the second scan: it signs in to the Feishu Open
 // Platform and switches on the scopes, long-connection events and card
 // callbacks AgentMux needs, then publishes the bot. `documents` also asks for
-// what document triggers need. It works only from the local Console.
+// what document triggers need, and `userScopes` for what a person grants when
+// they authorize the app as themselves. It works only from the local Console.
 export function useFeishuAutomation(missingAppError: string): FeishuAutomation {
   const [state, setState] = useState<{ phase: FeishuAutomationPhase; qrPayload: string; error: string; result?: FeishuAutomationResult }>({ phase: "idle", qrPayload: "", error: "" });
   const run = useRef(0);
 
   useEffect(() => () => { run.current += 1; }, []);
 
-  const start = useCallback((appID: string, visibility: "owner" | "all", documents = false) => {
+  const start = useCallback((appID: string, visibility: "owner" | "all", documents = false, userScopes = false) => {
     const id = run.current + 1;
     run.current = id;
     const live = () => run.current === id;
@@ -121,7 +122,7 @@ export function useFeishuAutomation(missingAppError: string): FeishuAutomation {
           }
           if (polled.status === "completed") {
             setState((current) => ({ ...current, phase: "configuring", error: "" }));
-            const result = await api.configureFeishuAutomation(started.session_id, appID.trim(), visibility, documents);
+            const result = await api.configureFeishuAutomation(started.session_id, appID.trim(), visibility, documents, userScopes);
             if (live()) setState({ phase: "completed", qrPayload: "", error: "", result });
             return;
           }

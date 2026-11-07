@@ -111,7 +111,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			"guard":  {RuntimeActive: true, Enforced: true},
 		},
 	})
-	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel}
+	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel, Grants: st}
 	superAgents := superagent.New(superagent.Options{
 		Store: st, Invoker: connect, Log: log,
 		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},

@@ -205,7 +205,7 @@ func TestFeishuAutomationDocumentScopesAndEvents(t *testing.T) {
 		oldOpen := feishuAutomationOpenOrigin
 		feishuAutomationOpenOrigin = server.URL
 
-		if _, err := configureFeishuOpenPlatform(context.Background(), server.Client(), "cli_test", false, "", documents); err != nil {
+		if _, err := configureFeishuOpenPlatform(context.Background(), server.Client(), "cli_test", false, "", documents, false); err != nil {
 			t.Fatalf("documents=%v: %v", documents, err)
 		}
 		feishuAutomationOpenOrigin = oldOpen
@@ -222,5 +222,67 @@ func TestFeishuAutomationDocumentScopesAndEvents(t *testing.T) {
 	}
 	if slices.Contains(agentMuxFeishuEvents, feishuDocumentEditEvent) {
 		t.Fatal("the shared event list was modified")
+	}
+}
+
+// A Super Agent trigger's setup also enables what a person grants when they
+// authorize the app as themselves; other setups leave user scopes alone.
+func TestFeishuAutomationUserScopes(t *testing.T) {
+	for _, userScopes := range []bool{false, true} {
+		var gotUser []any
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /app/cli_test/auth", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`<script>window.csrfToken="csrf-one";</script>`))
+		})
+		mux.HandleFunc("POST /developers/v1/scope/all/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			var app, user []any
+			for _, name := range agentMuxFeishuScopes {
+				app = append(app, map[string]any{"scope_name": name, "scope_id": "app-" + name})
+			}
+			// The same name can carry a different id for user identity.
+			for _, name := range []string{"im:chat:read", "im:chat.members:write_only", "contact:user:search"} {
+				user = append(user, map[string]any{"scope_name": name, "scope_id": "user-" + name})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"appScopes": app, "userScopes": user}})
+		})
+		mux.HandleFunc("POST /developers/v1/scope/update/cli_test", func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotUser, _ = body["userScopeIDs"].([]any)
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+		})
+		for _, path := range []string{"robot/switch", "event/switch", "event/update", "callback/switch", "callback/update"} {
+			mux.HandleFunc("POST /developers/v1/"+path+"/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusOK, map[string]any{"code": 0})
+			})
+		}
+		mux.HandleFunc("POST /developers/v1/event/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"appEvents": []string{"im.message.receive_v1"}}})
+		})
+		mux.HandleFunc("POST /developers/v1/callback/cli_test", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"code": 0, "data": map[string]any{"callbacks": []string{"card.action.trigger"}}})
+		})
+		server := httptest.NewServer(mux)
+		oldOpen := feishuAutomationOpenOrigin
+		feishuAutomationOpenOrigin = server.URL
+		result, err := configureFeishuOpenPlatform(context.Background(), server.Client(), "cli_test", false, "", false, userScopes)
+		feishuAutomationOpenOrigin = oldOpen
+		server.Close()
+		if err != nil {
+			t.Fatalf("userScopes=%v: %v", userScopes, err)
+		}
+		if !userScopes {
+			if len(gotUser) != 0 {
+				t.Errorf("no user scopes unless asked: %v", gotUser)
+			}
+			continue
+		}
+		want := []any{"user-contact:user:search", "user-im:chat.members:write_only", "user-im:chat:read"}
+		if !reflect.DeepEqual(gotUser, want) {
+			t.Errorf("user scope ids = %v, want %v", gotUser, want)
+		}
+		if missing, _ := result["missing_scopes"].([]string); !slices.Contains(missing, "offline_access") {
+			t.Errorf("a scope the console does not list is reported: %v", result["missing_scopes"])
+		}
 	}
 }
