@@ -129,7 +129,10 @@ func TestAutoWorkersOffRefusesTheLaunch(t *testing.T) {
 	h := newHarness(t)
 	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
+	h.exhaustRetries()
+	if !strings.Contains(h.router.prompts[1], "cannot launch workers") {
+		t.Fatalf("a retry must say why the last answer was refused:\n%s", h.router.prompts[1])
+	}
 	if strings.Contains(h.router.prompts[0], `"id": "auto`) {
 		t.Fatalf("the roster must not offer a new worker:\n%s", h.router.prompts[0])
 	}
@@ -403,7 +406,7 @@ func TestRouterChoosesAmongWorkerFrameworks(t *testing.T) {
 	h.ingest("alice", "github:o/r#1", "use kimi", true)
 	h.settle()
 	h.ingest("alice", "github:o/r#2", "use codex", true)
-	h.settle()
+	h.exhaustRetries()
 
 	for _, entry := range []string{`"id": "auto:dsh"`, `"id": "auto:kimi"`, "Launches a new kimi worker"} {
 		if !strings.Contains(h.router.prompts[0], entry) {

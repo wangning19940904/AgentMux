@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -191,21 +192,57 @@ func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
 	return []core.Channel{{ID: "c1", Name: "Team bot", Type: "feishu"}, {ID: "c2", Name: "Slack bot", Type: "slack"}}, nil
 }
 
+// routerStub answers events with answer and ticket updates with updates, so
+// a test about events is not also asked about every finished turn.
+// prompts and conversations record events; updatePrompts records ticket
+// updates.
 type routerStub struct {
 	mu            sync.Mutex
 	answer        func(core.InvocationRequest) (string, error)
+	updates       func(core.InvocationRequest) (string, error)
 	prompts       []string
 	conversations []string
+	updatePrompts []string
 }
 
 func (r *routerStub) Invoke(_ context.Context, req core.InvocationRequest) (core.InvocationResult, error) {
 	r.mu.Lock()
-	r.prompts = append(r.prompts, req.Input)
-	r.conversations = append(r.conversations, req.ConversationID)
 	answer := r.answer
+	if isTicketUpdate(req.Input) {
+		r.updatePrompts = append(r.updatePrompts, req.Input)
+		if r.updates != nil {
+			answer = r.updates
+		}
+	} else {
+		r.prompts = append(r.prompts, req.Input)
+		r.conversations = append(r.conversations, req.ConversationID)
+	}
 	r.mu.Unlock()
 	text, err := answer(req)
 	return core.InvocationResult{Answer: text}, err
+}
+
+func isTicketUpdate(prompt string) bool {
+	return strings.Contains(prompt, `"kind": "`+core.SuperAgentTriggerTicketUpdate+`"`)
+}
+
+var updatedTicket = regexp.MustCompile(`"ticket_id": "(tkt_[^"]+)"`)
+
+// relay answers a ticket update with the worker's own report, as a router
+// that only passes results on would.
+func (h *harness) relay(req core.InvocationRequest) (string, error) {
+	match := updatedTicket.FindStringSubmatch(req.Input)
+	if match == nil {
+		return "", nil
+	}
+	ticket, _ := h.store.GetSuperAgentTicket(context.Background(), match[1])
+	if ticket == nil {
+		return "", nil
+	}
+	if ticket.Status == core.SuperAgentTicketFailed {
+		return fmt.Sprintf("I could not finish “%s”: %s", ticket.Title, ticket.Error), nil
+	}
+	return ticket.Output, nil
 }
 
 type workerCall struct {
@@ -213,6 +250,7 @@ type workerCall struct {
 	conv   string
 	input  string
 	dir    string
+	base   string
 }
 
 type workerStub struct {
@@ -221,8 +259,8 @@ type workerStub struct {
 	run   func(context.Context, workerCall) (string, error)
 }
 
-func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv, input, dir string) (string, error) {
-	call := workerCall{worker, conv, input, dir}
+func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv, input string, options RunOptions) (string, error) {
+	call := workerCall{worker, conv, input, options.Dir, options.BaseRef}
 	w.mu.Lock()
 	w.calls = append(w.calls, call)
 	run := w.run
@@ -242,16 +280,33 @@ func (w *workerStub) callCount() int {
 }
 
 type replyStub struct {
-	mu    sync.Mutex
-	texts []string
-	err   error
+	mu      sync.Mutex
+	texts   []string
+	targets []string
+	sources []string
+	err     error
 }
 
-func (r *replyStub) Send(_ context.Context, _ core.SuperAgentSource, _ []byte, text string) error {
+func (r *replyStub) Send(_ context.Context, source core.SuperAgentSource, target []byte, text string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.texts = append(r.texts, text)
+	r.targets = append(r.targets, string(target))
+	r.sources = append(r.sources, source.ID)
 	return r.err
+}
+
+// sentTo returns what was sent to one reply address.
+func (r *replyStub) sentTo(target string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for index, text := range r.texts {
+		if r.targets[index] == target {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 func (r *replyStub) sent() []string {
 	r.mu.Lock()
@@ -283,6 +338,7 @@ func newHarness(t *testing.T) *harness {
 		router: &routerStub{answer: func(core.InvocationRequest) (string, error) { return acceptAnswer("local"), nil }},
 		clock:  &clock,
 	}
+	h.router.updates = h.relay
 	h.service = New(Options{
 		Store: h.store, Invoker: h.router, Workers: h.workers, Replies: h.replies,
 		Now: func() time.Time { return *h.clock }, StateDir: t.TempDir(),
@@ -342,6 +398,9 @@ func (h *harness) settle() {
 }
 
 func (h *harness) onlyDelayed(pending []core.SuperAgentTrigger, queued []core.SuperAgentTicket) bool {
+	queued = slices.DeleteFunc(slices.Clone(queued), func(ticket core.SuperAgentTicket) bool {
+		return len(h.service.unmetDependencies(context.Background(), ticket)) > 0
+	})
 	h.service.mu.Lock()
 	defer h.service.mu.Unlock()
 	now := h.service.now()
@@ -360,10 +419,31 @@ func (h *harness) onlyDelayed(pending []core.SuperAgentTrigger, queued []core.Su
 
 func (h *harness) advance(duration time.Duration) { *h.clock = h.clock.Add(duration) }
 
+// disposition returns the index-th event, skipping ticket updates.
 func (h *harness) disposition(index int) core.SuperAgentTrigger {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
-	return h.store.triggers[index]
+	for _, trigger := range h.store.triggers {
+		if trigger.Kind != "" {
+			continue
+		}
+		if index == 0 {
+			return trigger
+		}
+		index--
+	}
+	h.t.Fatalf("no event %d", index)
+	return core.SuperAgentTrigger{}
+}
+
+// exhaustRetries lets every retry of the router run out.
+func (h *harness) exhaustRetries() {
+	h.t.Helper()
+	for range maxRouterAttempts {
+		h.settle()
+		h.advance(retryDelay + time.Second)
+	}
+	h.settle()
 }
 
 func TestAcceptedRequestRunsWorkerAndRepliesInSource(t *testing.T) {
@@ -426,11 +506,11 @@ func TestUnaddressedTrafficIsOnlyRoutedOnTicketThreads(t *testing.T) {
 	}
 }
 
-func TestRouterCannotEscapeRosterOrThread(t *testing.T) {
+func TestRouterCannotEscapeRosterOrSuperAgent(t *testing.T) {
 	h := newHarness(t)
 	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("not-on-roster"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
+	h.exhaustRetries()
 	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
 		t.Fatal("an unknown worker must not run")
 	}
@@ -438,17 +518,19 @@ func TestRouterCannotEscapeRosterOrThread(t *testing.T) {
 		t.Fatalf("disposition = %q", trigger.Disposition)
 	}
 
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("local"), nil }
-	h.ingest("alice", "github:o/r#2", "work", true)
-	h.settle()
-	other := h.store.allTickets()[0]
+	// Another Super Agent's Ticket is out of reach, whatever the router names.
+	foreign := core.SuperAgentTicket{ID: "tkt_foreign", SuperAgentID: "sa_other", ThreadKey: "github:o/r#9", Status: core.SuperAgentTicketRunning, CreatedAt: *h.clock, UpdatedAt: *h.clock}
+	_ = h.store.UpsertSuperAgentTicket(context.Background(), foreign)
 	h.router.answer = func(core.InvocationRequest) (string, error) {
-		return fmt.Sprintf(`{"decision":"stop","ticket_id":%q}`, other.ID), nil
+		return `<agentmux-action>[{"action":"stop","ticket_id":"tkt_foreign"}]</agentmux-action>`, nil
 	}
 	h.ingest("alice", "github:o/r#3", "stop everything", true)
-	h.settle()
-	if got, _ := h.store.GetSuperAgentTicket(context.Background(), other.ID); got.Status == core.SuperAgentTicketStopped {
-		t.Fatal("a decision must not reach a Ticket on another thread")
+	h.exhaustRetries()
+	if got, _ := h.store.GetSuperAgentTicket(context.Background(), foreign.ID); got.Status == core.SuperAgentTicketStopped {
+		t.Fatal("a decision must not reach another Super Agent's Ticket")
+	}
+	if trigger := h.disposition(1); trigger.Disposition != core.SuperAgentDispositionFailed {
+		t.Fatalf("trigger = %+v", trigger)
 	}
 }
 
@@ -487,7 +569,7 @@ func TestRejectedDecisionTellsTheSender(t *testing.T) {
 	h := newHarness(t)
 	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("not-on-roster"), nil }
 	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
+	h.exhaustRetries()
 	got := h.replies.sent()
 	if len(got) != 1 || !strings.Contains(got[0], "could not process this request") {
 		t.Fatalf("replies = %v", got)
@@ -591,7 +673,7 @@ func TestUnparseableRouterAnswerFailsWithoutAThreadTicket(t *testing.T) {
 	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionFailed {
 		t.Fatalf("trigger = %+v", trigger)
 	}
-	if got := h.replies.sent(); len(got) != 1 || !strings.Contains(got[0], "router is unavailable") {
+	if got := h.replies.sent(); len(got) != 1 || !strings.Contains(got[0], "could not process this request") {
 		t.Fatalf("replies = %v", got)
 	}
 }
@@ -671,7 +753,7 @@ func TestStopCancelsTurnAndNeverResumes(t *testing.T) {
 		t.Fatalf("ticket = %+v", ticket)
 	}
 	before := len(h.replies.sent())
-	if err := h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "more"}, ""); !errors.Is(err, ErrConflict) {
+	if err := h.service.attach(context.Background(), h.agent, id, core.SuperAgentTrigger{Text: "more"}, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("attach to a stopped ticket: %v", err)
 	}
 	h.settle()
@@ -699,7 +781,7 @@ func TestFollowUpDuringTurnRunsBeforeAnyoneIsTold(t *testing.T) {
 	go func() {
 		<-entered
 		id := h.store.allTickets()[0].ID
-		_ = h.service.attach(context.Background(), id, core.SuperAgentTrigger{Text: "one more thing", Reply: json.RawMessage(`{}`)}, "")
+		_ = h.service.attach(context.Background(), h.agent, id, core.SuperAgentTrigger{Text: "one more thing", Reply: json.RawMessage(`{}`)}, "")
 		close(release)
 	}()
 	h.settle()

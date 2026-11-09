@@ -599,7 +599,7 @@ func TestRemoteWorkerRunsOverInvocationStream(t *testing.T) {
 		sse(w, core.InvocationStreamEvent{Type: "output", Text: "partial"})
 		sse(w, core.InvocationStreamEvent{Type: "completed", Final: true, Result: &core.InvocationResult{Answer: "remote answer"}})
 	})
-	answer, err := fleet.Run(context.Background(), worker, "conv-1", "do it", "")
+	answer, err := fleet.Run(context.Background(), worker, "conv-1", "do it", RunOptions{})
 	if err != nil || answer != "remote answer" {
 		t.Fatalf("answer=%q err=%v", answer, err)
 	}
@@ -632,15 +632,15 @@ func TestRemoteWorkerFailureClassification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		fleet, worker := remoteFleet(t, tc.handler)
-		_, err := fleet.Run(context.Background(), worker, "c", "i", "")
+		_, err := fleet.Run(context.Background(), worker, "c", "i", RunOptions{})
 		if err == nil || IsRetryable(err) != tc.retryable || !strings.Contains(err.Error(), tc.contains) {
 			t.Errorf("%s: err=%v retryable=%v", tc.name, err, IsRetryable(err))
 		}
 	}
-	if _, err := (&Fleet{Hosts: &fakeDialer{}}).Run(context.Background(), core.SuperAgentWorker{HostID: "gone"}, "c", "i", ""); err == nil || IsRetryable(err) {
+	if _, err := (&Fleet{Hosts: &fakeDialer{}}).Run(context.Background(), core.SuperAgentWorker{HostID: "gone"}, "c", "i", RunOptions{}); err == nil || IsRetryable(err) {
 		t.Errorf("unknown host: %v", err)
 	}
-	if _, err := (&Fleet{}).Run(context.Background(), core.SuperAgentWorker{HostID: "x"}, "c", "i", ""); err == nil {
+	if _, err := (&Fleet{}).Run(context.Background(), core.SuperAgentWorker{HostID: "x"}, "c", "i", RunOptions{}); err == nil {
 		t.Error("remote control unavailable must be an error")
 	}
 }
@@ -658,7 +658,7 @@ func TestRemoteWorkerStopClosesTheStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := fleet.Run(ctx, worker, "c", "i", "")
+		_, err := fleet.Run(ctx, worker, "c", "i", RunOptions{})
 		done <- err
 	}()
 	<-entered
@@ -708,31 +708,47 @@ func TestWorkerStatusLocalAndRemote(t *testing.T) {
 
 func TestParseRouterDecision(t *testing.T) {
 	decision, err := parseRouterDecision("On it.\n\n<agentmux-action>\n```json\n{\"action\":\"ACCEPT\",\"worker_id\":\"w\",\"instructions\":\"see memory/repos.md\"}\n```\n</agentmux-action>\n")
-	if err != nil || decision.Decision != decisionAccept || decision.WorkerID != "w" || decision.Reply != "On it." || decision.Instructions != "see memory/repos.md" {
+	if err != nil || len(decision.Actions) != 1 || decision.Actions[0].Action != actionAccept || decision.Actions[0].WorkerID != "w" || decision.Reply != "On it." || decision.Actions[0].Instructions != "see memory/repos.md" {
 		t.Fatalf("decision=%+v err=%v", decision, err)
 	}
 	// Without a block, the whole message is the reply.
 	decision, err = parseRouterDecision("  The build is green: tickets/tkt_1/result.md has the details.  ")
-	if err != nil || decision.Decision != decisionIgnore || decision.Reply != "The build is green: tickets/tkt_1/result.md has the details." {
+	if err != nil || len(decision.Actions) != 0 || decision.Reply != "The build is green: tickets/tkt_1/result.md has the details." {
 		t.Fatalf("plain reply: decision=%+v err=%v", decision, err)
 	}
-	if decision, err := parseRouterDecision(""); err != nil || decision.Decision != decisionIgnore || decision.Reply != "" {
+	if decision, err := parseRouterDecision(""); err != nil || len(decision.Actions) != 0 || decision.Reply != "" {
 		t.Fatalf("empty answer: decision=%+v err=%v", decision, err)
 	}
-	if decision, err := parseRouterDecision(`<agentmux-action>{"action":"none","reason":"chit-chat"}</agentmux-action>`); err != nil || decision.Decision != decisionIgnore || decision.Reason != "chit-chat" || decision.Reply != "" {
+	if decision, err := parseRouterDecision(`<agentmux-action>{"action":"none","reason":"chit-chat"}</agentmux-action>`); err != nil || len(decision.Actions) != 0 || decision.Reply != "" {
 		t.Fatalf("no action: decision=%+v err=%v", decision, err)
 	}
 	// An answer in the old JSON-only form is never sent as a reply.
-	if decision, err := parseRouterDecision(`{"decision":"stop","ticket_id":"t","reply":"stopped"}`); err != nil || decision.Decision != decisionStop || decision.Reply != "stopped" {
+	if decision, err := parseRouterDecision(`{"decision":"stop","ticket_id":"t","reply":"stopped"}`); err != nil || len(decision.Actions) != 1 || decision.Actions[0].Action != actionStop || decision.Reply != "stopped" {
 		t.Fatalf("legacy: decision=%+v err=%v", decision, err)
+	}
+	// A closing tag cut short, or missing at the end, still closes the block:
+	// the router's work is not thrown away over a ">".
+	for _, answer := range []string{
+		"已转交。\n<agentmux-action>\n{\"action\":\"accept\",\"worker_id\":\"auto:codex\"}\n</agentmux-action",
+		"已转交。\n<agentmux-action>\n{\"action\":\"accept\",\"worker_id\":\"auto:codex\"}\n",
+	} {
+		decision, err := parseRouterDecision(answer)
+		if err != nil || decision.Reply != "已转交。" || len(decision.Actions) != 1 || decision.Actions[0].WorkerID != "auto:codex" {
+			t.Fatalf("%q: decision=%+v err=%v", answer, decision, err)
+		}
+	}
+	// Several actions: a list, or blocks in a row, in order.
+	decision, err = parseRouterDecision("Two tasks.\n```\n<agentmux-action>\n[{\"action\":\"accept\",\"ref\":\"a\",\"worker_id\":\"w\"},{\"action\":\"accept\",\"worker_id\":\"w\",\"depends_on\":[\"a\"]}]\n</agentmux-action>\n```\n<agentmux-action>{\"action\":\"post\",\"to\":\"chat:oc_1\",\"text\":\"FYI\"}</agentmux-action>")
+	if err != nil || decision.Reply != "Two tasks." || len(decision.Actions) != 3 || decision.Actions[1].DependsOn[0] != "a" || decision.Actions[2].To != "chat:oc_1" {
+		t.Fatalf("several: decision=%+v err=%v", decision, err)
 	}
 	for _, bad := range []string{
 		`<agentmux-action>{"action":"accept"}</agentmux-action>`,
 		`<agentmux-action>{"action":"stop"}</agentmux-action>`,
 		`<agentmux-action>{"action":"attach"}</agentmux-action>`,
+		`<agentmux-action>{"action":"post","to":"chat:oc_1"}</agentmux-action>`,
 		`<agentmux-action>{"action":"delete_repo"}</agentmux-action>`,
 		`<agentmux-action>{broken}</agentmux-action>`,
-		`ok <agentmux-action>{"action":"accept","worker_id":"w"}`,
 	} {
 		if _, err := parseRouterDecision(bad); err == nil {
 			t.Errorf("%q must be refused", bad)

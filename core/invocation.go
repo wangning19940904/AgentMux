@@ -27,6 +27,10 @@ type InvocationRequest struct {
 	// the conversation runs there instead of in the Agent's directory. The API
 	// never reads it, so a remote caller cannot choose a directory.
 	ConversationDir string `json:"-"`
+	// WorktreeBaseRef, in worktree mode, is the commit a new conversation's
+	// worktree starts from instead of the Agent's base ref. Like
+	// ConversationDir, only in-process callers can set it.
+	WorktreeBaseRef string `json:"-"`
 }
 
 // InvocationResult is the completed, synchronous result of an Agent turn.
@@ -81,7 +85,18 @@ type StreamingInvoker interface {
 	InvokeStream(ctx context.Context, req InvocationRequest, sink InvocationEventSink) (InvocationResult, error)
 }
 
+// InvocationSteerer adds input to the turn an invocation is running, so a
+// caller can change course without waiting for the turn to end.
+type InvocationSteerer interface {
+	SteerInvocation(ctx context.Context, agentID, conversationID, text string) error
+}
+
 var (
+	// ErrInvocationIdle means there is no running turn to steer; the caller
+	// sends its input with the next turn instead.
+	ErrInvocationIdle = errors.New("conversation has no running turn")
+	// ErrSteerUnsupported means the Agent's framework cannot take input mid-turn.
+	ErrSteerUnsupported   = errors.New("agent cannot take input during a turn")
 	ErrInvalidInvocation  = errors.New("invalid invocation")
 	ErrInvocationNotFound = errors.New("invocation target not found")
 	ErrInvocationDisabled = errors.New("invocation target is disabled")
@@ -137,6 +152,9 @@ func (c *ConnectService) invoke(ctx context.Context, req InvocationRequest, sink
 		dir = filepath.Clean(dir)
 		if strings.EqualFold(strings.TrimSpace(workspace.WorkspaceMode), "worktree") {
 			workspace.WorktreePath = dir
+			if ref := strings.TrimSpace(req.WorktreeBaseRef); ref != "" {
+				workspace.WorktreeBaseRef = ref
+			}
 		} else {
 			workspace.WorkDir, workDir = dir, dir
 		}
@@ -238,6 +256,8 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 		return result, err
 	}
 	result.SessionID = sessionObservationID(sess)
+	e.trackInvocationSession(targetKey, conversationKey, sess)
+	defer e.trackInvocationSession(targetKey, conversationKey, nil)
 	data["agent_id"] = runtime.workspace.AgentID
 	data["runtime_id"] = runtime.workspace.RuntimeID
 	data["memory_scope"] = runtime.workspace.MemoryScope
@@ -436,6 +456,48 @@ func (e *Engine) beginInvocation(targetKey, conversationKey string) bool {
 	}
 	e.activeInvocations[key] = struct{}{}
 	return true
+}
+
+// trackInvocationSession records the session a running invocation uses, so
+// SteerInvocation can reach it; a nil session forgets it.
+func (e *Engine) trackInvocationSession(targetKey, conversationKey string, sess AgentSession) {
+	key := targetKey + "\x00" + conversationKey
+	e.invocationMu.Lock()
+	defer e.invocationMu.Unlock()
+	if sess == nil {
+		delete(e.invocationSessions, key)
+		return
+	}
+	if e.invocationSessions == nil {
+		e.invocationSessions = map[string]AgentSession{}
+	}
+	e.invocationSessions[key] = sess
+}
+
+// SteerInvocation adds text to the turn a conversation started with Invoke is
+// running, when the Agent's framework can take input mid-turn.
+func (c *ConnectService) SteerInvocation(ctx context.Context, agentID, conversationID, text string) error {
+	if c == nil || c.eng == nil {
+		return fmt.Errorf("%w: engine is unavailable", ErrInvocationRuntime)
+	}
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("%w: input is required", ErrInvalidInvocation)
+	}
+	key := "agent:" + strings.TrimSpace(agentID) + "\x00" + "api:" + strings.TrimSpace(conversationID)
+	c.eng.invocationMu.Lock()
+	sess := c.eng.invocationSessions[key]
+	c.eng.invocationMu.Unlock()
+	if sess == nil {
+		return ErrInvocationIdle
+	}
+	interactive, ok := sess.(InteractiveAgentSession)
+	if !ok {
+		return ErrSteerUnsupported
+	}
+	if interactive.ActiveTurnID() == "" {
+		return ErrInvocationIdle
+	}
+	return interactive.Steer(ctx, text)
 }
 
 func (e *Engine) finishInvocation(targetKey, conversationKey string) {
