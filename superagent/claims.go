@@ -65,7 +65,7 @@ func (s *Service) refreshClaims(ctx context.Context) error {
 	}
 	bySource := map[string]sourceClaim{}
 	byChannel := map[string][]sourceClaim{}
-	var documents []core.SuperAgentSource
+	var documents, messages []core.SuperAgentSource
 	for _, agent := range agents {
 		if !agent.Enabled {
 			continue
@@ -79,8 +79,11 @@ func (s *Service) refreshClaims(ctx context.Context) error {
 			if channelID := strings.TrimSpace(source.Config["channel_id"]); channelID != "" {
 				byChannel[channelID] = append(byChannel[channelID], claim)
 			}
-			if source.Kind == core.SuperAgentSourceFeishuDoc {
+			switch source.Kind {
+			case core.SuperAgentSourceFeishuDoc:
 				documents = append(documents, source)
+			case core.SuperAgentSourceFeishuMessage:
+				messages = append(messages, source)
 			}
 		}
 	}
@@ -91,6 +94,18 @@ func (s *Service) refreshClaims(ctx context.Context) error {
 			go func() {
 				defer s.wg.Done()
 				s.subscribeDocuments(s.ctx, source)
+			}()
+		}
+		// A save may have changed the channel or its app, so the scope check
+		// starts fresh.
+		s.mu.Lock()
+		clear(s.scopeChecks)
+		s.mu.Unlock()
+		for _, source := range messages {
+			s.wg.Add(1)
+			go func() {
+				defer s.wg.Done()
+				s.checkFeishuScopes(s.ctx, source)
 			}()
 		}
 	}

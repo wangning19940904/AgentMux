@@ -34,6 +34,11 @@ const (
 	SuperAgentDispositionFailed   = "failed"
 )
 
+// Trigger kinds. An event from a Source has no kind. A ticket update is
+// AgentMux telling the router that a Ticket's worker finished a turn, so the
+// router can report it, start dependent work or ask someone for a decision.
+const SuperAgentTriggerTicketUpdate = "ticket_update"
+
 // Ticket states. A Ticket defines its own state instead of following the
 // worker session: a follow-up can resume a ready Ticket on the same worker.
 const (
@@ -105,6 +110,7 @@ type SuperAgentTrigger struct {
 	Actor        string          `json:"actor,omitempty"`
 	ActorName    string          `json:"actor_name,omitempty"`
 	Addressed    bool            `json:"addressed"`
+	Kind         string          `json:"kind,omitempty"`
 	Title        string          `json:"title,omitempty"`
 	Text         string          `json:"text"`
 	Reply        json.RawMessage `json:"reply,omitempty"`
@@ -135,11 +141,26 @@ type SuperAgentTicket struct {
 	Error          string           `json:"error,omitempty"`
 	ReplyError     string           `json:"reply_error,omitempty"`
 	Reply          json.RawMessage  `json:"reply,omitempty"`
-	Attempts       int              `json:"attempts"`
-	CreatedAt      time.Time        `json:"created_at"`
-	StartedAt      time.Time        `json:"started_at,omitempty"`
-	FinishedAt     time.Time        `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+	// DependsOn holds a queued Ticket until each of these is ready. A new
+	// worktree starts from BaseTicket's latest commit instead of the default.
+	DependsOn  []string `json:"depends_on,omitempty"`
+	BaseTicket string   `json:"base_ticket,omitempty"`
+	// Links are the other threads that steered or asked about this Ticket, so
+	// the router can tell them when it moves.
+	Links      []SuperAgentTicketLink `json:"links,omitempty"`
+	Attempts   int                    `json:"attempts"`
+	CreatedAt  time.Time              `json:"created_at"`
+	StartedAt  time.Time              `json:"started_at,omitempty"`
+	FinishedAt time.Time              `json:"finished_at,omitempty"`
+	UpdatedAt  time.Time              `json:"updated_at"`
+}
+
+// SuperAgentTicketLink is a thread other than a Ticket's own that cares about
+// it, with the address a message to that thread goes to.
+type SuperAgentTicketLink struct {
+	ThreadKey string          `json:"thread_key"`
+	SourceID  string          `json:"source_id"`
+	Reply     json.RawMessage `json:"reply,omitempty"`
 }
 
 // SuperAgentWorkerStatus is the router's and the Console's view of a worker.

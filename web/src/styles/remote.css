@@ -1579,3 +1579,5 @@
 .super-agent-scope-check { display: grid; gap: 8px; }
 .super-agent-scope-gap { display: grid; gap: 6px; }
 .super-agent-scope-check .super-agent-scope-list code { color: var(--text); }
+.super-agent-source-warning { color: var(--amber); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.status-badge.status-warning { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 25%, var(--border)); }

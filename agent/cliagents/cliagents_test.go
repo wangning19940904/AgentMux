@@ -428,6 +428,18 @@ func TestCodexThreadResumeRefreshesDeveloperInstructions(t *testing.T) {
 	}
 }
 
+func TestCodexSingleAgentThreadsTurnOffSubAgents(t *testing.T) {
+	agent := newCodexAgent(map[string]any{"single_agent": true})
+	params := (&codexSession{agent: agent}).threadResumeParams("thread-1")
+	config, _ := params["config"].(map[string]any)
+	if config["features.multi_agent"] != false || config["features.multi_agent_v2"] != false {
+		t.Fatalf("resume params = %#v", params)
+	}
+	if params := (&codexSession{agent: newCodexAgent(map[string]any{})}).threadResumeParams("thread-1"); params["config"] != nil {
+		t.Fatalf("other Agents keep the user's configuration: %#v", params)
+	}
+}
+
 func TestCodexTurnStartCarriesRichInputAndOutputSchema(t *testing.T) {
 	s := &codexSession{}
 	params := s.turnStartParamsInput("thread-1", core.AgentTurnInput{

@@ -1699,7 +1699,7 @@ export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
   workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
-  sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string }>;
+  sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
 }
 
 export interface Orchestration {

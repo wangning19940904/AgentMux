@@ -46,6 +46,7 @@ type Engine struct {
 	nextMeetingEventID      uint64
 	invocationMu            sync.Mutex
 	activeInvocations       map[string]struct{}
+	invocationSessions      map[string]AgentSession
 	msgLog                  *MessageLogger
 }
 

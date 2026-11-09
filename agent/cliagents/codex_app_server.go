@@ -48,6 +48,7 @@ type codexAgent struct {
 	supportedServiceTiers     []string
 	supportedApprovalModes    []string
 	env                       map[string]string
+	singleAgent               bool
 	desktopMode               bool
 	desktopThreadID           string
 	clientMu                  sync.Mutex
@@ -59,6 +60,7 @@ type codexAgent struct {
 func newCodexAgent(cfg map[string]any) *codexAgent {
 	a := &codexAgent{capabilityState: "not_probed"}
 	a.desktopMode, _ = cfg["desktop_mode"].(bool)
+	a.singleAgent, _ = cfg["single_agent"].(bool)
 	if value, ok := cfg["desktop_thread_id"].(string); ok {
 		a.desktopThreadID = strings.TrimSpace(value)
 	}
@@ -583,6 +585,9 @@ func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 	} else {
 		s.freshThread = true
 		params := map[string]any{"cwd": s.workDir}
+		if config := s.threadConfig(); config != nil {
+			params["config"] = config
+		}
 		if prompt := strings.TrimSpace(s.agent.systemPrompt); prompt != "" {
 			params["developerInstructions"] = prompt
 		}
@@ -614,8 +619,19 @@ func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 	return s.client.register(threadID, s)
 }
 
+// threadConfig overrides the user's Codex configuration for one thread.
+func (s *codexSession) threadConfig() map[string]any {
+	if !s.agent.singleAgent {
+		return nil
+	}
+	return map[string]any{"features.multi_agent": false, "features.multi_agent_v2": false}
+}
+
 func (s *codexSession) threadResumeParams(threadID string) map[string]any {
 	params := map[string]any{"threadId": threadID, "cwd": s.workDir}
+	if config := s.threadConfig(); config != nil {
+		params["config"] = config
+	}
 	if prompt := strings.TrimSpace(s.agent.systemPrompt); prompt != "" {
 		params["developerInstructions"] = prompt
 	}

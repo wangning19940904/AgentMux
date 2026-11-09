@@ -77,15 +77,16 @@ func (e *Engine) SetInboundInterceptor(interceptor InboundInterceptor) {
 }
 
 // ReplyToChat posts to any chat of a running channel, with no active turn. With
-// a messageID the text replies under that message, falling back to a plain post
-// when the platform refuses, for example because the message was deleted.
+// a messageID the text replies in that message's thread, falling back to a
+// plain post when the platform refuses, for example because the message was
+// deleted.
 func (e *Engine) ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) error {
 	rt := e.channelRuntime(channelID)
 	if rt == nil {
 		return fmt.Errorf("channel %q is not running", channelID)
 	}
 	if messageID != "" {
-		msg := &Message{ID: messageID, SourceMessageID: messageID, ChatID: chatID, ChannelID: channelID}
+		msg := &Message{ID: messageID, SourceMessageID: messageID, ChatID: chatID, ChannelID: channelID, ReplyInThread: true}
 		if err := rt.platform.Reply(ctx, msg, text); err == nil {
 			return nil
 		}

@@ -119,6 +119,8 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		Mail:             &superagent.IMAPClient{},
 		GitHub:           &superagent.GitHubClient{},
 		Docs:             feishuAPI,
+		Directory:        feishuAPI,
+		Scopes:           feishuAPI,
 		RuntimeAvailable: server.AgentRuntimeAvailable,
 		MCP:              mcpRegistry,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {

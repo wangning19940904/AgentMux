@@ -78,7 +78,7 @@ func TestRouterSeesItsMemoryAndTicketFolders(t *testing.T) {
 	for _, want := range []string{
 		"MEMORY INDEX (memory/MEMORY.md):\n- [Repos](repos.md) — widgets lives in ~/src/widgets",
 		`"folder": "tickets/` + ticket.ID + `"`,
-		"EVENT " + h.store.triggers[1].ID,
+		"EVENT " + h.disposition(1).ID,
 		"Never store secrets",
 	} {
 		if !strings.Contains(prompt, want) {

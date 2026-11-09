@@ -534,6 +534,11 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	if len(inst.Env) > 0 {
 		cfg["env"] = inst.Env
 	}
+	if workerOfSuperAgent(inst) {
+		// A Super Agent tracks parallel work as Tickets it can see and steer.
+		// Sub-agents a framework spawns inside one turn are invisible to it.
+		cfg["single_agent"] = true
+	}
 	agentKind := inst.RuntimeID
 	if strings.EqualFold(strings.TrimSpace(inst.SessionBackend), "tmux") {
 		agentKind = "terminal"
@@ -711,4 +716,10 @@ func (c *ConnectService) DecorateChannelTask(task *ChannelTask) {
 			task.CanSteer = false
 		}
 	}
+}
+
+// workerOfSuperAgent reports whether a Super Agent created this Agent to route
+// for it or to work its Tickets.
+func workerOfSuperAgent(inst *AgentInstance) bool {
+	return inst.Source == "super_agent" || inst.Source == "super_agent_router"
 }

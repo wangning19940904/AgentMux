@@ -21,12 +21,16 @@ import (
 )
 
 const (
-	passInterval        = 2 * time.Second
-	maxRouterEvals      = 4
-	maxRouterAttempts   = 3
-	maxWorkerAttempts   = 3
-	retryDelay          = 15 * time.Second
-	routerTimeout       = 5 * time.Minute
+	passInterval      = 2 * time.Second
+	maxRouterEvals    = 4
+	maxRouterAttempts = 3
+	maxWorkerAttempts = 3
+	retryDelay        = 15 * time.Second
+	// A router at high reasoning effort can think for minutes without
+	// streaming anything, so the idle limit catches a dead stream, not a slow
+	// model.
+	routerTimeout       = 10 * time.Minute
+	routerIdleTimeout   = 5 * time.Minute
 	workerTimeout       = 6 * time.Hour
 	pendingBatchSize    = 100
 	defaultConcurrency  = 2
@@ -78,8 +82,13 @@ type Options struct {
 	Mail    MailClient
 	GitHub  GitHubInbox
 	Docs    DocumentSubscriber
-	Log     *slog.Logger
-	Now     func() time.Time
+	// Directory names the Feishu groups a Super Agent listens in and the
+	// people there, so its router can address them. Scopes checks that a
+	// Feishu bot receives the messages a Source expects.
+	Directory Directory
+	Scopes    FeishuScopeChecker
+	Log       *slog.Logger
+	Now       func() time.Time
 	// ChannelHasAgent reports whether a channel has its own Agent to take the
 	// messages a Super Agent does not claim.
 	ChannelHasAgent func(context.Context, string) bool
@@ -102,13 +111,18 @@ type Service struct {
 	wake    chan struct{}
 
 	mu             sync.Mutex
+	asksMu         sync.Mutex
 	running        map[string]context.CancelFunc
 	stopping       map[string]bool
 	evaluating     map[string]bool
 	evaluations    uint64 // finished router evaluations
 	routerAttempts map[string]int
+	routerFeedback map[string]string
 	notBefore      map[string]time.Time
 	health         map[string]SourceHealth
+	places         map[string]feishuPlaces
+	scopeChecks    map[string]scopeState
+	activities     map[string]activity
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -125,13 +139,17 @@ type Service struct {
 	runtimeAvailable func(string) bool
 	mcp              core.MCPRegistry
 	state            string
+	directory        Directory
+	scopes           FeishuScopeChecker
 }
 
-// SourceHealth is the latest intake outcome of one Source.
+// SourceHealth is the latest intake outcome of one Source. A warning is a
+// standing problem that loses some events without failing any.
 type SourceHealth struct {
 	LastEventAt time.Time `json:"last_event_at,omitzero"`
 	LastError   string    `json:"last_error,omitempty"`
 	LastErrorAt time.Time `json:"last_error_at,omitzero"`
+	Warning     string    `json:"warning,omitempty"`
 }
 
 // Activity is the Console's view of one Super Agent.
@@ -155,9 +173,11 @@ func New(options Options) *Service {
 		store: options.Store, invoker: options.Invoker, workers: options.Workers, replies: options.Replies,
 		log: log, now: now, wake: make(chan struct{}, 1),
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
-		routerAttempts: map[string]int{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
+		routerAttempts: map[string]int{}, routerFeedback: map[string]string{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
+		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, mcp: options.MCP, state: options.StateDir,
+		directory: options.Directory, scopes: options.Scopes,
 	}
 }
 
@@ -350,36 +370,57 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 		return
 	}
 	*agent = s.withWorkerRuntimes(ctx, *agent)
-	tickets, err := s.store.ListSuperAgentThreadTickets(ctx, agent.ID, trigger.ThreadKey)
+	tickets, err := s.store.ListSuperAgentTickets(ctx, agent.ID, ticketListLimit)
 	if err != nil {
-		s.log.Error("load thread tickets", "thread", trigger.ThreadKey, "err", err)
+		s.log.Error("load super agent tickets", "id", agent.ID, "err", err)
 		return
 	}
-	decision, err := s.route(ctx, *agent, trigger, tickets)
+	view := s.routerView(ctx, *agent, trigger, tickets)
+	s.mu.Lock()
+	view.Feedback = s.routerFeedback[trigger.ID]
+	s.mu.Unlock()
+	decision, err := s.route(ctx, *agent, trigger, view)
+	if err == nil && agent.Mode == core.SuperAgentModeAct {
+		// Every action is checked before any is carried out, so a mistake
+		// in one never leaves the others half done.
+		if err = s.preflight(ctx, *agent, decision); err != nil {
+			err = decisionError{err}
+		}
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		s.routerFailed(ctx, *agent, trigger, tickets, err)
+		s.routerFailed(ctx, *agent, trigger, threadTickets(tickets, trigger.ThreadKey), err)
 		return
 	}
 	s.mu.Lock()
 	delete(s.routerAttempts, trigger.ID)
+	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
 	if agent.Mode == core.SuperAgentModeObserve {
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionObserved, decision.summary(), "")
 		return
 	}
-	if err := s.apply(ctx, *agent, trigger, tickets, decision); err != nil {
-		s.log.Error("apply router decision", "trigger", trigger.ID, "err", err)
-		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, err.Error(), "")
-		s.sendReply(ctx, *agent, trigger.SourceID, trigger.Reply, "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent.")
-	}
+	s.apply(ctx, *agent, trigger, decision)
 }
 
-// routerFailed retries a transient router failure. Once retries run out, a
-// message on a thread with a live Ticket still reaches that Ticket, so a router
+func threadTickets(tickets []core.SuperAgentTicket, threadKey string) []core.SuperAgentTicket {
+	var out []core.SuperAgentTicket
+	for _, ticket := range tickets {
+		if ticket.ThreadKey == threadKey {
+			out = append(out, ticket)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b core.SuperAgentTicket) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out
+}
+
+// routerFailed retries a router failure, telling the router on the next try
+// what went wrong, since nothing it asked for happened. Once retries run out,
+// a message on a thread with a live Ticket still reaches that Ticket, and a
+// finished turn is still reported in the worker's own words, so a router
 // outage never strands a conversation that is already authorized.
 func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket, cause error) {
 	s.mu.Lock()
@@ -387,22 +428,40 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	attempts := s.routerAttempts[trigger.ID]
 	if attempts < maxRouterAttempts {
 		s.notBefore[trigger.ID] = s.now().Add(retryDelay)
+		s.routerFeedback[trigger.ID] = cause.Error()
 		s.mu.Unlock()
 		s.log.Warn("super agent router failed; retrying", "trigger", trigger.ID, "attempt", attempts, "err", cause)
+		trigger.Reason = fmt.Sprintf("router attempt %d failed: %v", attempts, cause)
+		trigger.UpdatedAt = s.now().UTC()
+		if err := s.store.UpdateSuperAgentTrigger(ctx, trigger); err != nil && ctx.Err() == nil {
+			s.log.Error("update super agent trigger", "id", trigger.ID, "err", err)
+		}
 		return
 	}
 	delete(s.routerAttempts, trigger.ID)
+	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
+	if trigger.Kind == core.SuperAgentTriggerTicketUpdate {
+		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error()+"; sent the worker's report as it was", trigger.TicketID)
+		if agent.Mode == core.SuperAgentModeAct {
+			s.relayReport(ctx, agent, trigger)
+		}
+		return
+	}
 	if live := latestLiveTicket(tickets); live != nil && agent.Mode == core.SuperAgentModeAct {
-		if err := s.attach(ctx, live.ID, trigger, ""); err == nil {
+		if err := s.attach(ctx, agent, live.ID, trigger, ""); err == nil {
 			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFollowUp, "router unavailable; delivered to the thread's ticket", live.ID)
 			return
 		}
 	}
 	s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), "")
 	if agent.Mode == core.SuperAgentModeAct {
-		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, "I could not process this request because my router is unavailable. Please try again later.")
+		message := "I could not process this request because my router is unavailable. Please try again later."
+		if errors.As(cause, new(decisionError)) {
+			message = "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent."
+		}
+		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, message)
 	}
 }
 
@@ -415,61 +474,207 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 	return nil
 }
 
-// apply executes one validated decision. Everything a decision names is checked
-// against the host's own records: a worker must be on this Super Agent's roster
-// and a Ticket must already belong to the Trigger's thread.
-func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket, decision routerDecision) error {
-	switch decision.Decision {
-	case decisionIgnore:
-		disposition := core.SuperAgentDispositionIgnored
-		if strings.TrimSpace(decision.Reply) != "" {
-			disposition = core.SuperAgentDispositionAnswered
+// preflight checks every action against the host's own records before any is
+// carried out: a worker must be on the roster or an allowed auto worker, a
+// Ticket must belong to this Super Agent, and a post must go somewhere this
+// Super Agent already talks. A ref names a Ticket accepted earlier in the
+// same decision.
+func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, decision routerDecision) error {
+	refs := map[string]string{}
+	resolve := func(id string) (string, error) {
+		id = strings.TrimSpace(id)
+		if _, ok := refs[id]; ok {
+			return "", nil
 		}
-		s.finishTrigger(ctx, trigger, disposition, decision.Reason, "")
-		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
-		return nil
-	case decisionAccept:
-		return s.accept(ctx, agent, trigger, decision)
-	case decisionAttach, decisionStop:
-		ticket := threadTicket(tickets, decision.TicketID)
-		if ticket == nil {
-			return fmt.Errorf("router named ticket %q, which is not on this thread", decision.TicketID)
+		ticket, err := s.agentTicket(ctx, agent.ID, id)
+		if err != nil {
+			return "", err
 		}
-		if decision.Decision == decisionStop {
-			if err := s.StopTicket(ctx, ticket.ID); err != nil && !errors.Is(err, ErrConflict) {
-				return err
-			}
-			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionStopped, decision.Reason, ticket.ID)
-		} else {
-			if err := s.attach(ctx, ticket.ID, trigger, decision.Instructions); err != nil {
-				return err
-			}
-			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFollowUp, decision.Reason, ticket.ID)
-		}
-		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
-		return nil
-	default:
-		return fmt.Errorf("unknown router decision %q", decision.Decision)
+		return ticket.Status, nil
 	}
-}
-
-func threadTicket(tickets []core.SuperAgentTicket, id string) *core.SuperAgentTicket {
-	for index := range tickets {
-		if tickets[index].ID == id {
-			return &tickets[index]
+	for _, action := range decision.Actions {
+		switch action.Action {
+		case actionAccept:
+			if err := s.checkWorker(agent, action.WorkerID); err != nil {
+				return err
+			}
+			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
+				if strings.TrimSpace(id) == "" {
+					continue
+				}
+				status, err := resolve(id)
+				if err != nil {
+					return err
+				}
+				if status == core.SuperAgentTicketStopped {
+					return fmt.Errorf("ticket %s was stopped, so nothing can depend on it", id)
+				}
+			}
+			if ref := strings.TrimSpace(action.Ref); ref != "" {
+				refs[ref] = ref
+			}
+		case actionAttach, actionStop, actionLink:
+			status, err := resolve(action.TicketID)
+			if err != nil {
+				return err
+			}
+			if action.Action == actionAttach && status == core.SuperAgentTicketStopped {
+				return fmt.Errorf("ticket %s was stopped and cannot take input; accept new work instead", action.TicketID)
+			}
+		case actionPost:
+			if _, ok := refs[strings.TrimSpace(action.To)]; ok {
+				continue
+			}
+			if _, err := s.resolveDestination(ctx, agent, action.To, nil); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
-	worker, err := s.assignedWorker(ctx, agent, decision.WorkerID)
+// checkWorker is assignedWorker without launching anything.
+func (s *Service) checkWorker(agent core.SuperAgent, workerID string) error {
+	if runtimeID, ok := strings.CutPrefix(workerID, autoWorkerID+":"); ok {
+		if !agent.AutoWorkers {
+			return errors.New("this Super Agent cannot launch workers; choose one from the roster")
+		}
+		if !slices.Contains(agent.WorkerRuntimes, runtimeID) {
+			return fmt.Errorf("worker %q is not on the roster", workerID)
+		}
+		return nil
+	}
+	if !slices.ContainsFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID }) {
+		return fmt.Errorf("worker %q is not on the roster", workerID)
+	}
+	return nil
+}
+
+// apply carries out a checked decision in order, sends the reply to the
+// event's thread, then posts elsewhere. The Trigger records the most
+// significant thing that happened. A failure past preflight is rare, such as a Ticket stopped in the
+// meantime; it is recorded and the rest still runs.
+func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) {
+	refs := map[string]string{}
+	resolve := func(id string) string {
+		id = strings.TrimSpace(id)
+		if ticketID, ok := refs[id]; ok {
+			return ticketID
+		}
+		return id
+	}
+	var accepted, attached, stopped, posted bool
+	var ticketIDs, problems, reasons []string
+	if decision.Reason != "" {
+		reasons = append(reasons, decision.Reason)
+	}
+	reply := strings.TrimSpace(decision.Reply)
+	replied := false
+	sendReply := func() {
+		if replied {
+			return
+		}
+		replied = true
+		if err := s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, reply); err != nil && trigger.Kind == core.SuperAgentTriggerTicketUpdate {
+			_ = s.mutateTicket(ctx, trigger.TicketID, func(ticket *core.SuperAgentTicket) error {
+				ticket.ReplyError = err.Error()
+				return nil
+			})
+		}
+	}
+	for _, action := range decision.Actions {
+		if action.Reason != "" {
+			reasons = append(reasons, action.Reason)
+		}
+		var err error
+		switch action.Action {
+		case actionAccept:
+			var dependsOn []string
+			for _, id := range action.DependsOn {
+				if id = resolve(id); id != "" {
+					dependsOn = append(dependsOn, id)
+				}
+			}
+			action.DependsOn = dependsOn
+			action.BaseTicket = resolve(action.BaseTicket)
+			var id string
+			if id, err = s.accept(ctx, agent, trigger, action); err == nil {
+				accepted = true
+				ticketIDs = append(ticketIDs, id)
+				if ref := strings.TrimSpace(action.Ref); ref != "" {
+					refs[ref] = id
+				}
+			}
+		case actionAttach:
+			id := resolve(action.TicketID)
+			if err = s.attach(ctx, agent, id, trigger, action.Instructions); err == nil {
+				attached = true
+				ticketIDs = append(ticketIDs, id)
+			}
+		case actionLink:
+			id := resolve(action.TicketID)
+			if err = s.link(ctx, agent, id, trigger); err == nil {
+				ticketIDs = append(ticketIDs, id)
+			}
+		case actionStop:
+			id := resolve(action.TicketID)
+			if err = s.StopTicket(ctx, id); err == nil || errors.Is(err, ErrConflict) {
+				err = nil
+				stopped = true
+				ticketIDs = append(ticketIDs, id)
+			}
+		case actionPost:
+			sendReply()
+			var target destination
+			if target, err = s.resolveDestination(ctx, agent, resolve(action.To), refs); err == nil {
+				if err = s.sendReply(ctx, agent, target.sourceID, target.reply, action.Text); err == nil {
+					posted = true
+					s.notePost(agent.ID, trigger.ThreadKey, trigger.SourceID, trigger.Reply, target, action.Text)
+				}
+			}
+		}
+		if err != nil {
+			s.log.Error("apply router action", "trigger", trigger.ID, "action", action.Action, "err", err)
+			problems = append(problems, action.Action+": "+err.Error())
+		}
+	}
+	sendReply()
+	disposition := core.SuperAgentDispositionIgnored
+	switch {
+	case accepted:
+		disposition = core.SuperAgentDispositionAccepted
+	case attached:
+		disposition = core.SuperAgentDispositionFollowUp
+	case stopped:
+		disposition = core.SuperAgentDispositionStopped
+	case reply != "" || posted:
+		disposition = core.SuperAgentDispositionAnswered
+	case len(problems) > 0:
+		disposition = core.SuperAgentDispositionFailed
+	}
+	ticketID := trigger.TicketID
+	if len(ticketIDs) > 0 {
+		ticketID = ticketIDs[0]
+	}
+	reason := strings.Join(reasons, "; ")
+	if len(problems) > 0 {
+		reason = strings.TrimPrefix(reason+"; failed: "+strings.Join(problems, "; "), "; ")
+	}
+	s.finishTrigger(ctx, trigger, disposition, reason, ticketID)
+}
+
+func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, action routerAction) (string, error) {
+	worker, err := s.assignedWorker(ctx, agent, action.WorkerID)
 	if err != nil {
-		return err
+		return "", err
+	}
+	base := strings.TrimSpace(action.BaseTicket)
+	if base == "" && len(action.DependsOn) == 1 {
+		base = action.DependsOn[0]
 	}
 	now := s.now().UTC()
 	id := "tkt_" + uuid.NewString()
-	title := strings.TrimSpace(decision.Title)
+	title := strings.TrimSpace(action.Title)
 	if title == "" {
 		title = firstNonEmpty(trigger.Title, truncateRunes(trigger.Text, 80))
 	}
@@ -477,19 +682,20 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		ID: id, SuperAgentID: agent.ID, SourceID: trigger.SourceID, SourceKind: trigger.SourceKind,
 		ThreadKey: trigger.ThreadKey, TriggerID: trigger.ID, Title: title, Actor: trigger.Actor,
 		Worker: worker, ConversationID: "superagent-" + id, Status: core.SuperAgentTicketQueued,
-		Inputs: []string{workerAssignment(trigger, decision)}, Reply: trigger.Reply,
+		Inputs:    []string{workerAssignment(trigger, action, s.ticketBackground(ctx, agent.ID, action.DependsOn, base))},
+		Reply:     trigger.Reply,
+		DependsOn: action.DependsOn, BaseTicket: base,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
-		return err
+		return "", err
 	}
 	if err := s.store.UpsertSuperAgentTicket(ctx, ticket); err != nil {
-		return err
+		return "", err
 	}
 	s.recordTicket(ctx, ticket)
-	s.finishTrigger(ctx, trigger, core.SuperAgentDispositionAccepted, decision.Reason, id)
-	s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, decision.Reply)
-	return nil
+	s.notify()
+	return id, nil
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
@@ -503,16 +709,44 @@ func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, wor
 	return agent.Workers[index], nil
 }
 
-// attach delivers a Trigger to an existing Ticket on its thread. A running
-// Ticket runs again after its current turn with the new input; an ended Ticket
-// resumes on the same conversation.
-func (s *Service) attach(ctx context.Context, ticketID string, trigger core.SuperAgentTrigger, note string) error {
+// attach delivers a Trigger to one of the Super Agent's Tickets, on any
+// thread. A running Ticket gets it in its current turn when its worker can
+// take input mid-turn, and otherwise runs again after that turn with it; an
+// ended Ticket resumes on the same conversation. A message from the Ticket's
+// own thread moves its reply there; one from another thread links that thread,
+// so the router can tell it about the Ticket later.
+func (s *Service) attach(ctx context.Context, agent core.SuperAgent, ticketID string, trigger core.SuperAgentTrigger, note string) error {
+	current, err := s.agentTicket(ctx, agent.ID, ticketID)
+	if err != nil {
+		return err
+	}
+	where := ""
+	if current.ThreadKey != trigger.ThreadKey && trigger.Kind == "" {
+		where = describeThread(trigger.ThreadKey, trigger.DedupeKey, nil)
+	}
+	input := workerFollowUp(trigger, note, where)
+	steered := false
+	if current.Status == core.SuperAgentTicketRunning {
+		if err := s.steer(ctx, *current, input); err == nil {
+			steered = true
+			s.appendTicketLog(*current, ticketInputsFile, "(delivered during the running turn)\n\n"+input)
+		} else if !errors.Is(err, core.ErrSteerUnsupported) {
+			s.log.Debug("super agent could not steer a running ticket; it will get the message after its turn", "ticket", ticketID, "err", err)
+		}
+	}
 	return s.mutateTicket(ctx, ticketID, func(ticket *core.SuperAgentTicket) error {
 		if ticket.Status == core.SuperAgentTicketStopped {
 			return fmt.Errorf("%w: ticket %s was stopped", ErrConflict, ticket.ID)
 		}
-		ticket.Inputs = append(ticket.Inputs, workerFollowUp(trigger, note))
-		ticket.Reply = trigger.Reply
+		if trigger.Kind == "" && ticket.ThreadKey == trigger.ThreadKey {
+			ticket.Reply = trigger.Reply
+		} else {
+			addLink(ticket, trigger)
+		}
+		if steered && ticket.Status == core.SuperAgentTicketRunning {
+			return nil
+		}
+		ticket.Inputs = append(ticket.Inputs, input)
 		if ticket.Status != core.SuperAgentTicketRunning {
 			ticket.Status = core.SuperAgentTicketQueued
 			ticket.Attempts = 0
@@ -520,6 +754,33 @@ func (s *Service) attach(ctx context.Context, ticketID string, trigger core.Supe
 		}
 		return nil
 	})
+}
+
+// link records that a thread other than the Ticket's own cares about it,
+// without sending its worker anything.
+func (s *Service) link(ctx context.Context, agent core.SuperAgent, ticketID string, trigger core.SuperAgentTrigger) error {
+	if _, err := s.agentTicket(ctx, agent.ID, ticketID); err != nil {
+		return err
+	}
+	return s.mutateTicket(ctx, ticketID, func(ticket *core.SuperAgentTicket) error {
+		addLink(ticket, trigger)
+		return nil
+	})
+}
+
+// addLink links an event's thread to a Ticket, keeping the latest reply
+// address. A ticket update, or a message on the Ticket's own thread, adds no
+// link.
+func addLink(ticket *core.SuperAgentTicket, trigger core.SuperAgentTrigger) {
+	if trigger.Kind != "" || ticket.ThreadKey == trigger.ThreadKey || len(trigger.Reply) == 0 {
+		return
+	}
+	link := core.SuperAgentTicketLink{ThreadKey: trigger.ThreadKey, SourceID: trigger.SourceID, Reply: trigger.Reply}
+	if index := slices.IndexFunc(ticket.Links, func(existing core.SuperAgentTicketLink) bool { return existing.ThreadKey == trigger.ThreadKey }); index >= 0 {
+		ticket.Links[index] = link
+		return
+	}
+	ticket.Links = append(ticket.Links, link)
 }
 
 func (s *Service) finishTrigger(ctx context.Context, trigger core.SuperAgentTrigger, disposition, reason, ticketID string) {
@@ -563,7 +824,7 @@ func (s *Service) startQueued(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if agent == nil || !agent.Enabled {
+		if agent == nil || !agent.Enabled || len(s.unmetDependencies(ctx, ticket)) > 0 {
 			continue
 		}
 		s.mu.Lock()
@@ -634,7 +895,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		s.log.Warn("place super agent ticket", "ticket", ticketID, "err", err)
 	}
 	s.appendTicketLog(ticket, ticketInputsFile, input)
-	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input, placement.ConversationDir)
+	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input, RunOptions{
+		Dir: placement.ConversationDir, BaseRef: s.baseCommit(ctx, ticket), Progress: s.progressRecorder(ticket),
+	})
 	if ctx.Err() != nil {
 		return
 	}
@@ -646,8 +909,10 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	}
 	var reply string
 	var replyTo = ticket.Reply
+	var saved core.SuperAgentTicket
 	finished := time.Time{}
 	mutateErr := s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
+		defer func() { saved = *current }()
 		if current.Status != core.SuperAgentTicketRunning {
 			return nil // Stopped while this turn was finishing.
 		}
@@ -690,6 +955,18 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	}
 	if finished.IsZero() || strings.TrimSpace(reply) == "" {
 		return
+	}
+	// The router tells people what the turn did and moves dependent work
+	// along. If it cannot be woken, people still hear the worker.
+	failed := runErr != nil
+	report := answer
+	if failed {
+		report = runErr.Error()
+	}
+	if wakeErr := s.wakeRouter(ctx, agent, saved, replyTo, report, failed); wakeErr == nil {
+		return
+	} else if ctx.Err() == nil {
+		s.log.Error("wake super agent router", "ticket", ticketID, "err", wakeErr)
 	}
 	if replyErr := s.sendReply(ctx, agent, ticket.SourceID, replyTo, reply); replyErr != nil {
 		_ = s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
@@ -824,6 +1101,14 @@ func (s *Service) recordEvent(sourceID string, at time.Time) {
 	defer s.mu.Unlock()
 	health := s.health[sourceID]
 	health.LastEventAt = at
+	s.health[sourceID] = health
+}
+
+func (s *Service) recordSourceWarning(sourceID, warning string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	health := s.health[sourceID]
+	health.Warning = warning
 	s.health[sourceID] = health
 }
 

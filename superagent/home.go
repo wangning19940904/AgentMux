@@ -24,6 +24,7 @@ import (
 //	    ├── ticket.json        the Ticket as AgentMux last saved it
 //	    ├── inputs.md          everything AgentMux sent the worker
 //	    ├── result.md          the worker's answer after each turn
+//	    ├── progress.md        what the worker has been doing, as it happens
 //	    └── work/              the worker's working directory, or a link to it
 //
 // Tickets created before homes existed have no folder and keep working where
@@ -50,6 +51,7 @@ and each ticket's worker works in a folder below it.
   - ticket.json: its status, worker and working directory, kept current by AgentMux
   - inputs.md: everything AgentMux sent the worker
   - result.md: the worker's final answer after each turn
+  - progress.md: what the worker has been doing, written as it happens
   - work/: the worker's working directory, or a link to the directory its Agent uses
 
 AgentMux does not overwrite this file after creating it.
@@ -251,6 +253,9 @@ type ticketRecord struct {
 	Worker         core.SuperAgentWorker `json:"worker"`
 	ConversationID string                `json:"conversation_id"`
 	WorkDir        string                `json:"work_dir,omitempty"`
+	DependsOn      []string              `json:"depends_on,omitempty"`
+	BaseTicket     string                `json:"base_ticket,omitempty"`
+	LinkedThreads  []string              `json:"linked_threads,omitempty"`
 	Attempts       int                   `json:"attempts"`
 	Error          string                `json:"error,omitempty"`
 	ReplyError     string                `json:"reply_error,omitempty"`
@@ -275,8 +280,12 @@ func (s *Service) recordTicket(ctx context.Context, ticket core.SuperAgentTicket
 		ID: ticket.ID, SuperAgentID: ticket.SuperAgentID, Title: ticket.Title, Status: ticket.Status,
 		SourceKind: ticket.SourceKind, ThreadKey: ticket.ThreadKey, Actor: ticket.Actor, Worker: ticket.Worker,
 		ConversationID: ticket.ConversationID, WorkDir: placement.WorkDir, Attempts: ticket.Attempts,
+		DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
 		Error: ticket.Error, ReplyError: ticket.ReplyError, CreatedAt: ticket.CreatedAt,
 		StartedAt: ticket.StartedAt, FinishedAt: ticket.FinishedAt, UpdatedAt: ticket.UpdatedAt,
+	}
+	for _, link := range ticket.Links {
+		record.LinkedThreads = append(record.LinkedThreads, link.ThreadKey)
 	}
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err == nil {

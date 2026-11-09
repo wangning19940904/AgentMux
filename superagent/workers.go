@@ -24,12 +24,21 @@ const remoteIdleTimeout = 2 * time.Minute
 
 // WorkerRunner controls workers wherever they run. Cancelling Run's context
 // cancels the turn; repeating Run with the same conversation continues it.
-// dir, when set, is where a local worker's new conversation gets its
-// directory (core.InvocationRequest.ConversationDir); a remote worker's
-// directory is on its own machine, so it ignores dir.
 type WorkerRunner interface {
-	Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input, dir string) (string, error)
+	Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error)
 	Status(ctx context.Context, worker core.SuperAgentWorker) core.SuperAgentWorkerStatus
+}
+
+// RunOptions place a turn and report on it. A remote worker's directory is on
+// its own machine, so it ignores Dir and BaseRef.
+type RunOptions struct {
+	// Dir is where a local worker's new conversation gets its directory
+	// (core.InvocationRequest.ConversationDir).
+	Dir string
+	// BaseRef is the commit a new worktree starts from.
+	BaseRef string
+	// Progress, when set, receives the turn's events as they happen.
+	Progress func(core.InvocationStreamEvent)
 }
 
 // retryableError marks a failure of the path to a worker, not of its work.
@@ -64,15 +73,35 @@ type Fleet struct {
 	Hosts   HostDialer
 }
 
-func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input, dir string) (string, error) {
+func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error) {
 	if worker.HostID != "" {
-		return f.runRemote(ctx, worker, conversationID, input)
+		return f.runRemote(ctx, worker, conversationID, input, options.Progress)
 	}
-	result, err := f.Invoker.Invoke(ctx, core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: dir})
+	request := core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: options.Dir, WorktreeBaseRef: options.BaseRef}
+	var result core.InvocationResult
+	var err error
+	if streaming, ok := f.Invoker.(core.StreamingInvoker); ok && options.Progress != nil {
+		result, err = streaming.InvokeStream(ctx, request, func(event core.InvocationStreamEvent) error {
+			options.Progress(event)
+			return nil
+		})
+	} else {
+		result, err = f.Invoker.Invoke(ctx, request)
+	}
 	if err != nil {
 		return "", err
 	}
 	return result.Answer, nil
+}
+
+// Steer adds text to a local worker's running turn. A remote worker's turn
+// runs on another daemon, so its input waits for the next turn.
+func (f *Fleet) Steer(ctx context.Context, worker core.SuperAgentWorker, conversationID, text string) error {
+	steerer, ok := f.Invoker.(core.InvocationSteerer)
+	if worker.HostID != "" || !ok {
+		return core.ErrSteerUnsupported
+	}
+	return steerer.SteerInvocation(ctx, worker.AgentID, conversationID, text)
 }
 
 func (f *Fleet) Status(ctx context.Context, worker core.SuperAgentWorker) core.SuperAgentWorkerStatus {
@@ -167,7 +196,7 @@ func (f *Fleet) remoteAgent(ctx context.Context, worker core.SuperAgentWorker) (
 // runRemote streams the invocation because a synchronous request would look
 // idle to the tunnel for the length of a turn. Closing the stream on cancel is
 // what stops the remote turn: the remote handler's context ends with it.
-func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string) (string, error) {
+func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, progress func(core.InvocationStreamEvent)) (string, error) {
 	host, client, err := f.remoteClient(worker.HostID)
 	if err != nil {
 		return "", err
@@ -203,7 +232,7 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 	}
 	idle := time.AfterFunc(remoteIdleTimeout, func() { cancel(errors.New("no data from the remote daemon")) })
 	defer idle.Stop()
-	return readInvocationStream(response.Body, func() { idle.Reset(remoteIdleTimeout) }, func(cause error) error {
+	return readInvocationStream(response.Body, func() { idle.Reset(remoteIdleTimeout) }, progress, func(cause error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -216,7 +245,7 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 
 // readInvocationStream reads the invocation SSE contract. Only a terminal event
 // counts as an outcome: a stream that ends without one means the path failed.
-func readInvocationStream(body io.Reader, activity func(), interrupted func(error) error) (string, error) {
+func readInvocationStream(body io.Reader, activity func(), progress func(core.InvocationStreamEvent), interrupted func(error) error) (string, error) {
 	reader := bufio.NewReaderSize(body, 64*1024)
 	var data strings.Builder
 	for {
@@ -234,6 +263,9 @@ func readInvocationStream(body io.Reader, activity func(), interrupted func(erro
 				return "", fmt.Errorf("decode remote event: %w", decodeErr)
 			}
 			data.Reset()
+			if progress != nil {
+				progress(event)
+			}
 			switch event.Type {
 			case "completed":
 				if event.Result != nil {

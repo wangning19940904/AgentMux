@@ -116,9 +116,10 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     const health = activity.data?.sources?.[source.id];
                     return (
                       <article key={source.id}>
-                        <header><strong>{t(`superAgents.kind.${source.kind}`)}</strong><span className={`status-badge status-${health?.last_error ? "failed" : source.enabled ? "succeeded" : "cancelled"}`}>{t(source.enabled ? "common.enabled" : "common.disabled")}</span></header>
+                        <header><strong>{t(`superAgents.kind.${source.kind}`)}</strong><span className={`status-badge status-${health?.last_error ? "failed" : health?.warning ? "warning" : source.enabled ? "succeeded" : "cancelled"}`}>{t(source.enabled ? "common.enabled" : "common.disabled")}</span></header>
                         {source.kind === "github_webhook" && (githubPolls(source) ? <small>{t("superAgents.setup.github.pollSummary")}</small> : <code>{sourceHookAddress(source)}</code>)}
                         {health?.last_error && <div className="error">{health.last_error}</div>}
+                        {health?.warning && <div className="warning super-agent-source-warning" role="status">{health.warning}</div>}
                         {health?.last_event_at && <time>{t("superAgents.lastEvent")}: {time(health.last_event_at)}</time>}
                       </article>
                     );
