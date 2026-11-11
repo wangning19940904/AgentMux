@@ -607,10 +607,15 @@ body.sidebar-resizing * {
   border-radius: var(--radius);
 }
 
+.preference-keep-awake.active {
+  border-color: color-mix(in srgb, var(--accent-strong) 45%, var(--border));
+}
+
 .preference-keep-awake-title {
   display: flex;
   align-items: flex-start;
   gap: 7px;
+  cursor: pointer;
 }
 
 .preference-keep-awake-title > svg {
@@ -621,6 +626,7 @@ body.sidebar-resizing * {
 
 .preference-keep-awake-title > span {
   display: grid;
+  flex: 1 1 auto;
   min-width: 0;
   gap: 2px;
 }
@@ -631,10 +637,98 @@ body.sidebar-resizing * {
   line-height: 1.2;
 }
 
-.preference-keep-awake-title small {
+.preference-keep-awake-title small,
+.preference-keep-awake-simulate small,
+.keep-awake-activity {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
+}
+
+.preference-keep-awake-title input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 17px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--accent-strong);
+}
+
+.preference-keep-awake-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.preference-keep-awake-row select {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.preference-keep-awake .keep-awake-mode button {
+  font-size: 11px;
+}
+
+.preference-keep-awake-simulate {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.preference-keep-awake-simulate input {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  min-height: 0;
+  margin: 1px 0 0;
+  accent-color: var(--accent-strong);
+}
+
+.preference-keep-awake-simulate > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.preference-keep-awake-simulate strong {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.keep-awake-activity.ok {
+  color: var(--green);
+}
+
+.keep-awake-activity.warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--amber);
+}
+
+.keep-awake-activity.warn > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.keep-awake-activity.warn button {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 7px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 10px;
 }
 
 .preference-keep-awake-controls {
@@ -666,27 +760,6 @@ body.sidebar-resizing * {
   transform: translateY(-50%);
 }
 
-.preference-keep-awake-controls button {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 8px;
-  color: white;
-  background: var(--accent-strong);
-  border: 1px solid var(--accent-strong);
-  border-radius: 6px;
-  font-size: 11px;
-}
-
-.preference-keep-awake-controls .keep-awake-stop {
-  color: var(--text-soft);
-  background: var(--bg-elevated);
-  border-color: var(--border);
-}
-
-.preference-keep-awake-controls button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
 
 .preference-error {
   color: var(--red);
