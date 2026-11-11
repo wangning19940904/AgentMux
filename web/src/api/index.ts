@@ -65,6 +65,7 @@ import type {
   FrameworkUpdateCheck,
   FrameworksResponse,
   GuardPolicy,
+  KeepAwakeRequest,
   KeepAwakeStatus,
   MCPServer,
   MarketplaceSkill,
@@ -437,8 +438,9 @@ export const api = {
   status: () => get<Status>("/api/v1/status"),
   localStatus: () => getLocal<Status>("/api/v1/status"),
   keepAwakeStatus: () => get<KeepAwakeStatus>("/api/v1/system/keep-awake"),
-  setKeepAwake: (durationMinutes: number) =>
-    put<KeepAwakeStatus>("/api/v1/system/keep-awake", { duration_minutes: durationMinutes }),
+  setKeepAwake: (request: KeepAwakeRequest) =>
+    put<KeepAwakeStatus>("/api/v1/system/keep-awake", request),
+  requestKeepAwakeAccessibility: () => postChecked<{ opened: boolean }>("/api/v1/system/keep-awake/accessibility", {}),
   platforms: () => fleetMode() ? fleetReadValues<string>("/api/v1/platforms") : get<string[]>("/api/v1/platforms"),
   agents: () => fleetMode() ? fleetReadValues<string>("/api/v1/agents") : get<string[]>("/api/v1/agents"),
   agentInstances: () => fleetMode() ? fleetReadArray<AgentInstance>("/api/v1/agent-instances") : get<AgentInstance[] | null>("/api/v1/agent-instances"),

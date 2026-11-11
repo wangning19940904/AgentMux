@@ -296,12 +296,29 @@ export interface DesktopUpdateStatus {
   restarting?: boolean;
 }
 
+export type KeepAwakeMode = "display" | "system";
+
+export type KeepAwakeActivityState = "waiting" | "active" | "blocked" | "error";
+
 export interface KeepAwakeStatus {
   supported: boolean;
   enabled: boolean;
+  mode: KeepAwakeMode;
+  simulate_activity: boolean;
+  activity_state?: KeepAwakeActivityState;
+  activity_error?: string;
+  last_activity_at?: string;
+  /** Zero means "until turned off". */
   duration_minutes: number;
   remaining_seconds: number;
   ends_at?: string;
+}
+
+export interface KeepAwakeRequest {
+  enabled: boolean;
+  duration_minutes?: number;
+  mode?: KeepAwakeMode;
+  simulate_activity?: boolean;
 }
 
 export interface SystemDirectoryEntry {
