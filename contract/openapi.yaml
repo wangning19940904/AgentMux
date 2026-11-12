@@ -473,6 +473,10 @@ paths:
       tags: [agents]
       operationId: upsertAgentInstance
       summary: Create or update an Agent instance
+      description: >-
+        Saves an agent's brain. Creating one also creates the agent around it,
+        under the same id, in act mode and with no workers; the response is the
+        Agent instance as before. See contract/SUPER_AGENTS.md.
       requestBody:
         required: true
         content:
@@ -494,6 +498,9 @@ paths:
       tags: [agents]
       operationId: deleteAgentInstance
       summary: Delete an Agent instance
+      description: >-
+        Deletes the agent made with this Agent instance too, stopping its
+        Tickets. Its home directory stays on disk.
       parameters:
         - name: id
           in: query

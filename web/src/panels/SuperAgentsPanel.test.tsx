@@ -860,6 +860,28 @@ describe("superAgentModel", () => {
     expect(superAgentProblems(agent)).toEqual([]);
   });
 
+  it("shows one agent with its own brain: its bound channels are listed, not edited, and saving needs no workers", async () => {
+    const own: SuperAgent = {
+      id: "coder", name: "Coder", router_agent_id: "coder", mode: "act", max_concurrency: 2, enabled: true, workers: [],
+      sources: [{ id: "channel:c1", kind: "channel", name: "Team bot", enabled: true, allowed_actors: [], config: { channel_id: "c1" } }],
+    };
+    vi.mocked(api.superAgents).mockResolvedValue([saved, own]);
+    const save = vi.spyOn(api, "saveSuperAgent").mockImplementation(async (agent) => agent);
+    renderPanel({ agentID: "coder" });
+    await until(() => hasText("Chats only"));
+    expect(hasText("Repo keeper")).toBe(false);
+    expect(hasText("Bound channel · Team bot")).toBe(true);
+    expect(button(/^Delete$/)).toBeUndefined();
+    click(button(/Edit workers and triggers/));
+    await until(() => hasText("This agent answers with its own framework"));
+    expect([...container.querySelectorAll("label.field span")].some((item) => item.textContent === "Router agent")).toBe(false);
+    expect(container.querySelector(".super-agent-section .super-agent-chip")?.textContent).toContain("Team bot");
+    click(await until(() => workerFramework("Codex")));
+    click(button(/Save/));
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ id: "coder", router_agent_id: "coder", auto_workers: true, worker_runtimes: ["codex"] });
+  });
+
   it("parses sender lists", () => {
     expect(parseActors(" a@b.c, d\ne  f ")).toEqual(["a@b.c", "d", "e", "f"]);
   });

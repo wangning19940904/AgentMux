@@ -24,7 +24,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | 权限审批 | **AgentMux Guard** | `guard/` |
 | Web 控制台 | **AgentMux Console** | `web/` + `server/` |
 | 多 Agent 编排 | **AgentMux Orchestrations** | `orchestration/` + `store/orchestrations.go` |
-| 常驻路由 | **AgentMux Super Agents** | `superagent/` + `store/superagents.go` |
+| Agent（大脑、来源与 Worker） | **AgentMux Agents** | `superagent/` + `store/superagents.go` + `store/agents.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
 - **事件订阅** — 同机服务可使用租户 Token 订阅飞书/Lark 原始事件与 AgentMux 生命周期事件，复用现有长连接。PostgreSQL 持久化、独立 HTTP 回调、HMAC 验签、失败重试及投递记录；共享渠道需要单独授权事件读取权。见 [接入指南](contract/EVENT_SUBSCRIPTIONS.md) 与 [Homebook 示例](integrations/homebook-events/README.md)。
@@ -38,12 +38,12 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
-- **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Super Agent 远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
+- **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Agent 的远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
 - **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
 - **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
-- **Super Agents** — 常驻 Router 把飞书消息、飞书文档更新、邮件和 GitHub（Webhook 或通知轮询）转成工单，并派给本地或远程（SSH）Worker，在请求来源处回复。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行，事件文本和模型都无法改变；新建时默认为只记录不执行的观察模式。见 [接入指南](contract/SUPER_AGENTS.md)。
+- **Agents（统一 Agent）** — AgentMux 只有一种 Agent：身份、主目录与记忆、一个“大脑”会话（它的框架、模型、审批模式和工作目录），以及来源和 Worker 策略。大脑能直接回答就直接回答，做不完的工作交给 Worker（工单），Worker 完成后由大脑在原处汇报。绑定的渠道是它的来源：对话仍走渠道引擎，保留流式卡片、会话队列、转向、审批卡片和 `/` 命令；飞书消息、飞书文档更新、邮件和 GitHub（Webhook 或通知轮询）也可以作为来源。Console 的「Agents」页统一管理全部 Agent，每个 Agent 的 Worker、触发和工单从它那一行打开。升级时，原有的普通 Agent 自动成为统一 Agent（保持执行模式、不启动 Worker，照旧回答原来的人）；原有的 Super Agent 保持不变。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行。见 [接入指南](contract/SUPER_AGENTS.md)。
 - **DeepSeek Harness** — `dsh` 作为 Agent Runtime 接入，使用 `dsh --profile headless --json`，支持会话恢复；审批模式映射到 DSH 权限预设。
 - **Orchestrations** — 通过持久 DAG 跨 Agent/Project 分派任务，支持依赖输出传递、并发上限、失败阻断、取消和 daemon 重启恢复。
 
@@ -437,7 +437,7 @@ while response.status in {"queued", "in_progress"}:
 
 ### Agent Invocation API
 
-其他本机服务不需要伪装成消息渠道，也不需要先配置 IM/Webhook Channel。直接调用独立的 Invocation API 即可复用 AgentMux 的 Agent 配置、工作目录、Provider 路由、系统提示词、会话持久化和 Observability：
+其他本机服务不需要伪装成消息渠道，也不需要先配置 IM/Webhook Channel。直接调用独立的 Invocation API 即可复用 AgentMux 的 Agent 配置、工作目录、Provider 路由、系统提示词、会话持久化和 Observability。`agent_id` 是 Agent 的 id，也是它大脑的 id；Invocation 和 `/v1/responses` 直接运行大脑，不附带 Worker 说明，也不会启动 Worker。`POST /api/v1/agent-instances` 创建的就是统一 Agent，`DELETE` 会连同它的 Agent 记录一起删除，返回格式不变：
 
 `/api/v1/send` 仍只负责向已有渠道发送出站消息，不会运行 Agent；需要 Agent 产出结果时使用 `/api/v1/invocations`。即使只监听 `127.0.0.1`，服务间调用也建议开启 `[bridge]` Bearer Token 鉴权。
 

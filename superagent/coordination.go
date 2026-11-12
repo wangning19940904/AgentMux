@@ -238,6 +238,8 @@ func describeThread(threadKey, messageID string, chatNames map[string]string) st
 		return "Feishu document " + strings.TrimPrefix(threadKey, "feishu_doc:")
 	case strings.HasPrefix(threadKey, "console:"):
 		return "the AgentMux Console"
+	case strings.HasPrefix(threadKey, channelSourcePrefix):
+		return "a chat with you on channel " + strings.SplitN(strings.TrimPrefix(threadKey, channelSourcePrefix), ":", 2)[0]
 	}
 	return threadKey
 }

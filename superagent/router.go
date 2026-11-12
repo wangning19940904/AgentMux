@@ -377,6 +377,40 @@ This Super Agent is in observe mode: AgentMux records your reply and actions, bu
 `
 
 func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuses []core.SuperAgentWorkerStatus, view routerContext) string {
+	event := map[string]any{
+		"source": trigger.SourceKind, "actor": firstNonEmpty(trigger.ActorName, trigger.Actor),
+		"addressed_to_you": trigger.Addressed, "title": trigger.Title, "text": trigger.Text,
+	}
+	if trigger.Actor != "" && trigger.ActorName != "" && trigger.Actor != trigger.ActorName {
+		event["actor_id"] = trigger.Actor
+	}
+	if view.Where != "" {
+		event["where"] = view.Where
+	}
+	if trigger.Kind != "" {
+		event["kind"] = trigger.Kind
+		event["ticket_id"] = trigger.TicketID
+		delete(event, "addressed_to_you")
+	}
+	eventJSON, _ := json.MarshalIndent(event, "", "  ")
+
+	var prompt strings.Builder
+	fmt.Fprintf(&prompt, routerCharter, agent.Name)
+	if agent.Mode == core.SuperAgentModeObserve {
+		prompt.WriteString(observeNote)
+	}
+	writeRouterContext(&prompt, agent, statuses, view)
+	if view.Feedback != "" {
+		fmt.Fprintf(&prompt, "\nEVENT %s. Your previous answer to it was not carried out: %s. Nothing happened: no ticket was created or changed and nothing was sent. Answer it again:\n%s\n", trigger.ID, view.Feedback, eventJSON)
+	} else {
+		fmt.Fprintf(&prompt, "\nEVENT %s (if you already handled this event earlier in this conversation, do not act on it again):\n%s\n", trigger.ID, eventJSON)
+	}
+	return prompt.String()
+}
+
+// writeRouterContext writes what the brain is shown besides the event: the
+// operator's rules, the roster, open Tickets, places, asks, notes and memory.
+func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses []core.SuperAgentWorkerStatus, view routerContext) {
 	type rosterEntry struct {
 		ID           string `json:"id"`
 		Label        string `json:"label,omitempty"`
@@ -401,34 +435,12 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuse
 			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Available: true})
 		}
 	}
-	event := map[string]any{
-		"source": trigger.SourceKind, "actor": firstNonEmpty(trigger.ActorName, trigger.Actor),
-		"addressed_to_you": trigger.Addressed, "title": trigger.Title, "text": trigger.Text,
-	}
-	if trigger.Actor != "" && trigger.ActorName != "" && trigger.Actor != trigger.ActorName {
-		event["actor_id"] = trigger.Actor
-	}
-	if view.Where != "" {
-		event["where"] = view.Where
-	}
-	if trigger.Kind != "" {
-		event["kind"] = trigger.Kind
-		event["ticket_id"] = trigger.TicketID
-		delete(event, "addressed_to_you")
-	}
-	eventJSON, _ := json.MarshalIndent(event, "", "  ")
 	rosterJSON, _ := json.MarshalIndent(roster, "", "  ")
 	tickets := view.Tickets
 	if tickets == nil {
 		tickets = []ticketView{}
 	}
 	ticketsJSON, _ := json.MarshalIndent(tickets, "", "  ")
-
-	var prompt strings.Builder
-	fmt.Fprintf(&prompt, routerCharter, agent.Name)
-	if agent.Mode == core.SuperAgentModeObserve {
-		prompt.WriteString(observeNote)
-	}
 	if extra := strings.TrimSpace(agent.RouterPrompt); extra != "" {
 		prompt.WriteString("\nOPERATOR'S ROUTING RULES:\n" + extra + "\n")
 	}
@@ -436,25 +448,19 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuse
 	if memory == "" {
 		memory = "(empty)"
 	}
-	fmt.Fprintf(&prompt, "\nWORKER ROSTER:\n%s\n\nOPEN TICKETS (every thread, newest first):\n%s\n", rosterJSON, ticketsJSON)
+	fmt.Fprintf(prompt, "\nWORKER ROSTER:\n%s\n\nOPEN TICKETS (every thread, newest first):\n%s\n", rosterJSON, ticketsJSON)
 	if len(view.Places) > 0 {
 		placesJSON, _ := json.MarshalIndent(view.Places, "", "  ")
-		fmt.Fprintf(&prompt, "\nPLACES AND PEOPLE (where post can send, and who is there):\n%s\n", placesJSON)
+		fmt.Fprintf(prompt, "\nPLACES AND PEOPLE (where post can send, and who is there):\n%s\n", placesJSON)
 	}
 	if len(view.Asks) > 0 {
 		asksJSON, _ := json.MarshalIndent(view.Asks, "", "  ")
-		fmt.Fprintf(&prompt, "\nQUESTIONS YOU ASKED HERE (on behalf of other threads, which wait for the answer):\n%s\n", asksJSON)
+		fmt.Fprintf(prompt, "\nQUESTIONS YOU ASKED HERE (on behalf of other threads, which wait for the answer):\n%s\n", asksJSON)
 	}
 	for _, note := range view.Notes {
 		prompt.WriteString("\nNOTE: " + note + "\n")
 	}
-	fmt.Fprintf(&prompt, "\nMEMORY INDEX (memory/MEMORY.md):\n%s\n", memory)
-	if view.Feedback != "" {
-		fmt.Fprintf(&prompt, "\nEVENT %s. Your previous answer to it was not carried out: %s. Nothing happened: no ticket was created or changed and nothing was sent. Answer it again:\n%s\n", trigger.ID, view.Feedback, eventJSON)
-	} else {
-		fmt.Fprintf(&prompt, "\nEVENT %s (if you already handled this event earlier in this conversation, do not act on it again):\n%s\n", trigger.ID, eventJSON)
-	}
-	return prompt.String()
+	fmt.Fprintf(prompt, "\nMEMORY INDEX (memory/MEMORY.md):\n%s\n", memory)
 }
 
 // workerBrief is what a worker is told about how it works for a Super Agent.

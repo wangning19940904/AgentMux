@@ -118,6 +118,14 @@ func (s *Server) handleSuperAgentUpsert(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// An agent's own brain follows its name and enabled state, which the
+	// channels bound to it read when they start.
+	if saved.RouterAgentID == saved.ID && s.connect != nil {
+		if err := s.connect.RestartChannelsForAgent(r.Context(), saved.ID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "agent saved, but bound channels failed to restart: "+err.Error())
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, saved)
 }
 
@@ -133,6 +141,12 @@ func (s *Server) handleSuperAgentDelete(w http.ResponseWriter, r *http.Request) 
 	if err := s.superAgents.Delete(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.connect != nil {
+		if err := s.connect.RestartChannelsForAgent(r.Context(), id); err != nil {
+			writeErr(w, http.StatusInternalServerError, "agent deleted, but bound channels failed to restart: "+err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -1,10 +1,55 @@
-# Super Agents
+# Agents
 
-A Super Agent is a persistent router. Events arrive from its triggers, a router
-Agent answers each one or decides what it means, and AgentMux applies that
-decision to local or remote workers. The design follows DeepSeek's
+AgentMux has one kind of agent. An agent has an identity, a home with its
+memory and Tickets, a **brain**, its **sources**, and a **worker policy**. The
+brain answers directly when it can and starts workers, as Tickets, when it
+cannot. Older versions had two kinds: regular Agents bound to channels, and
+Super Agents, persistent routers. Both are now this one kind, and the rest of
+this document still says "Super Agent" for the parts that only routed agents
+used before. The design follows DeepSeek's
 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype)
 prototype, simplified to run inside the AgentMux daemon.
+
+## One kind of agent
+
+- **Record.** An agent is a `super_agents` row (`core.SuperAgent`).
+  `router_agent_id` names its brain: an Agent instance (`agent_instances`) with
+  the framework, model, approval mode, working directory, MCP servers and skills
+  the brain runs with.
+- **Creating an agent** in the Console or with `POST /api/v1/agent-instances`
+  saves the brain and an agent record with **the same id**, in act mode and with
+  no worker policy. Channel bindings, grants, `/api/v1/invocations` and
+  `/v1/responses` keep naming that id. Nothing creates a regular agent any more.
+- **Upgrading.** When the daemon starts, every Agent instance that is no agent's
+  brain gets a record with its id: act mode, enabled as the instance was, and no
+  workers. Router agents (`sar_*`) and auto workers (`saw_*`) belong to their
+  agent and get none, and an ordinary Agent a Super Agent already routed with
+  stays that Super Agent's brain. The step only inserts, so starting again
+  changes nothing and no instance, channel binding, conversation or grant changes.
+- **Channel sources.** Each channel bound to the brain (`channels.agent_id`) is a
+  source of kind `channel`, with id `channel:<channel id>`. It is read from the
+  binding every time and never stored; bind channels in the agent's settings. The
+  channel's own reply scope decides who reaches the brain, exactly as before:
+  there is no allowed list, and observe mode does not hold back the brain's reply.
+- **Chats run through the channel engine.** A message on a bound channel is a
+  normal channel turn, with streaming replies, the per-conversation queue,
+  steering, approval cards and `/` commands. When the agent has a worker policy
+  (worker frameworks or a roster), the engine puts a brief before the message: the
+  roster, the conversation's Tickets, the operator's rules, the memory index and
+  how to start a worker. The brain ends its reply with an action block to act; the
+  block is hidden from the chat while the reply streams, and AgentMux carries it
+  out after the turn completes, with the same checks as a router's. A turn that
+  is stopped or times out starts nothing. An agent with no worker policy gets no
+  brief, so its turns are what they were before agents could start workers.
+- **Tickets from a chat** report back to that chat: when a worker finishes a
+  turn, the brain gets a ticket update, as a router turn outside the chat's
+  conversation, and its reply is posted in the chat's thread.
+- **Deleting** an agent with `DELETE /api/v1/agent-instances` or
+  `DELETE /api/v1/super-agents` stops its Tickets, removes its records and its own
+  brain, and leaves its channels without an agent. Its home stays on disk.
+- **The Console** has one Agents page. Each row shows what the agent does besides
+  chatting, and opens its workers, triggers and Tickets. Agents that answer with a
+  router agent, as Super Agents did, are rows of their own.
 
 ## Flow
 
@@ -52,7 +97,8 @@ The router reads untrusted text. What limits the harm a crafted event can do:
 
 - **Allowed senders** are checked before the router sees an event, and an empty
   list admits nobody. `*` is accepted only for Feishu messages. This is the only hard
-  limit on who can reach the router.
+  limit on who can reach the router. Channel sources have no list: whoever the
+  channel lets reach the bot reaches the brain, as with any bound channel.
 - **An action** can only name a worker on this Super Agent's roster, `auto:<framework>`
   for one of its worker frameworks, and a Ticket already on the event's thread.
 - **The router** is a [router agent](#router-agents): it runs on this machine in the
@@ -60,9 +106,12 @@ The router reads untrusted text. What limits the harm a crafted event can do:
   daemon's user, including reading AgentMux's own configuration; its charter, not a
   sandbox, is what tells it to treat event text as data. Choose `auto`, `auto_edit` or
   `plan` for a Super Agent whose triggers carry text from people you do not trust.
-- **Observe mode** is the default. It records the router's reply and action without
+- **Observe mode** is the default for a Super Agent saved through
+  `POST /api/v1/super-agents` without a mode. It records the router's reply and action without
   running work or messaging anyone, and tells the router to change nothing; its approval
-  mode still applies. Switch to Act when the decisions look right.
+  mode still applies. Switch to Act when the decisions look right. Agents created as
+  Agents, and Agents upgraded from before, act. In a chat, observe mode records the
+  brain's actions without carrying them out; the chat still gets its reply.
 
 Workers run unattended, and an approval nobody can answer is declined. Give them
 a non-manual approval mode, and per-conversation worktrees so parallel Tickets
@@ -300,7 +349,7 @@ These routes are for Console administrators and are closed to tenant credentials
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete; secrets are write-only |
+| `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
 | `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
@@ -328,6 +377,15 @@ Headless ignores credentials saved by the DSH GUI. Provide `DEEPSEEK_API_KEY` in
 the Agent's environment or in `$DSH_HOME/.env`.
 
 ## Current limits
+
+- Workers are still Agent instances: auto workers keep their hidden
+  `saw_<agent id>_<framework>` records, and roster workers are Agents.
+- Only chats on bound channels run the brain through the channel engine. Feishu
+  message, Feishu document, email and GitHub sources, the Console's "try it", and
+  ticket updates run it as a router turn, with no streaming and in a conversation
+  of their own per thread.
+- A ticket update for a chat reaches the brain outside the chat's own conversation;
+  the next chat turn sees the Ticket in its brief.
 
 - One daemon owns a Super Agent's Tickets; running several against one database is
   not supported.

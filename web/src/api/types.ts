@@ -1493,7 +1493,9 @@ export interface OrchestrationTask {
   updated_at: string;
 }
 
-export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook";
+// "channel" is a channel bound to the agent's brain. The daemon derives it from
+// the binding on every read and never stores it.
+export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook" | "channel";
 
 export interface SuperAgentWorker {
   id: string;
@@ -1562,6 +1564,9 @@ export interface SuperAgentGitHubSetup {
   api_protected: boolean;
 }
 
+// An agent. AgentMux has one kind: router_agent_id is its brain, the Agent
+// instance whose framework, model and approval mode answer. An agent made as
+// one shares its id with its brain.
 export interface SuperAgent {
   id: string;
   name: string;

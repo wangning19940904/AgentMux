@@ -201,6 +201,13 @@ func (s *Service) Start(parent context.Context) error {
 		}
 		s.recordTicket(ctx, ticket)
 	}
+	if created, err := s.UnifyAgents(ctx); err != nil {
+		// Chats do not depend on the agent records: the channel engine still
+		// reaches every brain. The next start tries again.
+		s.log.Error("give agents their records", "err", err, "created", created)
+	} else if created > 0 {
+		s.log.Info("gave agents their records", "created", created)
+	}
 	s.adoptRouters(ctx)
 	if err := s.refreshClaims(ctx); err != nil {
 		cancel()

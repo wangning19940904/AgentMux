@@ -67,6 +67,14 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Every agent is a unified agent: saving an instance that is no agent's
+	// brain makes it one, under the same id.
+	if s.superAgents != nil {
+		if _, err := s.superAgents.EnsureAgent(r.Context(), a); err != nil {
+			writeErr(w, http.StatusInternalServerError, "agent saved, but its agent record failed: "+err.Error())
+			return
+		}
+	}
 	if !principal.IsTenant() && a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
 		if err := s.provider.Switch(r.Context(), a.ProviderID, a.ProviderTool); err != nil {
 			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: "+err.Error())
@@ -149,6 +157,21 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 	}
 	if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
 		return
+	}
+	// The agent made with this instance goes with it: its Tickets stop and
+	// its records are removed, though its home stays on disk.
+	if s.superAgents != nil {
+		agent, err := s.superAgents.AgentFor(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if agent != nil && agent.ID == id {
+			if err := s.superAgents.Delete(r.Context(), id); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 	}
 	if err := s.st.DeleteAgentInstance(r.Context(), id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
