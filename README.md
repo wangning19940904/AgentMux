@@ -223,14 +223,14 @@ amux accounts set-role bob admin|member
 
 ## 手机访问与通知
 
-Console 在窄屏上换成底部标签栏（总览、Agent、超级 Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
+Console 在窄屏上换成底部标签栏（总览、Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
 
 **1. 给 Console 一个 HTTPS 地址。** 浏览器只在 `https://`（或本机 `localhost`）上允许安装和推送。`[hub] addr` 的端口只服务设备配对和连接，不提供 Console，所以手机要通过 HTTPS 访问管理端口（默认 `127.0.0.1:8765`），例如：
 
 - 反向代理：Caddy `your-hub.example.com { reverse_proxy 127.0.0.1:8765 }`，或 nginx 等；
 - 隧道：Tailscale `tailscale serve --bg 8765`、Cloudflare Tunnel 等。
 
-**经反向代理或隧道对外开放前，务必开启 Bridge 鉴权**（`[bridge] enabled = true` 并设置 `token`）。守护进程只在自己直接监听非回环地址时强制要求这一点；代理和隧道从本机回环地址连进来，不开鉴权就等于把整个管理接口交给能访问该地址的任何人。手机浏览器没有 Bridge Token，可以用一次性的 Console 登录链接进入（有效 60 秒，登录后会话 8 小时）：
+**经反向代理或隧道对外开放前，务必开启 Bridge 鉴权**（`[bridge] enabled = true` 并设置 `token`）。守护进程只在自己直接监听非回环地址时强制要求这一点；代理和隧道从本机回环地址连进来，不开鉴权就等于把整个管理接口交给能访问该地址的任何人。已创建[账号](#账号与登录)时，手机上直接用登录名和密码登录即可。没有账号时，手机浏览器没有 Bridge Token，可以用一次性的 Console 登录链接进入（有效 60 秒，登录后会话 8 小时）：
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.example.com/api/v1/console/sessions
@@ -251,7 +251,7 @@ curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.exampl
 - **Super Agent 工单**：工单完成（ready）或失败。
 - **关联机器**：机器离线超过 2 分钟后通知，重新上线时再通知；短暂断线不打扰。
 
-通知只写「谁、在哪台机器、发生了什么」，从不包含消息正文、命令、路径或密钥；点开会进入对应页面（会话记录、Super Agent、机器状态）。同一类通知在 45 秒内只推一次，期间的其他事件合并成一条摘要。Hub 首次启动时生成并保存自己的 VAPID 密钥对；推送服务返回 404/410（订阅已失效）时自动删除该订阅。推送经浏览器厂商的推送服务送达（Apple、Google、Microsoft、Mozilla），Hub 需要能访问外网，可通过 `HTTPS_PROXY` 走代理。
+通知只写「谁、在哪台机器、发生了什么」，从不包含消息正文、命令、路径或密钥；点开会进入对应页面（会话记录、Agents、机器状态）。同一类通知在 45 秒内只推一次，期间的其他事件合并成一条摘要。Hub 首次启动时生成并保存自己的 VAPID 密钥对；推送服务返回 404/410（订阅已失效）时自动删除该订阅。推送经浏览器厂商的推送服务送达（Apple、Google、Microsoft、Mozilla），Hub 需要能访问外网，可通过 `HTTPS_PROXY` 走代理。
 
 推送接口：`GET /api/v1/push`（公钥与本人的订阅）、`POST /api/v1/push/subscriptions`、`DELETE /api/v1/push/subscriptions?id=`、`POST /api/v1/push/test`。订阅按登录身份（目前为管理员）保存，租户暂不能订阅。
 
