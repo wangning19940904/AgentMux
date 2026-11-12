@@ -24,7 +24,7 @@ func (s *Service) List(ctx context.Context) ([]core.SuperAgent, error) {
 		return nil, err
 	}
 	for index := range agents {
-		agents[index] = redactAgent(s.withWorkerRuntimes(ctx, agents[index]))
+		agents[index] = redactAgent(s.withChannelSources(ctx, s.withWorkerRuntimes(ctx, agents[index])))
 	}
 	return agents, nil
 }
@@ -58,15 +58,20 @@ func (s *Service) Save(ctx context.Context, agent core.SuperAgent) (core.SuperAg
 	if err := s.nameRouter(ctx, agent); err != nil {
 		return core.SuperAgent{}, err
 	}
+	if err := s.syncOwnBrain(ctx, agent); err != nil {
+		return core.SuperAgent{}, err
+	}
 	if err := s.refreshClaims(ctx); err != nil {
 		return core.SuperAgent{}, err
 	}
-	return redactAgent(agent), nil
+	return redactAgent(s.withChannelSources(ctx, agent)), nil
 }
 
 // Delete stops the Super Agent's running turns and removes its records, its
-// auto workers and its router agent. Its home stays on disk, since tickets'
-// worktrees there can hold work that was never pushed.
+// auto workers and its router agent, or its own brain. Its home stays on disk,
+// since tickets' worktrees there can hold work that was never pushed. Channels
+// bound to a deleted brain are left without an agent, as when an Agent
+// instance is deleted.
 func (s *Service) Delete(ctx context.Context, id string) error {
 	agent, err := s.store.GetSuperAgent(ctx, id)
 	if err != nil {
@@ -86,7 +91,11 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := s.deleteAutoWorkers(ctx, id); err != nil {
 		return err
 	}
-	if agent != nil {
+	if agent != nil && ownsBrain(*agent) {
+		if err := s.store.DeleteAgentInstance(ctx, agent.RouterAgentID); err != nil {
+			return err
+		}
+	} else if agent != nil {
 		if err := s.deleteOwnedRouter(ctx, agent.RouterAgentID); err != nil {
 			return err
 		}
@@ -180,8 +189,13 @@ func (s *Service) normalizeAutoWorkers(agent *core.SuperAgent, router *core.Agen
 }
 
 func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) error {
-	if len(agent.Workers) == 0 && !agent.AutoWorkers {
+	// An agent with its own brain may only chat; a router has nothing to do
+	// without workers.
+	if len(agent.Workers) == 0 && !agent.AutoWorkers && !ownsBrain(*agent) {
 		return errors.New("at least one worker is required unless auto workers are on")
+	}
+	if agent.Workers == nil {
+		agent.Workers = []core.SuperAgentWorker{}
 	}
 	seen := map[string]bool{}
 	for index := range agent.Workers {
@@ -219,6 +233,14 @@ func (s *Service) normalizeWorkers(ctx context.Context, agent *core.SuperAgent) 
 }
 
 func normalizeSources(agent *core.SuperAgent, existing *core.SuperAgent) error {
+	// Channel sources are the brain's channel bindings, read back on every
+	// list; a client that sends them back does not store them.
+	agent.Sources = slices.DeleteFunc(agent.Sources, func(source core.SuperAgentSource) bool {
+		return source.Kind == core.SuperAgentSourceChannel
+	})
+	if agent.Sources == nil {
+		agent.Sources = []core.SuperAgentSource{}
+	}
 	seen := map[string]bool{}
 	for index := range agent.Sources {
 		source := &agent.Sources[index]

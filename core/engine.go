@@ -17,6 +17,7 @@ type EventSink func(event HookEvent, data map[string]string)
 type Engine struct {
 	eventIngress            func(Channel) PlatformEventIngress
 	inboundInterceptor      InboundInterceptor
+	brainHook               BrainHook
 	ingressMu               sync.Mutex
 	ingress                 map[string]chan struct{}
 	log                     *slog.Logger

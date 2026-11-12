@@ -12,6 +12,11 @@ const (
 	SuperAgentSourceFeishuDoc     = "feishu_doc"
 	SuperAgentSourceEmail         = "email"
 	SuperAgentSourceGitHub        = "github_webhook"
+	// SuperAgentSourceChannel is a channel bound to the agent's brain
+	// (channels.agent_id). It is derived from the binding, never stored: the
+	// channel engine runs the brain's turn, and the channel's own reply scope,
+	// not an allowed list, decides who reaches it.
+	SuperAgentSourceChannel = "channel"
 )
 
 // Super Agent modes. Observe records what the router would do without creating
@@ -49,8 +54,13 @@ const (
 	SuperAgentTicketStopped = "stopped"
 )
 
-// SuperAgent is a persistent router that turns events from its Sources into
-// Tickets and assigns them to local or remote workers.
+// SuperAgent is an agent: AgentMux has one kind. It has an identity, a home
+// with memory and Tickets, a brain and the sources and worker policy around
+// it. The brain is the Agent instance RouterAgentID names: its framework,
+// model, approval mode and directory. An agent created through the Console or
+// the agent-instances API shares its id with its brain, so channel bindings,
+// grants and invocations that name the id reach the brain. The brain answers
+// directly when it can and starts workers, as Tickets, when it cannot.
 type SuperAgent struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

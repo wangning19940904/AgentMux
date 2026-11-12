@@ -129,6 +129,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		},
 	})
 	engine.SetInboundInterceptor(superAgents.InterceptMessage)
+	engine.SetBrainHook(superAgents)
 	relay.SetLocalConsumer(superAgents)
 	srv.SetSuperAgents(superAgents, feishuAPI)
 	if cfg.Observability.Enabled {
