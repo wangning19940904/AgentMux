@@ -423,10 +423,6 @@ body.sidebar-resizing * {
   gap: 6px;
 }
 
-.mobile-flat-nav {
-  display: none;
-}
-
 .nav button,
 .sidebar-tools button {
   display: flex;

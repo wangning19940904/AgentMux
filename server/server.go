@@ -22,6 +22,7 @@ import (
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
+	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 	"github.com/wangning19940904/AgentMux/store"
@@ -57,6 +58,7 @@ type Server struct {
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
 	linkHub            *linkpkg.Hub
+	push               *pushpkg.Service
 	devices            *deviceBackend
 	node               *nodeLink
 	superAgents        *superagent.Service
@@ -111,6 +113,8 @@ type Dependencies struct {
 	Workspace      core.WorkspaceInitializer
 	ModuleRuntime  map[string]ModuleRuntimeState
 	Orchestrations *orchestrationpkg.Service
+	// PushSender delivers push notifications; nil sends Web Push.
+	PushSender pushpkg.Sender
 }
 
 type ModuleRuntimeState struct {
@@ -185,6 +189,7 @@ func New(deps Dependencies) *Server {
 		s.channelPeers = peer
 		s.meetingPeers = peer
 	}
+	s.setupPush(deps.PushSender)
 	s.setupLink()
 	s.routes()
 	if s.orchestrations != nil {

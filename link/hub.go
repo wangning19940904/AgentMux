@@ -59,6 +59,17 @@ type Hub struct {
 	sessions map[string]*hubSession
 	attempts map[string][]time.Time
 	uplink   http.Handler
+	presence func(deviceID string, online bool)
+}
+
+// SetPresenceListener is told when a device connects (online) and when its
+// last connection ends. A reconnect that replaces a live connection, and a
+// device dropped by Disconnect, are not changes. It runs on the connection's
+// goroutine and must return quickly.
+func (h *Hub) SetPresenceListener(listener func(deviceID string, online bool)) {
+	h.mu.Lock()
+	h.presence = listener
+	h.mu.Unlock()
 }
 
 // SetUplink sets what answers the requests devices send up their links, such
@@ -212,18 +223,26 @@ func (h *Hub) attach(id string, session *hubSession) {
 	h.mu.Lock()
 	previous := h.sessions[id]
 	h.sessions[id] = session
+	presence := h.presence
 	h.mu.Unlock()
 	if previous != nil {
 		_ = previous.mux.Close()
+	} else if presence != nil {
+		presence(id, true)
 	}
 }
 
 func (h *Hub) detach(id string, session *hubSession) {
 	h.mu.Lock()
-	if h.sessions[id] == session {
+	removed := h.sessions[id] == session
+	if removed {
 		delete(h.sessions, id)
 	}
+	presence := h.presence
 	h.mu.Unlock()
+	if removed && presence != nil {
+		presence(id, false)
+	}
 }
 
 // Dial opens a stream to the device. The node serves HTTP on it.

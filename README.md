@@ -36,7 +36,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Skills** — 统一发现、安装与管理 Agent Skills。
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
 - **Guard** — 工具调用的权限审批与策略闸门。
-- **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
+- **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。手机上自动切换为底部标签栏与「更多」抽屉，可安装到主屏幕，并能推送「Agent 等你批准/回答」「Super Agent 工单结束」「关联机器离线/恢复」通知。见 [手机访问与通知](#手机访问与通知)。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
 - **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Agent 的远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
 - **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
@@ -220,6 +220,40 @@ amux accounts set-role bob admin|member
 - **归属复用多租户**：每个账号自带一个 `kind = "account"` 的租户命名空间（名称即登录名）。成员新建的资源自动归属自己；管理员可在「租户」中给成员的命名空间授予 `read/use/manage`，或用 `amux tenants assign` / `POST /api/v1/tenancy/ownership` 移交资源（包括设备，`resource_type = "device"`）。账号命名空间只能经账号管理，不能单独删除、停用或签发 token。
 - **设备归属**：设备归属于创建其配对码的账号。管理员（含 bridge token）创建的配对码得到的设备不归属任何人，仅管理员可见。成员可在「租户」页的「我的设备」中配对、查看和移除自己的设备；成员暂不能经 Hub 远程操作设备。
 - **兼容**：bridge token 始终是管理员，CLI、SDK 与现有集成不受影响；tenant token 行为不变。关闭 bridge 时，本机无凭证请求（例如 CLI）仍是管理员——此时登录页只是本机便利，要让账号成为真正的访问边界，请开启 `[bridge]`（对外监听本来就要求开启）。打包的桌面 App 是本机管理员界面，不显示登录页。
+
+## 手机访问与通知
+
+Console 在窄屏上换成底部标签栏（总览、Agent、超级 Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
+
+**1. 给 Console 一个 HTTPS 地址。** 浏览器只在 `https://`（或本机 `localhost`）上允许安装和推送。`[hub] addr` 的端口只服务设备配对和连接，不提供 Console，所以手机要通过 HTTPS 访问管理端口（默认 `127.0.0.1:8765`），例如：
+
+- 反向代理：Caddy `your-hub.example.com { reverse_proxy 127.0.0.1:8765 }`，或 nginx 等；
+- 隧道：Tailscale `tailscale serve --bg 8765`、Cloudflare Tunnel 等。
+
+**经反向代理或隧道对外开放前，务必开启 Bridge 鉴权**（`[bridge] enabled = true` 并设置 `token`）。守护进程只在自己直接监听非回环地址时强制要求这一点；代理和隧道从本机回环地址连进来，不开鉴权就等于把整个管理接口交给能访问该地址的任何人。手机浏览器没有 Bridge Token，可以用一次性的 Console 登录链接进入（有效 60 秒，登录后会话 8 小时）：
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.example.com/api/v1/console/sessions
+# 在手机上打开返回的 enter_url
+```
+
+如果 `[hub] public_url` 填的是 HTTPS 地址，推送服务看到的联系人（VAPID subject）就是它，否则使用项目主页地址。
+
+**2. 安装到手机。**
+
+- iPhone / iPad（iOS 16.4 及以上）：用 Safari 打开 Console，点「分享」→「添加到主屏幕」，之后**从主屏幕图标打开**。iOS 只给主屏幕应用推送通知，在 Safari 标签页里无法开启。
+- Android：用 Chrome 打开，菜单中选「安装应用」或「添加到主屏幕」；Console 的「设置 → 本设备通知」里也会出现「安装到本设备」按钮。
+- 电脑上的 Chrome / Edge 同样可以从地址栏安装。
+
+**3. 开启通知。** 在已安装的 Console 里打开「设置 → 本设备通知」，点「开启」并允许浏览器通知，然后选择要接收的类型，点「发送测试」确认能收到。每台设备单独订阅，其他设备会列在下方，可以随时移除。
+
+- **等我处理的 Agent**：本机或关联机器上的 Agent 发来批准请求或问题。关联机器的请求经它的数据上报（`interactions_pending`，约 30 秒一次）到达 Hub 后通知。
+- **Super Agent 工单**：工单完成（ready）或失败。
+- **关联机器**：机器离线超过 2 分钟后通知，重新上线时再通知；短暂断线不打扰。
+
+通知只写「谁、在哪台机器、发生了什么」，从不包含消息正文、命令、路径或密钥；点开会进入对应页面（会话记录、Super Agent、机器状态）。同一类通知在 45 秒内只推一次，期间的其他事件合并成一条摘要。Hub 首次启动时生成并保存自己的 VAPID 密钥对；推送服务返回 404/410（订阅已失效）时自动删除该订阅。推送经浏览器厂商的推送服务送达（Apple、Google、Microsoft、Mozilla），Hub 需要能访问外网，可通过 `HTTPS_PROXY` 走代理。
+
+推送接口：`GET /api/v1/push`（公钥与本人的订阅）、`POST /api/v1/push/subscriptions`、`DELETE /api/v1/push/subscriptions?id=`、`POST /api/v1/push/test`。订阅按登录身份（目前为管理员）保存，租户暂不能订阅。
 
 ## CLI
 

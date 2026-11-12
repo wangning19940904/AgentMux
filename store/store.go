@@ -492,6 +492,9 @@ func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(accountSchema); err != nil {
 		return err
 	}
+	if _, err := s.writer.Exec(pushSchema); err != nil {
+		return err
+	}
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
 		return err
 	}

@@ -41,6 +41,9 @@ import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
 import { RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
+import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
+import { ConnectionBanner } from "./pwa/ConnectionBanner";
+import { NotificationSettings } from "./pwa/NotificationSettings";
 
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
@@ -160,6 +163,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
+const MOBILE_TABS = mobileTabItems(TABS);
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -381,6 +385,8 @@ function Shell({
   const searchAnchorRef = useRef<HTMLDivElement>(null);
   const closeSearchResults = useCallback(() => setSearchOpen(false), []);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
   const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const preferencesButtonRef = useRef<HTMLButtonElement>(null);
   const preferencesPanelRef = useRef<HTMLDivElement>(null);
@@ -453,6 +459,7 @@ function Shell({
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    setMobileNavOpen(false);
   }, [visibleTab]);
 
   useEffect(() => {
@@ -735,23 +742,14 @@ function Shell({
           })}
         </nav>
 
-        <nav className="mobile-flat-nav" aria-label={t("nav.primary")}>
-          {TABS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={`nav-item${visibleTab === item.id ? " active" : ""}`}
-                onClick={() => setTab(item.id)}
-                title={t(item.labelKey)}
-                disabled={navigationLocked && item.id !== "tenants"}
-              >
-                <Icon size={18} />
-                <span>{t(item.labelKey)}</span>
-              </button>
-            );
-          })}
-        </nav>
+        <MobileTabBar
+          items={MOBILE_TABS}
+          active={visibleTab}
+          drawerOpen={mobileNavOpen}
+          isDisabled={(id) => navigationLocked && id !== "tenants"}
+          onSelect={setTab}
+          onOpenMore={() => setMobileNavOpen((open) => !open)}
+        />
 
         <div className={`account primary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`} title={identityName}>
           {identityIsAdmin && activeTenantOptions.length > 0 ? (
@@ -917,6 +915,26 @@ function Shell({
         />
       </aside>
 
+      <MobileDrawer
+        open={mobileNavOpen}
+        overview={OVERVIEW_ITEM}
+        groups={NAV_GROUPS}
+        active={visibleTab}
+        isDisabled={(id) => navigationLocked && id !== "tenants"}
+        onSelect={(id) => {
+          setMobileNavOpen(false);
+          setTab(id);
+        }}
+        onClose={closeMobileNav}
+      >
+        <PreferenceControls
+          language={language}
+          setLanguage={setLanguage}
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+        />
+      </MobileDrawer>
+
       <div className="workspace">
         <div className="workspace-canvas">
           <header className="workspace-header">
@@ -972,6 +990,7 @@ function Shell({
 		    </div>
           </header>
 
+        <ConnectionBanner />
         <MeetingInvitationOverlay />
 
         <main className={`main main-${visibleTab}`}>
@@ -1007,6 +1026,7 @@ function Shell({
                 </section>
               ) : (
                 <>
+				  {visibleTab === "settings" && <NotificationSettings />}
 				  <RegisteredPanel
 				    tab={visibleTab}
 				    createRequested={createAgentRequested}

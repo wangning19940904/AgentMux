@@ -52,6 +52,7 @@ func (s *Server) serveSPA(mux *http.ServeMux, dist fs.FS) {
 	fileServer := http.FileServer(http.FS(dist))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := fs.Stat(dist, trimLeadingSlash(r.URL.Path)); err == nil && r.URL.Path != "/" {
+			setStaticHeaders(w.Header(), r.URL.Path)
 			fileServer.ServeHTTP(w, r)
 			return
 		}
@@ -61,9 +62,29 @@ func (s *Server) serveSPA(mux *http.ServeMux, dist fs.FS) {
 			http.Error(w, "index.html missing", http.StatusInternalServerError)
 			return
 		}
+		setStaticHeaders(w.Header(), "/index.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(index)
 	})
+}
+
+// setStaticHeaders lets browsers keep the build's hashed assets for good and
+// makes them revalidate everything else. The service worker and the page that
+// loads it must always be fresh so a new build is noticed; the manifest needs
+// its own media type for install checks.
+func setStaticHeaders(h http.Header, path string) {
+	switch {
+	case strings.HasPrefix(path, "/assets/"):
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+	case path == "/sw.js":
+		h.Set("Cache-Control", "no-cache")
+		h.Set("Content-Type", "text/javascript; charset=utf-8")
+	case strings.HasSuffix(path, ".webmanifest"):
+		h.Set("Cache-Control", "no-cache")
+		h.Set("Content-Type", "application/manifest+json")
+	default:
+		h.Set("Cache-Control", "no-cache")
+	}
 }
 
 func trimLeadingSlash(p string) string {
