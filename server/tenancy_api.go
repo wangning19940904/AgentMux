@@ -55,6 +55,9 @@ func (s *Server) handleTenancySelf(w http.ResponseWriter, r *http.Request) {
 		"tenant_id": principal.TenantID,
 		"tenant":    principal.TenantName,
 	}
+	if principal.Account != nil {
+		response["account"] = principal.Account
+	}
 	if principal.IsTenant() {
 		tenant, err := s.st.GetTenant(r.Context(), principal.TenantID)
 		if err == nil && tenant != nil {
@@ -94,6 +97,10 @@ func (s *Server) handleTenancyRegister(w http.ResponseWriter, r *http.Request) {
 	kind := strings.TrimSpace(body.Kind)
 	if kind == "" {
 		kind = core.TenantKindApp
+	}
+	if kind == core.TenantKindAccount {
+		writeErr(w, http.StatusBadRequest, "account namespaces are created with their account")
+		return
 	}
 	now := time.Now().UTC()
 	tenant := &core.Tenant{
@@ -162,6 +169,10 @@ func (s *Server) handleTenantUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	if tenant.Kind == core.TenantKindAccount {
+		writeErr(w, http.StatusBadRequest, "account namespaces are created with their account")
+		return
+	}
 	if strings.TrimSpace(tenant.ID) == "" {
 		tenant.ID = "ten_" + randomToken()[:16]
 		tenant.CreatedAt = now
@@ -169,6 +180,10 @@ func (s *Server) handleTenantUpsert(w http.ResponseWriter, r *http.Request) {
 		existing, err := s.st.GetTenant(r.Context(), tenant.ID)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if existing != nil && existing.Kind == core.TenantKindAccount {
+			writeAccountNamespaceManaged(w)
 			return
 		}
 		if existing == nil {
@@ -198,6 +213,13 @@ func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if managed, err := s.isAccountNamespace(r, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if managed {
+		writeAccountNamespaceManaged(w)
 		return
 	}
 	if err := s.st.DeleteTenant(r.Context(), id); err != nil {
@@ -251,6 +273,10 @@ func (s *Server) handleTenantTokenCreate(w http.ResponseWriter, r *http.Request)
 	}
 	if tenant == nil {
 		writeErr(w, http.StatusNotFound, "unknown tenant")
+		return
+	}
+	if tenant.Kind == core.TenantKindAccount {
+		writeErr(w, http.StatusBadRequest, "account namespaces have no API tokens; per-account tokens are not available yet")
 		return
 	}
 	var expiresAt *time.Time
@@ -387,8 +413,10 @@ func (s *Server) handleOwnershipAssign(w http.ResponseWriter, r *http.Request) {
 		err = s.st.SetChannelOwner(r.Context(), resourceID, tenantID)
 	case core.ResourceTypeTrigger:
 		err = s.st.SetTriggerOwner(r.Context(), resourceID, tenantID)
+	case core.ResourceTypeDevice:
+		err = s.st.SetDeviceOwner(r.Context(), resourceID, tenantID)
 	default:
-		writeErr(w, http.StatusBadRequest, "resource_type must be one of agent, channel, trigger")
+		writeErr(w, http.StatusBadRequest, "resource_type must be one of agent, channel, trigger, device")
 		return
 	}
 	if err != nil {
@@ -396,6 +424,21 @@ func (s *Server) handleOwnershipAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// isAccountNamespace reports whether a tenant is the namespace of an account.
+// Those are managed through the account: renaming, disabling or deleting one
+// directly would leave the account pointing at the wrong place.
+func (s *Server) isAccountNamespace(r *http.Request, tenantID string) (bool, error) {
+	tenant, err := s.st.GetTenant(r.Context(), tenantID)
+	if err != nil || tenant == nil {
+		return false, err
+	}
+	return tenant.Kind == core.TenantKindAccount, nil
+}
+
+func writeAccountNamespaceManaged(w http.ResponseWriter) {
+	writeErr(w, http.StatusConflict, "this tenant is an account's namespace; manage it under Accounts")
 }
 
 func isGrantableResourceType(value string) bool {

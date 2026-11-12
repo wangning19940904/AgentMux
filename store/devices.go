@@ -42,7 +42,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_device_pairing_codes_hash ON device_pairin
 
 const (
 	deviceTokenPrefix = "amxd_"
-	deviceColumns     = `id,name,hostname,os,arch,version,token_prefix,created_at,last_seen_at`
+	deviceColumns     = `id,name,hostname,os,arch,version,token_prefix,created_at,last_seen_at,owner_tenant_id`
 	// DevicePairingCodeTTL is how long a pairing code can be used.
 	DevicePairingCodeTTL = 30 * time.Minute
 	pairingCodeLength    = 8
@@ -71,6 +71,12 @@ func normalizePairingCode(code string) string {
 // CreateDevicePairingCode mints a one-time code. The returned value carries
 // the plaintext in Code; it cannot be recovered later.
 func (s *Store) CreateDevicePairingCode(ctx context.Context, name string) (*core.DevicePairingCode, error) {
+	return s.CreateOwnedDevicePairingCode(ctx, name, "")
+}
+
+// CreateOwnedDevicePairingCode mints a one-time code whose device will be
+// owned by ownerTenantID; empty leaves the device unassigned.
+func (s *Store) CreateOwnedDevicePairingCode(ctx context.Context, name, ownerTenantID string) (*core.DevicePairingCode, error) {
 	now := time.Now().UTC()
 	// Codes nobody used are of no further interest once they expire.
 	if _, err := s.writer.ExecContext(ctx, `DELETE FROM device_pairing_codes WHERE created_at<?`,
@@ -81,8 +87,8 @@ func (s *Store) CreateDevicePairingCode(ctx context.Context, name string) (*core
 		ID: newTenancyID("pair"), Name: strings.TrimSpace(name), Code: newPairingCode(),
 		CreatedAt: now, ExpiresAt: now.Add(DevicePairingCodeTTL),
 	}
-	_, err := s.writer.ExecContext(ctx, `INSERT INTO device_pairing_codes (id,code_hash,name,created_at,expires_at) VALUES (?,?,?,?,?)`,
-		code.ID, HashSecret(code.Code), code.Name, now.Format(time.RFC3339Nano), code.ExpiresAt.Format(time.RFC3339Nano))
+	_, err := s.writer.ExecContext(ctx, `INSERT INTO device_pairing_codes (id,code_hash,name,created_at,expires_at,owner_tenant_id) VALUES (?,?,?,?,?,?)`,
+		code.ID, HashSecret(code.Code), code.Name, now.Format(time.RFC3339Nano), code.ExpiresAt.Format(time.RFC3339Nano), nullableString(ownerTenantID))
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +104,9 @@ func (s *Store) RedeemDevicePairingCode(ctx context.Context, code string, info c
 		return nil, "", nil
 	}
 	var id, expires string
-	var name, used sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,expires_at,used_at FROM device_pairing_codes WHERE code_hash=?`, HashSecret(code)).
-		Scan(&id, &name, &expires, &used)
+	var name, used, owner sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,expires_at,used_at,owner_tenant_id FROM device_pairing_codes WHERE code_hash=?`, HashSecret(code)).
+		Scan(&id, &name, &expires, &used, &owner)
 	if err == sql.ErrNoRows {
 		return nil, "", nil
 	}
@@ -116,7 +122,7 @@ func (s *Store) RedeemDevicePairingCode(ctx context.Context, code string, info c
 	device := &core.Device{
 		ID: newTenancyID("dev"), Name: firstNonEmpty(strings.TrimSpace(name.String), info.Name, info.Hostname, "device"),
 		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch, Version: info.Version,
-		TokenPrefix: secretDisplayPrefix(token), CreatedAt: now,
+		TokenPrefix: secretDisplayPrefix(token), CreatedAt: now, OwnerTenantID: owner.String,
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -133,9 +139,9 @@ func (s *Store) RedeemDevicePairingCode(ctx context.Context, code string, info c
 	if count, err := claimed.RowsAffected(); err != nil || count != 1 {
 		return nil, "", err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id,name,hostname,os,arch,version,token_hash,token_prefix,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id,name,hostname,os,arch,version,token_hash,token_prefix,created_at,owner_tenant_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		device.ID, device.Name, device.Hostname, device.OS, device.Arch, device.Version,
-		HashSecret(token), device.TokenPrefix, now.Format(time.RFC3339Nano)); err != nil {
+		HashSecret(token), device.TokenPrefix, now.Format(time.RFC3339Nano), nullableString(device.OwnerTenantID)); err != nil {
 		return nil, "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -162,7 +168,16 @@ func (s *Store) AuthenticateDevice(ctx context.Context, token string) (*core.Dev
 
 // ListDevices returns the paired devices, oldest first.
 func (s *Store) ListDevices(ctx context.Context) ([]core.Device, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+deviceColumns+` FROM devices ORDER BY created_at, id`)
+	return s.listDevices(ctx, `SELECT `+deviceColumns+` FROM devices ORDER BY created_at, id`)
+}
+
+// ListDevicesForTenant returns the devices one namespace owns, oldest first.
+func (s *Store) ListDevicesForTenant(ctx context.Context, tenantID string) ([]core.Device, error) {
+	return s.listDevices(ctx, `SELECT `+deviceColumns+` FROM devices WHERE owner_tenant_id=? ORDER BY created_at, id`, tenantID)
+}
+
+func (s *Store) listDevices(ctx context.Context, query string, args ...any) ([]core.Device, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +203,13 @@ func (s *Store) GetDevice(ctx context.Context, id string) (*core.Device, error) 
 		return nil, err
 	}
 	return &device, nil
+}
+
+// SetDeviceOwner hands a device to a namespace; empty returns it to
+// administrators only.
+func (s *Store) SetDeviceOwner(ctx context.Context, id, ownerTenantID string) error {
+	_, err := s.writer.ExecContext(ctx, `UPDATE devices SET owner_tenant_id=? WHERE id=?`, nullableString(ownerTenantID), id)
+	return err
 }
 
 // RenameDevice changes the hub's label for a device.
@@ -231,13 +253,14 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 
 func scanDevice(sc scanner) (core.Device, error) {
 	var device core.Device
-	var hostname, os, arch, version, prefix, lastSeen sql.NullString
+	var hostname, os, arch, version, prefix, lastSeen, owner sql.NullString
 	var created string
-	if err := sc.Scan(&device.ID, &device.Name, &hostname, &os, &arch, &version, &prefix, &created, &lastSeen); err != nil {
+	if err := sc.Scan(&device.ID, &device.Name, &hostname, &os, &arch, &version, &prefix, &created, &lastSeen, &owner); err != nil {
 		return core.Device{}, err
 	}
 	device.Hostname, device.OS, device.Arch, device.Version, device.TokenPrefix = hostname.String, os.String, arch.String, version.String, prefix.String
 	device.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	device.LastSeenAt = nullableTime(lastSeen)
+	device.OwnerTenantID = owner.String
 	return device, nil
 }

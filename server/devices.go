@@ -131,6 +131,46 @@ type deviceView struct {
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
 }
 
+// Device ownership. A device belongs to the namespace of the account that
+// created its pairing code. Administrators see every device with its owner;
+// a signed-in member sees and manages only their own, and a device that is
+// not theirs answers as not found.
+
+// visibleDevices lists the devices a principal may see.
+func (s *Server) visibleDevices(ctx context.Context, principal *core.Principal) ([]core.Device, error) {
+	if principal.IsTenant() {
+		return s.st.ListDevicesForTenant(ctx, principal.TenantID)
+	}
+	devices, err := s.st.ListDevices(ctx)
+	if err != nil || len(devices) == 0 {
+		return devices, err
+	}
+	names, err := s.st.TenantNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range devices {
+		devices[index].OwnerTenantName = names[devices[index].OwnerTenantID]
+	}
+	return devices, nil
+}
+
+// authorizeDevice resolves a device the principal may manage. It writes the
+// response and returns nil when the device is missing or not theirs.
+func (s *Server) authorizeDevice(w http.ResponseWriter, r *http.Request, id string) *core.Device {
+	device, err := s.st.GetDevice(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return nil
+	}
+	principal := requestPrincipal(r)
+	if device == nil || (principal.IsTenant() && device.OwnerTenantID != principal.TenantID) {
+		writeNotVisible(w, "device")
+		return nil
+	}
+	return device
+}
+
 // handleDeviceReports lists what the hub holds of each device's data.
 func (s *Server) handleDeviceReports(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -138,10 +178,33 @@ func (s *Server) handleDeviceReports(w http.ResponseWriter, r *http.Request) {
 		serviceUnavailable(w, "device pairing")
 		return
 	}
-	collections, err := s.st.ListDeviceCollections(r.Context(), strings.TrimSpace(r.URL.Query().Get("device_id")))
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	principal := requestPrincipal(r)
+	if deviceID != "" && s.authorizeDevice(w, r, deviceID) == nil {
+		return
+	}
+	collections, err := s.st.ListDeviceCollections(r.Context(), deviceID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if principal.IsTenant() && deviceID == "" {
+		owned, err := s.visibleDevices(r.Context(), principal)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		mine := make(map[string]bool, len(owned))
+		for _, device := range owned {
+			mine[device.ID] = true
+		}
+		filtered := collections[:0]
+		for _, collection := range collections {
+			if mine[collection.DeviceID] {
+				filtered = append(filtered, collection)
+			}
+		}
+		collections = filtered
 	}
 	if collections == nil {
 		collections = []core.DeviceCollection{}
@@ -173,7 +236,7 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 		serviceUnavailable(w, "device pairing")
 		return
 	}
-	devices, err := s.st.ListDevices(r.Context())
+	devices, err := s.visibleDevices(r.Context(), requestPrincipal(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -210,13 +273,7 @@ func (s *Server) handleDeviceRename(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "id and a name of at most 120 characters are required")
 		return
 	}
-	device, err := s.st.GetDevice(r.Context(), req.ID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if device == nil {
-		writeErr(w, http.StatusNotFound, "device not found")
+	if s.authorizeDevice(w, r, req.ID) == nil {
 		return
 	}
 	if err := s.st.RenameDevice(r.Context(), req.ID, req.Name); err != nil {
@@ -234,6 +291,9 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if requestPrincipal(r).IsTenant() && s.authorizeDevice(w, r, id) == nil {
 		return
 	}
 	if err := s.devices.Remove(r.Context(), id); err != nil {
@@ -274,7 +334,10 @@ func (s *Server) handleDevicePairingCode(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	code, err := s.st.CreateDevicePairingCode(r.Context(), req.Name)
+	// The device will belong to whoever asked for the code: a signed-in
+	// account's namespace, or nobody (administrators only) for the bridge
+	// token and the loopback administrator.
+	code, err := s.st.CreateOwnedDevicePairingCode(r.Context(), req.Name, requestPrincipal(r).OwnerTenantID())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

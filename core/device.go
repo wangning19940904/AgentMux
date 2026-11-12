@@ -29,6 +29,11 @@ type Device struct {
 	TokenPrefix string     `json:"token_prefix,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
+	// OwnerTenantID is the namespace of the account that created the device's
+	// pairing code. Empty means it was paired with administrator credentials
+	// and only administrators see it.
+	OwnerTenantID   string `json:"owner_tenant_id,omitempty"`
+	OwnerTenantName string `json:"owner_tenant_name,omitempty"`
 }
 
 // DevicePairingCode lets one node pair with the hub once. Code carries the

@@ -76,6 +76,7 @@ type Server struct {
 	feishuAutomationMu sync.Mutex
 	feishuAutomations  map[string]*feishuAutomationSession
 	consoleSessions    *consoleSessionManager
+	signIns            *signInLimiter
 	fleetSyncMu        sync.Mutex
 	fleetSyncPlans     map[string]*fleetSyncPlan
 	mux                *http.ServeMux
@@ -153,6 +154,7 @@ func New(deps Dependencies) *Server {
 		feishuAutomations: map[string]*feishuAutomationSession{},
 		feishuUserAuths:   map[string]feishuUserAuthSession{},
 		consoleSessions:   newConsoleSessionManager(),
+		signIns:           newSignInLimiter(),
 		fleetSyncPlans:    map[string]*fleetSyncPlan{},
 		mux:               http.NewServeMux(),
 	}
@@ -330,7 +332,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			}
 			// Tenants reach only the endpoints AgentMux publishes to third
 			// parties; the Console-only management surface stays admin-owned.
-			if principal.IsTenant() && !tenantRouteAllowed(r.Method, r.URL.Path) {
+			// A signed-in member additionally reaches their own devices and
+			// account.
+			if principal.IsTenant() && !principalRouteAllowed(principal, r.Method, r.URL.Path) {
 				denyTenantRoute(w, r, principal)
 				return
 			}
@@ -364,8 +368,11 @@ func isBridgeAPIPath(path string) bool {
 // and therefore cannot require a bearer token. A newly registered tenant
 // starts with an empty private namespace; an administrator grants access
 // separately, so open registration does not expose existing resources.
+//
+// The open account paths report whether sign-in is needed and perform it;
+// they resolve the caller's credential themselves.
 func isSelfAuthenticatingPath(path string) bool {
-	return path == "/api/v1/tenancy/register"
+	return path == "/api/v1/tenancy/register" || authOpenPaths[path]
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
