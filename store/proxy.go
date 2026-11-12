@@ -254,7 +254,15 @@ func (s *Store) GetOrCreateGatewayToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	token := "amux-" + hex.EncodeToString(buf)
-	if err := s.SetSetting(ctx, gatewayTokenKey, token); err != nil {
+	// Concurrent first requests must all receive the winning token. An upsert
+	// that replaces an existing value can invalidate a profile just written by
+	// another request or process.
+	err := s.writer.QueryRowContext(ctx, `INSERT INTO settings(key,value) VALUES(?,?)
+		ON CONFLICT(key) DO UPDATE SET value=CASE
+			WHEN settings.value IS NULL OR settings.value='' THEN excluded.value
+			ELSE settings.value END
+		RETURNING value`, gatewayTokenKey, token).Scan(&token)
+	if err != nil {
 		return "", err
 	}
 	return token, nil
