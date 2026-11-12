@@ -4,6 +4,7 @@ func (s *Server) routes() {
 	s.registerEventRelayRoutes()
 	s.registerTenancyRoutes()
 	s.registerDeviceRoutes()
+	s.registerPushRoutes()
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/capabilities", s.handleCapabilities)
 	s.mux.HandleFunc("GET /api/v1/platforms", s.handlePlatforms)

@@ -374,6 +374,8 @@ CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data 
 		{version: 21, name: "devices", sql: deviceSchema},
 		// The hub's copy of what each device reports; see core.DeviceReport.
 		{version: 22, name: "device_reports", sql: deviceReportSchema},
+		// Web Push: the hub's VAPID key pair and browser subscriptions.
+		{version: 25, name: "push_notifications", sql: pushSchema},
 	}
 }
 

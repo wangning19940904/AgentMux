@@ -44,6 +44,7 @@ import { RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
 import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
 import { ConnectionBanner } from "./pwa/ConnectionBanner";
+import { NotificationSettings } from "./pwa/NotificationSettings";
 
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
@@ -1038,6 +1039,7 @@ function Shell({
                 </section>
               ) : (
                 <>
+				  {visibleTab === "settings" && <NotificationSettings />}
 				  <RegisteredPanel
 				    tab={visibleTab}
 				    createRequested={createAgentRequested}

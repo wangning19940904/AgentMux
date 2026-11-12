@@ -71,6 +71,8 @@ var DefaultReports = []Report{
 	{"platforms", "/api/v1/platforms"},
 	{"runtimes", "/api/v1/agents"},
 	{"tenants", "/api/v1/tenancy/tenants"},
+	// Agents waiting for a person; the hub notifies from its copy.
+	{"interactions_pending", "/api/v1/channel-interactions?pending=true"},
 }
 
 // ReportSink is where the hub keeps what devices report.

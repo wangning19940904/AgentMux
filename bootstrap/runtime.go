@@ -112,8 +112,15 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		},
 	})
 	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel, Grants: st}
+	// Push notifications: agents waiting for a person, and Tickets that
+	// finished or failed. A nil push service passes both through unchanged.
+	var superAgentStore superagent.Store = st
+	if push := srv.Push(); push != nil {
+		engine.SubscribeEventSink(push.EngineSink(st))
+		superAgentStore = push.TicketStore(st)
+	}
 	superAgents := superagent.New(superagent.Options{
-		Store: st, Invoker: connect, Log: log,
+		Store: superAgentStore, Invoker: connect, Log: log,
 		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
 		Replies:          &superagent.Replies{Chats: engine},
 		Mail:             &superagent.IMAPClient{},
@@ -252,6 +259,9 @@ func (r *Runtime) Stop() {
 		}
 		if r.Provider != nil && r.Provider.Proxy() != nil {
 			_ = r.Provider.Proxy().Stop()
+		}
+		if r.Server != nil {
+			r.Server.Push().Close()
 		}
 	})
 }

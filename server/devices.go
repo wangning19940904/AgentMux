@@ -15,6 +15,7 @@ import (
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
+	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	"github.com/wangning19940904/AgentMux/store"
 )
@@ -28,8 +29,9 @@ import (
 
 // deviceBackend presents paired devices to the remote Manager.
 type deviceBackend struct {
-	st  *store.Store
-	hub *linkpkg.Hub
+	st   *store.Store
+	hub  *linkpkg.Hub
+	push *pushpkg.Service
 }
 
 func (b *deviceBackend) linked(device core.Device) remotepkg.LinkedDevice {
@@ -88,6 +90,7 @@ func (b *deviceBackend) Remove(ctx context.Context, id string) error {
 		return err
 	}
 	b.hub.Disconnect(id)
+	b.push.ForgetDevice(id)
 	return nil
 }
 
@@ -98,8 +101,15 @@ func (s *Server) setupLink() {
 		return
 	}
 	s.linkHub = linkpkg.NewHub(s.st, s.log)
-	s.linkHub.SetUplink(linkpkg.NewReportHandler(s.st, s.log))
-	s.devices = &deviceBackend{st: s.st, hub: s.linkHub}
+	var reports linkpkg.ReportSink = s.st
+	if s.push != nil {
+		// Machines coming and going, and agents waiting on them, are
+		// notified from here (push.Service).
+		reports = s.push.ReportSink(s.st, pushDeviceNames{server: s})
+		s.linkHub.SetPresenceListener(s.push.DevicePresence)
+	}
+	s.linkHub.SetUplink(linkpkg.NewReportHandler(reports, s.log))
+	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push}
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
 	}

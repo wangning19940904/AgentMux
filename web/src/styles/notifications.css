@@ -1,0 +1,113 @@
+/* Settings → Notifications on this device (pwa/NotificationSettings.tsx). */
+.notification-settings {
+  margin-bottom: 14px;
+}
+
+.notification-settings-body {
+  display: grid;
+  gap: 14px;
+}
+
+.notification-callout {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.notification-callout strong {
+  color: var(--text);
+}
+
+.notification-callout.warning {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: color-mix(in srgb, var(--amber) 24%, var(--border));
+}
+
+.notification-callout.warning strong {
+  color: inherit;
+}
+
+.notification-kinds {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.notification-kinds legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notification-notice {
+  color: var(--green);
+  font-size: 12.5px;
+}
+
+.notification-error {
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.notification-devices h3,
+.notification-install h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notification-devices ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification-devices li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.notification-devices li > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.notification-devices li > span {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.notification-devices li small {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.notification-install {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
