@@ -370,6 +370,10 @@ CREATE TABLE IF NOT EXISTS super_agent_source_state (source_id TEXT PRIMARY KEY,
 		{version: 20, name: "feishu_user_grants", sql: `
 CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data TEXT NOT NULL,updated_at TEXT NOT NULL);
 `},
+		// Nodes paired with this hub; see core.Device.
+		{version: 21, name: "devices", sql: deviceSchema},
+		// The hub's copy of what each device reports; see core.DeviceReport.
+		{version: 22, name: "device_reports", sql: deviceReportSchema},
 	}
 }
 

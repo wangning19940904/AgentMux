@@ -54,6 +54,7 @@ import {
   api,
   FLEET_WARNING_EVENT,
   currentFleetWarnings,
+  isFleetStaleNotice,
   getLaunchAtLogin,
   isDesktopApp,
   LaunchAtLoginStatus,
@@ -945,7 +946,8 @@ function Shell({
               <span className="status-dot" />
               {t(tenantGate.state === "loading" ? "tenants.checking"
                 : tenantGate.state !== "ready" ? "tenants.requiredTitle"
-                : fleetWarnings.length ? "app.statusWarning" : "app.status")}
+                : !fleetWarnings.length ? "app.status"
+                : fleetWarnings.every(isFleetStaleNotice) ? "app.statusStale" : "app.statusWarning")}
             </span>
           </div>
 		    <div className="workspace-header-actions">
@@ -989,7 +991,7 @@ function Shell({
           {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
           {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && (
             <div className="session-notice warning" role="status">
-              <strong>{t("remote.partialFleetWarning")}</strong>
+              <strong>{t(fleetWarnings.every(isFleetStaleNotice) ? "remote.staleFleetNotice" : "remote.partialFleetWarning")}</strong>
               <span>{fleetWarnings.join(" · ")}</span>
               <button className="ghost-action" type="button" onClick={() => setDismissedFleetWarnings(fleetWarningKey)}>{t("common.close")}</button>
             </div>

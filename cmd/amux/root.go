@@ -44,6 +44,9 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(databaseCmd())
 	root.AddCommand(sendCmd())
 	root.AddCommand(tenantsCmd())
+	root.AddCommand(joinCmd())
+	root.AddCommand(leaveCmd())
+	root.AddCommand(hubCmd())
 	root.AddCommand(versionCmd())
 	return root
 }

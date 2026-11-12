@@ -11,9 +11,14 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
+
+// reportedAtHeader marks an answer served from the hub's copy of an offline
+// device's data, with the time the device reported it.
+const reportedAtHeader = "X-AgentMux-Reported-At"
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
@@ -319,6 +324,22 @@ func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetPath := "/api/v1/" + path
+	// An offline linked device is answered from what it last reported. A
+	// tenant preview is not: the copy is the device administrator's view.
+	if host.Kind == remotepkg.KindLink && r.Header.Get(tenantScopeHeader) == "" {
+		reportedPath := targetPath
+		if r.URL.RawQuery != "" {
+			reportedPath += "?" + r.URL.RawQuery
+		}
+		if payload, at, ok := s.reportedResponse(r.Context(), id, r.Method, reportedPath); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set(reportedAtHeader, at.UTC().Format(time.RFC3339))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+	}
 	target := &url.URL{Scheme: "http", Host: host.RemoteAddr}
 	transport := &http.Transport{
 		Proxy: nil,

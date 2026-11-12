@@ -10,6 +10,23 @@ export function fleetWarningMessage(name: string, error: string): string {
   return `${name}: ${/context deadline exceeded|i\/o timeout/i.test(detail) ? "request timed out" : detail}`;
 }
 
+// An offline machine that connects to this hub itself is answered from what
+// it last reported. The data is real but may be out of date, so it is noted
+// instead of shown as a failed load. Every list of one machine gives the
+// same notice, so a page of several lists shows it once; the Machines page
+// has the time of the last report.
+const STALE_NOTICE = " is offline; showing the data it last reported";
+
+export function fleetStaleMessage(name: string): string {
+  return `${name}${STALE_NOTICE}`;
+}
+
+// A stale notice says the data is old, not that a load failed, so the
+// Console words its banner differently when notices are all there is.
+export function isFleetStaleNotice(message: string): boolean {
+  return message.includes(STALE_NOTICE);
+}
+
 export function fleetWarningWithContext(message: string, request: { path: string; method?: string }, occurredAt = new Date()): string {
   // Query strings may contain credentials or user input. The endpoint and
   // receipt time are enough to identify the failed load in the Console.

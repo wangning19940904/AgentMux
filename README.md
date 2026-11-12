@@ -38,6 +38,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Guard** — 工具调用的权限审批与策略闸门。
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Super Agent 远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
 - **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
@@ -167,6 +168,37 @@ AgentMux 在 Linux/macOS 启动时会从用户的交互式登录 shell 导入 `h
 
 Console 的 **Observability → Integrations** 可预览、安装、修复或卸载原生 `agentmux-observer`。安装始终通过 Claude/Codex 自身的 plugin CLI；Codex 安装后保持 `pending_trust`，需在 `/hooks` 手动审核。AgentMux 不覆盖 Flux Island、CC Switch 或其他同名/漂移资源。
 
+## Hub 连接
+
+SSH 远程控制要求本机能连到对方。Hub 连接方向相反：其他机器主动连到 Hub，所以只有 Hub 需要一个它们能访问的地址。
+
+```toml
+# Hub 上的 config.toml
+[hub]
+addr = "0.0.0.0:8766"   # 只提供配对和设备连接，不暴露管理 API
+# tls = "auto"          # 默认：Hub 自签证书，设备按指纹校验，不需要域名
+# public_url = "https://hub.example.com"  # 经隧道、反向代理或端口转发访问时填写
+# pin_certificate = true                  # public_url 后面仍是 Hub 自签证书（如纯端口转发）时开启
+```
+
+```bash
+amux hub pair --name build-box     # 在 Hub 上：输出一次性的 amux join 命令（30 分钟内有效）
+amux join amxj_...                 # 在要接入的机器上运行
+amux hub devices                   # 在 Hub 上查看已接入机器及在线状态
+amux hub remove <device-id>        # 取消配对，连接立即断开
+amux leave                         # 在已接入的机器上：离开 Hub
+```
+
+- 设备只向外发起一条 WebSocket 连接，Hub 的请求沿这条连接返回，断线后自动退避重连；Hub 重启后设备会自行连回。
+- 一次性配对码和设备 Token 在 Hub 数据库中只保存 SHA-256；设备端的 Token 保存在 `hub-link.json`（权限 `0600`）。
+- Hub 不持有设备的 Bridge Token：设备在本机转发请求时自行附加，离开 Hub 或被移除后 Hub 即无法访问。接入 Hub 等于把这台机器的 AgentMux 管理权交给 Hub 的管理员，因此 `POST /api/v1/link/join` 只对管理员开放。
+- 通过 Hub 连接只能访问设备的 `/api/` 与 `/v1/` 接口。
+- **数据上报**：每台设备仍使用自己的 PostgreSQL。接入 Hub 后，它会沿同一条连接把 Agent、渠道、触发、Super Agent、编排、Skills、MCP、Guard 策略、Provider 与路由、租户等列表上报给 Hub，Hub 存入自己的数据库（`device_collections` / `device_resources`）。只发送有变化的条目，约 30 秒检查一次；重连后以 Hub 现有副本为准重新对齐。上报内容就是设备 API 返回给管理员的内容，密钥已按该 API 的规则脱敏。
+- **离线可见**：设备离线时，Console 的「全部机器」与单机视图用 Hub 的副本显示它上报过的列表，并提示该机器离线；「远程机器」页显示最近一次上报时间。写操作和未上报的接口在设备离线时照常失败，设备在线时始终由设备自己回答。`GET /api/v1/devices/reports` 可查看 Hub 持有的各设备数据概况；取消配对会同时删除该设备的副本。
+- 未设置 `[hub] addr` 时，设备也可以经管理端口配对（例如同一台机器或已有反向代理）；经明文 `http://` 连接非本机地址时命令会给出提示。
+- Hub 自身也没有公网地址时，可把 Cloudflare Tunnel、frp 等隧道的地址填入 `public_url`。
+- 旧版本 AgentMux 所在的机器可以用 `amux join <token> --foreground` 由命令本身保持连接。
+
 ## CLI
 
 ```
@@ -182,6 +214,8 @@ amux usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 amux usage statusline            # compact one-liner for status bars/hooks
 amux provider list|presets|import <id>|switch <id> --tool <tool>
 amux send --channel-id <id> --conversation-key <key> --text "..."
+amux hub pair|devices|remove     # manage machines connected to this hub
+amux join <token> | amux leave   # connect this machine to a hub, or leave it
 ```
 
 ## HTTP API(节选)

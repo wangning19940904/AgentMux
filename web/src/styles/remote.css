@@ -160,6 +160,71 @@
   border-color: color-mix(in srgb, var(--red) 24%, var(--border));
 }
 
+.remote-pairing {
+  display: grid;
+  gap: 12px;
+  margin: 0 18px 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+
+.remote-pairing header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remote-pairing header div,
+.remote-pairing-result {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.remote-pairing header strong {
+  font-size: 13px;
+}
+
+.remote-pairing span {
+  color: var(--muted);
+}
+
+.remote-pairing-form,
+.remote-pairing-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remote-pairing-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.remote-pairing-command code {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.remote-pairing .remote-pairing-warning {
+  color: var(--amber);
+}
+
+.remote-pairing .remote-feedback {
+  margin: 0;
+}
+
 .remote-host-form {
   display: grid;
   gap: 16px;

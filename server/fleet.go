@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
 
 const (
@@ -56,6 +57,9 @@ type fleetOperationResult struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 	Error      string          `json:"error,omitempty"`
 	DurationMS int64           `json:"duration_ms"`
+	// ReportedAt is set when the target is offline and Data is what it last
+	// reported to this hub rather than a live answer.
+	ReportedAt *time.Time `json:"reported_at,omitempty"`
 }
 
 type fleetTargetResult struct {
@@ -85,10 +89,16 @@ func (s *Server) handleFleetTargets(w http.ResponseWriter, r *http.Request) {
 	for index, view := range views {
 		index, view := index, view
 		remoteTargets[index] = machineTarget{
-			ID: view.ID, Name: view.Name, Kind: "ssh", Trusted: view.Trusted,
+			ID: view.ID, Name: view.Name, Kind: view.Kind, Trusted: view.Trusted,
 		}
 		if !view.Trusted {
 			remoteTargets[index].Error = "SSH host key is not trusted"
+			continue
+		}
+		// The hub already knows whether a linked device is connected.
+		if view.Online != nil && !*view.Online {
+			remoteTargets[index].Version = view.Version
+			remoteTargets[index].Error = "device is offline"
 			continue
 		}
 		wg.Add(1)
@@ -245,7 +255,7 @@ func (s *Server) resolveFleetTargets(ids []string) ([]machineTarget, error) {
 				}
 				return nil, fmt.Errorf("remote host %q is not trusted", host.Name)
 			}
-			targets = append(targets, machineTarget{ID: host.ID, Name: host.Name, Kind: "ssh", Trusted: true})
+			targets = append(targets, machineTarget{ID: host.ID, Name: host.Name, Kind: host.Kind, Trusted: true})
 		}
 	}
 	if len(requested) > 0 {
@@ -273,9 +283,15 @@ func (s *Server) runFleetOperations(ctx context.Context, target machineTarget, o
 		}
 		started := time.Now()
 		status, payload, err := s.executeFleetOperation(ctx, target.ID, operation)
+		var reportedAt *time.Time
+		if err != nil && target.Kind == remotepkg.KindLink {
+			if reported, at, ok := s.reportedResponse(ctx, target.ID, operation.Method, operation.Path); ok {
+				status, payload, err, reportedAt = http.StatusOK, reported, nil, &at
+			}
+		}
 		item := fleetOperationResult{
 			Key: operation.Key, Status: status, OK: err == nil && status >= 200 && status < 300,
-			DurationMS: time.Since(started).Milliseconds(),
+			DurationMS: time.Since(started).Milliseconds(), ReportedAt: reportedAt,
 		}
 		if err != nil {
 			item.Error = err.Error()

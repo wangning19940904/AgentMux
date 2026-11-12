@@ -40,6 +40,7 @@ import type {
   ChannelInteraction,
   ChannelTask,
   Claude3PStatus,
+  DevicePairingCode,
   DiscoveredRemoteHost,
   FeishuSetupBeginResponse,
   FeishuSetupPollResponse,
@@ -418,6 +419,8 @@ export const api = {
   syncRemoteHostsFromSSHConfig: () =>
     postChecked<RemoteSSHConfigSyncResult>("/api/v1/remote/hosts/sync-ssh-config", {}),
   importRemoteHost,
+  createDevicePairingCode: (name: string) =>
+    postChecked<DevicePairingCode>("/api/v1/devices/pairing-codes", { name }, { local: true }),
   deleteRemoteHost: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
   testRemoteHost,

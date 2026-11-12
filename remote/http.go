@@ -18,12 +18,15 @@ type httpResult struct {
 // Replayable GETs retry the entire read, including headers and body. Other
 // requests only retry opening the tunnel, before any HTTP bytes are sent.
 func (m *Manager) DoHTTP(id string, request *http.Request, responseLimit int64) (int, []byte, error) {
-	host, ok := m.store.Get(id)
-	if !ok {
-		return 0, nil, os.ErrNotExist
-	}
 	if responseLimit <= 0 {
 		return 0, nil, fmt.Errorf("response limit must be positive")
+	}
+	host, ok := m.store.Get(id)
+	if !ok {
+		if device, linked := m.linked(request.Context(), id); linked {
+			return m.doLinkedHTTP(device, request, responseLimit)
+		}
+		return 0, nil, os.ErrNotExist
 	}
 	replayable := request.Method == http.MethodGet &&
 		(request.Body == nil || request.Body == http.NoBody || request.GetBody != nil)
@@ -80,4 +83,25 @@ func (m *Manager) DoHTTP(id string, request *http.Request, responseLimit int64) 
 		return 0, nil, fmt.Errorf("remote %s: %w", host.Name, err)
 	}
 	return result.status, result.body, nil
+}
+
+// doLinkedHTTP reads a bounded response from a linked device. A stream on a
+// live link opens without a handshake that can fail halfway, so there is
+// nothing to retry: an offline device is reported at once.
+func (m *Manager) doLinkedHTTP(device LinkedDevice, request *http.Request, responseLimit int64) (int, []byte, error) {
+	transport := m.linkedTransport(device)
+	defer transport.CloseIdleConnections()
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("remote %s: %w", device.Name, err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
+	if err != nil {
+		return 0, nil, fmt.Errorf("remote %s: read HTTP response body: %w", device.Name, err)
+	}
+	if int64(len(payload)) > responseLimit {
+		return 0, nil, fmt.Errorf("remote %s: response exceeds %d bytes", device.Name, responseLimit)
+	}
+	return response.StatusCode, payload, nil
 }

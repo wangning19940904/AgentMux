@@ -351,6 +351,24 @@ export interface RemoteHost {
   host_key_fingerprint?: string;
   trusted?: boolean;
   clear_api_token?: boolean;
+  // "link" is a machine that connects to this hub itself; the hub knows
+  // whether it is connected without probing it.
+  kind?: "ssh" | "link";
+  online?: boolean;
+  version?: string;
+  last_seen_at?: string;
+  // When the machine last sent the hub its data.
+  reported_at?: string;
+}
+
+export interface DevicePairingCode {
+  code: string;
+  expires_at: string;
+  hub_url: string;
+  fingerprint?: string;
+  join_token: string;
+  command: string;
+  warning?: string;
 }
 
 export type MachineScope = "all" | "local" | string;
@@ -358,7 +376,7 @@ export type MachineScope = "all" | "local" | string;
 export interface MachineTarget {
   id: string;
   name: string;
-  kind: "local" | "ssh";
+  kind: "local" | "ssh" | "link";
   trusted: boolean;
   online: boolean;
   version?: string;
@@ -442,6 +460,9 @@ export interface FleetOperationResult<T = unknown> {
   data?: T;
   error?: string;
   duration_ms: number;
+  // Set when the target is offline and data is what it last reported to
+  // the hub rather than a live answer.
+  reported_at?: string;
 }
 
 export interface FleetTargetResult<T = unknown> {

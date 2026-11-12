@@ -19,6 +19,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
+	linkpkg "github.com/wangning19940904/AgentMux/link"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -55,6 +56,9 @@ type Server struct {
 	obs                *observabilityRuntime
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
+	linkHub            *linkpkg.Hub
+	devices            *deviceBackend
+	node               *nodeLink
 	superAgents        *superagent.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory
@@ -179,6 +183,7 @@ func New(deps Dependencies) *Server {
 		s.channelPeers = peer
 		s.meetingPeers = peer
 	}
+	s.setupLink()
 	s.routes()
 	if s.orchestrations != nil {
 		go s.orchestrations.Recover()
@@ -243,6 +248,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.providerMonitor != nil {
 		go s.providerMonitor.Run(ctx)
 	}
+	if err := s.startHubListener(ctx); err != nil {
+		return err
+	}
+	s.node.run(ctx)
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

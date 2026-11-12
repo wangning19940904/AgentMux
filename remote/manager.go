@@ -33,6 +33,7 @@ type Manager struct {
 	update       func(context.Context, remoteClient, Host) (remoteUpdateArtifact, error)
 	mu           sync.Mutex
 	clients      map[string]*cachedClient
+	links        LinkBackend
 	connLocks    sync.Map
 	attemptGates sync.Map
 	updateMu     sync.Mutex
@@ -102,11 +103,23 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 	}, nil
 }
 
+// List returns the SSH hosts followed by the devices paired with this hub.
 func (m *Manager) List() []HostView {
 	hosts := m.store.List()
 	out := make([]HostView, 0, len(hosts))
 	for _, host := range hosts {
 		out = append(out, host.View())
+	}
+	if backend := m.linkBackend(); backend != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+		defer cancel()
+		devices, err := backend.Devices(ctx)
+		if err != nil && m.log != nil {
+			m.log.Warn("list paired devices failed", "err", err)
+		}
+		for _, device := range devices {
+			out = append(out, device.view())
+		}
 	}
 	return out
 }
@@ -149,9 +162,26 @@ func (m *Manager) SyncSSHConfig(candidates []DiscoveredHost) (SSHConfigSyncResul
 	return result, nil
 }
 
-func (m *Manager) Get(id string) (Host, bool) { return m.store.Get(id) }
+func (m *Manager) Get(id string) (Host, bool) {
+	if host, ok := m.store.Get(id); ok {
+		return host, true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+	defer cancel()
+	if device, ok := m.linked(ctx, id); ok {
+		return device.host(), true
+	}
+	return Host{}, false
+}
 
 func (m *Manager) Upsert(host Host, clearAPIToken bool) (HostView, error) {
+	if _, stored := m.store.Get(host.ID); !stored && host.ID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+		defer cancel()
+		if _, linked := m.linked(ctx, host.ID); linked {
+			return HostView{}, ErrLinkedDevice
+		}
+	}
 	saved, err := m.store.Upsert(host, clearAPIToken)
 	if err != nil {
 		return HostView{}, err
@@ -160,7 +190,15 @@ func (m *Manager) Upsert(host Host, clearAPIToken bool) (HostView, error) {
 	return saved.View(), nil
 }
 
+// Delete forgets an SSH host, or unpairs a linked device.
 func (m *Manager) Delete(id string) error {
+	if _, ok := m.store.Get(id); !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+		defer cancel()
+		if device, ok := m.linked(ctx, id); ok {
+			return m.linkBackend().Remove(ctx, device.ID)
+		}
+	}
 	m.invalidate(id)
 	return m.store.Delete(id)
 }
@@ -214,6 +252,10 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (TestResult, error) {
 	host, ok := m.store.Get(id)
 	if !ok {
+		// Testing a linked device is asking whether it answers now.
+		if device, linked := m.linked(ctx, id); linked {
+			return m.linkedStatus(ctx, device)
+		}
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
@@ -281,6 +323,9 @@ func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse boo
 func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
 	host, ok := m.store.Get(id)
 	if !ok {
+		if device, linked := m.linked(ctx, id); linked {
+			return m.linkedStatus(ctx, device)
+		}
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
@@ -323,6 +368,9 @@ func (m *Manager) Update(ctx context.Context, id string) (UpdateResult, error) {
 
 	host, ok := m.store.Get(id)
 	if !ok {
+		if _, linked := m.linked(ctx, id); linked {
+			return UpdateResult{}, ErrLinkedDevice
+		}
 		return UpdateResult{}, os.ErrNotExist
 	}
 	if m.update == nil {
@@ -560,6 +608,9 @@ func (m *Manager) cache(host Host, client remoteClient) {
 func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn, error) {
 	host, ok := m.store.Get(id)
 	if !ok {
+		if device, linked := m.linked(ctx, id); linked {
+			return m.dialLinked(ctx, device)
+		}
 		return nil, os.ErrNotExist
 	}
 	conn, err := retrySSH(ctx, m.timeout, func(attemptCtx context.Context) (net.Conn, error) {

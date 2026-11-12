@@ -57,7 +57,9 @@ export function remoteUpdateCandidates(
 ): RemoteHost[] {
   return hosts.filter((host) => {
     const snapshot = snapshots[host.id];
+    // A linked machine has no SSH connection to push an update through.
     return Boolean(
+      host.kind !== "link" &&
       host.trusted &&
       snapshot?.health === "healthy" &&
       isRemoteUpdateAvailable(snapshot.version, localVersion),

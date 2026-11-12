@@ -312,3 +312,43 @@ describe("fleet mergers", () => {
     expect(merged.usage?.total_tokens).toBe(100);
   });
 });
+
+describe("data an offline linked machine last reported", () => {
+  const reportedAt = "2026-11-12T12:00:00Z";
+
+  it("is shown with its age instead of as a failed load", async () => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "all" });
+    const stale = target("dev_1", "home-box", "data", [{ id: "a" }]);
+    stale.target.kind = "link" as never;
+    stale.target.online = false;
+    Object.assign(stale.responses[0], { reported_at: reportedAt });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ targets: [target("local", "Local machine", "data", [{ id: "b" }]), stale] }))));
+
+    const items = await fleetReadArray<{ id: string }>("/api/v1/agent-instances");
+    expect(items.map((item) => `${item.target_name}:${item.id}`)).toEqual(["Local machine:b", "home-box:a"]);
+    expect(currentFleetWarnings()).toEqual(["home-box is offline; showing the data it last reported"]);
+    // Another list of the same machine, reported at another time, adds nothing.
+    Object.assign(stale.responses[0], { reported_at: "2026-11-12T12:05:00Z" });
+    await fleetReadArray<{ id: string }>("/api/v1/channels");
+    expect(currentFleetWarnings()).toHaveLength(1);
+
+    // Once the machine answers for itself again the notice goes.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ targets: [target("dev_1", "home-box", "data", [{ id: "a" }])] }))));
+    await fleetReadArray<{ id: string }>("/api/v1/agent-instances");
+    await fleetReadArray<{ id: string }>("/api/v1/channels");
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("is noticed when that one machine is selected", async () => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "dev_1" });
+    const fetchMock = vi.fn(async (_path: string) => new Response("[]", { headers: { "X-AgentMux-Reported-At": reportedAt } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.superAgents();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/remote/proxy/dev_1/super-agents");
+    expect(currentFleetWarnings()).toEqual(["This machine is offline; showing the data it last reported"]);
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
+    await api.superAgents();
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+});
