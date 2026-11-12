@@ -117,9 +117,13 @@ const CONSOLE_HEADER = { "X-AgentMux-Console": "1" } as const;
 
 export function tenantScopeHeaders(path: string): Record<string, string> {
   const tenantID = activeTenantScopeID();
+  // Identity, sign-in and account management belong to the signed-in
+  // person, not to the tenant an administrator is previewing.
   const scopeable =
     (path.startsWith("/api/v1/") || path.startsWith("/v1/")) &&
-    !path.startsWith("/api/v1/tenancy/");
+    !path.startsWith("/api/v1/tenancy/") &&
+    !path.startsWith("/api/v1/auth/") &&
+    !path.startsWith("/api/v1/accounts");
   return tenantID && scopeable ? { "X-AgentMux-Tenant-Scope": tenantID } : {};
 }
 
@@ -415,4 +419,14 @@ export async function del<T>(path: string): Promise<T> {
   invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+// delChecked deletes on this Console's own origin and reports the server's
+// error message.
+export async function delChecked<T = { ok: boolean }>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "DELETE", headers: { ...CONSOLE_HEADER } });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  invalidateResourceCache();
+  if (!res.ok) throw checkedError(path, res.status, payload);
+  return payload as T;
 }

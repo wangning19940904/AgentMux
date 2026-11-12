@@ -178,6 +178,7 @@ func (s *Store) DeleteTenant(ctx context.Context, id string) error {
 		`UPDATE channels SET owner_tenant_id=NULL WHERE owner_tenant_id=?`,
 		`UPDATE triggers SET owner_tenant_id=NULL WHERE owner_tenant_id=?`,
 		`UPDATE orchestrations SET owner_tenant_id=NULL WHERE owner_tenant_id=?`,
+		`UPDATE devices SET owner_tenant_id=NULL WHERE owner_tenant_id=?`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 			return err

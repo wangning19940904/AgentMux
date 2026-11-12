@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "2.2"
-  x-contract-version: "2.2"
+  version: "2.3"
+  x-contract-version: "2.3"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -1142,6 +1142,21 @@ components:
         tenant: { type: string }
         kind: { type: string }
         status: { type: string }
+        account:
+          type: object
+          description: >
+            The person signed in to the Console, present only for an account
+            session. Bearer tokens never carry an account. A member's tenant_id
+            is the namespace that account owns.
+          required: [id, login, role, tenant_id]
+          properties:
+            id: { type: string }
+            login: { type: string }
+            display_name: { type: string }
+            role:
+              type: string
+              enum: [admin, member]
+            tenant_id: { type: string }
 
     Trigger:
       type: object

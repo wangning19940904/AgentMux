@@ -6,7 +6,7 @@ export * from "./types";
 export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
-import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del } from "./client";
+import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del, delChecked } from "./client";
 import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
@@ -108,6 +108,11 @@ import type {
   Status,
   SystemDirectoryListing,
   TenancySelf,
+  Account,
+  AccountIdentity,
+  AccountRole,
+  AuthSession,
+  PairedDevice,
   Tenant,
   TenantKind,
   TenantToken,
@@ -472,6 +477,23 @@ export const api = {
   // Login identity belongs to the Console's origin, independent of the last
   // selected SSH machine or administrator tenant preview.
   tenancySelf: () => getLocal<TenancySelf>("/api/v1/tenancy/self"),
+  // Accounts and sign-in always concern this Console's own origin, never the
+  // selected remote machine.
+  authSession: () => getChecked<AuthSession>("/api/v1/auth/session", { local: true }),
+  signIn: (login: string, password: string) =>
+    postChecked<{ account: AccountIdentity }>("/api/v1/auth/sign-in", { login, password }, { local: true }),
+  signOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/sign-out", {}, { local: true }),
+  setupFirstAdmin: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: Account }>("/api/v1/auth/setup", payload, { local: true }),
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/auth/password", { current_password: currentPassword, new_password: newPassword }, { local: true }),
+  accounts: () => getChecked<Account[]>("/api/v1/accounts", { local: true }),
+  saveAccount: (payload: { id?: string; login?: string; display_name?: string; role?: AccountRole; status?: Account["status"]; password?: string }) =>
+    postChecked<{ account: Account; password?: string }>("/api/v1/accounts", payload, { local: true }),
+  resetAccountPassword: (id: string, password?: string) =>
+    postChecked<{ ok: boolean; password?: string }>("/api/v1/accounts/password", { id, password }, { local: true }),
+  pairedDevices: () => getChecked<{ devices: PairedDevice[] }>("/api/v1/devices", { local: true }).then((result) => result.devices ?? []),
+  removePairedDevice: (id: string) => delChecked(`/api/v1/devices?id=${encodeURIComponent(id)}`),
   registerTenant: (payload: { name: string; kind?: TenantKind; target_id?: string }) => {
     const body = { ...payload }; delete body.target_id;
     return fleetCall<{ tenant: Tenant; token: string; prefix: string }>({ key: "tenant", method: "POST", path: "/api/v1/tenancy/register", body }, writeTargetIDs(payload.target_id)).then((result) => result.first);

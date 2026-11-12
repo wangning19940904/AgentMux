@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // Console session embedding lets a host application (holding a bridge or
@@ -105,6 +106,13 @@ func (m *consoleSessionManager) sessionPrincipal(token string) *core.Principal {
 		}
 	}
 	return nil
+}
+
+// revoke ends one session, for sign-out.
+func (m *consoleSessionManager) revoke(token string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, token)
 }
 
 func (m *consoleSessionManager) prune() {
@@ -224,19 +232,32 @@ func normalizeConsoleLanding(value string) (string, bool) {
 // SameSite=Lax already withholds the cookie from cross-site subresources, and
 // the Sec-Fetch-Site / custom-header requirement blocks the remaining
 // top-level navigation and legacy-browser cases.
+//
+// The cookie holds either an entry-link session, kept in memory with the
+// principal that minted it, or an account session, kept in the database and
+// resolved to the account's current role and status on every request.
 func (s *Server) consoleSessionPrincipal(r *http.Request) *core.Principal {
 	cookie, err := r.Cookie(consoleSessionCookie)
 	if err != nil || cookie == nil {
 		return nil
 	}
-	principal := s.consoleSessions.sessionPrincipal(cookie.Value)
-	if principal == nil {
+	if !consoleOriginRequest(r) {
 		return nil
 	}
-	if r.Header.Get(consoleCSRFHeader) == "" && r.Header.Get("Sec-Fetch-Site") != "same-origin" {
-		return nil
+	if strings.HasPrefix(cookie.Value, store.AccountSessionTokenPrefix) {
+		if s.st == nil {
+			return nil
+		}
+		account, err := s.st.AuthenticateAccountSession(r.Context(), cookie.Value)
+		if err != nil {
+			if s.log != nil {
+				s.log.Warn("account session lookup failed", "err", err)
+			}
+			return nil
+		}
+		return core.AccountPrincipal(account)
 	}
-	return principal
+	return s.consoleSessions.sessionPrincipal(cookie.Value)
 }
 
 func requestBaseURL(r *http.Request) string {

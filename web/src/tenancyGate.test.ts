@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { AuthSession } from "./api";
 import {
+  accountFormError,
+  accountLabel,
+  resolveSignInGate,
+  signInErrorKey,
   resolveTenancyGate,
   resolveTenancyGateWithRetry,
   tenancyNavigationLocked,
@@ -67,5 +72,54 @@ describe("resolveTenancyGate", () => {
     expect(tenancyNavigationLocked("required", true)).toBe(false);
     expect(tenancyNavigationLocked("required", false)).toBe(true);
     expect(tenancyNavigationLocked("ready", false)).toBe(false);
+  });
+});
+
+describe("sign-in gate", () => {
+  const session = (overrides: Partial<AuthSession>): AuthSession => ({
+    accounts_enabled: false,
+    setup_available: false,
+    sign_in_required: false,
+    authenticated: true,
+    admin: true,
+    sign_in_methods: ["password"],
+    ...overrides,
+  });
+
+  it("opens as before on a machine without accounts", () => {
+    expect(resolveSignInGate(session({}), { nativeDesktopAdmin: false, failed: false })).toBe("open");
+  });
+
+  it("asks for sign-in once accounts exist and the browser has no credential", () => {
+    const required = session({ accounts_enabled: true, sign_in_required: true, authenticated: false, admin: false });
+    expect(resolveSignInGate(required, { nativeDesktopAdmin: false, failed: false })).toBe("signed-out");
+    expect(resolveSignInGate(null, { nativeDesktopAdmin: false, failed: false })).toBe("checking");
+  });
+
+  it("never blocks the desktop shell, and leaves check failures to the shell", () => {
+    const required = session({ accounts_enabled: true, sign_in_required: true });
+    expect(resolveSignInGate(required, { nativeDesktopAdmin: true, failed: false })).toBe("open");
+    expect(resolveSignInGate(null, { nativeDesktopAdmin: false, failed: true })).toBe("open");
+  });
+
+  it("names accounts by display name, falling back to login", () => {
+    expect(accountLabel({ login: "bob", display_name: " Bob Lee " })).toBe("Bob Lee");
+    expect(accountLabel({ login: "bob", display_name: "" })).toBe("bob");
+    expect(accountLabel(undefined)).toBe("");
+  });
+
+  it("validates new account forms like the server", () => {
+    expect(accountFormError({ login: "Bob", password: "" }, { passwordRequired: false })).toBe("");
+    expect(accountFormError({ login: "b", password: "" }, { passwordRequired: false })).toBe("accounts.loginInvalid");
+    expect(accountFormError({ login: "has space", password: "" }, { passwordRequired: false })).toBe("accounts.loginInvalid");
+    expect(accountFormError({ login: "bob", password: "" }, { passwordRequired: true })).toBe("accounts.passwordTooShort");
+    expect(accountFormError({ login: "bob", password: "long-enough-1", confirm: "other" }, { passwordRequired: true })).toBe("accounts.passwordMismatch");
+    expect(accountFormError({ login: "bob", password: "long-enough-1", confirm: "long-enough-1" }, { passwordRequired: true })).toBe("");
+  });
+
+  it("explains failed sign-ins", () => {
+    expect(signInErrorKey({ status: 401 })).toBe("auth.wrongCredentials");
+    expect(signInErrorKey({ status: 429 })).toBe("auth.tooManyAttempts");
+    expect(signInErrorKey(new Error("offline"))).toBe("auth.failed");
   });
 });

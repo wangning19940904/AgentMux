@@ -12,6 +12,9 @@ addr = "127.0.0.1:8765"
 enabled = false
 # Protects /api/v1 management, send, and Agent invocation endpoints.
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
+# People sign in to the Console with accounts stored in the database, not
+# here: create the first administrator with `amux accounts create <login>` or
+# from the Console. The bridge token stays the administrator either way.
 
 # ---- SSH remote control ----
 # Remote machine profiles are managed in Console -> Machines and saved with

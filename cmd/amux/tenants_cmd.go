@@ -160,6 +160,9 @@ func tenantsDisableCmd() *cobra.Command {
 				if tenant == nil {
 					return fmt.Errorf("unknown tenant %q", args[0])
 				}
+				if tenant.Kind == core.TenantKindAccount {
+					return fmt.Errorf("tenant %q is the namespace of an account; use amux accounts instead", tenant.Name)
+				}
 				tenant.Status = core.TenantStatusDisabled
 				if enable {
 					tenant.Status = core.TenantStatusActive
@@ -191,6 +194,9 @@ func tenantsRemoveCmd() *cobra.Command {
 				if tenant == nil {
 					return fmt.Errorf("unknown tenant %q", args[0])
 				}
+				if tenant.Kind == core.TenantKindAccount {
+					return fmt.Errorf("tenant %q is the namespace of an account; use amux accounts instead", tenant.Name)
+				}
 				if err := st.DeleteTenant(cmd.Context(), tenant.ID); err != nil {
 					return err
 				}
@@ -216,6 +222,9 @@ func tenantsTokenCmd() *cobra.Command {
 				}
 				if tenant == nil {
 					return fmt.Errorf("unknown tenant %q", args[0])
+				}
+				if tenant.Kind == core.TenantKindAccount {
+					return fmt.Errorf("tenant %q is the namespace of an account; use amux accounts instead", tenant.Name)
 				}
 				var expiresAt *time.Time
 				if expiresInHours > 0 {

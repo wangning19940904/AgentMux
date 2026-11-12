@@ -662,7 +662,7 @@ export interface Channel {
 // contract/CONTRACT.md "多租户".
 export type ResourceVisibility = "private" | "public";
 export type GrantLevel = "read" | "use" | "manage";
-export type TenantKind = "app" | "web" | "service";
+export type TenantKind = "app" | "web" | "service" | "account";
 export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider" | "event_source";
 
 export interface Tenant {
@@ -710,6 +710,58 @@ export interface TenancySelf {
   tenant?: string;
   kind?: string;
   status?: string;
+  // The person signed in, for an account session.
+  account?: AccountIdentity;
+}
+
+export type AccountRole = "admin" | "member";
+
+// AccountIdentity is the signed-in person a request carries.
+export interface AccountIdentity {
+  id: string;
+  login: string;
+  display_name?: string;
+  role: AccountRole;
+  tenant_id: string;
+}
+
+// Account is one person who signs in to the Console.
+export interface Account extends AccountIdentity {
+  status: "active" | "disabled";
+  has_password: boolean;
+  created_at: string;
+  updated_at: string;
+  last_sign_in_at?: string;
+}
+
+// AuthSession says who the Console is and whether it must sign in first.
+export interface AuthSession {
+  accounts_enabled: boolean;
+  setup_available: boolean;
+  sign_in_required: boolean;
+  authenticated: boolean;
+  admin: boolean;
+  account?: AccountIdentity;
+  tenant_id?: string;
+  tenant?: string;
+  sign_in_methods: string[];
+}
+
+// PairedDevice is a machine paired with this hub, as /api/v1/devices lists
+// it. Administrators see every device with its owner; a member their own.
+export interface PairedDevice {
+  id: string;
+  name: string;
+  hostname?: string;
+  os?: string;
+  arch?: string;
+  version?: string;
+  created_at: string;
+  last_seen_at?: string;
+  owner_tenant_id?: string;
+  owner_tenant_name?: string;
+  online: boolean;
+  reported_at?: string;
 }
 
 export interface ChannelTask {
