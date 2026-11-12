@@ -386,10 +386,6 @@ button {
   margin-bottom: 6px;
 }
 
-.mobile-flat-nav {
-  display: none;
-}
-
 .account {
   min-height: 32px;
   margin-top: 0;
@@ -1273,24 +1269,6 @@ dialog.surface {
 
   .native-desktop .sidebar {
     padding: 5px;
-  }
-
-  .sidebar .mobile-flat-nav {
-    display: flex;
-  }
-
-  .mobile-flat-nav .nav-item {
-    flex: 0 0 40px;
-    justify-content: center;
-    width: 40px;
-    min-height: 40px;
-    padding: 0;
-    border-radius: 7px;
-  }
-
-  .mobile-flat-nav .nav-item.active {
-    color: var(--text);
-    background: var(--accent-soft);
   }
 
   .workspace-header {

@@ -2079,4 +2079,13 @@ export const zh: Record<keyof typeof en, string> = {
     "guard.tool": "工具",
     "guard.action": "动作",
     "guard.empty": "暂无策略。未命中调用将回退为 ask。",
+    "nav.mobile.overview": "总览",
+    "nav.mobile.agents": "Agent",
+    "nav.mobile.super-agents": "超级 Agent",
+    "nav.mobile.machines": "机器",
+    "nav.mobile.more": "更多",
+    "nav.mobile.menu": "全部页面与偏好设置",
+    "app.offline": "无法连接 AgentMux。页面显示的是上次加载的内容，连接恢复前都不是实时数据。",
+    "app.updateReady": "Console 有新版本可用。",
+    "app.updateReload": "重新加载",
 };

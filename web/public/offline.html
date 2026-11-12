@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f3f3f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+<title>AgentMux · Offline</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f3f3f4; --card: #fff; --text: #202022; --muted: #6d6d74; --border: #e2e2e4; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --card: #29292b; --text: #f0f0f2; --muted: #a0a0a8; --border: #38383b; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box;
+    background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 380px; padding: 28px 24px; background: var(--card); border: 1px solid var(--border); border-radius: 14px; text-align: center; }
+  img { width: 56px; height: 56px; border-radius: 13px; }
+  h1 { margin: 14px 0 6px; font-size: 19px; }
+  p { margin: 0 0 18px; color: var(--muted); }
+  button { min-height: 44px; padding: 0 22px; color: var(--bg); background: var(--text); border: 0; border-radius: 10px; font: inherit; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <img src="/icons/maskable-192.png" alt="">
+  <h1>AgentMux is out of reach</h1>
+  <p>This device is offline or cannot reach your AgentMux hub. Nothing shown here is live. Try again once the connection is back.</p>
+  <button type="button" onclick="location.href='/'">Try again</button>
+</main>
+</body>
+</html>

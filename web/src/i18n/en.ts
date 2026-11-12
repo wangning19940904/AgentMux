@@ -2083,4 +2083,13 @@ export const en = {
     "guard.tool": "Tool",
     "guard.action": "Action",
     "guard.empty": "No policies yet. Unmatched calls fall back to ask.",
+    "nav.mobile.overview": "Overview",
+    "nav.mobile.agents": "Agents",
+    "nav.mobile.super-agents": "Super",
+    "nav.mobile.machines": "Machines",
+    "nav.mobile.more": "More",
+    "nav.mobile.menu": "All pages and preferences",
+    "app.offline": "Can't reach AgentMux. Pages show what was last loaded and nothing is live until the connection is back.",
+    "app.updateReady": "A new version of the Console is ready.",
+    "app.updateReload": "Reload",
 } as const;
