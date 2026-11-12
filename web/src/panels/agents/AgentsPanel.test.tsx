@@ -105,3 +105,42 @@ it("refreshes a partially failed Provider load even when the Agent list succeede
     container.remove();
   }
 });
+
+it("shows every kind of agent on one page, with its workers and activity", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("agentmux:active-remote", "local");
+  const chat = { ...newAgent(["codex"]), id: "ning", name: "宁宝" };
+  const router = { ...newAgent(["codex"]), id: "sar_ops", name: "Ops router", source: "super_agent_router" };
+  const worker = { ...newAgent(["codex"]), id: "saw_sa_ops_codex", name: "worker", source: "super_agent" };
+  vi.spyOn(api, "agentInstances").mockResolvedValue([chat, router, worker]);
+  vi.spyOn(api, "agents").mockResolvedValue(["codex"]);
+  for (const key of ["providers", "activeRoutes", "channels", "triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
+  vi.spyOn(api, "superAgents").mockResolvedValue([
+    { id: "ning", name: "宁宝", router_agent_id: "ning", mode: "act", max_concurrency: 2, workers: [], sources: [], enabled: true },
+    { id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", mode: "observe", max_concurrency: 2, workers: [], auto_workers: true, worker_runtimes: ["codex"], sources: [], enabled: true },
+  ]);
+  vi.spyOn(api, "superAgentActivity").mockResolvedValue({ tickets: [], triggers: [], workers: [], sources: {} });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<I18nProvider language="en"><AgentsPanel /></I18nProvider>));
+    const rows = [...container.querySelectorAll("article")];
+    expect(rows.map((row) => row.querySelector("strong")?.textContent)).toEqual(["宁宝", "Ops"]);
+    expect(rows[0].textContent).toContain("Chat only");
+    expect(rows[1].textContent).toContain("Workers: codex");
+    expect(rows[1].textContent).toContain("Answers with Ops router");
+    expect(container.textContent).toContain("2 Agents");
+    expect(container.textContent).not.toContain("worker");
+    const open = [...rows[0].querySelectorAll("button")].find((button) => button.textContent === "Workers & activity")!;
+    await act(async () => open.click());
+    const drawer = container.querySelector('[aria-labelledby="agent-work-title"]')!;
+    expect(drawer.textContent).toContain("Workers and activity");
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+      expect(drawer.textContent).toContain("Chats only: it starts no workers.");
+    }, { timeout: 5000 });
+    expect(drawer.textContent).toContain("Edit workers and triggers");
+    expect(drawer.textContent).not.toContain("Create Super Agent");
+  } finally { await act(async () => root.unmount()); }
+});

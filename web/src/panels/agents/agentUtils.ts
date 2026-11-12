@@ -1,4 +1,4 @@
-import { api, type AgentInstance, type Channel, type CLIManagedTool, type Provider, type ProviderRoute, type RuntimeOption, type Trigger } from "../../api";
+import { api, type AgentInstance, type Channel, type CLIManagedTool, type Provider, type ProviderRoute, type RuntimeOption, type SuperAgent, type Trigger } from "../../api";
 
 export type DrawerMode = "create" | "edit";
 
@@ -359,6 +359,37 @@ export function isConfigManaged(agent: AgentInstance): boolean {
 // auto workers.
 export function isRouterAgent(agent: AgentInstance): boolean {
   return agent.source === "super_agent_router" || (agent.source === "super_agent" && agent.id.startsWith("sar_"));
+}
+
+// isAgentPart reports whether an Agent instance belongs to an agent rather
+// than being one: a router agent or an auto worker. The Agents page shows them
+// through the agent they belong to.
+export function isAgentPart(agent: AgentInstance): boolean {
+  return agent.source === "super_agent" || agent.source === "super_agent_router";
+}
+
+// unifiedAgentFor finds the agent whose brain an Agent instance on this
+// machine is. Agents on other machines are managed there.
+export function unifiedAgentFor(agent: AgentInstance, agents: SuperAgent[]): SuperAgent | undefined {
+  if (agent.target_id && agent.target_id !== "local") return undefined;
+  return agents.find((item) => item.id === agent.id && item.router_agent_id === agent.id)
+    ?? agents.find((item) => item.router_agent_id === agent.id);
+}
+
+// agentsWithoutRow are the agents whose brain is not an Agent row of its own:
+// those that answer with a router agent. The Agents page lists them as rows too.
+export function agentsWithoutRow(agents: SuperAgent[], instances: AgentInstance[]): SuperAgent[] {
+  const rows = new Set(instances.filter((item) => !isAgentPart(item) && (!item.target_id || item.target_id === "local")).map((item) => item.id));
+  return agents.filter((agent) => !rows.has(agent.router_agent_id));
+}
+
+// workPolicy is the short label of what an agent does besides chatting.
+export function workPolicy(agent: SuperAgent | undefined): { key: string; params?: Record<string, string | number> } {
+  if (!agent || (!agent.auto_workers && agent.workers.length === 0)) return { key: "agents.work.policyChat" };
+  if (agent.auto_workers && (agent.worker_runtimes ?? []).length > 0) {
+    return { key: "agents.work.policyAuto", params: { frameworks: (agent.worker_runtimes ?? []).join(", ") } };
+  }
+  return { key: "agents.work.policyRoster", params: { count: agent.workers.length } };
 }
 
 export function isReadOnlyAgent(agent: AgentInstance): boolean {
