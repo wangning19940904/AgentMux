@@ -1,4 +1,4 @@
-import type { TenancySelf } from "./api";
+import type { AccountIdentity, AuthSession, TenancySelf } from "./api";
 
 export type TenancyGateState = "loading" | "ready" | "required" | "error";
 
@@ -56,4 +56,62 @@ export async function resolveTenancyGateWithRetry(
     }
   }
   throw lastError;
+}
+
+// Sign-in gate. Accounts exist only once an administrator creates the first
+// one; until then the Console opens exactly as before. The packaged desktop
+// shell is the machine's own administrator surface and never asks.
+
+export type SignInGateState = "checking" | "signed-out" | "open";
+
+// AUTH_CHANGED_EVENT asks the sign-in gate to look again, after a sign-in,
+// sign-out or first-administrator setup.
+export const AUTH_CHANGED_EVENT = "agentmux:auth-changed";
+
+export function notifyAuthChanged() {
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
+}
+
+// resolveSignInGate decides whether the Console shows the sign-in screen. A
+// failed check opens the shell, whose own identity check reports the error,
+// so an older daemon without accounts keeps working.
+export function resolveSignInGate(
+  session: AuthSession | null,
+  options: { nativeDesktopAdmin: boolean; failed: boolean },
+): SignInGateState {
+  if (options.nativeDesktopAdmin || options.failed) return "open";
+  if (!session) return "checking";
+  return session.sign_in_required ? "signed-out" : "open";
+}
+
+// accountLabel is how the Console names a signed-in person.
+export function accountLabel(account: Pick<AccountIdentity, "login" | "display_name"> | undefined | null): string {
+  if (!account) return "";
+  return account.display_name?.trim() || account.login;
+}
+
+export const MIN_PASSWORD_LENGTH = 10;
+const LOGIN_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+
+// accountFormError checks a new account form before it is sent and returns
+// an i18n key, or "" when the form is fine. An empty password is allowed
+// only where the server generates one.
+export function accountFormError(
+  form: { login: string; password: string; confirm?: string },
+  options: { passwordRequired: boolean },
+): string {
+  const login = form.login.trim().toLowerCase();
+  if (!LOGIN_PATTERN.test(login)) return "accounts.loginInvalid";
+  if (!form.password && !options.passwordRequired) return "";
+  if (form.password.length < MIN_PASSWORD_LENGTH) return "accounts.passwordTooShort";
+  if (form.confirm !== undefined && form.confirm !== form.password) return "accounts.passwordMismatch";
+  return "";
+}
+
+// signInErrorKey turns a failed sign-in into an i18n key.
+export function signInErrorKey(error: unknown): string {
+  const status = typeof error === "object" && error && "status" in error ? Number((error as { status: unknown }).status) : 0;
+  if (status === 401) return "auth.wrongCredentials";
+  if (status === 429) return "auth.tooManyAttempts";
+  return "auth.failed";
 }

@@ -68,10 +68,12 @@ import {
 } from "./api";
 import { resetFleetWarnings } from "./api/fleetWarnings";
 import {
+  accountLabel,
   resolveTenancyGateWithRetry,
   tenancyNavigationLocked,
   type TenancyGateState,
 } from "./tenancyGate";
+import { SignInGate } from "./SignInGate";
 import {
   navigationGroupForTab,
   primaryGroupDestination,
@@ -271,16 +273,18 @@ export function App() {
 
   return (
     <I18nProvider language={language}>
-      <MeetingProvider>
-        <Shell
-          tab={tab}
-          setTab={selectTab}
-          language={language}
-          setLanguage={setLanguage}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-        />
-      </MeetingProvider>
+      <SignInGate>
+        <MeetingProvider>
+          <Shell
+            tab={tab}
+            setTab={selectTab}
+            language={language}
+            setLanguage={setLanguage}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
+          />
+        </MeetingProvider>
+      </SignInGate>
     </I18nProvider>
   );
 }
@@ -320,7 +324,9 @@ function Shell({
 		})
     : undefined;
 	const selectedTenantTargetID = selectedTenant?.target_id || (selectedTenant ? "local" : undefined);
-  const identityName = selectedTenant?.name ?? (identityIsAdmin
+  const identityName = selectedTenant?.name ?? (tenantIdentity?.account
+    ? accountLabel(tenantIdentity.account)
+    : identityIsAdmin
     ? t("app.admin")
     : tenantIdentity?.tenant || t("app.tenant"));
   const navigationLocked = tenancyNavigationLocked(tenantGate.state, nativeDesktopAdmin);
