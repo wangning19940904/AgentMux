@@ -373,7 +373,7 @@ func (s *Server) handleAccountSave(w http.ResponseWriter, r *http.Request) {
 	login := core.NormalizeLogin(req.Login)
 	generated := ""
 	if req.Password == "" {
-		generated = generateAccountPassword()
+		generated = store.GeneratePassword()
 		req.Password = generated
 	}
 	if err := validateNewAccount(login, req.Password); err != nil {
@@ -414,7 +414,7 @@ func (s *Server) handleAccountPasswordReset(w http.ResponseWriter, r *http.Reque
 	}
 	generated := ""
 	if req.Password == "" {
-		generated = generateAccountPassword()
+		generated = store.GeneratePassword()
 		req.Password = generated
 	}
 	if err := core.ValidatePassword(req.Password); err != nil {
@@ -461,13 +461,6 @@ func writeAccountError(w http.ResponseWriter, err error) {
 	default:
 		writeErr(w, http.StatusInternalServerError, err.Error())
 	}
-}
-
-// generateAccountPassword returns a 20-character password for an
-// administrator to hand over; the person should change it after signing in.
-func generateAccountPassword() string {
-	token := randomToken()
-	return token[:5] + "-" + token[5:10] + "-" + token[10:15] + "-" + token[15:20]
 }
 
 func derefString(value *string) string {

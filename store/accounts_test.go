@@ -246,3 +246,66 @@ func TestDeviceOwnership(t *testing.T) {
 		t.Fatalf("device owner after namespace delete = %q", got.OwnerTenantID)
 	}
 }
+
+func TestAccountsOnPostgres(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	ctx := context.Background()
+
+	// Two first-run requests at once make exactly one administrator.
+	results := make(chan error, 2)
+	for _, login := range []string{"first", "second"} {
+		go func(login string) {
+			_, err := st.CreateFirstAdmin(ctx, NewAccount{Login: login, Password: login + "-password-1"})
+			results <- err
+		}(login)
+	}
+	var created, refused int
+	for range 2 {
+		switch err := <-results; {
+		case err == nil:
+			created++
+		case errors.Is(err, ErrAccountsExist):
+			refused++
+		default:
+			t.Fatalf("first admin: %v", err)
+		}
+	}
+	if created != 1 || refused != 1 {
+		t.Fatalf("created %d, refused %d", created, refused)
+	}
+
+	member, err := st.CreateAccount(ctx, NewAccount{Login: "bob", Password: "bob-password-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account, err := st.VerifyAccountPassword(ctx, "bob", "bob-password-1"); err != nil || account == nil {
+		t.Fatalf("verify = %+v, %v", account, err)
+	}
+	token, _, err := st.CreateAccountSession(ctx, member.ID, core.SignInMethodPassword, "agent", "127.0.0.1", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account, err := st.AuthenticateAccountSession(ctx, token); err != nil || account == nil || account.ID != member.ID {
+		t.Fatalf("session = %+v, %v", account, err)
+	}
+	disabled := core.AccountStatusDisabled
+	if _, err := st.UpdateAccount(ctx, member.ID, AccountUpdate{Status: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if account, _ := st.AuthenticateAccountSession(ctx, token); account != nil {
+		t.Fatal("disabled account session resolved")
+	}
+
+	code, err := st.CreateOwnedDevicePairingCode(ctx, "laptop", member.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, _, err := st.RedeemDevicePairingCode(ctx, code.Code, core.DeviceInfo{Hostname: "laptop"})
+	if err != nil || device == nil {
+		t.Fatalf("redeem = %+v, %v", device, err)
+	}
+	mine, err := st.ListDevicesForTenant(ctx, member.TenantID)
+	if err != nil || len(mine) != 1 || mine[0].OwnerTenantID != member.TenantID {
+		t.Fatalf("owned devices = %+v, %v", mine, err)
+	}
+}

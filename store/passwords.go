@@ -83,6 +83,17 @@ func decodePasswordHash(encoded string) (argon2Params, []byte, []byte, error) {
 	return params, salt, key, nil
 }
 
+// GeneratePassword returns a random 23-character password for an
+// administrator to hand over; the person should change it after signing in.
+func GeneratePassword() string {
+	buf := make([]byte, 10)
+	if _, err := rand.Read(buf); err != nil {
+		panic("store: crypto/rand unavailable: " + err.Error())
+	}
+	text := fmt.Sprintf("%x", buf)
+	return text[:5] + "-" + text[5:10] + "-" + text[10:15] + "-" + text[15:20]
+}
+
 // dummyPasswordHash is verified against when a login does not exist, so a
 // failed sign-in takes as long whether or not the account is real.
 var dummyPasswordHash = sync.OnceValue(func() string {
