@@ -161,6 +161,7 @@ AgentMux 在 Linux/macOS 启动时会从用户的交互式登录 shell 导入 `h
 - 旧版 `[[projects]]`、`[[projects.platforms]]` 与 `[[hooks]]` 只可用于一次性迁移：先运行 `amux database import-config --dry-run`，确认后运行 `--apply`，再从配置文件删除这些 section。
 - 飞书渠道扫码取得 App ID/Secret 后，Console 可继续执行“补全开放平台配置”：二次扫码建立仅内存 Web session，自动导入消息/CardKit/会议权限、配置长连接事件与卡片回调，并按明确选择的可见范围发布版本。该能力使用飞书开放平台 Console 接口，接口变化时会 fail closed 并返回具体失败步骤。
 - 开启 `[bridge]` 可用 Bearer Token 保护 HTTP send 与 Agent Invocation API；**启用时必须设置 token**。
+- **账号**不在 `config.toml` 中配置，存放在数据库里，用 Console 的 **系统 → 租户** 页顶部的「账号」区或 `amux accounts` 管理，详见下方「账号与登录」。
 - `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
 - `[observability]` 默认启用；完整内容先脱敏、分块压缩并以 AES-256-GCM 加密，默认保留 30 天，详细元数据保留 180 天。每个 `[[observability.exporters]]` 独立配置 OTLP 队列，`include_content` 默认关闭。
@@ -199,6 +200,27 @@ amux leave                         # 在已接入的机器上：离开 Hub
 - Hub 自身也没有公网地址时，可把 Cloudflare Tunnel、frp 等隧道的地址填入 `public_url`。
 - 旧版本 AgentMux 所在的机器可以用 `amux join <token> --foreground` 由命令本身保持连接。
 
+## 账号与登录
+
+账号让人登录 Hub，并据此拥有机器和 Agent。目前只支持本地账号 + 密码；单点登录（如飞书）以后作为另一种登录方式接入，不改动会话与归属。
+
+```bash
+amux accounts create alice --name "Alice"   # 第一个账号自动成为管理员；不给密码则生成一次性显示的密码
+amux accounts create bob                    # 之后的账号默认是成员（--admin 设为管理员）
+amux accounts list
+amux accounts reset-password bob            # 生成新密码，并结束 bob 的所有会话
+amux accounts disable bob | enable bob
+amux accounts set-role bob admin|member
+```
+
+也可以在 Console 中完成：管理员打开 **系统 → 租户**，在「账号」区创建第一个管理员（创建后当前浏览器即以该管理员登录），再新建、停用账号或重置密码。`amux accounts` 直接操作数据库，所有管理员都忘记密码时也能用它恢复。
+
+- **没有账号时一切照旧**：bridge token（或关闭 bridge 时的本机 Console）就是管理员。创建第一个账号后，浏览器打开 Console 会先看到登录页。
+- **角色**：管理员看到并管理全部资源（带归属标注）；成员只看到自己拥有的、被授权的和公开的 Agent、渠道、触发器，以及自己配对的设备。
+- **归属复用多租户**：每个账号自带一个 `kind = "account"` 的租户命名空间（名称即登录名）。成员新建的资源自动归属自己；管理员可在「租户」中给成员的命名空间授予 `read/use/manage`，或用 `amux tenants assign` / `POST /api/v1/tenancy/ownership` 移交资源（包括设备，`resource_type = "device"`）。账号命名空间只能经账号管理，不能单独删除、停用或签发 token。
+- **设备归属**：设备归属于创建其配对码的账号。管理员（含 bridge token）创建的配对码得到的设备不归属任何人，仅管理员可见。成员可在「租户」页的「我的设备」中配对、查看和移除自己的设备；成员暂不能经 Hub 远程操作设备。
+- **兼容**：bridge token 始终是管理员，CLI、SDK 与现有集成不受影响；tenant token 行为不变。关闭 bridge 时，本机无凭证请求（例如 CLI）仍是管理员——此时登录页只是本机便利，要让账号成为真正的访问边界，请开启 `[bridge]`（对外监听本来就要求开启）。打包的桌面 App 是本机管理员界面，不显示登录页。
+
 ## CLI
 
 ```
@@ -215,6 +237,7 @@ amux usage statusline            # compact one-liner for status bars/hooks
 amux provider list|presets|import <id>|switch <id> --tool <tool>
 amux send --channel-id <id> --conversation-key <key> --text "..."
 amux hub pair|devices|remove     # manage machines connected to this hub
+amux accounts list|create|disable|enable|set-role|reset-password
 amux join <token> | amux leave   # connect this machine to a hub, or leave it
 ```
 
@@ -617,6 +640,9 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 ## 安全说明
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
+- **账号密码**只以 argon2id（64 MiB、2 轮，参数随哈希保存）存储，明文不落库也不写日志。登录会话 token 只保存 SHA-256，放在 `HttpOnly`、`SameSite=Strict`（HTTPS 下加 `Secure`）的 `agentmux_console` cookie 中，有效期 7 天；每个请求都按账号当前的角色和状态解析，停用账号、重置密码会立即结束其会话，修改自己的密码会结束其他会话。
+- 登录、登出与 cookie 鉴权都要求同源（`X-AgentMux-Console` 头或 `Sec-Fetch-Site: same-origin`），跨站请求无法登录或借用会话。失败登录按「登录名+来源地址」（5 次）、来源地址（20 次）与登录名（50 次）在 15 分钟窗口内限流，触发后锁定 15 分钟；不存在的登录名同样执行一次哈希计算，不泄露账号是否存在。
+- 第一个管理员只能由管理员身份创建（bridge token、关闭 bridge 时的本机 Console，或 `amux accounts create`），远程访问者无法抢先注册。
 - SSH 远程控制优先使用私钥/`ssh-agent`；从 SSH Config 导入的主机也可回退到系统 OpenSSH 的非交互认证（例如 GSSAPI），且不保存 SSH 密码。首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
 - 导入或测试连接遇到远端 API 401 时，会通过已验证的 SSH 连接读取远端配置中的 `[bridge].token`、SSH 环境中的 `AGENTMUX_BRIDGE_TOKEN`，以及标准 launchd / systemd 用户服务的 Token。配置支持 `AMUX_CONFIG`、`XDG_CONFIG_HOME` 和系统默认路径，`${ENV}` 在远端 SSH 环境中展开。Token 通过状态接口验证后才保存，不返回给浏览器或写入日志；自定义启动环境不可读取时仍可手动填写。
 - SSH 代理使用系统 OpenSSH 解析别名的有效配置（包括 `Include`、`Match` 与通配符）；跳板机沿用本机凭据与 `known_hosts`，请先在终端完成跳板机指纹确认或 Cloudflare 登录。`ProxyCommand` 需要 POSIX shell 和已安装的代理程序，通过标准输入/输出转发连接；暂不支持 `ProxyUseFdpass`。代理失败不会改为直连目标机。

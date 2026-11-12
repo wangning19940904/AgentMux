@@ -133,7 +133,10 @@ export function TenantsPanel({
 
   return (
     <div className="page-stack">
-      <AccountsPanel />
+      <AccountsPanel onAccountsChanged={() => {
+        void tenants.reload();
+        onTenantChanged?.();
+      }} />
       <section className="surface">
         <div className="surface-header">
           <div>

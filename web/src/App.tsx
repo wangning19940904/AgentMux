@@ -779,7 +779,7 @@ function Shell({
 					setSelectedTenantScopeID(scopeKey);
                 }}
               >
-                <option value="">{t("app.admin")}</option>
+                <option value="">{tenantIdentity?.account ? accountLabel(tenantIdentity.account) : t("app.admin")}</option>
                 {activeTenantOptions.map((tenant) => (
 				  <option
 					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}

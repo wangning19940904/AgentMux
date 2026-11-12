@@ -16,7 +16,9 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function AccountsPanel() {
+// onAccountsChanged runs after an account is created, enabled or disabled,
+// since each account has a tenant namespace the Tenants list shows.
+export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () => void } = {}) {
   const session = useAsync(() => api.authSession(), []);
   const state = session.data;
   if (!state) return null;
@@ -24,7 +26,10 @@ export function AccountsPanel() {
     <>
       {state.account && <SignedInCard session={state} />}
       {state.admin && (state.accounts_enabled || state.setup_available) && (
-        <AccountsAdmin session={state} onChanged={() => void session.reload()} />
+        <AccountsAdmin session={state} onChanged={() => {
+          void session.reload();
+          onAccountsChanged?.();
+        }} />
       )}
       {state.account && !state.admin && <MyDevices />}
     </>
@@ -158,6 +163,7 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
     try {
       await action();
       await accounts.reload();
+      onChanged();
       return true;
     } catch (error) {
       setNotice(errorText(error));
@@ -183,7 +189,6 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
         await api.setupFirstAdmin({ login, display_name: form.display_name.trim(), password: form.password });
         // The browser is now signed in as that administrator.
         notifyAuthChanged();
-        onChanged();
         return;
       }
       const result = await api.saveAccount({
