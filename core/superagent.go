@@ -39,9 +39,9 @@ const (
 	SuperAgentDispositionFailed   = "failed"
 )
 
-// Trigger kinds. An event from a Source has no kind. A ticket update is
-// AgentMux telling the router that a Ticket's worker finished a turn, so the
-// router can report it, start dependent work or ask someone for a decision.
+// SuperAgentTriggerTicketUpdate tells the router that a Ticket's worker
+// finished a turn, so it can report it, start dependent work or ask someone
+// for a decision. An event from a Source has no kind.
 const SuperAgentTriggerTicketUpdate = "ticket_update"
 
 // Ticket states. A Ticket defines its own state instead of following the
