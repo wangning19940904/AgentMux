@@ -25,7 +25,6 @@ import {
   composeInjectedPrompt,
   providerModelOptions,
   routeToolForRuntime,
-  routeToolOptionsForRuntime,
   runtimeLabel,
   runtimeProviderOptions,
   runtimeOptionValues,
@@ -131,7 +130,6 @@ export function AgentForm({
   const frameworkRuntimeID = desktopRuntime ? "codex" : draft.runtime_id;
   const authTargetID = draft.target_id || authStatus?.target_id;
   const authenticated = authStatus?.state === "authenticated";
-  const routeToolOptions = routeToolOptionsForRuntime(draft.runtime_id);
   const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
   const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
 	const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
@@ -600,21 +598,6 @@ export function AgentForm({
           <h3>{t("agents.routing")}</h3>
         </header>
         <div className="field-grid">
-          <label className="field">
-            <span>{t("agents.routeTool")}</span>
-            <select
-              disabled={readOnly || routeToolOptions.length <= 1}
-              value={selectedRouteTool}
-              onChange={(event) => onUpdate("provider_tool", event.target.value)}
-            >
-              {routeToolOptions.map((tool) => (
-                <option key={tool} value={tool}>
-                  {runtimeLabel(tool)}
-                </option>
-              ))}
-            </select>
-            <small>{t("agents.routeToolFollowsRuntime")}</small>
-          </label>
           <label className="field">
             <span>{t("agents.providerOverride")}</span>
             <select disabled={readOnly} value={draft.provider_id ?? ""} onChange={(event) => onUpdate("provider_id", event.target.value)}>

@@ -316,6 +316,9 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 			a.GroupChatMode = core.DefaultGroupChatMode
 		}
 	}
+	if creatingRecord && unselectableAgentRuntimes[a.RuntimeID] {
+		return fmt.Errorf("agent runtime %q cannot be used for new agents", a.RuntimeID)
+	}
 	if creatingRecord && !agentRuntimeAvailable(a.RuntimeID) {
 		return fmt.Errorf("agent runtime %q is not installed on this machine", a.RuntimeID)
 	}
@@ -563,6 +566,9 @@ func (s *Server) enrichAgentProviders(ctx context.Context, items []core.AgentIns
 }
 
 func knownAgentRuntime(id string) bool {
+	if id == "terminal" {
+		return false
+	}
 	for _, name := range core.RegisteredAgents() {
 		if name == id {
 			return true
@@ -582,9 +588,18 @@ func availableAgentRuntimes() []string {
 	return available
 }
 
+// unselectableAgentRuntimes are registered agent adapters that are not offered
+// as a runtime for new Agents. "terminal" is the tmux session backend, chosen
+// through SessionBackend rather than RuntimeID. "codex-app" is retired as a
+// selectable runtime; existing Codex Desktop Agents keep working.
+var unselectableAgentRuntimes = map[string]bool{
+	"terminal":  true,
+	"codex-app": true,
+}
+
 func agentRuntimeAvailable(id string) bool {
-	if id == "codex-app" {
-		return framework.IsInstalled("codex")
+	if unselectableAgentRuntimes[id] {
+		return false
 	}
 	if spec, catalogued := framework.Lookup(id); catalogued {
 		if spec.Hidden {
