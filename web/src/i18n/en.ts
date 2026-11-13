@@ -826,6 +826,8 @@ export const en = {
     "common.source": "Source",
     "common.description": "Description",
     "common.cancel": "Cancel",
+    "common.confirm": "Confirm",
+    "common.confirmTitle": "Please confirm",
     "common.close": "Close",
     "common.actions": "Actions",
     "common.type": "Type",

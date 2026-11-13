@@ -10,6 +10,7 @@ import { describeModelChoice, ModelPicker } from "./superAgentModelPicker";
 import type { ModelChoice } from "./superAgentModelPicker";
 import { isReachableOrigin } from "./superAgentSetupModel";
 import { NEW_ROUTER, SOURCE_KINDS, githubPolls, isChannelSource, newRouter, newSource, newSuperAgent, newWorker, ownsBrain, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
+import { confirmAction } from "../components/ConfirmDialog";
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -93,8 +94,8 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   <div><h3>{selected.name}</h3><p className="muted">{selected.description || t(`superAgents.modeHelp.${selected.mode}`)}</p></div>
                   <div className="control-row">
                     <button className="ghost-action" onClick={() => setDraft(structuredClone(selected))}>{embedded ? t("agents.work.edit") : t("common.edit")}</button>
-                    {!embedded && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => {
-                      if (window.confirm(t("superAgents.deleteConfirm", { name: selected.name }))) void run("delete", () => api.deleteSuperAgent(selected.id));
+                    {!embedded && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={async () => {
+                      if (await confirmAction(t("superAgents.deleteConfirm", { name: selected.name }), { danger: true })) void run("delete", () => api.deleteSuperAgent(selected.id));
                     }}><Trash2 size={14} /> {t("common.delete")}</button>}
                   </div>
                 </header>
@@ -475,7 +476,7 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
   }
 
   async function deleteRouter(router: SuperAgentRouter) {
-    if (!window.confirm(t("superAgents.deleteRouterConfirm", { name: router.name }))) return;
+    if (!(await confirmAction(t("superAgents.deleteRouterConfirm", { name: router.name }), { danger: true }))) return;
     setRouterError("");
     try {
       await api.deleteSuperAgentRouter(router.id);
@@ -488,10 +489,10 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
 
   // The template fills the routing rules with an example to edit; what was
   // typed is only replaced when the operator agrees.
-  const applyRoutingTemplate = () => {
+  const applyRoutingTemplate = async () => {
     const text = t("superAgents.routerPromptTemplateText");
     const current = draft.router_prompt ?? "";
-    if (!current.trim() || current === text || window.confirm(t("superAgents.replaceRoutingRules"))) onChange({ ...draft, router_prompt: text });
+    if (!current.trim() || current === text || await confirmAction(t("superAgents.replaceRoutingRules"))) onChange({ ...draft, router_prompt: text });
   };
   const loadRemoteAgents = useCallback(async (hostID: string) => {
     if (!hostID) return;

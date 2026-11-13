@@ -6,6 +6,7 @@ import type {
   MachineTarget,
   TargetMetadata,
 } from "./types";
+import { confirmAction } from "../components/ConfirmDialog";
 
 export type Targeted<T> = T & TargetMetadata;
 export { FLEET_WARNING_EVENT, currentFleetWarnings, isFleetStaleNotice } from "./fleetWarnings";
@@ -118,7 +119,7 @@ export async function fleetCall<T>(
   const multiTarget = targetIDs.includes("all") || targetIDs.length > 1;
   if (options.confirm !== false && multiTarget && operation.method && operation.method !== "GET" && typeof window !== "undefined") {
     const chinese = document.documentElement.lang.toLowerCase().startsWith("zh");
-    const accepted = window.confirm(chinese
+    const accepted = await confirmAction(chinese
       ? "确定把这个操作应用到所有选中的机器吗？每台机器会独立执行，并逐机报告失败。"
       : "Apply this operation to all selected machines? Each machine will run independently and partial failures will be reported.");
     if (!accepted) throw new Error("Fleet operation cancelled.");

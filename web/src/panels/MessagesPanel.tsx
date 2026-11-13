@@ -8,6 +8,7 @@ import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { contactState, conversationThread, messageState, partyFromAddress, relativeTime, sortParties, threadKey } from "./messagesModel";
 import type { OpenThread } from "./messagesModel";
+import { confirmAction } from "../components/ConfirmDialog";
 
 // Messages are the direct messages between people and agents, and between
 // agents. The page lists the viewer's own conversations and the ones between
@@ -608,8 +609,8 @@ function Contacts({ contacts, error, controlled, admin, everyone, partyOf, onCha
                       <Check size={14} /> {t("messages.contacts.accept")}
                     </button>
                   )}
-                  <button className="ghost-action danger-action" type="button" disabled={working} onClick={() => {
-                    if (state !== "accepted" || window.confirm(t("messages.contacts.removeConfirm", { a: a.name, b: b.name }))) {
+                  <button className="ghost-action danger-action" type="button" disabled={working} onClick={async () => {
+                    if (state !== "accepted" || await confirmAction(t("messages.contacts.removeConfirm", { a: a.name, b: b.name }), { danger: true })) {
                       void run(contact.id, () => mailboxAPI.removeContact(contact.id));
                     }
                   }}>

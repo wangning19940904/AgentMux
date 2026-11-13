@@ -4,6 +4,7 @@ import { api, type Account, type AccountRole, type AuthSession, type DevicePairi
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged } from "../tenancyGate";
+import { confirmAction } from "../components/ConfirmDialog";
 
 // Accounts are the people who sign in to this AgentMux. This panel sits at
 // the top of the Tenants page: everyone signed in sees who they are and can
@@ -402,8 +403,8 @@ function MyDevices() {
               </div>
               <div className="table-actions">
                 <button className="ghost-action danger-action" disabled={busy}
-                  onClick={() => {
-                    if (window.confirm(t("accounts.removeDeviceConfirm", { name: device.name }))) {
+                  onClick={async () => {
+                    if (await confirmAction(t("accounts.removeDeviceConfirm", { name: device.name }), { danger: true })) {
                       void run(() => api.removePairedDevice(device.id));
                     }
                   }}>

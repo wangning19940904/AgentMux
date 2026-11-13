@@ -717,15 +717,18 @@ describe("SuperAgentsPanel", () => {
     await until(() => control(/^Router agent/).value === "router");
     const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
     click(button(/^Use template$/));
+    await until(() => /^Take on:/.test(rules().value));
     expect(confirm).not.toHaveBeenCalled();
     expect(rules().value).toMatch(/^Take on: requests about <project>/);
     expect(rules().value.split("\n")).toHaveLength(4);
     setValue(rules(), "only widgets");
     click(button(/^Use template$/));
+    await settle();
+    expect(confirm).toHaveBeenCalledTimes(1);
     expect(rules().value).toBe("only widgets");
     confirm.mockReturnValue(true);
     click(button(/^Use template$/));
-    expect(rules().value).toMatch(/^Take on:/);
+    await until(() => /^Take on:/.test(rules().value));
   });
 
   it("chooses the router's model, reasoning effort and speed in one picker, and names it after the Super Agent", async () => {

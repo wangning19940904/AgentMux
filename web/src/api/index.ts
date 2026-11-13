@@ -128,6 +128,7 @@ import type {
   CursorUsageSourceStatus,
   WorkspaceInitResult,
 } from "./types";
+import { confirmAction } from "../components/ConfirmDialog";
 
 function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
   const extra =
@@ -872,7 +873,7 @@ export const api = {
     delete channel.target_name;
     if (activeMachineScope() === "all" && !ch.target_id) {
       const chinese = document.documentElement.lang.toLowerCase().startsWith("zh");
-      if (!window.confirm(chinese ? "确定在所有可用机器上保存这个 Channel 吗？" : "Save this channel on every available machine?")) {
+      if (!(await confirmAction(chinese ? "确定在所有可用机器上保存这个 Channel 吗？" : "Save this channel on every available machine?"))) {
         throw new Error(chinese ? "已取消多机操作。" : "Fleet operation cancelled.");
       }
       if (!channel.id) channel.id = `channel-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
