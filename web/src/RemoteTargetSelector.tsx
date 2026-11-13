@@ -23,7 +23,7 @@ export function RemoteTargetSelector({
   const [activeID, setActiveID] = useState(activeMachineScope());
 
   const applyHosts = useCallback((items: MachineTarget[]) => {
-		const next = (items ?? []).filter((item) => item.kind === "ssh" && (!allowedTargetID || item.id === allowedTargetID));
+		const next = (items ?? []).filter((item) => item.kind !== "local" && (!allowedTargetID || item.id === allowedTargetID));
     setHosts(next);
     setLoadFailed(false);
     const selectedID = activeMachineScope();

@@ -1,7 +1,7 @@
 // HTTP client core: same-origin fetch helpers plus transparent routing of
 // API calls through the selected SSH remote target.
 import { invalidateResourceCache } from "../resourceCache";
-import { beginFleetWarningUpdate, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
+import { beginFleetWarningUpdate, fleetStaleMessage, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import type {
   DesktopUpdateStatus,
   FleetBatchResult,
@@ -117,9 +117,13 @@ const CONSOLE_HEADER = { "X-AgentMux-Console": "1" } as const;
 
 export function tenantScopeHeaders(path: string): Record<string, string> {
   const tenantID = activeTenantScopeID();
+  // Identity, sign-in and account management belong to the signed-in
+  // person, not to the tenant an administrator is previewing.
   const scopeable =
     (path.startsWith("/api/v1/") || path.startsWith("/v1/")) &&
-    !path.startsWith("/api/v1/tenancy/");
+    !path.startsWith("/api/v1/tenancy/") &&
+    !path.startsWith("/api/v1/auth/") &&
+    !path.startsWith("/api/v1/accounts");
   return tenantID && scopeable ? { "X-AgentMux-Tenant-Scope": tenantID } : {};
 }
 
@@ -170,7 +174,8 @@ async function fleetBatch<T>(
     const receivedAt = new Date();
     updateWarnings((payload.targets ?? []).flatMap((target) => requests.flatMap((request) => {
       const response = target.responses.find((response) => response.key === request.key);
-      return response?.ok ? [] : [fleetWarningWithContext(fleetWarningMessage(target.target.name, response?.error || "unavailable"), request, receivedAt)];
+      if (response?.ok) return response.reported_at ? [fleetStaleMessage(target.target.name)] : [];
+      return [fleetWarningWithContext(fleetWarningMessage(target.target.name, response?.error || "unavailable"), request, receivedAt)];
     })));
     return payload;
   } catch (error) {
@@ -201,8 +206,20 @@ export function fleetMonitorQuery<T>(requests: FleetOperation[], targetIDs?: str
   return fleetBatch<T>("query", requests, targetIDs, false, false);
 }
 
+// With one machine selected, reads go through that machine. When it is a
+// linked machine that is offline, the hub answers from what it last reported
+// and says so in a header; that is surfaced like the fleet's stale notice.
+function noteReportedAt(path: string, res: Response) {
+  const remoteID = activeRemoteID();
+  if (!remoteID || !res.headers) return;
+  const update = beginFleetWarningUpdate(JSON.stringify(["reported", remoteID, fleetWarningResourceKey(path)]));
+  const reportedAt = res.ok ? res.headers.get("X-AgentMux-Reported-At") : null;
+  update(reportedAt ? [fleetStaleMessage("This machine")] : []);
+}
+
 export async function get<T>(path: string): Promise<T> {
   const res = await fetch(apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
+  noteReportedAt(path, res);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -235,6 +252,7 @@ function checkedError(path: string, status: number, payload: Record<string, unkn
 
 export async function getChecked<T>(path: string, options: { local?: boolean } = {}): Promise<T> {
   const res = await fetch(options.local ? path : apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
+  if (!options.local) noteReportedAt(path, res);
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     throw checkedError(path, res.status, payload);
@@ -401,4 +419,14 @@ export async function del<T>(path: string): Promise<T> {
   invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+// delChecked deletes on this Console's own origin and reports the server's
+// error message.
+export async function delChecked<T = { ok: boolean }>(path: string): Promise<T> {
+  const res = await fetch(path, { method: "DELETE", headers: { ...CONSOLE_HEADER } });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  invalidateResourceCache();
+  if (!res.ok) throw checkedError(path, res.status, payload);
+  return payload as T;
 }

@@ -47,4 +47,9 @@ describe("remote update candidates", () => {
       untrusted: { health: "healthy", version: "0.1.3" },
     }, "0.1.4").map((item) => item.id)).toEqual(["outdated"]);
   });
+
+  it("leaves out a linked machine, which has no SSH connection to update through", () => {
+    const linked = { ...host("linked"), kind: "link" as const };
+    expect(remoteUpdateCandidates([linked], { linked: { health: "healthy", version: "0.1.3" } }, "0.1.4")).toEqual([]);
+  });
 });

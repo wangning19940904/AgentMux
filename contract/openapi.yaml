@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "2.2"
-  x-contract-version: "2.2"
+  version: "2.3"
+  x-contract-version: "2.3"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -473,6 +473,10 @@ paths:
       tags: [agents]
       operationId: upsertAgentInstance
       summary: Create or update an Agent instance
+      description: >-
+        Saves an agent's brain. Creating one also creates the agent around it,
+        under the same id, in act mode and with no workers; the response is the
+        Agent instance as before. See contract/SUPER_AGENTS.md.
       requestBody:
         required: true
         content:
@@ -494,6 +498,9 @@ paths:
       tags: [agents]
       operationId: deleteAgentInstance
       summary: Delete an Agent instance
+      description: >-
+        Deletes the agent made with this Agent instance too, stopping its
+        Tickets. Its home directory stays on disk.
       parameters:
         - name: id
           in: query
@@ -1135,6 +1142,21 @@ components:
         tenant: { type: string }
         kind: { type: string }
         status: { type: string }
+        account:
+          type: object
+          description: >
+            The person signed in to the Console, present only for an account
+            session. Bearer tokens never carry an account. A member's tenant_id
+            is the namespace that account owns.
+          required: [id, login, role, tenant_id]
+          properties:
+            id: { type: string }
+            login: { type: string }
+            display_name: { type: string }
+            role:
+              type: string
+              enum: [admin, member]
+            tenant_id: { type: string }
 
     Trigger:
       type: object

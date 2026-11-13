@@ -324,43 +324,6 @@
     display: none;
   }
 
-  .mobile-flat-nav {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    gap: 4px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .mobile-flat-nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .mobile-flat-nav .nav-item {
-    display: flex;
-    flex: 0 0 44px;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    color: var(--text-soft);
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-  }
-
-  .mobile-flat-nav .nav-item.active {
-    color: var(--accent-strong);
-    background: var(--accent-soft);
-    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
-  }
-
-  .mobile-flat-nav .nav-item span {
-    display: none;
-  }
-
   .nav {
     display: flex;
     align-items: center;

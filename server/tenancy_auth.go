@@ -83,6 +83,49 @@ var tenantConsoleRoutePolicy = map[string][]string{
 	"/api/v1/frameworks/runtime-settings": {http.MethodGet},
 }
 
+// accountMemberRoutePolicy is what a signed-in member reaches beyond the
+// tenant surface: the devices they paired, and their own password. Device
+// handlers narrow every call to the member's own devices. Tenant tokens never
+// reach these routes.
+var accountMemberRoutePolicy = map[string][]string{
+	"/api/v1/devices":               {http.MethodGet, http.MethodPost, http.MethodDelete},
+	"/api/v1/devices/pairing-codes": {http.MethodPost},
+	"/api/v1/devices/reports":       {http.MethodGet},
+	"/api/v1/auth/password":         {http.MethodPost},
+	// Direct messages: a member's own conversations with agents, and the
+	// contacts of what they own. The mailbox narrows every call to that.
+	"/api/v1/mailbox":                 {http.MethodGet},
+	"/api/v1/mailbox/messages":        {http.MethodGet, http.MethodPost},
+	"/api/v1/mailbox/directory":       {http.MethodGet},
+	"/api/v1/mailbox/contacts":        {http.MethodGet, http.MethodPost, http.MethodDelete},
+	"/api/v1/mailbox/contacts/accept": {http.MethodPost},
+}
+
+// principalRouteAllowed applies the tenant route policy, widened by the
+// member policy for a signed-in member.
+func principalRouteAllowed(principal *core.Principal, method, path string) bool {
+	if tenantRouteAllowed(method, path) {
+		return true
+	}
+	return principal.IsMember() && routeInPolicy(accountMemberRoutePolicy, method, path)
+}
+
+func routeInPolicy(policy map[string][]string, method, path string) bool {
+	methods, ok := policy[path]
+	if !ok {
+		return false
+	}
+	if len(methods) == 0 {
+		return true
+	}
+	for _, allowed := range methods {
+		if allowed == method {
+			return true
+		}
+	}
+	return false
+}
+
 var tenantRoutePolicy = func() map[string][]string {
 	policy := publicTenantRoutePolicy()
 	for path, methods := range tenantConsoleRoutePolicy {
@@ -97,19 +140,7 @@ func tenantRouteAllowed(method, path string) bool {
 	if strings.HasPrefix(path, "/v1/") {
 		return true
 	}
-	methods, ok := tenantRoutePolicy[path]
-	if !ok {
-		return false
-	}
-	if len(methods) == 0 {
-		return true
-	}
-	for _, allowed := range methods {
-		if allowed == method {
-			return true
-		}
-	}
-	return false
+	return routeInPolicy(tenantRoutePolicy, method, path)
 }
 
 // resolvePrincipal maps the credentials on a request to a principal. It
@@ -178,6 +209,11 @@ func denyTenantRoute(w http.ResponseWriter, r *http.Request, principal *core.Pri
 	if strings.HasPrefix(r.URL.Path, "/v1/") {
 		writeOpenAIError(w, http.StatusForbidden, "this endpoint is not available to application credentials",
 			"permission_error", nil, "insufficient_scope")
+		return
+	}
+	if principal.Account != nil {
+		writeErr(w, http.StatusForbidden,
+			"endpoint not available to account \""+principal.Account.Login+"\"; it is reserved for AgentMux administrators")
 		return
 	}
 	writeErr(w, http.StatusForbidden,

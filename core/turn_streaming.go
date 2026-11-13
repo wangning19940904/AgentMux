@@ -53,9 +53,14 @@ func (e *Engine) consumeTurn(ctx context.Context, sess AgentSession, events <-ch
 		case EventFinal, EventOutput:
 			if ev.Text != "" && ev.Text != "NO_REPLY" {
 				lastText = ev.Text
-				if reply != nil && ev.Text != lastReply {
-					reply(ev.Text)
-					lastReply = ev.Text
+				visible := ev.Text
+				if turn := brainTurnFrom(ctx); turn != nil {
+					turn.answer = ev.Text
+					visible = brainVisibleText(ev.Text, ev.Type != EventFinal)
+				}
+				if reply != nil && visible != "" && visible != lastReply {
+					reply(visible)
+					lastReply = visible
 				}
 			}
 		case EventError:
@@ -191,6 +196,7 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 	var answer, completedAnswer, thinking, rendered string
 	var failed bool
 	var answerAfterLastTool bool
+	var answerFromText bool
 	var modelRetrying bool
 	clearModelRetry := func() {
 		if modelRetrying {
@@ -270,10 +276,12 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			// acknowledgements before the process hits WritableIterable-is-closed.
 			// Retain the most informative post-tool answer for that narrow recovery
 			// path while continuing to render the newest answer normally.
-			if len(strings.TrimSpace(ev.Text)) > len(strings.TrimSpace(completedAnswer)) {
-				completedAnswer = ev.Text
+			text := observeBrainText(ctx, ev.Text)
+			if len(strings.TrimSpace(text)) > len(strings.TrimSpace(completedAnswer)) {
+				completedAnswer = text
 			}
-			answer = ev.Text
+			answer = text
+			answerFromText = true
 			if speech != nil {
 				if err := speech.Update(ctx, answer, false); err != nil {
 					e.log.Warn("speech update", "err", err)
@@ -306,7 +314,13 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 			e.emit(ctx, HookError, withError(data, ev.Err))
 			failed = true
 			answer = "error: " + errString(ev.Err)
+			answerFromText = false
 		}
+	}
+	if turn := brainTurnFrom(ctx); turn != nil && answerFromText {
+		// The finished answer is complete, so only a whole action block is
+		// hidden from it.
+		answer = brainVisibleText(turn.answer, false)
 	}
 
 	if ctx.Err() != nil && e.remoteTaskStopRequested(data) {

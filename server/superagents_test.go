@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -246,5 +248,122 @@ func TestLoopbackURL(t *testing.T) {
 		if got := loopbackURL(addr); got != want {
 			t.Errorf("loopbackURL(%q) = %q, want %q", addr, got, want)
 		}
+	}
+}
+
+type steeringInvokerStub struct {
+	streamingInvokerStub
+	err    error
+	steers []string
+}
+
+func (s *steeringInvokerStub) SteerInvocation(_ context.Context, agentID, conversationID, text string) error {
+	s.steers = append(s.steers, agentID+"/"+conversationID+": "+text)
+	return s.err
+}
+
+// A hub's Fleet launches, steers and releases a worker on another machine
+// through that machine's own API, which applies its own checks.
+func TestFleetHostsAWorkerOnAnotherMachine(t *testing.T) {
+	addTestRuntimeToPath(t, "codex")
+	node, st := newTestServer(t)
+	records := &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}
+	node.SetSuperAgents(superagent.New(superagent.Options{
+		Store: records, StateDir: filepath.Join(t.TempDir(), "state"), RuntimeAvailable: AgentRuntimeAvailable,
+	}), nil)
+	steerer := &steeringInvokerStub{}
+	node.invoker = steerer
+	listener := httptest.NewServer(node.mux)
+	defer listener.Close()
+	fleet := &superagent.Fleet{Hosts: dialerToServer{address: listener.Listener.Addr().String()}}
+	ctx := context.Background()
+
+	if name, ok := fleet.MachineName("h"); !ok || name != "devbox" {
+		t.Fatalf("machine name = %q %v", name, ok)
+	}
+	runtimes, err := fleet.Runtimes(ctx, "h")
+	if err != nil || !slices.Contains(runtimes, "codex") {
+		t.Fatalf("runtimes = %v err = %v", runtimes, err)
+	}
+
+	dir := t.TempDir()
+	hosted, err := fleet.Launch(ctx, "h", core.HostedWorkerRequest{OwnerID: "sa_hub", OwnerName: "Builder", RuntimeID: "codex", Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, _ := st.GetAgentInstance(ctx, hosted.AgentID)
+	if instance == nil || instance.WorkDir != dir || !superagent.IsManagedAgent(*instance) || instance.RuntimeID != "codex" {
+		t.Fatalf("hosted = %+v instance = %+v", hosted, instance)
+	}
+	// The worker is not an agent of the node's own: it gets no agent record
+	// and stays out of the node's agent list.
+	if len(records.agents) != 0 {
+		t.Fatalf("agent records = %+v", records.agents)
+	}
+
+	// The node refuses what it would refuse for itself, and says why.
+	_, err = fleet.Launch(ctx, "h", core.HostedWorkerRequest{OwnerID: "sa_hub", RuntimeID: "codex", Dir: filepath.Join(dir, "missing")})
+	if err == nil || !strings.Contains(err.Error(), "does not exist on this machine") || superagent.IsRetryable(err) {
+		t.Fatalf("err = %v", err)
+	}
+	_, err = fleet.Launch(ctx, "h", core.HostedWorkerRequest{OwnerID: "sa_hub", RuntimeID: "no-such-framework"})
+	if err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("err = %v", err)
+	}
+
+	worker := core.SuperAgentWorker{HostID: "h", AgentID: hosted.AgentID}
+	if err := fleet.Steer(ctx, worker, "conv-1", "use the other branch"); err != nil {
+		t.Fatal(err)
+	}
+	if len(steerer.steers) != 1 || steerer.steers[0] != hosted.AgentID+"/conv-1: use the other branch" {
+		t.Fatalf("steers = %v", steerer.steers)
+	}
+	steerer.err = core.ErrInvocationIdle
+	if err := fleet.Steer(ctx, worker, "conv-1", "again"); !errors.Is(err, core.ErrInvocationIdle) {
+		t.Fatalf("err = %v", err)
+	}
+	steerer.err = core.ErrSteerUnsupported
+	if err := fleet.Steer(ctx, worker, "conv-1", "again"); !errors.Is(err, core.ErrSteerUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+
+	if err := fleet.Release(ctx, "h", "sa_hub"); err != nil {
+		t.Fatal(err)
+	}
+	if gone, _ := st.GetAgentInstance(ctx, hosted.AgentID); gone != nil {
+		t.Fatal("the worker must be removed")
+	}
+}
+
+// A machine whose AgentMux predates hosted workers answers the unknown path
+// with something else; the hub says the machine needs an update and a remote
+// steer falls back to waiting for the next turn.
+func TestFleetReportsAnOutdatedMachine(t *testing.T) {
+	old := http.NewServeMux()
+	old.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<!doctype html><title>AgentMux Console</title>"))
+	})
+	listener := httptest.NewServer(old)
+	defer listener.Close()
+	fleet := &superagent.Fleet{Hosts: dialerToServer{address: listener.Listener.Addr().String()}}
+	ctx := context.Background()
+	if _, err := fleet.Launch(ctx, "h", core.HostedWorkerRequest{OwnerID: "sa_hub", RuntimeID: "codex"}); !errors.Is(err, superagent.ErrMachineOutdated) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := fleet.Steer(ctx, core.SuperAgentWorker{HostID: "h", AgentID: "a"}, "c", "text"); !errors.Is(err, core.ErrSteerUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+	if err := fleet.Release(ctx, "h", "sa_hub"); err != nil {
+		t.Fatalf("release against an old machine must be a no-op: %v", err)
+	}
+}
+
+func TestSuperAgentTicketsRouteListsNothingOnAFreshMachine(t *testing.T) {
+	s, st := newTestServer(t)
+	s.SetSuperAgents(superagent.New(superagent.Options{Store: &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}}), nil)
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/super-agents/tickets", nil)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }

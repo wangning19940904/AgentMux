@@ -52,7 +52,7 @@ type Replies struct {
 
 func (r *Replies) Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) error {
 	switch source.Kind {
-	case core.SuperAgentSourceFeishuMessage, core.SuperAgentSourceFeishuDoc:
+	case core.SuperAgentSourceFeishuMessage, core.SuperAgentSourceFeishuDoc, core.SuperAgentSourceChannel:
 		var reply feishuReply
 		if err := json.Unmarshal(target, &reply); err != nil {
 			return err

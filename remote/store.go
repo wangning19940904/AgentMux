@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const defaultRemoteAddr = "127.0.0.1:8765"
@@ -32,6 +33,9 @@ type Host struct {
 	RemoteAddr         string `json:"remote_addr"`
 	APIToken           string `json:"api_token,omitempty"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	// Kind is KindLink for a paired device, which is never stored here, and
+	// empty for the SSH hosts that are.
+	Kind string `json:"-"`
 }
 
 // HostView is the non-secret representation returned to the Console.
@@ -47,13 +51,20 @@ type HostView struct {
 	APITokenSet        bool   `json:"api_token_set"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
 	Trusted            bool   `json:"trusted"`
+	// Kind is KindSSH or KindLink. The rest is known only for a linked
+	// device, whose connection the hub holds.
+	Kind       string     `json:"kind"`
+	Online     *bool      `json:"online,omitempty"`
+	Version    string     `json:"version,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	ReportedAt *time.Time `json:"reported_at,omitempty"`
 }
 
 func (h Host) View() HostView {
 	return HostView{
 		ID: h.ID, Name: h.Name, Host: h.Host, Port: h.Port, User: h.User,
 		KeyPath: h.KeyPath, SSHAlias: h.SSHAlias, RemoteAddr: h.RemoteAddr, APITokenSet: h.APIToken != "",
-		HostKeyFingerprint: h.HostKeyFingerprint, Trusted: h.HostKeyFingerprint != "",
+		HostKeyFingerprint: h.HostKeyFingerprint, Trusted: h.HostKeyFingerprint != "", Kind: KindSSH,
 	}
 }
 

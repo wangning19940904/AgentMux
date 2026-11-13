@@ -20,8 +20,11 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
+	linkpkg "github.com/wangning19940904/AgentMux/link"
+	"github.com/wangning19940904/AgentMux/mailbox"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
+	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
 	"github.com/wangning19940904/AgentMux/store"
@@ -58,7 +61,12 @@ type Server struct {
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
 	remoteStatusChecks singleflight.Group
+	linkHub            *linkpkg.Hub
+	push               *pushpkg.Service
+	devices            *deviceBackend
+	node               *nodeLink
 	superAgents        *superagent.Service
+	mail               *mailbox.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory
 	feishuUserAuthMu   sync.Mutex
@@ -75,6 +83,7 @@ type Server struct {
 	feishuAutomationMu sync.Mutex
 	feishuAutomations  map[string]*feishuAutomationSession
 	consoleSessions    *consoleSessionManager
+	signIns            *signInLimiter
 	fleetSyncMu        sync.Mutex
 	fleetSyncPlans     map[string]*fleetSyncPlan
 	mux                *http.ServeMux
@@ -109,6 +118,8 @@ type Dependencies struct {
 	Workspace      core.WorkspaceInitializer
 	ModuleRuntime  map[string]ModuleRuntimeState
 	Orchestrations *orchestrationpkg.Service
+	// PushSender delivers push notifications; nil sends Web Push.
+	PushSender pushpkg.Sender
 }
 
 type ModuleRuntimeState struct {
@@ -152,6 +163,7 @@ func New(deps Dependencies) *Server {
 		feishuAutomations: map[string]*feishuAutomationSession{},
 		feishuUserAuths:   map[string]feishuUserAuthSession{},
 		consoleSessions:   newConsoleSessionManager(),
+		signIns:           newSignInLimiter(),
 		fleetSyncPlans:    map[string]*fleetSyncPlan{},
 		mux:               http.NewServeMux(),
 	}
@@ -182,6 +194,9 @@ func New(deps Dependencies) *Server {
 		s.channelPeers = peer
 		s.meetingPeers = peer
 	}
+	s.setupPush(deps.PushSender)
+	s.setupLink()
+	s.setupMailbox()
 	s.routes()
 	if s.orchestrations != nil {
 		go s.orchestrations.Recover()
@@ -268,6 +283,13 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 	stopped := make(chan struct{})
 	defer close(stopped)
+	if err := s.startHubListener(ctx); err != nil {
+		return err
+	}
+	s.node.run(ctx)
+	if s.mail != nil {
+		go s.mail.Run(ctx)
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -349,7 +371,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			}
 			// Tenants reach only the endpoints AgentMux publishes to third
 			// parties; the Console-only management surface stays admin-owned.
-			if principal.IsTenant() && !tenantRouteAllowed(r.Method, r.URL.Path) {
+			// A signed-in member additionally reaches their own devices and
+			// account.
+			if principal.IsTenant() && !principalRouteAllowed(principal, r.Method, r.URL.Path) {
 				denyTenantRoute(w, r, principal)
 				return
 			}
@@ -383,8 +407,11 @@ func isBridgeAPIPath(path string) bool {
 // and therefore cannot require a bearer token. A newly registered tenant
 // starts with an empty private namespace; an administrator grants access
 // separately, so open registration does not expose existing resources.
+//
+// The open account paths report whether sign-in is needed and perform it;
+// they resolve the caller's credential themselves.
 func isSelfAuthenticatingPath(path string) bool {
-	return path == "/api/v1/tenancy/register"
+	return path == "/api/v1/tenancy/register" || authOpenPaths[path]
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

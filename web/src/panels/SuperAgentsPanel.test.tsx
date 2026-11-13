@@ -599,6 +599,30 @@ describe("SuperAgentsPanel", () => {
     expect(chips).toEqual(["codexAuto workers", "kimiAuto workers"]);
   });
 
+  it("lets an agent launch workers on another machine, and names the machine on its tickets", async () => {
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity, machines: [{ host_id: "h1", name: "GPU box", available: false, detail: "device is offline" }],
+      tickets: [{ id: "t3", title: "Train it", status: "running", worker: { id: "auto:codex@h1", agent_id: "sawr_sa_1_codex", host_id: "h1", label: "Repo keeper worker (codex)" }, updated_at: "2026-11-03T00:00:00Z" }],
+    });
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Train it"));
+    const chip = [...container.querySelectorAll(".super-agent-chip")].find((item) => item.textContent === "GPU boxlaunches workers");
+    expect(chip?.getAttribute("title")).toBe("device is offline");
+    expect(chip?.querySelector("i")?.className).toBe("offline");
+    expect(hasText("Repo keeper worker (codex) · GPU box")).toBe(true);
+
+    click(button(/^Edit$/));
+    await until(() => control(/^Directory on that machine/).value === "~/code");
+    // The only machine is already listed, so there is none left to add.
+    expect((button(/^Add machine$/) as HTMLButtonElement).disabled).toBe(true);
+    setValue(control(/^What this machine is for/), "Has the GPU");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ auto_workers: true, worker_machines: [{ host_id: "h1", dir: "~/code", capabilities: "Has the GPU" }] });
+  });
+
   it("edits an existing Super Agent's router, workers and triggers outside advanced settings", async () => {
     renderPanel();
     await until(() => hasText("Fix build"));
@@ -858,6 +882,28 @@ describe("superAgentModel", () => {
     expect(superAgentProblems(agent)).toEqual(["superAgents.problem.sourceField"]);
     polling.config = { ...polling.config, github_token: "t" };
     expect(superAgentProblems(agent)).toEqual([]);
+  });
+
+  it("shows one agent with its own brain: its bound channels are listed, not edited, and saving needs no workers", async () => {
+    const own: SuperAgent = {
+      id: "coder", name: "Coder", router_agent_id: "coder", mode: "act", max_concurrency: 2, enabled: true, workers: [],
+      sources: [{ id: "channel:c1", kind: "channel", name: "Team bot", enabled: true, allowed_actors: [], config: { channel_id: "c1" } }],
+    };
+    vi.mocked(api.superAgents).mockResolvedValue([saved, own]);
+    const save = vi.spyOn(api, "saveSuperAgent").mockImplementation(async (agent) => agent);
+    renderPanel({ agentID: "coder" });
+    await until(() => hasText("Chats only"));
+    expect(hasText("Repo keeper")).toBe(false);
+    expect(hasText("Bound channel · Team bot")).toBe(true);
+    expect(button(/^Delete$/)).toBeUndefined();
+    click(button(/Edit workers and triggers/));
+    await until(() => hasText("This agent answers with its own framework"));
+    expect([...container.querySelectorAll("label.field span")].some((item) => item.textContent === "Router agent")).toBe(false);
+    expect(container.querySelector(".super-agent-section .super-agent-chip")?.textContent).toContain("Team bot");
+    click(await until(() => workerFramework("Codex")));
+    click(button(/Save/));
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ id: "coder", router_agent_id: "coder", auto_workers: true, worker_runtimes: ["codex"] });
   });
 
   it("parses sender lists", () => {

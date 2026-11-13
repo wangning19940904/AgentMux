@@ -94,11 +94,15 @@ func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversat
 	return result.Answer, nil
 }
 
-// Steer adds text to a local worker's running turn. A remote worker's turn
-// runs on another daemon, so its input waits for the next turn.
+// Steer adds text to a worker's running turn. A remote worker's turn runs on
+// another daemon, which is asked to do it; one that cannot leaves the input
+// for the next turn.
 func (f *Fleet) Steer(ctx context.Context, worker core.SuperAgentWorker, conversationID, text string) error {
+	if worker.HostID != "" {
+		return f.steerRemote(ctx, worker, conversationID, text)
+	}
 	steerer, ok := f.Invoker.(core.InvocationSteerer)
-	if worker.HostID != "" || !ok {
+	if !ok {
 		return core.ErrSteerUnsupported
 	}
 	return steerer.SteerInvocation(ctx, worker.AgentID, conversationID, text)

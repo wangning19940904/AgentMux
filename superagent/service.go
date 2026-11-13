@@ -141,6 +141,7 @@ type Service struct {
 	state            string
 	directory        Directory
 	scopes           FeishuScopeChecker
+	mailbox          Mailbox
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -157,7 +158,9 @@ type Activity struct {
 	Tickets  []core.SuperAgentTicket       `json:"tickets"`
 	Triggers []core.SuperAgentTrigger      `json:"triggers"`
 	Workers  []core.SuperAgentWorkerStatus `json:"workers"`
-	Sources  map[string]SourceHealth       `json:"sources"`
+	// Machines are the other machines the agent may launch workers on.
+	Machines []core.SuperAgentMachineStatus `json:"machines"`
+	Sources  map[string]SourceHealth        `json:"sources"`
 }
 
 func New(options Options) *Service {
@@ -200,6 +203,13 @@ func (s *Service) Start(parent context.Context) error {
 			return fmt.Errorf("recover super agent ticket %s: %w", ticket.ID, err)
 		}
 		s.recordTicket(ctx, ticket)
+	}
+	if created, err := s.UnifyAgents(ctx); err != nil {
+		// Chats do not depend on the agent records: the channel engine still
+		// reaches every brain. The next start tries again.
+		s.log.Error("give agents their records", "err", err, "created", created)
+	} else if created > 0 {
+		s.log.Info("gave agents their records", "created", created)
 	}
 	s.adoptRouters(ctx)
 	if err := s.refreshClaims(ctx); err != nil {
@@ -535,7 +545,10 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, decision
 
 // checkWorker is assignedWorker without launching anything.
 func (s *Service) checkWorker(agent core.SuperAgent, workerID string) error {
-	if runtimeID, ok := strings.CutPrefix(workerID, autoWorkerID+":"); ok {
+	if runtimeID, hostID, ok := parseAutoWorkerID(workerID); ok {
+		if hostID != "" {
+			return checkMachineWorker(agent, workerID, runtimeID, hostID)
+		}
 		if !agent.AutoWorkers {
 			return errors.New("this Super Agent cannot launch workers; choose one from the roster")
 		}
@@ -699,7 +712,10 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
-	if runtimeID, ok := strings.CutPrefix(workerID, autoWorkerID+":"); ok {
+	if runtimeID, hostID, ok := parseAutoWorkerID(workerID); ok {
+		if hostID != "" {
+			return s.launchMachineWorker(ctx, agent, runtimeID, hostID)
+		}
 		return s.launchAutoWorker(ctx, agent, runtimeID)
 	}
 	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID })
@@ -1070,7 +1086,7 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	if err != nil {
 		return nil, err
 	}
-	activity := &Activity{Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Sources: map[string]SourceHealth{}}
+	activity := &Activity{Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Machines: s.machineStatuses(ctx, *agent), Sources: map[string]SourceHealth{}}
 	s.mu.Lock()
 	for _, source := range agent.Sources {
 		activity.Sources[source.ID] = s.health[source.ID]

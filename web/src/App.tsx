@@ -26,12 +26,12 @@ import {
   Search,
   ServerCog,
   MessageSquareText,
+  MessagesSquare,
   MonitorDot,
   Settings,
   ShieldCheck,
   Sparkles,
   Sun,
-  Network,
   Workflow,
   Video,
   Zap,
@@ -42,6 +42,9 @@ import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
 import { RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
+import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
+import { ConnectionBanner } from "./pwa/ConnectionBanner";
+import { NotificationSettings } from "./pwa/NotificationSettings";
 
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
@@ -52,8 +55,12 @@ import {
 	activeTenantScopeKey,
   activeMachineScope,
   api,
+  APIError,
   FLEET_WARNING_EVENT,
+  MAILBOX_UNREAD_EVENT,
+  mailboxAPI,
   currentFleetWarnings,
+  isFleetStaleNotice,
   getLaunchAtLogin,
   isDesktopApp,
   LaunchAtLoginStatus,
@@ -66,11 +73,14 @@ import {
   type TenancySelf,
 } from "./api";
 import { resetFleetWarnings } from "./api/fleetWarnings";
+import { usePolling } from "./hooks/usePolling";
 import {
+  accountLabel,
   resolveTenancyGateWithRetry,
   tenancyNavigationLocked,
   type TenancyGateState,
 } from "./tenancyGate";
+import { SignInGate } from "./SignInGate";
 import {
   navigationGroupForTab,
   primaryGroupDestination,
@@ -110,7 +120,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Bot,
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
-      { id: "super-agents", labelKey: "nav.superAgents", icon: Network },
+      { id: "messages", labelKey: "nav.messages", icon: MessagesSquare },
       { id: "orchestrations", labelKey: "nav.orchestrations", icon: Workflow },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
       { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
@@ -159,6 +169,8 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
+const MOBILE_TABS = mobileTabItems(TABS);
+const UNREAD_POLL_INTERVAL_MS = 30_000;
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -270,16 +282,18 @@ export function App() {
 
   return (
     <I18nProvider language={language}>
-      <MeetingProvider>
-        <Shell
-          tab={tab}
-          setTab={selectTab}
-          language={language}
-          setLanguage={setLanguage}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-        />
-      </MeetingProvider>
+      <SignInGate>
+        <MeetingProvider>
+          <Shell
+            tab={tab}
+            setTab={selectTab}
+            language={language}
+            setLanguage={setLanguage}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
+          />
+        </MeetingProvider>
+      </SignInGate>
     </I18nProvider>
   );
 }
@@ -319,7 +333,9 @@ function Shell({
 		})
     : undefined;
 	const selectedTenantTargetID = selectedTenant?.target_id || (selectedTenant ? "local" : undefined);
-  const identityName = selectedTenant?.name ?? (identityIsAdmin
+  const identityName = selectedTenant?.name ?? (tenantIdentity?.account
+    ? accountLabel(tenantIdentity.account)
+    : identityIsAdmin
     ? t("app.admin")
     : tenantIdentity?.tenant || t("app.tenant"));
   const navigationLocked = tenancyNavigationLocked(tenantGate.state, nativeDesktopAdmin);
@@ -370,14 +386,16 @@ function Shell({
   const [remoteAddRequest, setRemoteAddRequest] = useState(0);
   const [createAgentRequested, setCreateAgentRequested] = useState(false);
   const handleCreateAgentRequest = useCallback(() => setCreateAgentRequested(false), []);
-  const [createSuperAgentRequested, setCreateSuperAgentRequested] = useState(false);
-  const handleCreateSuperAgentRequest = useCallback(() => setCreateSuperAgentRequested(false), []);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const searchAnchorRef = useRef<HTMLDivElement>(null);
   const closeSearchResults = useCallback(() => setSearchOpen(false), []);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
+  const unreadMessages = useUnreadMessages(tenantGate.state === "ready", visibleTab === "messages");
+  const navBadges = useMemo(() => ({ messages: unreadMessages }), [unreadMessages]);
   const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const preferencesButtonRef = useRef<HTMLButtonElement>(null);
   const preferencesPanelRef = useRef<HTMLDivElement>(null);
@@ -450,6 +468,7 @@ function Shell({
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    setMobileNavOpen(false);
   }, [visibleTab]);
 
   useEffect(() => {
@@ -577,11 +596,6 @@ function Shell({
   function requestNewAgent() {
     setCreateAgentRequested(true);
     setTab("agents");
-  }
-
-  function requestNewSuperAgent() {
-    setCreateSuperAgentRequested(true);
-    setTab("super-agents");
   }
 
   function selectGroup(group: NavGroup) {
@@ -718,6 +732,7 @@ function Shell({
             const GroupIcon = group.icon;
             const hasActive = group.items.some((item) => item.id === visibleTab);
             const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
+            const hasUnread = unreadMessages > 0 && group.items.some((item) => item.id === "messages");
             return (
               <button
                 key={group.id}
@@ -732,28 +747,21 @@ function Shell({
               >
                 <GroupIcon size={18} />
                 <span>{t(group.shortLabelKey ?? group.labelKey)}</span>
+                {hasUnread && <i className="nav-badge-dot" aria-hidden="true" />}
               </button>
             );
           })}
         </nav>
 
-        <nav className="mobile-flat-nav" aria-label={t("nav.primary")}>
-          {TABS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={`nav-item${visibleTab === item.id ? " active" : ""}`}
-                onClick={() => setTab(item.id)}
-                title={t(item.labelKey)}
-                disabled={navigationLocked && item.id !== "tenants"}
-              >
-                <Icon size={18} />
-                <span>{t(item.labelKey)}</span>
-              </button>
-            );
-          })}
-        </nav>
+        <MobileTabBar
+          items={MOBILE_TABS}
+          active={visibleTab}
+          badges={navBadges}
+          drawerOpen={mobileNavOpen}
+          isDisabled={(id) => navigationLocked && id !== "tenants"}
+          onSelect={setTab}
+          onOpenMore={() => setMobileNavOpen((open) => !open)}
+        />
 
         <div className={`account primary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`} title={identityName}>
           {identityIsAdmin && activeTenantOptions.length > 0 ? (
@@ -772,7 +780,7 @@ function Shell({
 					setSelectedTenantScopeID(scopeKey);
                 }}
               >
-                <option value="">{t("app.admin")}</option>
+                <option value="">{tenantIdentity?.account ? accountLabel(tenantIdentity.account) : t("app.admin")}</option>
                 {activeTenantOptions.map((tenant) => (
 				  <option
 					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}
@@ -906,6 +914,11 @@ function Shell({
               >
                 <Icon size={16} />
                 <span>{t(item.labelKey)}</span>
+                {item.id === "messages" && unreadMessages > 0 && (
+                  <span className="nav-badge" aria-label={t("messages.unreadCount", { count: unreadMessages })}>
+                    {unreadMessages > 99 ? "99+" : unreadMessages}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -918,6 +931,27 @@ function Shell({
           onChange={setSecondarySidebarWidth}
         />
       </aside>
+
+      <MobileDrawer
+        open={mobileNavOpen}
+        overview={OVERVIEW_ITEM}
+        groups={NAV_GROUPS}
+        active={visibleTab}
+        badges={navBadges}
+        isDisabled={(id) => navigationLocked && id !== "tenants"}
+        onSelect={(id) => {
+          setMobileNavOpen(false);
+          setTab(id);
+        }}
+        onClose={closeMobileNav}
+      >
+        <PreferenceControls
+          language={language}
+          setLanguage={setLanguage}
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+        />
+      </MobileDrawer>
 
       <div className="workspace">
         <div className="workspace-canvas">
@@ -945,7 +979,8 @@ function Shell({
               <span className="status-dot" />
               {t(tenantGate.state === "loading" ? "tenants.checking"
                 : tenantGate.state !== "ready" ? "tenants.requiredTitle"
-                : fleetWarnings.length ? "app.statusWarning" : "app.status")}
+                : !fleetWarnings.length ? "app.status"
+                : fleetWarnings.every(isFleetStaleNotice) ? "app.statusStale" : "app.statusWarning")}
             </span>
           </div>
 		    <div className="workspace-header-actions">
@@ -961,16 +996,6 @@ function Shell({
               {visibleTab === "agents" && (
                 <>
                   <button
-                    className="ghost-action workspace-create-action workspace-create-secondary"
-                    type="button"
-                    title={t("agents.newSuper")}
-                    aria-label={t("agents.newSuper")}
-                    onClick={requestNewSuperAgent}
-                  >
-                    <Network size={14} />
-                    <span>{t("agents.newSuper")}</span>
-                  </button>
-                  <button
                     className="action workspace-create-action"
                     type="button"
                     onClick={requestNewAgent}
@@ -983,13 +1008,14 @@ function Shell({
 		    </div>
           </header>
 
+        <ConnectionBanner />
         <MeetingInvitationOverlay />
 
         <main className={`main main-${visibleTab}`}>
           {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
           {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && (
             <div className="session-notice warning" role="status">
-              <strong>{t("remote.partialFleetWarning")}</strong>
+              <strong>{t(fleetWarnings.every(isFleetStaleNotice) ? "remote.staleFleetNotice" : "remote.partialFleetWarning")}</strong>
               <span>{fleetWarnings.join(" · ")}</span>
               <button className="ghost-action" type="button" onClick={() => setDismissedFleetWarnings(fleetWarningKey)}>{t("common.close")}</button>
             </div>
@@ -1018,12 +1044,11 @@ function Shell({
                 </section>
               ) : (
                 <>
+				  {visibleTab === "settings" && <NotificationSettings />}
 				  <RegisteredPanel
 				    tab={visibleTab}
 				    createRequested={createAgentRequested}
 				    onCreateRequestHandled={handleCreateAgentRequest}
-				    createSuperAgentRequested={createSuperAgentRequested}
-				    onCreateSuperAgentRequestHandled={handleCreateSuperAgentRequest}
 				  />
 				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
@@ -1141,6 +1166,40 @@ function SidebarResizeHandle({
       <span aria-hidden="true" />
     </div>
   );
+}
+
+// useUnreadMessages counts the direct messages the signed-in person has not
+// read, for the navigation badge. The Messages page reports the count itself
+// while it is open, so this only asks when that page is closed. It stops
+// asking where there is no mailbox for the caller.
+function useUnreadMessages(enabled: boolean, pageOpen: boolean): number {
+  const [unread, setUnread] = useState(0);
+  const [available, setAvailable] = useState(true);
+  const polling = enabled && available && !pageOpen;
+
+  const refresh = useCallback(() => {
+    mailboxAPI.overview()
+      .then((overview) => setUnread(overview.unread))
+      .catch((error) => {
+        if (error instanceof APIError && [403, 404, 503].includes(error.status)) setAvailable(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (polling) refresh();
+  }, [polling, refresh]);
+  usePolling(refresh, UNREAD_POLL_INTERVAL_MS, { enabled: polling });
+
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const count = (event as CustomEvent<number>).detail;
+      if (typeof count === "number") setUnread(count);
+    };
+    window.addEventListener(MAILBOX_UNREAD_EVENT, receive);
+    return () => window.removeEventListener(MAILBOX_UNREAD_EVENT, receive);
+  }, []);
+
+  return unread;
 }
 
 function useTenancyGate(): {

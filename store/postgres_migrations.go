@@ -370,6 +370,16 @@ CREATE TABLE IF NOT EXISTS super_agent_source_state (source_id TEXT PRIMARY KEY,
 		{version: 20, name: "feishu_user_grants", sql: `
 CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data TEXT NOT NULL,updated_at TEXT NOT NULL);
 `},
+		// Nodes paired with this hub; see core.Device.
+		{version: 21, name: "devices", sql: deviceSchema},
+		// The hub's copy of what each device reports; see core.DeviceReport.
+		{version: 22, name: "device_reports", sql: deviceReportSchema},
+		// People who sign in, and who owns a paired device; see core.Account.
+		{version: 24, name: "accounts", sql: accountSchema + accountOwnershipMigration},
+		// Web Push: the hub's VAPID key pair and browser subscriptions.
+		{version: 25, name: "push_notifications", sql: pushSchema},
+		// The mailbox: messages between agents and people, and their contacts.
+		{version: 26, name: "mailbox", sql: mailboxSchema},
 	}
 }
 

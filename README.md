@@ -24,7 +24,8 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | 权限审批 | **AgentMux Guard** | `guard/` |
 | Web 控制台 | **AgentMux Console** | `web/` + `server/` |
 | 多 Agent 编排 | **AgentMux Orchestrations** | `orchestration/` + `store/orchestrations.go` |
-| 常驻路由 | **AgentMux Super Agents** | `superagent/` + `store/superagents.go` |
+| Agent（大脑、来源与 Worker） | **AgentMux Agents** | `superagent/` + `store/superagents.go` + `store/agents.go` |
+| 站内消息（Agent 互相联系、人与 Agent 对话） | **AgentMux Mailbox** | `mailbox/` + `store/mailbox.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
 - **事件订阅** — 同机服务可使用租户 Token 订阅飞书/Lark 原始事件与 AgentMux 生命周期事件，复用现有长连接。PostgreSQL 持久化、独立 HTTP 回调、HMAC 验签、失败重试及投递记录；共享渠道需要单独授权事件读取权。见 [接入指南](contract/EVENT_SUBSCRIPTIONS.md) 与 [Homebook 示例](integrations/homebook-events/README.md)。
@@ -36,13 +37,15 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Skills** — 统一发现、安装与管理 Agent Skills。
 - **MCP Registry** — 注册、编排与下发 MCP Server 配置。
 - **Guard** — 工具调用的权限审批与策略闸门。
-- **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。
+- **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。手机上自动切换为底部标签栏与「更多」抽屉，可安装到主屏幕，并能推送「Agent 等你批准/回答」「Super Agent 工单结束」「关联机器离线/恢复」通知。见 [手机访问与通知](#手机访问与通知)。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
+- **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Agent 的远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
+- **站内消息** — Agent 之间、人与 Agent 之间直接互发消息：同机直达，跨机器经 Hub 中转，对方离线时保存并在上线后送达。同一归属的各方可直接互写，不同归属之间通过「联系人」连接，由对方的归属人接受后生效。见「站内消息」。
 - **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
 - **Reliable Delivery & Feedback** — 所有渠道 turn 都写入持久任务状态，最终消息交付重试并记录 pending/sent/failed；成功的飞书最终卡支持三态答案反馈，Console 可聚合并补充负向原因。
-- **Super Agents** — 常驻 Router 把飞书消息、飞书文档更新、邮件和 GitHub（Webhook 或通知轮询）转成工单，并派给本地或远程（SSH）Worker，在请求来源处回复。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行，事件文本和模型都无法改变；新建时默认为只记录不执行的观察模式。见 [接入指南](contract/SUPER_AGENTS.md)。
+- **Agents（统一 Agent）** — AgentMux 只有一种 Agent：身份、主目录与记忆、一个“大脑”会话（它的框架、模型、审批模式和工作目录），以及来源和 Worker 策略。大脑能直接回答就直接回答，做不完的工作交给 Worker（工单），Worker 完成后由大脑在原处汇报。绑定的渠道是它的来源：对话仍走渠道引擎，保留流式卡片、会话队列、转向、审批卡片和 `/` 命令；飞书消息、飞书文档更新、邮件和 GitHub（Webhook 或通知轮询）也可以作为来源。Console 的「Agents」页统一管理全部 Agent，每个 Agent 的 Worker、触发和工单从它那一行打开。升级时，原有的普通 Agent 自动成为统一 Agent（保持执行模式、不启动 Worker，照旧回答原来的人）；原有的 Super Agent 保持不变。发送者白名单、签名校验、Worker 名册和工单归属都由宿主强制执行。见 [接入指南](contract/SUPER_AGENTS.md)。
 - **DeepSeek Harness** — `dsh` 作为 Agent Runtime 接入，使用 `dsh --profile headless --json`，支持会话恢复；审批模式映射到 DSH 权限预设。
 - **Orchestrations** — 通过持久 DAG 跨 Agent/Project 分派任务，支持依赖输出传递、并发上限、失败阻断、取消和 daemon 重启恢复。
 
@@ -160,12 +163,114 @@ AgentMux 在 Linux/macOS 启动时会从用户的交互式登录 shell 导入 `h
 - 旧版 `[[projects]]`、`[[projects.platforms]]` 与 `[[hooks]]` 只可用于一次性迁移：先运行 `amux database import-config --dry-run`，确认后运行 `--apply`，再从配置文件删除这些 section。
 - 飞书渠道扫码取得 App ID/Secret 后，Console 可继续执行“补全开放平台配置”：二次扫码建立仅内存 Web session，自动导入消息/CardKit/会议权限、配置长连接事件与卡片回调，并按明确选择的可见范围发布版本。该能力使用飞书开放平台 Console 接口，接口变化时会 fail closed 并返回具体失败步骤。
 - 开启 `[bridge]` 可用 Bearer Token 保护 HTTP send 与 Agent Invocation API；**启用时必须设置 token**。
+- **账号**不在 `config.toml` 中配置，存放在数据库里，用 Console 的 **系统 → 租户** 页顶部的「账号」区或 `amux accounts` 管理，详见下方「账号与登录」。
 - `[remote]` 配置 SSH 连接超时和本机远程档案路径；具体机器在 Console 的 **系统 → 远程机器** 中管理。
 - `[usage]` 选择数据源,可选 `[[usage.ssh]]` 远程目标。
 - `[observability]` 默认启用；完整内容先脱敏、分块压缩并以 AES-256-GCM 加密，默认保留 30 天，详细元数据保留 180 天。每个 `[[observability.exporters]]` 独立配置 OTLP 队列，`include_content` 默认关闭。
 - `${ENV_VAR}` 占位符从环境变量展开。
 
 Console 的 **Observability → Integrations** 可预览、安装、修复或卸载原生 `agentmux-observer`。安装始终通过 Claude/Codex 自身的 plugin CLI；Codex 安装后保持 `pending_trust`，需在 `/hooks` 手动审核。AgentMux 不覆盖 Flux Island、CC Switch 或其他同名/漂移资源。
+
+## Hub 连接
+
+SSH 远程控制要求本机能连到对方。Hub 连接方向相反：其他机器主动连到 Hub，所以只有 Hub 需要一个它们能访问的地址。
+
+```toml
+# Hub 上的 config.toml
+[hub]
+addr = "0.0.0.0:8766"   # 只提供配对和设备连接，不暴露管理 API
+# tls = "auto"          # 默认：Hub 自签证书，设备按指纹校验，不需要域名
+# public_url = "https://hub.example.com"  # 经隧道、反向代理或端口转发访问时填写
+# pin_certificate = true                  # public_url 后面仍是 Hub 自签证书（如纯端口转发）时开启
+```
+
+```bash
+amux hub pair --name build-box     # 在 Hub 上：输出一次性的 amux join 命令（30 分钟内有效）
+amux join amxj_...                 # 在要接入的机器上运行
+amux hub devices                   # 在 Hub 上查看已接入机器及在线状态
+amux hub remove <device-id>        # 取消配对，连接立即断开
+amux leave                         # 在已接入的机器上：离开 Hub
+```
+
+- 设备只向外发起一条 WebSocket 连接，Hub 的请求沿这条连接返回，断线后自动退避重连；Hub 重启后设备会自行连回。
+- 一次性配对码和设备 Token 在 Hub 数据库中只保存 SHA-256；设备端的 Token 保存在 `hub-link.json`（权限 `0600`）。
+- Hub 不持有设备的 Bridge Token：设备在本机转发请求时自行附加，离开 Hub 或被移除后 Hub 即无法访问。接入 Hub 等于把这台机器的 AgentMux 管理权交给 Hub 的管理员，因此 `POST /api/v1/link/join` 只对管理员开放。
+- 通过 Hub 连接只能访问设备的 `/api/` 与 `/v1/` 接口。
+- **数据上报**：每台设备仍使用自己的 PostgreSQL。接入 Hub 后，它会沿同一条连接把 Agent、渠道、触发、Super Agent、编排、Skills、MCP、Guard 策略、Provider 与路由、租户等列表上报给 Hub，Hub 存入自己的数据库（`device_collections` / `device_resources`）。只发送有变化的条目，约 30 秒检查一次；重连后以 Hub 现有副本为准重新对齐。上报内容就是设备 API 返回给管理员的内容，密钥已按该 API 的规则脱敏。
+- **在其他机器上启动 Worker**：Hub 上的 Agent 开启自动 Worker 后，可以在「其他机器」里选择已连接的机器（关联设备或 SSH 机器），并为每台机器填写目录和用途。Agent 的名册里会出现 `auto:<框架>@<机器>`，并标明该机器此刻是否在线、是否装有该框架；选中后由那台机器自己创建并运行 Worker（校验框架、目录和审批模式，使用它自己的 Provider 与环境），Worker 的会话和文件留在那台机器上，工单、输入输出记录和进度留在 Agent 所在的机器。运行中的远程 Worker 可以中途接收追加输入；机器离线时工单会重试。从列表中移除机器或删除 Agent 时，那台机器上的 Worker 会被清理，文件保留。跨机器的工单之间不能用 `base_ticket` 传递提交。那台机器的 AgentMux 需要同样支持此功能，否则会提示需要更新。
+- **工单汇总**：每台机器的 `GET /api/v1/super-agents/tickets` 列出其全部 Agent 的最新工单（含 Worker 所在机器），并随数据上报进入 Hub，设备离线时仍可查看。
+- **离线可见**：设备离线时，Console 的「全部机器」与单机视图用 Hub 的副本显示它上报过的列表，并提示该机器离线；「远程机器」页显示最近一次上报时间。写操作和未上报的接口在设备离线时照常失败，设备在线时始终由设备自己回答。`GET /api/v1/devices/reports` 可查看 Hub 持有的各设备数据概况；取消配对会同时删除该设备的副本。
+- 未设置 `[hub] addr` 时，设备也可以经管理端口配对（例如同一台机器或已有反向代理）；经明文 `http://` 连接非本机地址时命令会给出提示。
+- Hub 自身也没有公网地址时，可把 Cloudflare Tunnel、frp 等隧道的地址填入 `public_url`。
+- 旧版本 AgentMux 所在的机器可以用 `amux join <token> --foreground` 由命令本身保持连接。
+
+## 账号与登录
+
+账号让人登录 Hub，并据此拥有机器和 Agent。目前只支持本地账号 + 密码；单点登录（如飞书）以后作为另一种登录方式接入，不改动会话与归属。
+
+```bash
+amux accounts create alice --name "Alice"   # 第一个账号自动成为管理员；不给密码则生成一次性显示的密码
+amux accounts create bob                    # 之后的账号默认是成员（--admin 设为管理员）
+amux accounts list
+amux accounts reset-password bob            # 生成新密码，并结束 bob 的所有会话
+amux accounts disable bob | enable bob
+amux accounts set-role bob admin|member
+```
+
+也可以在 Console 中完成：管理员打开 **系统 → 租户**，在「账号」区创建第一个管理员（创建后当前浏览器即以该管理员登录），再新建、停用账号或重置密码。`amux accounts` 直接操作数据库，所有管理员都忘记密码时也能用它恢复。
+
+- **没有账号时一切照旧**：bridge token（或关闭 bridge 时的本机 Console）就是管理员。创建第一个账号后，浏览器打开 Console 会先看到登录页。
+- **角色**：管理员看到并管理全部资源（带归属标注）；成员只看到自己拥有的、被授权的和公开的 Agent、渠道、触发器，以及自己配对的设备。
+- **归属复用多租户**：每个账号自带一个 `kind = "account"` 的租户命名空间（名称即登录名）。成员新建的资源自动归属自己；管理员可在「租户」中给成员的命名空间授予 `read/use/manage`，或用 `amux tenants assign` / `POST /api/v1/tenancy/ownership` 移交资源（包括设备，`resource_type = "device"`）。账号命名空间只能经账号管理，不能单独删除、停用或签发 token。
+- **设备归属**：设备归属于创建其配对码的账号。管理员（含 bridge token）创建的配对码得到的设备不归属任何人，仅管理员可见。成员可在「租户」页的「我的设备」中配对、查看和移除自己的设备；成员暂不能经 Hub 远程操作设备。
+- **兼容**：bridge token 始终是管理员，CLI、SDK 与现有集成不受影响；tenant token 行为不变。关闭 bridge 时，本机无凭证请求（例如 CLI）仍是管理员——此时登录页只是本机便利，要让账号成为真正的访问边界，请开启 `[bridge]`（对外监听本来就要求开启）。打包的桌面 App 是本机管理员界面，不显示登录页。
+
+## 站内消息
+
+Agent 之间、人与 Agent 之间可以直接互发消息，不经过飞书等外部渠道。同一台机器上的各方直接送达；跨机器的消息经 Hub 中转，对方机器离线时由持有消息的机器保存并重试，上线后送达（7 天仍无法送达则放弃并标记失败）。
+
+- **地址**：`agent:<id>` 是本机的 Agent，`agent:<id>@<设备 ID>` 是 Hub 关联机器上的 Agent，`person:<登录名>` 是本机账号。在关联机器上，Hub 的各方写作 `agent:<id>@hub`、`person:<登录名>@hub`。一段对话就是两个地址之间的全部消息，目前没有群聊。
+- **人 → Agent**：Console 的「消息」页列出自己与各 Agent 的对话，可以给能联系的 Agent 写消息；Agent 的回复进入收件箱，并可推送到手机（「设置 → 本设备通知」中的「Agent 发来的消息」，通知只写发件人，不含正文）。还可以旁观自己名下 Agent 与其他 Agent 的对话（只读），管理员能看到全部。
+- **Agent 收发**：发给 Agent 的消息作为一条 `mailbox` 事件交给它，每个对方各自是一条连续的线程；Agent 的回复自动发回给对方，也可以用 `post` 主动写给名册「PLACES」里列出的 Agent 或人。Agent 代某个线程去问别人时，对方答复到达后会带上「替谁问的」，由它转告原线程。
+- **谁能给谁写**：同一归属的各方（同一账号名下的 Agent、设备上的 Agent 和本人；管理员们算同一归属）可以直接互写；管理员可以写给任何 Agent；别人先写来的，可以回复。除此之外需要**联系人**：在「消息 → 联系人」里把两方连起来，自己能代表两方时立即生效，否则等对方的归属人（或管理员）接受。人与人之间不在这里互发消息。
+- **跨机器的规则由 Hub 决定**：关联机器沿自己的连接发出消息，Hub 以连接确认它来自哪台机器（设备只能替自己的 Agent 发言），按上面的规则检查后保存并转交；Hub 转给设备的消息，设备直接接收。设备上的人要给 Hub 或其他机器上的 Agent 写消息，请使用 Hub 的 Console。
+- **防止空转**：两个 Agent 之间一小时内最多往来 40 条消息，超过后发送被拒绝，等人查看后再继续。
+- 接口：`GET /api/v1/mailbox`（本人的对话、可旁观的对话、未读数）、`GET /api/v1/mailbox/messages?with=<地址>[&and=<地址>]`、`POST /api/v1/mailbox/messages`、`GET /api/v1/mailbox/directory`、`GET|POST|DELETE /api/v1/mailbox/contacts`、`POST /api/v1/mailbox/contacts/accept`。成员可以使用这些接口，范围限于自己名下的各方。
+
+## 手机访问与通知
+
+Console 在窄屏上换成底部标签栏（总览、Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
+
+**1. 给 Console 一个 HTTPS 地址。** 浏览器只在 `https://`（或本机 `localhost`）上允许安装和推送。`[hub] addr` 的端口只服务设备配对和连接，不提供 Console，所以手机要通过 HTTPS 访问管理端口（默认 `127.0.0.1:8765`），例如：
+
+- 反向代理：Caddy `your-hub.example.com { reverse_proxy 127.0.0.1:8765 }`，或 nginx 等；
+- 隧道：Tailscale `tailscale serve --bg 8765`、Cloudflare Tunnel 等。
+
+**经反向代理或隧道对外开放前，务必开启 Bridge 鉴权**（`[bridge] enabled = true` 并设置 `token`）。守护进程只在自己直接监听非回环地址时强制要求这一点；代理和隧道从本机回环地址连进来，不开鉴权就等于把整个管理接口交给能访问该地址的任何人。已创建[账号](#账号与登录)时，手机上直接用登录名和密码登录即可。没有账号时，手机浏览器没有 Bridge Token，可以用一次性的 Console 登录链接进入（有效 60 秒，登录后会话 8 小时）：
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.example.com/api/v1/console/sessions
+# 在手机上打开返回的 enter_url
+```
+
+如果 `[hub] public_url` 填的是 HTTPS 地址，推送服务看到的联系人（VAPID subject）就是它，否则使用项目主页地址。
+
+**2. 安装到手机。**
+
+- iPhone / iPad（iOS 16.4 及以上）：用 Safari 打开 Console，点「分享」→「添加到主屏幕」，之后**从主屏幕图标打开**。iOS 只给主屏幕应用推送通知，在 Safari 标签页里无法开启。
+- Android：用 Chrome 打开，菜单中选「安装应用」或「添加到主屏幕」；Console 的「设置 → 本设备通知」里也会出现「安装到本设备」按钮。
+- 电脑上的 Chrome / Edge 同样可以从地址栏安装。
+
+**3. 开启通知。** 在已安装的 Console 里打开「设置 → 本设备通知」，点「开启」并允许浏览器通知，然后选择要接收的类型，点「发送测试」确认能收到。每台设备单独订阅，其他设备会列在下方，可以随时移除。
+
+- **等我处理的 Agent**：本机或关联机器上的 Agent 发来批准请求或问题。关联机器的请求经它的数据上报（`interactions_pending`，约 30 秒一次）到达 Hub 后通知。
+- **Super Agent 工单**：工单完成（ready）或失败。
+- **关联机器**：机器离线超过 2 分钟后通知，重新上线时再通知；短暂断线不打扰。
+- **Agent 发来的消息**：有 Agent 在「消息」里直接写给你。已有订阅需要在设置里勾选这一类才会收到。
+
+通知只写「谁、在哪台机器、发生了什么」，从不包含消息正文、命令、路径或密钥；点开会进入对应页面（会话记录、Agents、机器状态）。同一类通知在 45 秒内只推一次，期间的其他事件合并成一条摘要。Hub 首次启动时生成并保存自己的 VAPID 密钥对；推送服务返回 404/410（订阅已失效）时自动删除该订阅。推送经浏览器厂商的推送服务送达（Apple、Google、Microsoft、Mozilla），Hub 需要能访问外网，可通过 `HTTPS_PROXY` 走代理。
+
+推送接口：`GET /api/v1/push`（公钥与本人的订阅）、`POST /api/v1/push/subscriptions`、`DELETE /api/v1/push/subscriptions?id=`、`POST /api/v1/push/test`。订阅按登录身份（目前为管理员）保存，租户暂不能订阅。
 
 ## CLI
 
@@ -182,6 +287,9 @@ amux usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 amux usage statusline            # compact one-liner for status bars/hooks
 amux provider list|presets|import <id>|switch <id> --tool <tool>
 amux send --channel-id <id> --conversation-key <key> --text "..."
+amux hub pair|devices|remove     # manage machines connected to this hub
+amux accounts list|create|disable|enable|set-role|reset-password
+amux join <token> | amux leave   # connect this machine to a hub, or leave it
 ```
 
 ## HTTP API(节选)
@@ -403,7 +511,7 @@ while response.status in {"queued", "in_progress"}:
 
 ### Agent Invocation API
 
-其他本机服务不需要伪装成消息渠道，也不需要先配置 IM/Webhook Channel。直接调用独立的 Invocation API 即可复用 AgentMux 的 Agent 配置、工作目录、Provider 路由、系统提示词、会话持久化和 Observability：
+其他本机服务不需要伪装成消息渠道，也不需要先配置 IM/Webhook Channel。直接调用独立的 Invocation API 即可复用 AgentMux 的 Agent 配置、工作目录、Provider 路由、系统提示词、会话持久化和 Observability。`agent_id` 是 Agent 的 id，也是它大脑的 id；Invocation 和 `/v1/responses` 直接运行大脑，不附带 Worker 说明，也不会启动 Worker。`POST /api/v1/agent-instances` 创建的就是统一 Agent，`DELETE` 会连同它的 Agent 记录一起删除，返回格式不变：
 
 `/api/v1/send` 仍只负责向已有渠道发送出站消息，不会运行 Agent；需要 Agent 产出结果时使用 `/api/v1/invocations`。即使只监听 `127.0.0.1`，服务间调用也建议开启 `[bridge]` Bearer Token 鉴权。
 
@@ -583,6 +691,9 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 ## 安全说明
 
 - `[bridge].enabled` 时,管理/桥接 API 强制 bearer token。
+- **账号密码**只以 argon2id（64 MiB、2 轮，参数随哈希保存）存储，明文不落库也不写日志。登录会话 token 只保存 SHA-256，放在 `HttpOnly`、`SameSite=Strict`（HTTPS 下加 `Secure`）的 `agentmux_console` cookie 中，有效期 7 天；每个请求都按账号当前的角色和状态解析，停用账号、重置密码会立即结束其会话，修改自己的密码会结束其他会话。
+- 登录、登出与 cookie 鉴权都要求同源（`X-AgentMux-Console` 头或 `Sec-Fetch-Site: same-origin`），跨站请求无法登录或借用会话。失败登录按「登录名+来源地址」（5 次）、来源地址（20 次）与登录名（50 次）在 15 分钟窗口内限流，触发后锁定 15 分钟；不存在的登录名同样执行一次哈希计算，不泄露账号是否存在。
+- 第一个管理员只能由管理员身份创建（bridge token、关闭 bridge 时的本机 Console，或 `amux accounts create`），远程访问者无法抢先注册。
 - SSH 远程控制优先使用私钥/`ssh-agent`；从 SSH Config 导入的主机也可回退到系统 OpenSSH 的非交互认证（例如 GSSAPI），且不保存 SSH 密码。首次连接需确认主机指纹，后续指纹变化会阻断。远程档案以 `0600` 保存，隧道目标限制为远端回环地址上的 AgentMux API。
 - 导入或测试连接遇到远端 API 401 时，会通过已验证的 SSH 连接读取远端配置中的 `[bridge].token`、SSH 环境中的 `AGENTMUX_BRIDGE_TOKEN`，以及标准 launchd / systemd 用户服务的 Token。配置支持 `AMUX_CONFIG`、`XDG_CONFIG_HOME` 和系统默认路径，`${ENV}` 在远端 SSH 环境中展开。Token 通过状态接口验证后才保存，不返回给浏览器或写入日志；自定义启动环境不可读取时仍可手动填写。
 - SSH 代理使用系统 OpenSSH 解析别名的有效配置（包括 `Include`、`Match` 与通配符）；跳板机沿用本机凭据与 `known_hosts`，请先在终端完成跳板机指纹确认或 Cloudflare 登录。`ProxyCommand` 需要 POSIX shell 和已安装的代理程序，通过标准输入/输出转发连接；暂不支持 `ProxyUseFdpass`。代理失败不会改为直连目标机。

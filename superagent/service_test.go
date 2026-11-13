@@ -22,6 +22,7 @@ type memoryStore struct {
 	tickets  map[string]core.SuperAgentTicket
 	state    map[string]string
 	local    map[string]core.AgentInstance
+	channels []core.Channel
 }
 
 func newMemoryStore() *memoryStore {
@@ -189,6 +190,11 @@ func (m *memoryStore) ListAgentInstances(context.Context) ([]core.AgentInstance,
 	return out, nil
 }
 func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.channels != nil {
+		return slices.Clone(m.channels), nil
+	}
 	return []core.Channel{{ID: "c1", Name: "Team bot", Type: "feishu"}, {ID: "c2", Name: "Slack bot", Type: "slack"}}, nil
 }
 

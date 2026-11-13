@@ -15,6 +15,7 @@ vi.mock("../api", () => ({
     syncRemoteHostsFromSSHConfig: vi.fn(),
     discoveredRemoteHosts: vi.fn(),
     importRemoteHost: vi.fn(),
+    createDevicePairingCode: vi.fn(),
   },
   activeRemoteID: vi.fn(),
   setActiveMachineScope: vi.fn(),
@@ -226,5 +227,41 @@ describe("SSH machine deletion in the desktop console", () => {
     expect(container.textContent).not.toContain("lemon_claw");
     expect(notifyRemoteHostsChanged).toHaveBeenCalledTimes(1);
     expect(notifyRemoteHostsChanged).toHaveBeenCalledWith([hosts[0]]);
+  });
+});
+
+describe("machines that connect to the hub themselves", () => {
+  it("shows a linked machine without SSH details or SSH-only actions", async () => {
+    const linked: RemoteHost = { id: "dev_1", name: "home-box", host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: true };
+    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], linked]);
+    // An older version would offer an SSH update on an SSH machine.
+    vi.mocked(api.statusRemoteHost).mockResolvedValue({ status: { version: "0.1.7" } } as Awaited<ReturnType<typeof api.statusRemoteHost>>);
+    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="reload" /></I18nProvider>); });
+    const rows = Array.from(container.querySelectorAll("article"));
+    const ssh = rows.find((row) => row.textContent?.includes("ecs_cn"))!;
+    const row = rows.find((row) => row.textContent?.includes("home-box"))!;
+    expect(row.textContent).toContain("主动连接到本机");
+    expect(row.textContent).not.toContain("@");
+    expect(Array.from(row.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["检查更新", "删除"]);
+    expect(Array.from(ssh.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["更新", "编辑", "删除"]);
+  });
+
+  it("creates a one-time join command", async () => {
+    vi.mocked(api.createDevicePairingCode).mockResolvedValue({
+      code: "ABCD2345", expires_at: "2026-11-12T12:30:00Z", hub_url: "https://10.0.0.2:8766",
+      join_token: "amxj_x", command: "amux join amxj_x", warning: "Use a trusted network.",
+    });
+    await click(button(container, "连接一台机器"));
+    await click(button(container, "生成连接命令"));
+    expect(api.createDevicePairingCode).toHaveBeenCalledWith("");
+    const card = container.querySelector<HTMLElement>(".remote-pairing")!;
+    expect(card.querySelector("code")?.textContent).toBe("amux join amxj_x");
+    expect(card.textContent).toContain("https://10.0.0.2:8766");
+    expect(card.textContent).toContain("Use a trusted network.");
+    // Closing refreshes the list: the machine may have joined meanwhile.
+    const before = vi.mocked(api.remoteHosts).mock.calls.length;
+    await click(button(card, "关闭"));
+    expect(container.querySelector(".remote-pairing")).toBeNull();
+    expect(vi.mocked(api.remoteHosts).mock.calls.length).toBe(before + 1);
   });
 });

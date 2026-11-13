@@ -12,6 +12,11 @@ const (
 	SuperAgentSourceFeishuDoc     = "feishu_doc"
 	SuperAgentSourceEmail         = "email"
 	SuperAgentSourceGitHub        = "github_webhook"
+	// SuperAgentSourceChannel is a channel bound to the agent's brain
+	// (channels.agent_id). It is derived from the binding, never stored: the
+	// channel engine runs the brain's turn, and the channel's own reply scope,
+	// not an allowed list, decides who reaches it.
+	SuperAgentSourceChannel = "channel"
 )
 
 // Super Agent modes. Observe records what the router would do without creating
@@ -49,8 +54,13 @@ const (
 	SuperAgentTicketStopped = "stopped"
 )
 
-// SuperAgent is a persistent router that turns events from its Sources into
-// Tickets and assigns them to local or remote workers.
+// SuperAgent is an agent: AgentMux has one kind. It has an identity, a home
+// with memory and Tickets, a brain and the sources and worker policy around
+// it. The brain is the Agent instance RouterAgentID names: its framework,
+// model, approval mode and directory. An agent created through the Console or
+// the agent-instances API shares its id with its brain, so channel bindings,
+// grants and invocations that name the id reach the brain. The brain answers
+// directly when it can and starts workers, as Tickets, when it cannot.
 type SuperAgent struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -67,14 +77,18 @@ type SuperAgent struct {
 	// roster suits it. WorkerRuntimes are the frameworks it may launch one with,
 	// and default to the router's. AutoWorkerDir and AutoWorkerApprovalMode are
 	// the operator's limits for those workers; a router decision cannot set them.
-	AutoWorkers            bool               `json:"auto_workers,omitempty"`
-	WorkerRuntimes         []string           `json:"worker_runtimes,omitempty"`
-	AutoWorkerDir          string             `json:"auto_worker_dir,omitempty"`
-	AutoWorkerApprovalMode string             `json:"auto_worker_approval_mode,omitempty"`
-	Sources                []SuperAgentSource `json:"sources"`
-	Enabled                bool               `json:"enabled"`
-	CreatedAt              time.Time          `json:"created_at"`
-	UpdatedAt              time.Time          `json:"updated_at"`
+	AutoWorkers            bool     `json:"auto_workers,omitempty"`
+	WorkerRuntimes         []string `json:"worker_runtimes,omitempty"`
+	AutoWorkerDir          string   `json:"auto_worker_dir,omitempty"`
+	AutoWorkerApprovalMode string   `json:"auto_worker_approval_mode,omitempty"`
+	// WorkerMachines are the other machines the router may launch a worker
+	// on, besides this one. Like the rest of the auto worker settings they are
+	// the operator's: a router decision picks among them and cannot add one.
+	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
+	Sources        []SuperAgentSource  `json:"sources"`
+	Enabled        bool                `json:"enabled"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
 }
 
 // SuperAgentWorker is one Agent the router may assign work to. An empty HostID
@@ -85,6 +99,45 @@ type SuperAgentWorker struct {
 	HostID       string `json:"host_id,omitempty"`
 	AgentID      string `json:"agent_id"`
 	Capabilities string `json:"capabilities,omitempty"`
+}
+
+// SuperAgentMachine is a machine an agent may launch workers on: a device
+// linked to this hub, or an SSH host. Dir is a directory on that machine and
+// Capabilities tells the router what the machine is good for. An empty Dir
+// gives the workers a directory of their own there.
+type SuperAgentMachine struct {
+	HostID       string `json:"host_id"`
+	Dir          string `json:"dir,omitempty"`
+	Capabilities string `json:"capabilities,omitempty"`
+}
+
+// SuperAgentMachineStatus is what an agent's machine can run right now.
+type SuperAgentMachineStatus struct {
+	HostID    string   `json:"host_id"`
+	Name      string   `json:"name,omitempty"`
+	Available bool     `json:"available"`
+	Runtimes  []string `json:"runtimes,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+}
+
+// HostedWorkerRequest asks a machine to keep a worker for an agent that lives
+// on another machine. The machine that receives it decides what the worker
+// may be: it checks the framework, the directory and the approval mode
+// against what it has, exactly as it would for an agent of its own.
+type HostedWorkerRequest struct {
+	OwnerID      string `json:"owner_id"`
+	OwnerName    string `json:"owner_name,omitempty"`
+	RuntimeID    string `json:"runtime_id"`
+	Dir          string `json:"dir,omitempty"`
+	ApprovalMode string `json:"approval_mode,omitempty"`
+}
+
+// HostedWorker is the Agent a machine keeps for a HostedWorkerRequest.
+type HostedWorker struct {
+	AgentID       string `json:"agent_id"`
+	Name          string `json:"name"`
+	WorkDir       string `json:"work_dir"`
+	WorkspaceMode string `json:"workspace_mode"`
 }
 
 // SuperAgentSource is one event stream. AllowedActors is the fail-closed list,

@@ -4,7 +4,6 @@ import type { NavigationTabID } from "./navigationSearchAliases";
 import type { AgentsPanelProps } from "./panels/agents/AgentsPanel";
 
 const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel })));
-const SuperAgentsPanel = lazy(() => import("./panels/SuperAgentsPanel").then((module) => ({ default: module.SuperAgentsPanel })));
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
@@ -21,18 +20,16 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   skills: lazy(() => import("./panels/SkillsPanel").then((module) => ({ default: module.SkillsPanel }))),
   mcp: lazy(() => import("./panels/MCPPanel").then((module) => ({ default: module.MCPPanel }))),
   feedback: lazy(() => import("./panels/FeedbackPanel").then((module) => ({ default: module.FeedbackPanel }))),
+  messages: lazy(() => import("./panels/MessagesPanel").then((module) => ({ default: module.MessagesPanel }))),
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
 };
 
-export function RegisteredPanel({ tab, createSuperAgentRequested, onCreateSuperAgentRequestHandled, ...agentProps }: {
+export function RegisteredPanel({ tab, ...agentProps }: {
   tab: NavigationTabID;
-  createSuperAgentRequested?: boolean;
-  onCreateSuperAgentRequestHandled?: () => void;
 } & AgentsPanelProps) {
-  if (tab === "agents") return <AgentsPanel {...agentProps} />;
-  if (tab === "super-agents") {
-    return <SuperAgentsPanel createRequested={createSuperAgentRequested} onCreateRequestHandled={onCreateSuperAgentRequestHandled} />;
-  }
+  // There is one kind of agent: the former Super Agents page is the Agents
+  // page, where each agent's workers and triggers open from its row.
+  if (tab === "agents" || tab === "super-agents") return <AgentsPanel {...agentProps} />;
   const Panel = STATIC_PANELS[tab];
   return Panel ? <Panel /> : null;
 }

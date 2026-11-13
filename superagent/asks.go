@@ -59,6 +59,10 @@ func destinationPlace(reply []byte) string {
 	if json.Unmarshal(reply, &feishu) == nil && feishu.ChatID != "" {
 		return "feishu:" + feishu.ChannelID + ":" + feishu.ChatID
 	}
+	var mail mailReply
+	if json.Unmarshal(reply, &mail) == nil && mail.MailTo != "" {
+		return strings.ToLower(mailThreadKey(mail.MailTo))
+	}
 	var github githubReply
 	if json.Unmarshal(reply, &github) == nil && github.Repo != "" && github.Number > 0 {
 		return strings.ToLower(fmt.Sprintf("github:%s#%d", github.Repo, github.Number))

@@ -25,6 +25,11 @@ type DirectoryListing struct {
 // ListDirectories reads a host's filesystem through SSH. It intentionally
 // does not depend on the AgentMux HTTP version running on that host.
 func (m *Manager) ListDirectories(ctx context.Context, id, rawPath string) (DirectoryListing, error) {
+	if _, ok := m.store.Get(id); !ok {
+		if device, linked := m.linked(ctx, id); linked {
+			return m.linkedDirectories(ctx, device, rawPath)
+		}
+	}
 	command := remoteDirectoryPathScript(rawPath, true) + `
 if [ ! -d "$target" ]; then
   printf '%s\n' 'path is not a directory' >&2
@@ -50,6 +55,11 @@ done`
 // EnsureDirectory creates a directory through SSH and returns its canonical
 // absolute path on the selected host.
 func (m *Manager) EnsureDirectory(ctx context.Context, id, rawPath string) (string, error) {
+	if _, ok := m.store.Get(id); !ok {
+		if device, linked := m.linked(ctx, id); linked {
+			return m.linkedEnsureDirectory(ctx, device, rawPath)
+		}
+	}
 	if strings.TrimSpace(rawPath) == "" {
 		return "", errors.New("directory path is required")
 	}

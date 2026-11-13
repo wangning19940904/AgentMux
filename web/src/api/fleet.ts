@@ -8,7 +8,7 @@ import type {
 } from "./types";
 
 export type Targeted<T> = T & TargetMetadata;
-export { FLEET_WARNING_EVENT, currentFleetWarnings } from "./fleetWarnings";
+export { FLEET_WARNING_EVENT, currentFleetWarnings, isFleetStaleNotice } from "./fleetWarnings";
 
 export function fleetMode() {
   return activeMachineScope() === "all";

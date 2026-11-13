@@ -17,7 +17,7 @@
 
 ## 契约版本（contract_version）
 
-当前契约版本：**`2.2`**（常量定义于 [`contract.go`](contract.go)，由
+当前契约版本：**`2.3`**（常量定义于 [`contract.go`](contract.go)，由
 `GET /api/v1/capabilities` 与 `GET /api/v1/status` 返回）。
 
 `1.1` 新增多租户：Agent 实例与渠道新增可选归属字段、`/api/v1/tenancy/*`
@@ -41,6 +41,10 @@ Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 
 
 
 `2.2` 新增本机事件订阅：`event_subscriptions` feature、事件源目录、订阅 CRUD、测试回调、签名密钥轮换和投递历史/重试 API。新增 `event_source` 授权与普通资源授权独立；共享或公开渠道不自动开放事件读取。详见 [事件接入指南](EVENT_SUBSCRIPTIONS.md)。
+
+`2.3` 新增账号：`GET /api/v1/tenancy/self` 在 Console 账号会话下多返回可选
+`account` 字段。Bearer 凭证（bridge token、tenant token）的行为不变，也不会带
+`account`。
 
 `contract_version` 与二进制版本**相互独立**：
 
@@ -109,6 +113,7 @@ mcp、guard、`/api/v1/tenancy/*` 的管理端点等）是 Console 专用管理�
 | --- | --- | --- |
 | 管理员 | `config.toml` 的 `[bridge].token` | 全部路由、全部资源（并带归属标注） |
 | 租户 | `/api/v1/tenancy/*` 签发的 token（`amxt_` 前缀） | stable/beta 路由；自己的 ∪ 公共的 ∪ 被授权的资源 |
+| 账号 | Console 登录得到的 `agentmux_console` cookie（`amxs_` 会话） | 管理员账号同管理员；成员账号同租户（命名空间为账号自己的 tenant），另可管理自己配对的设备 |
 
 - `[bridge].enabled = true` 时，`/api/*` 与 `/v1/*` 要求
   `Authorization: Bearer <token>`；对外提供服务时必须开启。
@@ -119,6 +124,10 @@ mcp、guard、`/api/v1/tenancy/*` 的管理端点等）是 Console 专用管理�
   用租户 token 签发的会话，其 Console 只能看到该租户的资源；租户签发不要求
   全局 `[bridge]` 鉴权已开启。
 - `POST /hook/{id}` 使用触发器自带 token，不走 bridge。
+- 账号（Console 专用）：每个账号自带一个 `kind = "account"` 的 tenant 命名空间，
+  成员账号的归属、公开与授权完全复用下文的多租户规则。账号登录、登出与管理端点
+  （`/api/v1/auth/*`、`/api/v1/accounts*`）属于 Console 管理面，不在稳定性分级内；
+  第三方应继续使用 bridge 或 tenant token。尚无账号时一切行为与以前相同。
 
 ## 多租户
 

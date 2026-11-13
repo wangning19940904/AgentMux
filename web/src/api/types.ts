@@ -351,6 +351,24 @@ export interface RemoteHost {
   host_key_fingerprint?: string;
   trusted?: boolean;
   clear_api_token?: boolean;
+  // "link" is a machine that connects to this hub itself; the hub knows
+  // whether it is connected without probing it.
+  kind?: "ssh" | "link";
+  online?: boolean;
+  version?: string;
+  last_seen_at?: string;
+  // When the machine last sent the hub its data.
+  reported_at?: string;
+}
+
+export interface DevicePairingCode {
+  code: string;
+  expires_at: string;
+  hub_url: string;
+  fingerprint?: string;
+  join_token: string;
+  command: string;
+  warning?: string;
 }
 
 export type MachineScope = "all" | "local" | string;
@@ -358,7 +376,7 @@ export type MachineScope = "all" | "local" | string;
 export interface MachineTarget {
   id: string;
   name: string;
-  kind: "local" | "ssh";
+  kind: "local" | "ssh" | "link";
   trusted: boolean;
   online: boolean;
   version?: string;
@@ -442,6 +460,9 @@ export interface FleetOperationResult<T = unknown> {
   data?: T;
   error?: string;
   duration_ms: number;
+  // Set when the target is offline and data is what it last reported to
+  // the hub rather than a live answer.
+  reported_at?: string;
 }
 
 export interface FleetTargetResult<T = unknown> {
@@ -641,7 +662,7 @@ export interface Channel {
 // contract/CONTRACT.md "多租户".
 export type ResourceVisibility = "private" | "public";
 export type GrantLevel = "read" | "use" | "manage";
-export type TenantKind = "app" | "web" | "service";
+export type TenantKind = "app" | "web" | "service" | "account";
 export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider" | "event_source";
 
 export interface Tenant {
@@ -689,6 +710,58 @@ export interface TenancySelf {
   tenant?: string;
   kind?: string;
   status?: string;
+  // The person signed in, for an account session.
+  account?: AccountIdentity;
+}
+
+export type AccountRole = "admin" | "member";
+
+// AccountIdentity is the signed-in person a request carries.
+export interface AccountIdentity {
+  id: string;
+  login: string;
+  display_name?: string;
+  role: AccountRole;
+  tenant_id: string;
+}
+
+// Account is one person who signs in to the Console.
+export interface Account extends AccountIdentity {
+  status: "active" | "disabled";
+  has_password: boolean;
+  created_at: string;
+  updated_at: string;
+  last_sign_in_at?: string;
+}
+
+// AuthSession says who the Console is and whether it must sign in first.
+export interface AuthSession {
+  accounts_enabled: boolean;
+  setup_available: boolean;
+  sign_in_required: boolean;
+  authenticated: boolean;
+  admin: boolean;
+  account?: AccountIdentity;
+  tenant_id?: string;
+  tenant?: string;
+  sign_in_methods: string[];
+}
+
+// PairedDevice is a machine paired with this hub, as /api/v1/devices lists
+// it. Administrators see every device with its owner; a member their own.
+export interface PairedDevice {
+  id: string;
+  name: string;
+  hostname?: string;
+  os?: string;
+  arch?: string;
+  version?: string;
+  created_at: string;
+  last_seen_at?: string;
+  owner_tenant_id?: string;
+  owner_tenant_name?: string;
+  online: boolean;
+  reported_at?: string;
 }
 
 export interface ChannelTask {
@@ -1472,7 +1545,9 @@ export interface OrchestrationTask {
   updated_at: string;
 }
 
-export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook";
+// "channel" is a channel bound to the agent's brain. The daemon derives it from
+// the binding on every read and never stores it.
+export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook" | "channel";
 
 export interface SuperAgentWorker {
   id: string;
@@ -1480,6 +1555,21 @@ export interface SuperAgentWorker {
   host_id?: string;
   agent_id: string;
   capabilities?: string;
+}
+
+// A machine an agent may launch workers on, besides the one it lives on.
+export interface SuperAgentMachine {
+  host_id: string;
+  dir?: string;
+  capabilities?: string;
+}
+
+export interface SuperAgentMachineStatus {
+  host_id: string;
+  name?: string;
+  available: boolean;
+  runtimes?: string[];
+  detail?: string;
 }
 
 export interface SuperAgentSource {
@@ -1541,6 +1631,9 @@ export interface SuperAgentGitHubSetup {
   api_protected: boolean;
 }
 
+// An agent. AgentMux has one kind: router_agent_id is its brain, the Agent
+// instance whose framework, model and approval mode answer. An agent made as
+// one shares its id with its brain.
 export interface SuperAgent {
   id: string;
   name: string;
@@ -1555,6 +1648,7 @@ export interface SuperAgent {
   worker_runtimes?: string[];
   auto_worker_dir?: string;
   auto_worker_approval_mode?: string;
+  worker_machines?: SuperAgentMachine[];
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1716,6 +1810,7 @@ export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
   workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
+  machines?: SuperAgentMachineStatus[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
 }
 

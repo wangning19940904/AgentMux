@@ -1,10 +1,55 @@
-# Super Agents
+# Agents
 
-A Super Agent is a persistent router. Events arrive from its triggers, a router
-Agent answers each one or decides what it means, and AgentMux applies that
-decision to local or remote workers. The design follows DeepSeek's
+AgentMux has one kind of agent. An agent has an identity, a home with its
+memory and Tickets, a **brain**, its **sources**, and a **worker policy**. The
+brain answers directly when it can and starts workers, as Tickets, when it
+cannot. Older versions had two kinds: regular Agents bound to channels, and
+Super Agents, persistent routers. Both are now this one kind, and the rest of
+this document still says "Super Agent" for the parts that only routed agents
+used before. The design follows DeepSeek's
 [dsh-superagent](https://github.com/deepseek-ai/dsh-superagent-prototype)
 prototype, simplified to run inside the AgentMux daemon.
+
+## One kind of agent
+
+- **Record.** An agent is a `super_agents` row (`core.SuperAgent`).
+  `router_agent_id` names its brain: an Agent instance (`agent_instances`) with
+  the framework, model, approval mode, working directory, MCP servers and skills
+  the brain runs with.
+- **Creating an agent** in the Console or with `POST /api/v1/agent-instances`
+  saves the brain and an agent record with **the same id**, in act mode and with
+  no worker policy. Channel bindings, grants, `/api/v1/invocations` and
+  `/v1/responses` keep naming that id. Nothing creates a regular agent any more.
+- **Upgrading.** When the daemon starts, every Agent instance that is no agent's
+  brain gets a record with its id: act mode, enabled as the instance was, and no
+  workers. Router agents (`sar_*`) and auto workers (`saw_*`) belong to their
+  agent and get none, and an ordinary Agent a Super Agent already routed with
+  stays that Super Agent's brain. The step only inserts, so starting again
+  changes nothing and no instance, channel binding, conversation or grant changes.
+- **Channel sources.** Each channel bound to the brain (`channels.agent_id`) is a
+  source of kind `channel`, with id `channel:<channel id>`. It is read from the
+  binding every time and never stored; bind channels in the agent's settings. The
+  channel's own reply scope decides who reaches the brain, exactly as before:
+  there is no allowed list, and observe mode does not hold back the brain's reply.
+- **Chats run through the channel engine.** A message on a bound channel is a
+  normal channel turn, with streaming replies, the per-conversation queue,
+  steering, approval cards and `/` commands. When the agent has a worker policy
+  (worker frameworks or a roster), the engine puts a brief before the message: the
+  roster, the conversation's Tickets, the operator's rules, the memory index and
+  how to start a worker. The brain ends its reply with an action block to act; the
+  block is hidden from the chat while the reply streams, and AgentMux carries it
+  out after the turn completes, with the same checks as a router's. A turn that
+  is stopped or times out starts nothing. An agent with no worker policy gets no
+  brief, so its turns are what they were before agents could start workers.
+- **Tickets from a chat** report back to that chat: when a worker finishes a
+  turn, the brain gets a ticket update, as a router turn outside the chat's
+  conversation, and its reply is posted in the chat's thread.
+- **Deleting** an agent with `DELETE /api/v1/agent-instances` or
+  `DELETE /api/v1/super-agents` stops its Tickets, removes its records and its own
+  brain, and leaves its channels without an agent. Its home stays on disk.
+- **The Console** has one Agents page. Each row shows what the agent does besides
+  chatting, and opens its workers, triggers and Tickets. Agents that answer with a
+  router agent, as Super Agents did, are rows of their own.
 
 ## Flow
 
@@ -52,7 +97,8 @@ The router reads untrusted text. What limits the harm a crafted event can do:
 
 - **Allowed senders** are checked before the router sees an event, and an empty
   list admits nobody. `*` is accepted only for Feishu messages. This is the only hard
-  limit on who can reach the router.
+  limit on who can reach the router. Channel sources have no list: whoever the
+  channel lets reach the bot reaches the brain, as with any bound channel.
 - **An action** can only name a worker on this Super Agent's roster, `auto:<framework>`
   for one of its worker frameworks, and a Ticket already on the event's thread.
 - **The router** is a [router agent](#router-agents): it runs on this machine in the
@@ -60,9 +106,12 @@ The router reads untrusted text. What limits the harm a crafted event can do:
   daemon's user, including reading AgentMux's own configuration; its charter, not a
   sandbox, is what tells it to treat event text as data. Choose `auto`, `auto_edit` or
   `plan` for a Super Agent whose triggers carry text from people you do not trust.
-- **Observe mode** is the default. It records the router's reply and action without
+- **Observe mode** is the default for a Super Agent saved through
+  `POST /api/v1/super-agents` without a mode. It records the router's reply and action without
   running work or messaging anyone, and tells the router to change nothing; its approval
-  mode still applies. Switch to Act when the decisions look right.
+  mode still applies. Switch to Act when the decisions look right. Agents created as
+  Agents, and Agents upgraded from before, act. In a chat, observe mode records the
+  brain's actions without carrying them out; the chat still gets its reply.
 
 Workers run unattended, and an approval nobody can answer is declined. Give them
 a non-manual approval mode, and per-conversation worktrees so parallel Tickets
@@ -221,9 +270,117 @@ request, and the host starts a worker of that framework that was not configured 
   (a Super Agent that still routes with an ordinary Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
   which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
   where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
-- `max_concurrency` limits how many run at once. Auto workers run on this machine only.
+- `max_concurrency` limits how many run at once. Auto workers run on this machine unless
+  `worker_machines` lists others; see below.
 - Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
   with the Super Agent. Worktrees are kept after a Ticket ends, and so is the home.
+
+### Workers on other machines
+
+`worker_machines` lists machines connected to this AgentMux, as linked devices or SSH
+hosts, that the agent may also launch workers on:
+
+```json
+"worker_machines": [{ "host_id": "dev_23f0…", "dir": "~/code/app", "capabilities": "Has the GPU." }]
+```
+
+- The roster offers `auto:<framework>@<host_id>` for each machine and worker framework,
+  with the machine's name, the operator's `capabilities` text, and whether the machine is
+  reachable and has that framework installed right now. A decision can only name an entry
+  on the roster.
+- The machine itself creates the worker. The host sends the framework, `dir` and
+  `auto_worker_approval_mode` to `POST /api/v1/super-agents/workers/launch` on that machine,
+  which checks them as it would for its own agents: the framework must be installed, `dir`
+  must exist (empty gives the worker `~/.agentmux/hosted-workers/<agent id>/work`), and the
+  approval mode must be an unattended one. The worker is the Agent instance
+  `sawr_<agent id>_<framework>` there. It uses that machine's provider route, tools and
+  environment; nothing is inherited from the agent's machine.
+- The Ticket, its inputs, results and progress stay on the agent's machine. The worker's
+  session and files stay on its own, so `base_ticket` only carries commits between Tickets
+  on the same machine.
+- A follow-up for a running Ticket is delivered during its turn through
+  `POST /api/v1/invocations/steer` on the worker's machine. When that machine cannot take
+  it, the follow-up waits for the next turn.
+- An unreachable machine fails the turn as retryable, like any remote worker.
+- Removing a machine from the list, or deleting the agent, removes its workers there
+  (`POST /api/v1/super-agents/workers/release`). Their files are kept. A machine that is
+  offline at that moment keeps an idle Agent instance.
+- A machine whose AgentMux predates this answers the launch with an error naming the update.
+
+`GET /api/v1/super-agents/tickets?limit=` lists the newest Tickets of every agent on a
+machine, each with its agent's name and the machine its worker runs on. Reply addresses and
+queued inputs are left out and long output is cut. Machines linked to a hub report this list
+to it.
+
+## Direct messages
+
+Agents write to each other, and people write to agents, through AgentMux's own mailbox
+rather than an outside channel.
+
+**Addresses.** `agent:<id>` is an agent on this machine, `agent:<id>@<device id>` an agent on
+a machine linked to this hub, and `person:<login>` someone with an account here. A linked
+machine names its hub's parties `agent:<id>@hub` and `person:<login>@hub`. A conversation is
+the messages between two addresses; there are no groups.
+
+**For an agent.** A message to an agent is an event with `source` `mailbox` on the thread
+`mail:<sender address>`, one continuing thread per sender. The router's reply to it is sent
+back as a message, and so are a Ticket's updates when the message started one. The router's
+PLACES list the agents and people it may write to, with each agent's machine, description
+and whether its machine is online; `post` with `"to"` set to one of those addresses sends a
+message. A `post` to an address that is not listed is refused before anything is carried out.
+When the router posted on behalf of another thread, the answer's event lists that thread
+under QUESTIONS YOU ASKED HERE, as for other places.
+
+**Who may write to whom.**
+
+- Parties with the same owner: the agents of one account, the agents on its devices, and the
+  person. Administrators are one owner.
+- An administrator, to any agent.
+- Anyone, to a party that wrote to them first.
+- Parties joined by an accepted contact. `POST /api/v1/mailbox/contacts {"a","b"}` makes one:
+  accepted at once when the caller answers for both sides, otherwise `pending` with
+  `waiting_for` naming the side whose owner (or an administrator) must call
+  `POST /api/v1/mailbox/contacts/accept {"id"}`. Asking for a contact the other side already
+  asked for accepts it. `DELETE /api/v1/mailbox/contacts?id=` ends, declines or withdraws one.
+- People do not write to people.
+- Two agents may trade at most 40 messages an hour; further messages are refused until a
+  person has had time to look.
+
+**Across machines.** Every machine keeps the messages its own parties sent and received.
+A message for another machine goes through the hub:
+
+- A linked machine sends it up its link (`POST /uplink/v1/mail/messages`). The link names
+  the machine, so it can only send for its own agents. The hub applies the rules above,
+  keeps the message and passes it on.
+- The hub passes a message down the recipient's link to `POST /api/v1/mailbox/deliver`, an
+  administrator's route on that machine. The machine accepts what its hub delivers.
+- A message keeps its id on the way, and a machine that receives one twice keeps it once.
+- Whichever machine holds an undelivered message retries it every 20 seconds and when the
+  recipient's machine reconnects. After 7 days it gives up and records why (`failed_at`,
+  `error`). A refusal, such as parties that are not contacts or an agent that no longer
+  exists, fails the message at once and is recorded on the event that sent it.
+- A linked machine learns who its agents may reach elsewhere from the hub
+  (`GET /uplink/v1/mail/directory?agent=<id>`), and keeps the answer for a minute.
+- People on a linked machine use the hub's Console to write to agents elsewhere.
+- A hub or a machine whose AgentMux predates direct messages refuses them with a message
+  naming the update.
+
+**For the Console.**
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/mailbox` | The caller's conversations with agents, the conversations of their agents they may watch, the unread count and the addresses they answer for |
+| `GET /api/v1/mailbox/messages?with=<address>` | The caller's conversation with an address, oldest first; marks it read |
+| `GET /api/v1/mailbox/messages?with=<a>&and=<b>` | A conversation between two other parties, when the caller answers for one of them |
+| `POST /api/v1/mailbox/messages {"to","text"}` | Send a message as the caller; `422` with the reason when it is refused |
+| `GET /api/v1/mailbox/directory` | Every party the caller can name, and those they may write to now |
+| `GET /api/v1/mailbox/contacts` | The contacts with a side the caller answers for |
+
+A message has `delivered_at` once it reached its recipient's machine, or for a person their
+inbox, and `read_at` once that person opened the conversation. Members reach these routes
+for the parties they own. A caller without an account, such as the bridge token, is
+`person:admin`. When a message reaches a person, their devices get a push notification of
+kind `messages` that names the sender and never the text.
 
 ## Router agents
 
@@ -300,7 +457,7 @@ These routes are for Console administrators and are closed to tenant credentials
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete; secrets are write-only |
+| `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
 | `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
@@ -328,6 +485,15 @@ Headless ignores credentials saved by the DSH GUI. Provide `DEEPSEEK_API_KEY` in
 the Agent's environment or in `$DSH_HOME/.env`.
 
 ## Current limits
+
+- Workers are still Agent instances: auto workers keep their hidden
+  `saw_<agent id>_<framework>` records, and roster workers are Agents.
+- Only chats on bound channels run the brain through the channel engine. Feishu
+  message, Feishu document, email and GitHub sources, the Console's "try it", and
+  ticket updates run it as a router turn, with no streaming and in a conversation
+  of their own per thread.
+- A ticket update for a chat reaches the brain outside the chat's own conversation;
+  the next chat turn sees the Ticket in its brief.
 
 - One daemon owns a Super Agent's Tickets; running several against one database is
   not supported.

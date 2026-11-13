@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
+import { AccountsPanel } from "./AccountsPanel";
 import { TargetBadge, targetKey } from "../components/TargetBadge";
 import {
   resourcesForType,
@@ -95,6 +96,7 @@ export function TenantsPanel({
   if (scoped) {
     return (
       <div className="page-stack">
+        <AccountsPanel />
         <section className="surface">
           <div className="surface-header">
             <div>
@@ -131,6 +133,10 @@ export function TenantsPanel({
 
   return (
     <div className="page-stack">
+      <AccountsPanel onAccountsChanged={() => {
+        void tenants.reload();
+        onTenantChanged?.();
+      }} />
       <section className="surface">
         <div className="surface-header">
           <div>
@@ -225,6 +231,11 @@ export function TenantsPanel({
                     {t("tenants.resourceCount")}
                   </span>
                 </div>
+                {tenant.kind === "account" ? (
+                  <div className="table-actions">
+                    <span className="muted">{t("tenants.accountNamespace")}</span>
+                  </div>
+                ) : (
                 <div className="table-actions">
                   <button
                     className="ghost-action"
@@ -276,6 +287,7 @@ export function TenantsPanel({
                     <Trash2 size={14} /> {t("common.delete")}
                   </button>
                 </div>
+                )}
               </article>
             ))}
           </div>

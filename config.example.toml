@@ -12,6 +12,9 @@ addr = "127.0.0.1:8765"
 enabled = false
 # Protects /api/v1 management, send, and Agent invocation endpoints.
 # token = "${BRIDGE_TOKEN}"   # REQUIRED when enabled = true
+# People sign in to the Console with accounts stored in the database, not
+# here: create the first administrator with `amux accounts create <login>` or
+# from the Console. The bridge token stays the administrator either way.
 
 # ---- SSH remote control ----
 # Remote machine profiles are managed in Console -> Machines and saved with
@@ -19,6 +22,22 @@ enabled = false
 [remote]
 connect_timeout_seconds = 10
 # hosts_file = "~/.config/agentmux/remote-hosts.json"
+
+# ---- Hub ----
+# Other machines can connect to this one as their hub with `amux join`. They
+# open the connection, so only the hub needs an address they can reach. This
+# listener serves pairing and device connections only, never the management
+# API. Create join commands with `amux hub pair`.
+# [hub]
+# addr = "0.0.0.0:8766"
+# tls = "auto"            # auto: the hub's own certificate, pinned by devices
+#                         # (no domain needed) | files | off (behind a proxy)
+# cert_file = ""
+# key_file = ""
+# public_url = ""         # what devices dial, when it is not addr: a tunnel,
+#                         # a reverse proxy, a forwarded port
+# pin_certificate = false # public_url still presents the hub's own certificate
+# state_dir = ""          # hub certificate and this machine's own membership
 
 # ---- Runtime resources ----
 # Agents, Channels, Triggers, Skills, MCP, Memory, and Guard policies are stored

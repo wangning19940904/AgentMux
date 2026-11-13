@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -20,6 +21,7 @@ type Config struct {
 	Database    DatabaseConfig `toml:"database"`
 	Bridge      BridgeConfig   `toml:"bridge"`
 	Remote      RemoteConfig   `toml:"remote"`
+	Hub         HubConfig      `toml:"hub"`
 	// Projects and Hooks are parsed only for `amux database import-config`.
 	// Daemon startup rejects them so PostgreSQL remains the sole runtime source.
 	Projects      []ProjectConfig     `toml:"projects"`
@@ -56,6 +58,40 @@ type RemoteConfig struct {
 	HostsFile             string `toml:"hosts_file"`
 	ConnectTimeoutSeconds int    `toml:"connect_timeout_seconds"`
 }
+
+// HubConfig lets other machines connect to this one as their hub. Paired
+// devices open the connection themselves, so only the hub needs an address
+// they can reach. Addr is a listener that serves nothing but pairing and
+// device connections, which makes it safe to expose where the management API
+// on server.addr is not.
+type HubConfig struct {
+	// Addr is host:port for the device listener. Empty leaves it off; devices
+	// that can reach server.addr may still pair through it.
+	Addr string `toml:"addr"`
+	// TLS is "auto" (the default: the hub's own certificate, which devices
+	// pin by fingerprint, so no domain name is needed), "files" (CertFile
+	// and KeyFile), or "off" behind a proxy or tunnel that terminates TLS.
+	TLS      string `toml:"tls"`
+	CertFile string `toml:"cert_file"`
+	KeyFile  string `toml:"key_file"`
+	// PublicURL is the address devices dial when it differs from Addr: a
+	// tunnel, a reverse proxy, a forwarded port.
+	PublicURL string `toml:"public_url"`
+	// PinCertificate says devices reaching PublicURL still see the hub's own
+	// certificate, as they do through a plain port forward. It is assumed
+	// when PublicURL is empty and TLS is "auto".
+	PinCertificate bool `toml:"pin_certificate"`
+	// StateDir holds the hub's certificate and this machine's own membership
+	// of a hub. It defaults to the user's AgentMux configuration directory.
+	StateDir string `toml:"state_dir"`
+}
+
+// Hub TLS modes.
+const (
+	HubTLSAuto  = "auto"
+	HubTLSFiles = "files"
+	HubTLSOff   = "off"
+)
 
 // ProjectConfig pairs one agent with one or more platforms.
 type ProjectConfig struct {
@@ -177,6 +213,9 @@ func (c *Config) validate() error {
 	if c.Remote.ConnectTimeoutSeconds < 1 || c.Remote.ConnectTimeoutSeconds > 120 {
 		return fmt.Errorf("remote.connect_timeout_seconds must be between 1 and 120")
 	}
+	if err := c.validateHub(); err != nil {
+		return err
+	}
 	for _, p := range c.Projects {
 		if p.Name == "" {
 			return fmt.Errorf("project with empty name")
@@ -240,9 +279,41 @@ func (c *Config) ValidateListenSecurity() error {
 	return fmt.Errorf("server.addr %q is not loopback; enable bridge authentication before exposing the management API", addr)
 }
 
+func (c *Config) validateHub() error {
+	switch c.Hub.TLS {
+	case HubTLSAuto, HubTLSOff:
+	case HubTLSFiles:
+		if c.Hub.CertFile == "" || c.Hub.KeyFile == "" {
+			return fmt.Errorf("hub.tls = \"files\" needs hub.cert_file and hub.key_file")
+		}
+	default:
+		return fmt.Errorf("hub.tls must be \"auto\", \"files\" or \"off\"")
+	}
+	if c.Hub.Addr != "" {
+		if _, _, err := net.SplitHostPort(c.Hub.Addr); err != nil {
+			return fmt.Errorf("hub.addr %q must be host:port: %w", c.Hub.Addr, err)
+		}
+	}
+	if c.Hub.PublicURL != "" {
+		parsed, err := url.Parse(c.Hub.PublicURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("hub.public_url %q must look like https://host:port", c.Hub.PublicURL)
+		}
+	}
+	return nil
+}
+
 func (c *Config) applyDefaults() {
 	if c.Server.Addr == "" {
 		c.Server.Addr = "127.0.0.1:8765"
+	}
+	c.Hub.Addr = strings.TrimSpace(c.Hub.Addr)
+	c.Hub.TLS = strings.ToLower(strings.TrimSpace(c.Hub.TLS))
+	if c.Hub.TLS == "" {
+		c.Hub.TLS = HubTLSAuto
+		if c.Hub.CertFile != "" || c.Hub.KeyFile != "" {
+			c.Hub.TLS = HubTLSFiles
+		}
 	}
 	if c.DisplayMode == "" {
 		c.DisplayMode = "normal"

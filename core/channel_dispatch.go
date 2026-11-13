@@ -192,6 +192,16 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	}
 
 	agentMsg := channelMessageForAgent(rt.channel, msg)
+	if e.brainHook != nil && sessionWorkspace.AgentID != "" {
+		if brief := strings.TrimSpace(e.brainHook.BrainBrief(ctx, sessionWorkspace.AgentID, msg)); brief != "" {
+			briefed := *agentMsg
+			briefed.Text = brief + "\n\n" + agentMsg.Text
+			agentMsg = &briefed
+			var turn *brainTurn
+			ctx, turn = withBrainTurn(ctx)
+			defer e.finishBrainTurn(ctx, sessionWorkspace.AgentID, msg, turn)
+		}
+	}
 	mode, ok := channelReplyMode(rt.channel)
 	if CodexRemoteControlEnabled(rt.channel) && data["task_id"] != "" && isFeishuLikeChannel(rt.channel.Type) {
 		// Codex remote-control tasks always use one durable status card in
@@ -229,6 +239,15 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 		e.recordChannelDeliveryAttempt(data, nil, false)
 	}
 	e.emit(ctx, HookMessageSent, data)
+}
+
+// finishBrainTurn hands a completed briefed turn's whole answer to the hook.
+// A turn that was stopped or timed out asks for nothing: its answer is cut off.
+func (e *Engine) finishBrainTurn(ctx context.Context, agentID string, msg *Message, turn *brainTurn) {
+	if ctx.Err() != nil || turn == nil || strings.TrimSpace(turn.answer) == "" {
+		return
+	}
+	e.brainHook.BrainFinished(context.WithoutCancel(ctx), agentID, msg, turn.answer)
 }
 
 func (rt *channelRuntime) initialRuntimeConfigurationSetting(sess AgentSession) (RuntimeSetting, bool) {

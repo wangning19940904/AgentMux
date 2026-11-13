@@ -39,6 +39,8 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
     { key: "smtp_port", labelKey: "superAgents.field.smtpPort", placeholder: "465" },
     { key: "from_address", labelKey: "superAgents.field.fromAddress" },
   ],
+  // Bound channels are set in the agent's own settings; they have no fields here.
+  channel: [],
   github_webhook: [
     { key: "agent_login", labelKey: "superAgents.field.agentLogin", required: true, placeholder: "my-agent-bot" },
     { key: "repo", labelKey: "superAgents.field.repo", placeholder: "owner/name" },
@@ -118,6 +120,23 @@ export function isFeishuSource(kind: SuperAgentSourceKind) {
   return kind === "feishu_message" || kind === "feishu_doc";
 }
 
+// ownsBrain reports whether an agent answers with its own Agent instance, made
+// with it, rather than with a router agent.
+export function ownsBrain(agent: SuperAgent): boolean {
+  return Boolean(agent.id) && agent.router_agent_id === agent.id;
+}
+
+// A channel source is a channel bound to the agent's brain: read-only here.
+export function isChannelSource(source: SuperAgentSource): boolean {
+  return source.kind === "channel";
+}
+
+// canStartWorkers reports whether an agent has a worker policy. Without one it
+// only chats.
+export function canStartWorkers(agent: SuperAgent): boolean {
+  return Boolean(agent.auto_workers) || agent.workers.length > 0;
+}
+
 // routerDraft is a router agent the form creates or changes when it saves.
 export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRouter | null): string[] {
   const problems: string[] = [];
@@ -126,9 +145,10 @@ export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRo
   } else if (!agent.router_runtime && !agent.router_agent_id) {
     problems.push("superAgents.problem.router");
   }
-  if (agent.workers.length === 0 && !agent.auto_workers) problems.push("superAgents.problem.noWorkers");
+  // An agent with its own brain may only chat; a router needs someone to work.
+  if (!canStartWorkers(agent) && !ownsBrain(agent)) problems.push("superAgents.problem.noWorkers");
   if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
-  for (const source of agent.sources) {
+  for (const source of agent.sources.filter((item) => !isChannelSource(item))) {
     if (source.enabled && source.allowed_actors.length === 0) problems.push("superAgents.problem.actors");
     if (source.allowed_actors.includes("*") && source.kind !== "feishu_message") problems.push("superAgents.problem.wildcard");
     if (requiredKeys(source).some((key) => !source.config[key]?.trim())) {

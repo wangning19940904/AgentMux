@@ -483,6 +483,21 @@ func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(eventRelaySchema); err != nil {
 		return err
 	}
+	if _, err := s.writer.Exec(deviceSchema); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(deviceReportSchema); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(accountSchema); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(pushSchema); err != nil {
+		return err
+	}
+	if _, err := s.writer.Exec(mailboxSchema); err != nil {
+		return err
+	}
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
 		return err
 	}
@@ -546,6 +561,8 @@ func (s *Store) migrateSQLite() error {
 		{"channels", []string{"owner_tenant_id", "visibility"}},
 		{"triggers", []string{"owner_tenant_id"}},
 		{"orchestrations", []string{"owner_tenant_id"}},
+		{"devices", []string{"owner_tenant_id"}},
+		{"device_pairing_codes", []string{"owner_tenant_id"}},
 	} {
 		for _, column := range owned.columns {
 			if err := s.ensureColumn(owned.table, column, "TEXT"); err != nil {

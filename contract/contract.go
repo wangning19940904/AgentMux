@@ -18,4 +18,6 @@ package contract
 // X-AgentMux-Project compatibility path were removed.
 // 2.1 adds optional private/group conversation defaults to Agent instances.
 // 2.2 adds tenant-scoped durable event subscriptions and loopback callbacks.
-const Version = "2.2"
+// 2.3 adds the optional account field to GET /api/v1/tenancy/self for people
+// signed in to the Console.
+const Version = "2.3"

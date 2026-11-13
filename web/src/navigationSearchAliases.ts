@@ -12,6 +12,11 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "zhinengti", "zhi neng ti", "znt",
     "agent", "agents", "assistant", "bot", "ai agent",
   ],
+  messages: [
+    "消息", "站内消息", "私信", "收件箱", "联系人",
+    "xiaoxi", "xiao xi", "xx", "lianxiren", "lian xi ren", "lxr",
+    "message", "messages", "direct message", "dm", "inbox", "mailbox", "contact", "contacts",
+  ],
   "super-agents": [
     "超级智能体", "超级 Agent", "工单", "常驻智能体",
     "chaoji", "chao ji", "cjznt",

@@ -4,6 +4,9 @@ import "time"
 
 // Tenancy model
 //
+// People who sign in are accounts (see account.go); each owns a tenant
+// namespace of kind TenantKindAccount, so this model scopes them too.
+//
 // AgentMux is one control plane shared by several host applications: a Web UI,
 // a desktop app, a backend service. Each of those is a Tenant. Resources a
 // tenant creates are owned by it and invisible to its peers; the admin
@@ -55,6 +58,9 @@ const (
 	// Orchestrations remain tenant-scoped runtime records, but are no longer
 	// offered as administrator-granted catalogue resources.
 	ResourceTypeOrchestration = "orchestration"
+	// Devices are owned (an administrator can hand one to an account) but
+	// not granted.
+	ResourceTypeDevice = "device"
 )
 
 // grantRank orders the levels so a required level can be compared against a
@@ -152,10 +158,38 @@ type ResourceGrant struct {
 // Principal is the authenticated identity behind a request. Exactly one of
 // Admin or Tenant is meaningful: an admin principal bypasses every ownership
 // check, a tenant principal is confined to its visible set.
+//
+// Account is set when a person signed in. An administrator account is an
+// admin principal; a member account is a tenant principal whose tenant is the
+// account's own namespace. The bridge token, tenant tokens and the loopback
+// fallback carry no account.
 type Principal struct {
 	Admin      bool
 	TenantID   string
 	TenantName string
+	Account    *AccountIdentity
+}
+
+// OwnerTenantID is the namespace that should own what this principal
+// creates on its own behalf, such as a device it pairs. It is empty for the
+// bridge token and other callers that are not a person or a tenant, which
+// leaves the resource unassigned and visible to administrators only.
+func (p *Principal) OwnerTenantID() string {
+	if p == nil {
+		return ""
+	}
+	if p.Account != nil {
+		return p.Account.TenantID
+	}
+	if !p.Admin {
+		return p.TenantID
+	}
+	return ""
+}
+
+// IsMember reports whether the principal is a signed-in member account.
+func (p *Principal) IsMember() bool {
+	return p.IsTenant() && p.Account != nil
 }
 
 // IsTenant reports whether the principal is a scoped tenant.

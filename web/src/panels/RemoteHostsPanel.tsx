@@ -1,8 +1,10 @@
 import {
   CheckCircle2,
   Fingerprint,
+  Copy,
   KeyRound,
   Laptop,
+  Link2,
   Pencil,
   Plus,
   RefreshCw,
@@ -17,6 +19,7 @@ import {
   activeRemoteID,
   setActiveMachineScope,
   api,
+  DevicePairingCode,
   DiscoveredRemoteHost,
   notifyRemoteHostsChanged,
   RemoteConnectionError,
@@ -69,6 +72,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<RemoteHost | null>(null);
+  const [pairingOpen, setPairingOpen] = useState(false);
+  const [pairingName, setPairingName] = useState("");
+  const [pairing, setPairing] = useState<DevicePairingCode | null>(null);
+  const [pairingBusy, setPairingBusy] = useState(false);
+  const [pairingError, setPairingError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const deleteInFlight = useRef(false);
@@ -469,6 +477,27 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     setUpdatingAll(false);
   };
 
+  const createPairingCode = async () => {
+    setPairingBusy(true);
+    setPairingError("");
+    try {
+      setPairing(await api.createDevicePairingCode(pairingName.trim()));
+    } catch (cause) {
+      setPairingError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPairingBusy(false);
+    }
+  };
+
+  const closePairing = () => {
+    setPairingOpen(false);
+    setPairing(null);
+    setPairingName("");
+    setPairingError("");
+    // The machine may have joined while the command was on screen.
+    void load();
+  };
+
   return (
     <div className="page-stack remote-hosts-page">
       {deleteCandidate && (
@@ -789,6 +818,10 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               <Plus size={15} />
               {t("remote.add")}
             </button>
+            <button className="ghost-action" type="button" onClick={() => setPairingOpen(true)} title={t("remote.linkHint")}>
+              <Link2 size={14} />
+              {t("remote.linkAdd")}
+            </button>
             <button
               className="ghost-action"
               type="button"
@@ -822,6 +855,49 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             {error || message}
           </div>
         )}
+        {pairingOpen && (
+          <div className="remote-pairing" role="group" aria-label={t("remote.linkAdd")}>
+            <header>
+              <div>
+                <strong>{t("remote.linkAdd")}</strong>
+                <span>{t("remote.linkHint")}</span>
+              </div>
+              <button className="ghost-action" type="button" onClick={closePairing}>
+                <X size={15} />
+                {t("common.close")}
+              </button>
+            </header>
+            {!pairing && (
+              <div className="remote-pairing-form">
+                <input
+                  aria-label={t("remote.linkName")}
+                  placeholder={t("remote.linkName")}
+                  value={pairingName}
+                  maxLength={120}
+                  onChange={(event) => setPairingName(event.target.value)}
+                />
+                <button className="action" type="button" disabled={pairingBusy} onClick={() => void createPairingCode()}>
+                  {pairingBusy ? t("common.loading") : t("remote.linkCreate")}
+                </button>
+              </div>
+            )}
+            {pairing && (
+              <div className="remote-pairing-result">
+                <span>{t("remote.linkRun", { time: new Date(pairing.expires_at).toLocaleTimeString() })}</span>
+                <div className="remote-pairing-command">
+                  <code>{pairing.command}</code>
+                  <button className="ghost-action" type="button" onClick={() => void navigator.clipboard?.writeText(pairing.command)}>
+                    <Copy size={14} />
+                    {t("remote.linkCopy")}
+                  </button>
+                </div>
+                <span>{t("remote.linkDials", { url: pairing.hub_url })}</span>
+                {pairing.warning && <span className="remote-pairing-warning">{pairing.warning}</span>}
+              </div>
+            )}
+            {pairingError && <div className="remote-feedback error" role="alert">{pairingError}</div>}
+          </div>
+        )}
         <div className="remote-host-list">
           {loading && <div className="empty-state">{t("common.loading")}</div>}
           {!loading && hosts.length === 0 && (
@@ -836,7 +912,8 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             const snapshot = snapshots[host.id] ?? {
               health: host.trusted ? "checking" as const : "unverified" as const,
             };
-            const updateAvailable = isRemoteUpdateAvailable(snapshot.version, localVersion);
+            const linked = host.kind === "link";
+            const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
             const healthTone = snapshot.health === "healthy"
@@ -860,8 +937,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   <header>
                     <div>
                       <strong>{host.name}</strong>
-                      <span>{host.user}@{host.host}:{host.port}</span>
-                      {host.ssh_alias && host.ssh_alias !== host.name && (
+                      <span>
+                        {linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
+                        {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
+                      </span>
+                      {!linked && host.ssh_alias && host.ssh_alias !== host.name && (
                         <span>{t("remote.sshAlias", { alias: host.ssh_alias })}</span>
                       )}
                     </div>
@@ -904,10 +984,12 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                           ? t("remote.update")
                           : t("remote.checkUpdates")}
                   </button>
-                  <button className="ghost-action" onClick={() => edit(host)}>
-                    <Pencil size={14} />
-                    {t("common.edit")}
-                  </button>
+                  {!linked && (
+                    <button className="ghost-action" onClick={() => edit(host)}>
+                      <Pencil size={14} />
+                      {t("common.edit")}
+                    </button>
+                  )}
                   <button
                     className="ghost-action danger-action"
                     type="button"
