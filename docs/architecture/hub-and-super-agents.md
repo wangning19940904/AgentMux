@@ -126,12 +126,97 @@ on day one (§4.3).
 A node only ever needs *outbound* HTTPS to the hub URL, and it honors the proxy
 variables AgentMux already imports from the login shell.
 
-### 4.2 Hub high availability (later)
+### 4.2 Hub storage and a standby hub
 
-The hub is a single process at first. Its state lives in PostgreSQL, so running
-more than one hub process later needs Postgres `LISTEN/NOTIFY` (or a small bus)
-to fan out live frames, plus sticky routing of node connections. Node links
-reconnect with jitter and resume from cursors, so restarting the hub is safe.
+The hub starts as a single process, and node links reconnect with jitter and
+resume from cursors, so restarting it is safe. A second machine can later run as
+a **standby hub** that takes over when the primary shuts down or loses its
+network. Both rely on the rules below.
+
+**One PostgreSQL instance per machine.** Every machine, hub or not, runs exactly
+one PostgreSQL instance holding its own local data. A machine that can act as a
+hub keeps the shared data in a separate `hub` schema in the same database. Hub
+data never needs its own instance, and local data is never copied to another
+machine.
+
+**Only the hub service writes hub data.** Nodes never connect to a hub's
+PostgreSQL. They send reports over the node link (§4.3), and the active hub
+process validates them and writes the `hub` schema:
+
+- No database port or password leaves the hub machine. Each node authenticates
+  with its own device token and can only write its own records.
+- The `hub` tables can change without upgrading every node; only the link
+  protocol has to stay compatible.
+- Every report carries `(node_id, stream, seq)`, so a node can resend after a
+  reconnect or a failover and the hub drops duplicates.
+- With a single writer, fencing a stale primary (below) is a check in one place.
+
+**The standby copies hub data through the hub service, not through PostgreSQL.**
+PostgreSQL's own replication was rejected for three reasons:
+
+- Physical streaming replication copies a whole instance, local data included,
+  and leaves the copy read-only, so the standby could no longer write its own
+  local data. It also needs the same major version on both ends, and the first
+  two hubs run PostgreSQL 18 and 16.
+- Logical replication of the `hub` schema avoids both problems, but the standby's
+  subscription is an ordinary PostgreSQL client connection to the primary. The
+  two hubs would need a direct network path and a database port open between
+  them, which defeats the outbound-only design. It also needs `wal_level=logical`
+  and a restart, and copies neither schema changes nor sequences.
+- Each hub would have to manage the database's publications and subscriptions,
+  and swap their direction on every failover.
+
+Instead, the standby replicates over the same path as any node:
+
+1. The standby joins the primary as a link peer with `role=standby`, through the
+   relay, like any node. No extra port or network path is needed.
+2. The hub service appends every write to `hub.changes`
+   (`seq`, `epoch`, `table`, `key`, `op`, `row jsonb`) in the same transaction as
+   the write itself.
+3. The standby streams `hub.changes` from its cursor, applies each change in
+   `seq` order to its own `hub` schema, and acks cumulatively, like a report
+   stream. If its cursor is older than the pruned log, it first loads a snapshot,
+   then resumes from the snapshot's `seq`.
+4. Uploaded blobs (artifacts, result files) follow as content-addressed fetches
+   over the same link.
+5. Each hub runs its own schema migrations at startup, as AgentMux does today.
+   A standby on an older schema version stops applying changes and reports the
+   mismatch rather than writing the wrong columns.
+
+This works between any PostgreSQL versions and wherever both machines can reach
+the relay.
+
+**Failover and fencing**
+
+- **Lease:** the relay forwards the public address (443) to whichever hub holds
+  a short lease (about 15 seconds). Each hub keeps its own outbound tunnel to the
+  relay and renews the lease while it is healthy. When the lease expires, the
+  standby takes it and the relay switches forwarding.
+- **Epoch:** each lease grant increments an epoch. The hub stamps the epoch on
+  every change and every frame it sends. A hub without a current lease accepts no
+  writes, and nodes ignore frames from an older epoch.
+- **Same identity:** the standby holds the same TLS certificate and key, copied
+  over the link when it pairs, so nodes' pinned fingerprints keep working after
+  a failover.
+- **No lost writes:** while a standby is connected, the primary acks a node's
+  report only after the standby has acked the matching change. Nodes keep each
+  report in their outbox until it is acked, so whatever the old primary held but
+  had not copied is resent to the new primary. Without a standby, the primary
+  acks after its own commit.
+- **Return of the old primary:** it rejoins as the standby. It drops its changes
+  after the new primary's starting `seq`, since none of them were acked, and
+  resyncs from there. Moving the primary role back is a manual step in the
+  Console.
+
+Live frames still come from one hub process at a time. Running several active
+hub processes on one database (with `LISTEN/NOTIFY` fan-out and sticky routing)
+remains out of scope.
+
+**First deployment:** this Mac is the primary and `bytedance-macmini` the standby.
+Its AgentMux database runs on the bundled PostgreSQL 16, while this Mac runs 18;
+the copy through the hub service does not care. The relay currently forwards 443
+to a single hub through an SSH reverse tunnel and `systemd-socket-proxyd`. The
+lease requires replacing that with a small relay process.
 
 ### 4.3 The node link
 
@@ -541,6 +626,7 @@ Ordered by value relative to effort, given what already exists.
 | D3 | Mobile | PWA first / native first | PWA in P3, native in P5 if needed |
 | D4 | How long to keep the `AgentInstance` API | One minor release / until Contract 4.0 | Shims until Contract 4.0, following the [LEGACY.md](../../LEGACY.md) policy |
 | D5 | Account sign-in on the hub | Email code / OIDC (Feishu, GitHub, Google) | Email code plus Feishu OIDC |
+| D6 | Hub storage and standby replication | A separate hub instance / PostgreSQL replication / copy through the hub service | **Decided (2026-11-13):** one instance per machine with a `hub` schema; only the hub service writes it; the standby copies it through the hub service over the link (§4.2) |
 
 ## 12. Risks
 
