@@ -2,6 +2,7 @@ import { ArrowRightLeft, CheckCircle2, RefreshCw, ShieldAlert } from "lucide-rea
 import { useMemo, useState } from "react";
 import { api, type FleetSyncApplyResult, type FleetSyncPathMapping, type FleetSyncPreview, type RemoteHost } from "../api";
 import { useI18n } from "../i18n";
+import { confirmAction } from "../components/ConfirmDialog";
 
 const CATEGORIES = ["agents", "providers", "channels", "triggers", "mcp", "skills", "guard", "memory"] as const;
 
@@ -42,7 +43,7 @@ export function FleetSyncCenter({ hosts }: { hosts: RemoteHost[] }) {
   }
 
   async function apply() {
-    if (!preview || !window.confirm(t("fleetSync.applyConfirm"))) return;
+    if (!preview || !(await confirmAction(t("fleetSync.applyConfirm")))) return;
     setBusy("apply"); setError("");
     try { setResult(await api.applyFleetSync(preview.plan_id)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }

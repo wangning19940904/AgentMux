@@ -7,6 +7,7 @@ import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { TargetBadge, targetKey } from "../components/TargetBadge";
 import { fmt } from "./OverviewPanel";
+import { confirmAction } from "../components/ConfirmDialog";
 
 const PERIODS = ["hourly", "daily", "weekly", "monthly", "session", "blocks"];
 const RANGES = ["all", "today", "7d", "month", "custom"] as const;
@@ -81,8 +82,8 @@ export function UsagePanel() {
   };
 
   async function runCursorAction(source: CursorUsageSourceStatus, action: "connect" | "sync" | "repair" | "disconnect") {
-    if (action === "connect" && !window.confirm(t("usage.cursorConsent"))) return;
-    if (action === "disconnect" && !window.confirm(t("usage.cursorDisconnectConfirm"))) return;
+    if (action === "connect" && !(await confirmAction(t("usage.cursorConsent")))) return;
+    if (action === "disconnect" && !(await confirmAction(t("usage.cursorDisconnectConfirm"), { danger: true }))) return;
     const key = targetKey(source.target_id, source.source);
     setSourceBusy(`${key}:${action}`);
     setSourceError("");

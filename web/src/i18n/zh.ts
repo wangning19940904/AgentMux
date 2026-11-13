@@ -828,6 +828,8 @@ export const zh: Record<keyof typeof en, string> = {
     "common.source": "来源",
     "common.description": "描述",
     "common.cancel": "取消",
+    "common.confirm": "确定",
+    "common.confirmTitle": "请确认",
     "common.close": "关闭",
     "common.actions": "操作",
     "common.type": "类型",

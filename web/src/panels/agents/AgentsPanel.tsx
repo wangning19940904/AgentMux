@@ -31,6 +31,7 @@ import { AgentForm } from "./AgentForm";
 import { ChannelLogoGroup } from "./ChannelLogo";
 import { AgentAvatar } from "./AgentAvatar";
 import { RuntimeBadge } from "./RuntimeBadge";
+import { confirmAction } from "../../components/ConfirmDialog";
 
 // An agent's workers, triggers and Tickets open over the Agents page.
 const AgentWork = lazy(() => import("../SuperAgentsPanel").then((module) => ({ default: module.SuperAgentsPanel })));
@@ -303,7 +304,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
 
   // An agent that answers with a router agent is deleted with its router.
   async function removeRoutedAgent(agent: SuperAgent) {
-    if (rowBusy || !window.confirm(t("agents.work.deleteConfirm", { name: agent.name }))) return;
+    if (rowBusy || !(await confirmAction(t("agents.work.deleteConfirm", { name: agent.name }), { danger: true, title: t("agents.deleteTitle", { name: agent.name }), confirmLabel: t("common.delete") }))) return;
     setRowBusy(`delete:${agent.id}`);
     setNotice("");
     setNoticeIsError(false);

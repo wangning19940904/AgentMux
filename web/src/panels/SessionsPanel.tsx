@@ -29,6 +29,7 @@ import { useAsync } from "../useAsync";
 import { TargetBadge } from "../components/TargetBadge";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { Drawer } from "../components/ui";
+import { confirmAction } from "../components/ConfirmDialog";
 
 const PROVIDERS = [
   { id: "", labelKey: "sessions.allProviders" },
@@ -270,7 +271,7 @@ export function SessionsPanel() {
 
 	async function stopConversation() {
 		if (!selected?.channel_id || !selected.conversation_id || !selectedCanStop || stopping) return;
-		if (!window.confirm(t("sessions.stopConfirm"))) return;
+		if (!(await confirmAction(t("sessions.stopConfirm"), { danger: true }))) return;
 		const stoppingOwnMessage = busy === "message";
 		stopRequestedRef.current = true;
 		setStopping(true);
@@ -357,7 +358,7 @@ export function SessionsPanel() {
   }
 
   async function respondInteraction(interactionID: string, nonce: string, decision: string, questionIDs: string[]) {
-    if (decision === "acceptForSession" && !window.confirm(t("sessions.allowSessionConfirm"))) return;
+    if (decision === "acceptForSession" && !(await confirmAction(t("sessions.allowSessionConfirm")))) return;
     setBusy(`interaction-${interactionID}`);
     try {
       const answers: Record<string, string[]> = {};

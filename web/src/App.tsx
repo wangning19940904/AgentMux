@@ -81,6 +81,7 @@ import {
   type TenancyGateState,
 } from "./tenancyGate";
 import { SignInGate } from "./SignInGate";
+import { ConfirmHost } from "./components/ConfirmDialog";
 import {
   navigationGroupForTab,
   primaryGroupDestination,
@@ -294,6 +295,7 @@ export function App() {
           />
         </MeetingProvider>
       </SignInGate>
+      <ConfirmHost />
     </I18nProvider>
   );
 }

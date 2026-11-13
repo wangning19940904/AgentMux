@@ -42,6 +42,7 @@ import {
   ToolInstallCandidate,
   toolUpdateCandidates,
 } from "./tools/toolCatalogModel";
+import { confirmAction } from "../components/ConfirmDialog";
 
 type ToolBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "description";
 type InternalInstallTarget = { candidate: ToolInstallCandidate; targetIDs: string[] };
@@ -312,16 +313,16 @@ export function ToolsPanel() {
     }
   }
 
-  function requestCLIUninstall(row: InstalledToolRow) {
+  async function requestCLIUninstall(row: InstalledToolRow) {
     if (!row.cli) return;
     const linked = row.cli.spec.linked_skills?.map((skill) => skill.name).join(", ");
     const name = linked ? `${row.name} + ${linked}` : row.name;
-    if (!window.confirm(t("tools.uninstallConfirm", { tool: name }))) return;
+    if (!(await confirmAction(t("tools.uninstallConfirm", { tool: name }), { danger: true }))) return;
     void runCLIAction(row, "uninstall");
   }
 
   async function uninstallSkill(row: InstalledToolRow) {
-    if (!row.skill || !window.confirm(t("tools.uninstallConfirm", { tool: row.name }))) return;
+    if (!row.skill || !(await confirmAction(t("tools.uninstallConfirm", { tool: row.name }), { danger: true }))) return;
     setToolBusy(row.key, "uninstall");
     showNotice("");
     try {

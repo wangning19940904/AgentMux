@@ -32,6 +32,7 @@ import {
   remoteUpdateCandidates,
   type RemoteHostSnapshot,
 } from "./remoteHostModel";
+import { confirmAction } from "../components/ConfirmDialog";
 
 type RemoteForm = {
   id?: string;
@@ -455,7 +456,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     const candidates = remoteUpdateCandidates(hosts.filter((host) => !host.hub_peer), snapshots, localVersion);
     if (candidates.length === 0) return;
     const names = candidates.map((host) => host.name).join("\n");
-    if (!window.confirm(t("remote.updateAllConfirm", { count: candidates.length, names }))) return;
+    if (!(await confirmAction(t("remote.updateAllConfirm", { count: candidates.length, names })))) return;
 
     setUpdatingAll(true);
     setMessage("");
