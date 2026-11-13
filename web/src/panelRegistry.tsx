@@ -20,6 +20,7 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   skills: lazy(() => import("./panels/SkillsPanel").then((module) => ({ default: module.SkillsPanel }))),
   mcp: lazy(() => import("./panels/MCPPanel").then((module) => ({ default: module.MCPPanel }))),
   feedback: lazy(() => import("./panels/FeedbackPanel").then((module) => ({ default: module.FeedbackPanel }))),
+  messages: lazy(() => import("./panels/MessagesPanel").then((module) => ({ default: module.MessagesPanel }))),
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
 };
 

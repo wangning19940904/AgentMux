@@ -2,7 +2,7 @@
 // never through a selected remote machine, and never carry a previewed
 // tenant scope: a device subscribes as the person signed in to this Console.
 
-export type PushKind = "waiting" | "tickets" | "machines";
+export type PushKind = "waiting" | "tickets" | "machines" | "messages";
 
 export type PushSubscriptionRecord = {
   id: string;

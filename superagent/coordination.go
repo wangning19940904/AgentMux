@@ -71,6 +71,7 @@ type placeView struct {
 	To     string       `json:"to"`
 	Kind   string       `json:"kind"`
 	Name   string       `json:"name,omitempty"`
+	About  string       `json:"about,omitempty"`
 	People []personView `json:"people,omitempty"`
 }
 
@@ -144,6 +145,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			}
 		}
 	}
+	view.Places = append(view.Places, s.mailPlaces(ctx, agent)...)
 	view.Where = describeThread(trigger.ThreadKey, trigger.DedupeKey, names)
 	view.Asks = s.asksIn(agent.ID, trigger.ThreadKey, names)
 	now := s.now()
@@ -238,6 +240,8 @@ func describeThread(threadKey, messageID string, chatNames map[string]string) st
 		return "Feishu document " + strings.TrimPrefix(threadKey, "feishu_doc:")
 	case strings.HasPrefix(threadKey, "console:"):
 		return "the AgentMux Console"
+	case strings.HasPrefix(threadKey, mailThreadPrefix):
+		return "direct messages with " + strings.TrimPrefix(threadKey, mailThreadPrefix)
 	case strings.HasPrefix(threadKey, channelSourcePrefix):
 		return "a chat with you on channel " + strings.SplitN(strings.TrimPrefix(threadKey, channelSourcePrefix), ":", 2)[0]
 	}
@@ -382,6 +386,8 @@ func (s *Service) resolveDestination(ctx context.Context, agent core.SuperAgent,
 			}
 		}
 		return destination{}, fmt.Errorf("cannot post to %q: it is not one of this Super Agent's Feishu groups", to)
+	case strings.HasPrefix(to, core.MailPartyAgent+":") || strings.HasPrefix(to, core.MailPartyPerson+":"):
+		return s.mailDestination(ctx, agent, to)
 	case strings.HasPrefix(to, "github:"):
 		if known, ok := s.knownThread(ctx, agent.ID, to); ok {
 			return known, nil

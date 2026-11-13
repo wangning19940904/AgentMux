@@ -115,11 +115,17 @@ func (s *Service) refreshClaims(ctx context.Context) error {
 // sendReply delivers one message back to where a Trigger came from. Console
 // requests have no reply path; their result stays on the Ticket.
 func (s *Service) sendReply(ctx context.Context, agent core.SuperAgent, sourceID string, target []byte, text string) error {
-	if strings.TrimSpace(text) == "" || len(target) == 0 || s.replies == nil {
+	if strings.TrimSpace(text) == "" || len(target) == 0 {
 		return nil
 	}
 	source, ok := replySource(agent, sourceID)
 	if !ok {
+		return nil
+	}
+	if source.Kind == core.SuperAgentSourceMailbox {
+		return s.sendMail(ctx, target, text)
+	}
+	if s.replies == nil {
 		return nil
 	}
 	err := s.replies.Send(ctx, source, target, text)

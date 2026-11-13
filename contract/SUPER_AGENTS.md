@@ -312,6 +312,76 @@ machine, each with its agent's name and the machine its worker runs on. Reply ad
 queued inputs are left out and long output is cut. Machines linked to a hub report this list
 to it.
 
+## Direct messages
+
+Agents write to each other, and people write to agents, through AgentMux's own mailbox
+rather than an outside channel.
+
+**Addresses.** `agent:<id>` is an agent on this machine, `agent:<id>@<device id>` an agent on
+a machine linked to this hub, and `person:<login>` someone with an account here. A linked
+machine names its hub's parties `agent:<id>@hub` and `person:<login>@hub`. A conversation is
+the messages between two addresses; there are no groups.
+
+**For an agent.** A message to an agent is an event with `source` `mailbox` on the thread
+`mail:<sender address>`, one continuing thread per sender. The router's reply to it is sent
+back as a message, and so are a Ticket's updates when the message started one. The router's
+PLACES list the agents and people it may write to, with each agent's machine, description
+and whether its machine is online; `post` with `"to"` set to one of those addresses sends a
+message. A `post` to an address that is not listed is refused before anything is carried out.
+When the router posted on behalf of another thread, the answer's event lists that thread
+under QUESTIONS YOU ASKED HERE, as for other places.
+
+**Who may write to whom.**
+
+- Parties with the same owner: the agents of one account, the agents on its devices, and the
+  person. Administrators are one owner.
+- An administrator, to any agent.
+- Anyone, to a party that wrote to them first.
+- Parties joined by an accepted contact. `POST /api/v1/mailbox/contacts {"a","b"}` makes one:
+  accepted at once when the caller answers for both sides, otherwise `pending` with
+  `waiting_for` naming the side whose owner (or an administrator) must call
+  `POST /api/v1/mailbox/contacts/accept {"id"}`. Asking for a contact the other side already
+  asked for accepts it. `DELETE /api/v1/mailbox/contacts?id=` ends, declines or withdraws one.
+- People do not write to people.
+- Two agents may trade at most 40 messages an hour; further messages are refused until a
+  person has had time to look.
+
+**Across machines.** Every machine keeps the messages its own parties sent and received.
+A message for another machine goes through the hub:
+
+- A linked machine sends it up its link (`POST /uplink/v1/mail/messages`). The link names
+  the machine, so it can only send for its own agents. The hub applies the rules above,
+  keeps the message and passes it on.
+- The hub passes a message down the recipient's link to `POST /api/v1/mailbox/deliver`, an
+  administrator's route on that machine. The machine accepts what its hub delivers.
+- A message keeps its id on the way, and a machine that receives one twice keeps it once.
+- Whichever machine holds an undelivered message retries it every 20 seconds and when the
+  recipient's machine reconnects. After 7 days it gives up and records why (`failed_at`,
+  `error`). A refusal, such as parties that are not contacts or an agent that no longer
+  exists, fails the message at once and is recorded on the event that sent it.
+- A linked machine learns who its agents may reach elsewhere from the hub
+  (`GET /uplink/v1/mail/directory?agent=<id>`), and keeps the answer for a minute.
+- People on a linked machine use the hub's Console to write to agents elsewhere.
+- A hub or a machine whose AgentMux predates direct messages refuses them with a message
+  naming the update.
+
+**For the Console.**
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/mailbox` | The caller's conversations with agents, the conversations of their agents they may watch, the unread count and the addresses they answer for |
+| `GET /api/v1/mailbox/messages?with=<address>` | The caller's conversation with an address, oldest first; marks it read |
+| `GET /api/v1/mailbox/messages?with=<a>&and=<b>` | A conversation between two other parties, when the caller answers for one of them |
+| `POST /api/v1/mailbox/messages {"to","text"}` | Send a message as the caller; `422` with the reason when it is refused |
+| `GET /api/v1/mailbox/directory` | Every party the caller can name, and those they may write to now |
+| `GET /api/v1/mailbox/contacts` | The contacts with a side the caller answers for |
+
+A message has `delivered_at` once it reached its recipient's machine, or for a person their
+inbox, and `read_at` once that person opened the conversation. Members reach these routes
+for the parties they own. A caller without an account, such as the bridge token, is
+`person:admin`. When a message reaches a person, their devices get a push notification of
+kind `messages` that names the sender and never the text.
+
 ## Router agents
 
 A router agent is an Agent made only to route, kept apart from ordinary Agents. The

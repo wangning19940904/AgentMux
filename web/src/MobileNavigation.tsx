@@ -15,7 +15,16 @@ export type MobileNavItem<T extends string> = { id: T; labelKey: string; icon: I
 export type MobileNavGroup<T extends string> = { id: string; labelKey: string; icon: Icon; items: MobileNavItem<T>[] };
 
 // The tab bar shows these destinations, in this order, when they exist.
-export const MOBILE_TAB_IDS = ["overview", "agents", "super-agents", "machines"] as const;
+export const MOBILE_TAB_IDS = ["overview", "agents", "super-agents", "messages", "machines"] as const;
+
+// A badge is a small count on a destination, such as unread messages.
+export type MobileNavBadges = Partial<Record<string, number>>;
+
+function NavBadge({ count, className }: { count: number | undefined; className: string }) {
+  const { t } = useI18n();
+  if (!count || count <= 0) return null;
+  return <span className={className} aria-label={t("messages.unreadCount", { count })}>{count > 99 ? "99+" : count}</span>;
+}
 
 export function mobileTabItems<T extends string>(items: MobileNavItem<T>[]): MobileNavItem<T>[] {
   return MOBILE_TAB_IDS
@@ -26,6 +35,7 @@ export function mobileTabItems<T extends string>(items: MobileNavItem<T>[]): Mob
 export function MobileTabBar<T extends string>({
   items,
   active,
+  badges,
   drawerOpen,
   isDisabled,
   onSelect,
@@ -33,6 +43,7 @@ export function MobileTabBar<T extends string>({
 }: {
   items: MobileNavItem<T>[];
   active: T;
+  badges?: MobileNavBadges;
   drawerOpen: boolean;
   isDisabled: (id: T) => boolean;
   onSelect: (id: T) => void;
@@ -40,6 +51,8 @@ export function MobileTabBar<T extends string>({
 }) {
   const { t } = useI18n();
   const moreActive = drawerOpen || !items.some((item) => item.id === active);
+  // A count on a page that is not in the tab bar shows as a dot on More.
+  const hiddenUnread = Object.entries(badges ?? {}).some(([id, count]) => (count ?? 0) > 0 && !items.some((item) => item.id === id));
   return (
     <nav className="mobile-tab-bar" aria-label={t("nav.primary")}>
       {items.map((item) => {
@@ -56,6 +69,7 @@ export function MobileTabBar<T extends string>({
           >
             <Icon size={20} aria-hidden="true" />
             <span>{t(`nav.mobile.${item.id}`)}</span>
+            <NavBadge count={badges?.[item.id]} className="nav-badge mobile-tab-badge" />
           </button>
         );
       })}
@@ -69,6 +83,7 @@ export function MobileTabBar<T extends string>({
       >
         <Menu size={20} aria-hidden="true" />
         <span>{t("nav.mobile.more")}</span>
+        {hiddenUnread && <i className="nav-badge-dot" aria-hidden="true" />}
       </button>
     </nav>
   );
@@ -79,6 +94,7 @@ export function MobileDrawer<T extends string>({
   overview,
   groups,
   active,
+  badges,
   isDisabled,
   onSelect,
   onClose,
@@ -88,6 +104,7 @@ export function MobileDrawer<T extends string>({
   overview: MobileNavItem<T>;
   groups: MobileNavGroup<T>[];
   active: T;
+  badges?: MobileNavBadges;
   isDisabled: (id: T) => boolean;
   onSelect: (id: T) => void;
   onClose: () => void;
@@ -130,6 +147,7 @@ export function MobileDrawer<T extends string>({
       >
         <Icon size={17} aria-hidden="true" />
         <span>{t(item.labelKey)}</span>
+        <NavBadge count={badges?.[item.id]} className="nav-badge" />
       </button>
     );
   };

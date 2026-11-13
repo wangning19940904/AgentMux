@@ -24,6 +24,10 @@ func (s *Server) SetSuperAgents(service *superagent.Service, directory superagen
 	s.superAgents = service
 	s.feishuDirectory = directory
 	s.feishuUser, _ = directory.(superagent.FeishuUserDirectory)
+	if s.mail != nil && service != nil {
+		s.mail.SetAgents(service)
+		service.SetMailbox(s.mail)
+	}
 }
 
 // RemoteHosts exposes the SSH host manager to the Super Agent worker fleet. It

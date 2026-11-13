@@ -20,6 +20,7 @@ import (
 	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
+	"github.com/wangning19940904/AgentMux/mailbox"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	pushpkg "github.com/wangning19940904/AgentMux/push"
@@ -62,6 +63,7 @@ type Server struct {
 	devices            *deviceBackend
 	node               *nodeLink
 	superAgents        *superagent.Service
+	mail               *mailbox.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory
 	feishuUserAuthMu   sync.Mutex
@@ -191,6 +193,7 @@ func New(deps Dependencies) *Server {
 	}
 	s.setupPush(deps.PushSender)
 	s.setupLink()
+	s.setupMailbox()
 	s.routes()
 	if s.orchestrations != nil {
 		go s.orchestrations.Recover()
@@ -259,6 +262,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	s.node.run(ctx)
+	if s.mail != nil {
+		go s.mail.Run(ctx)
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

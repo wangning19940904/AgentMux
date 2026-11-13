@@ -6,6 +6,7 @@ export * from "./types";
 export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
+export * from "./mailbox";
 import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del, delChecked } from "./client";
 import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";

@@ -217,6 +217,9 @@ func replySource(agent core.SuperAgent, sourceID string) (core.SuperAgentSource,
 			return source, true
 		}
 	}
+	if sourceID == mailSourceID {
+		return core.SuperAgentSource{ID: sourceID, Kind: core.SuperAgentSourceMailbox, Enabled: true}, true
+	}
 	if channelID, ok := strings.CutPrefix(sourceID, channelSourcePrefix); ok && channelID != "" {
 		return core.SuperAgentSource{
 			ID: sourceID, Kind: core.SuperAgentSourceChannel, Enabled: true,

@@ -92,6 +92,13 @@ var accountMemberRoutePolicy = map[string][]string{
 	"/api/v1/devices/pairing-codes": {http.MethodPost},
 	"/api/v1/devices/reports":       {http.MethodGet},
 	"/api/v1/auth/password":         {http.MethodPost},
+	// Direct messages: a member's own conversations with agents, and the
+	// contacts of what they own. The mailbox narrows every call to that.
+	"/api/v1/mailbox":                 {http.MethodGet},
+	"/api/v1/mailbox/messages":        {http.MethodGet, http.MethodPost},
+	"/api/v1/mailbox/directory":       {http.MethodGet},
+	"/api/v1/mailbox/contacts":        {http.MethodGet, http.MethodPost, http.MethodDelete},
+	"/api/v1/mailbox/contacts/accept": {http.MethodPost},
 }
 
 // principalRouteAllowed applies the tenant route policy, widened by the

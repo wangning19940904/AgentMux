@@ -99,6 +99,25 @@ type Client struct {
 	mu           sync.Mutex
 	status       ClientStatus
 	reportStatus reportStatuses
+	session      *yamux.Session
+}
+
+// Uplink returns an HTTP client whose requests travel up the link to the
+// hub, which answers them knowing which device asked. Requests fail with
+// ErrOffline while the node is not connected. Use any host in the URL.
+func (c *Client) Uplink() *http.Client {
+	return &http.Client{Timeout: time.Minute, Transport: &http.Transport{
+		Proxy: nil, DisableKeepAlives: true,
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			c.mu.Lock()
+			session := c.session
+			c.mu.Unlock()
+			if session == nil {
+				return nil, ErrOffline
+			}
+			return session.Open()
+		},
+	}}
 }
 
 // Status reports whether the node is connected now.
@@ -195,6 +214,16 @@ func (c *Client) connect(ctx context.Context) error {
 		status.Connected, status.Since, status.LastError, status.Revoked = true, &now, "", false
 	})
 	c.Log.Info("hub link connected", "hub", c.State.HubURL, "device", c.State.DeviceID)
+	c.mu.Lock()
+	c.session = session
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.session == session {
+			c.session = nil
+		}
+		c.mu.Unlock()
+	}()
 
 	// Each stream the hub opens is one connection to this server.
 	server := &http.Server{Handler: c.Handler, ReadHeaderTimeout: 30 * time.Second}

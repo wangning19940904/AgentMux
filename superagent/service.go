@@ -141,6 +141,7 @@ type Service struct {
 	state            string
 	directory        Directory
 	scopes           FeishuScopeChecker
+	mailbox          Mailbox
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a

@@ -32,7 +32,13 @@ type Event struct {
 	Waiting *Waiting
 	Ticket  *TicketChange
 	Machine *MachineChange
+	Message *MessageArrival
 	Test    bool
+}
+
+// MessageArrival describes a direct message that reached a person.
+type MessageArrival struct {
+	From string // the sender's name
 }
 
 // Waiting describes an agent that needs a person.
@@ -69,7 +75,17 @@ const (
 	routeTickets  = "/#super-agents"
 	routeMachines = "/#machine-status"
 	routeSettings = "/#settings"
+	routeMessages = "/#messages"
 )
+
+// MessageEvent is a direct message that arrived for a person. A newer
+// message from the same sender replaces the older notification.
+func MessageEvent(messageID, fromAddress, fromName string, at time.Time) Event {
+	return Event{
+		ID: "message:" + messageID, Kind: core.PushKindMessages, Tag: "message:" + fromAddress, URL: routeMessages, At: at,
+		Message: &MessageArrival{From: fromName},
+	}
+}
 
 // WaitingEvent is an agent waiting for a person. id names the interaction;
 // machineID is empty for this machine.
@@ -137,6 +153,10 @@ func (e Event) Render(lang string) Message {
 			m.Title = pick(zh, "A Super Agent Ticket finished", "Super Agent 工单已完成")
 		}
 		m.Body = e.Ticket.SuperAgent
+	case e.Message != nil:
+		from := fallback(e.Message.From, pick(zh, "An agent", "有 Agent"))
+		m.Title = pick(zh, from+" sent you a message", from+" 给你发来消息")
+		m.Body = pick(zh, "Open AgentMux to read it.", "打开 AgentMux 查看。")
 	case e.Machine != nil:
 		name := fallback(e.Machine.Name, pick(zh, "A linked machine", "一台关联机器"))
 		if e.Machine.Online {

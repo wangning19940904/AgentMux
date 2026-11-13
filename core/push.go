@@ -11,11 +11,13 @@ const (
 	PushKindTickets = "tickets"
 	// PushKindMachines: a linked machine went offline or came back.
 	PushKindMachines = "machines"
+	// PushKindMessages: an agent wrote to a person directly.
+	PushKindMessages = "messages"
 )
 
 // PushKinds lists every kind, in the order the Console shows them.
 func PushKinds() []string {
-	return []string{PushKindWaiting, PushKindTickets, PushKindMachines}
+	return []string{PushKindWaiting, PushKindTickets, PushKindMachines, PushKindMessages}
 }
 
 // PushSubscription is one browser on one device that asked to be notified.

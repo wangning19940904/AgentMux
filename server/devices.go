@@ -106,9 +106,15 @@ func (s *Server) setupLink() {
 		// Machines coming and going, and agents waiting on them, are
 		// notified from here (push.Service).
 		reports = s.push.ReportSink(s.st, pushDeviceNames{server: s})
-		s.linkHub.SetPresenceListener(s.push.DevicePresence)
 	}
-	s.linkHub.SetUplink(linkpkg.NewReportHandler(reports, s.log))
+	s.linkHub.SetPresenceListener(func(deviceID string, online bool) {
+		s.push.DevicePresence(deviceID, online)
+		// A machine that came back gets the mail that waited for it.
+		if online && s.mail != nil {
+			s.mail.Wake()
+		}
+	})
+	s.linkHub.SetUplink(s.mailUplink(linkpkg.NewReportHandler(reports, s.log)))
 	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push}
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)

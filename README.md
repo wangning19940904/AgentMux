@@ -25,6 +25,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 | Web 控制台 | **AgentMux Console** | `web/` + `server/` |
 | 多 Agent 编排 | **AgentMux Orchestrations** | `orchestration/` + `store/orchestrations.go` |
 | Agent（大脑、来源与 Worker） | **AgentMux Agents** | `superagent/` + `store/superagents.go` + `store/agents.go` |
+| 站内消息（Agent 互相联系、人与 Agent 对话） | **AgentMux Mailbox** | `mailbox/` + `store/mailbox.go` |
 
 - **Connect** — 从消息平台(Feishu/Lark、Telegram、钉钉、Slack、Discord、通用 webhook;插件式扩展)与本地 AI 编码 Agent 对话;**渠道 & 触发**面板统一管理动态渠道、定时任务(cron)、入站 Webhook 与事件回调；飞书会议语音支持为每个渠道配置多个自定义唤醒词。
 - **事件订阅** — 同机服务可使用租户 Token 订阅飞书/Lark 原始事件与 AgentMux 生命周期事件，复用现有长连接。PostgreSQL 持久化、独立 HTTP 回调、HMAC 验签、失败重试及投递记录；共享渠道需要单独授权事件读取权。见 [接入指南](contract/EVENT_SUBSCRIPTIONS.md) 与 [Homebook 示例](integrations/homebook-events/README.md)。
@@ -39,6 +40,7 @@ CLI 名称:`agentmux`(短别名 `amux`)。Linux 上推荐直接使用
 - **Console** — React Web 控制台,内嵌进二进制,统一观测与操作以上模块。手机上自动切换为底部标签栏与「更多」抽屉，可安装到主屏幕，并能推送「Agent 等你批准/回答」「Super Agent 工单结束」「关联机器离线/恢复」通知。见 [手机访问与通知](#手机访问与通知)。
 - **SSH 远程控制** — 从 SSH Config 一键导入远程机器，支持 `ProxyJump` 跳板链与 `ProxyCommand`（例如 Cloudflare），通过代理验证目标主机指纹、SSH 与 AgentMux 服务；服务缺失时自动上传匹配系统架构的 CLI 并启动，再通过 SSH 隧道复用 Console 管理其 Agent、Provider、渠道、Skills、MCP 等配置。
 - **Hub 连接** — 没有公网 IP 或域名的机器可以主动连到一台作为 Hub 的 AgentMux：在 Hub 上运行 `amux hub pair`（或在 Console「系统 → 远程机器 → 连接一台机器」）生成一次性命令，在那台机器上运行 `amux join <token>` 即可。连接由那台机器发起并自动重连，Hub 随后像管理 SSH 机器一样管理它（机器列表、批量查询、Console 代理、Agent 的远程 Worker），不需要 SSH 可达，也不保存它的 API Token。见 [Hub 连接](#hub-连接)。
+- **站内消息** — Agent 之间、人与 Agent 之间直接互发消息：同机直达，跨机器经 Hub 中转，对方离线时保存并在上线后送达。同一归属的各方可直接互写，不同归属之间通过「联系人」连接，由对方的归属人接受后生效。见「站内消息」。
 - **机器状态** — 「运行与分析 → 机器状态」并排展示本机与所有 SSH 机器的在线状态、CPU/负载、内存、磁盘、网速及近 6 分钟走势，以及由 AgentMux 托管的会话中需要你处理、工作中和空闲的数量；磁盘快满、内存紧张、负载高等情况会直接标在卡片上。每台机器独立轮询，离线机器不会拖慢其他机器；采样只在有人查看时运行，10 分钟无人查看后自动停止。
 - **Interactive Sessions** — Agent 可选择结构化事件流或持久 tmux 后端；tmux 会话跨 daemon 重启存活，可在 Console 查看实时终端快照、输入命令或复制本地 attach 命令。
 - **Worktree Isolation** — Agent/Project 可选择每 conversation 独立 Git worktree；渠道话题与 API conversation 使用确定性的 `agentmux/*` 分支，适合多个 Agent 并行改同一仓库。
@@ -223,6 +225,18 @@ amux accounts set-role bob admin|member
 - **设备归属**：设备归属于创建其配对码的账号。管理员（含 bridge token）创建的配对码得到的设备不归属任何人，仅管理员可见。成员可在「租户」页的「我的设备」中配对、查看和移除自己的设备；成员暂不能经 Hub 远程操作设备。
 - **兼容**：bridge token 始终是管理员，CLI、SDK 与现有集成不受影响；tenant token 行为不变。关闭 bridge 时，本机无凭证请求（例如 CLI）仍是管理员——此时登录页只是本机便利，要让账号成为真正的访问边界，请开启 `[bridge]`（对外监听本来就要求开启）。打包的桌面 App 是本机管理员界面，不显示登录页。
 
+## 站内消息
+
+Agent 之间、人与 Agent 之间可以直接互发消息，不经过飞书等外部渠道。同一台机器上的各方直接送达；跨机器的消息经 Hub 中转，对方机器离线时由持有消息的机器保存并重试，上线后送达（7 天仍无法送达则放弃并标记失败）。
+
+- **地址**：`agent:<id>` 是本机的 Agent，`agent:<id>@<设备 ID>` 是 Hub 关联机器上的 Agent，`person:<登录名>` 是本机账号。在关联机器上，Hub 的各方写作 `agent:<id>@hub`、`person:<登录名>@hub`。一段对话就是两个地址之间的全部消息，目前没有群聊。
+- **人 → Agent**：Console 的「消息」页列出自己与各 Agent 的对话，可以给能联系的 Agent 写消息；Agent 的回复进入收件箱，并可推送到手机（「设置 → 本设备通知」中的「Agent 发来的消息」，通知只写发件人，不含正文）。还可以旁观自己名下 Agent 与其他 Agent 的对话（只读），管理员能看到全部。
+- **Agent 收发**：发给 Agent 的消息作为一条 `mailbox` 事件交给它，每个对方各自是一条连续的线程；Agent 的回复自动发回给对方，也可以用 `post` 主动写给名册「PLACES」里列出的 Agent 或人。Agent 代某个线程去问别人时，对方答复到达后会带上「替谁问的」，由它转告原线程。
+- **谁能给谁写**：同一归属的各方（同一账号名下的 Agent、设备上的 Agent 和本人；管理员们算同一归属）可以直接互写；管理员可以写给任何 Agent；别人先写来的，可以回复。除此之外需要**联系人**：在「消息 → 联系人」里把两方连起来，自己能代表两方时立即生效，否则等对方的归属人（或管理员）接受。人与人之间不在这里互发消息。
+- **跨机器的规则由 Hub 决定**：关联机器沿自己的连接发出消息，Hub 以连接确认它来自哪台机器（设备只能替自己的 Agent 发言），按上面的规则检查后保存并转交；Hub 转给设备的消息，设备直接接收。设备上的人要给 Hub 或其他机器上的 Agent 写消息，请使用 Hub 的 Console。
+- **防止空转**：两个 Agent 之间一小时内最多往来 40 条消息，超过后发送被拒绝，等人查看后再继续。
+- 接口：`GET /api/v1/mailbox`（本人的对话、可旁观的对话、未读数）、`GET /api/v1/mailbox/messages?with=<地址>[&and=<地址>]`、`POST /api/v1/mailbox/messages`、`GET /api/v1/mailbox/directory`、`GET|POST|DELETE /api/v1/mailbox/contacts`、`POST /api/v1/mailbox/contacts/accept`。成员可以使用这些接口，范围限于自己名下的各方。
+
 ## 手机访问与通知
 
 Console 在窄屏上换成底部标签栏（总览、Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
@@ -252,6 +266,7 @@ curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.exampl
 - **等我处理的 Agent**：本机或关联机器上的 Agent 发来批准请求或问题。关联机器的请求经它的数据上报（`interactions_pending`，约 30 秒一次）到达 Hub 后通知。
 - **Super Agent 工单**：工单完成（ready）或失败。
 - **关联机器**：机器离线超过 2 分钟后通知，重新上线时再通知；短暂断线不打扰。
+- **Agent 发来的消息**：有 Agent 在「消息」里直接写给你。已有订阅需要在设置里勾选这一类才会收到。
 
 通知只写「谁、在哪台机器、发生了什么」，从不包含消息正文、命令、路径或密钥；点开会进入对应页面（会话记录、Agents、机器状态）。同一类通知在 45 秒内只推一次，期间的其他事件合并成一条摘要。Hub 首次启动时生成并保存自己的 VAPID 密钥对；推送服务返回 404/410（订阅已失效）时自动删除该订阅。推送经浏览器厂商的推送服务送达（Apple、Google、Microsoft、Mozilla），Hub 需要能访问外网，可通过 `HTTPS_PROXY` 走代理。
 

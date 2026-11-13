@@ -84,7 +84,7 @@ func TestPushEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &status) != nil {
 		t.Fatalf("status = %d %s", rec.Code, rec.Body)
 	}
-	if status.PublicKey == "" || status.Subscriber != pushpkg.SubscriberAdmin || len(status.Kinds) != 3 || len(status.Subscriptions) != 0 {
+	if status.PublicKey == "" || status.Subscriber != pushpkg.SubscriberAdmin || len(status.Kinds) != len(core.PushKinds()) || len(status.Subscriptions) != 0 {
 		t.Fatalf("status = %+v", status)
 	}
 

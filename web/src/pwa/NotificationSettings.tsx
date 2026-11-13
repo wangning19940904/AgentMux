@@ -15,7 +15,7 @@ import {
   type PushBlocker,
 } from "./pushSupport";
 
-const ALL_KINDS: PushKind[] = ["waiting", "tickets", "machines"];
+const ALL_KINDS: PushKind[] = ["waiting", "tickets", "machines", "messages"];
 
 type Phase = "loading" | "idle" | "working";
 

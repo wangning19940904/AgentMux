@@ -339,7 +339,7 @@ func TestSubscribeValidatesWhatABrowserSends(t *testing.T) {
 	// Omitted kinds mean all; unknown kinds are dropped; the ID follows the
 	// endpoint so subscribing again updates in place.
 	sub, err := svc.Subscribe(ctx, SubscriberAdmin, good)
-	if err != nil || sub.ID != SubscriptionID(good.Endpoint) || len(sub.Kinds) != 3 || sub.Label != "Phone" {
+	if err != nil || sub.ID != SubscriptionID(good.Endpoint) || len(sub.Kinds) != len(core.PushKinds()) || sub.Label != "Phone" {
 		t.Fatalf("subscribe = %+v, %v", sub, err)
 	}
 	again := subscribeRequest(t, good.Endpoint, core.PushKindMachines, "bogus")

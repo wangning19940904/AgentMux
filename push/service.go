@@ -171,6 +171,20 @@ func (s *Service) Publish(e Event) {
 	s.notifier.Publish(e)
 }
 
+// Notify sends one event to one subscriber's devices now, without the burst
+// collapsing Publish applies: it is for events addressed to a person, such
+// as a direct message. It never blocks the caller on the network.
+func (s *Service) Notify(subscriber string, e Event) {
+	if s == nil || subscriber == "" {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.deliver(s.ctx, Batch{Kind: e.Kind, Events: []Event{e}, At: e.At}, subscriber, "")
+	}()
+}
+
 // DevicePresence records a linked machine connecting or disconnecting.
 func (s *Service) DevicePresence(deviceID string, online bool) {
 	if s == nil {
