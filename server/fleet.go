@@ -96,9 +96,7 @@ func (s *Server) handleFleetTargets(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-			defer cancel()
-			status, err := s.remote.Status(ctx, view.ID)
+			status, err := s.checkRemoteStatus(r.Context(), view.ID)
 			if err != nil {
 				remoteTargets[index].Error = err.Error()
 				return

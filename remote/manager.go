@@ -171,7 +171,11 @@ func (m *Manager) Delete(id string) error {
 // healthy but the loopback service is absent, the matching bundled CLI is
 // installed and started automatically. An API authentication failure triggers
 // credential discovery over the verified SSH connection before saving.
+// With an existing ID, Import verifies a replacement SSH route against the
+// saved host key and only connects to an already-running AgentMux service.
 func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bool) (ImportResult, error) {
+	candidate.ID = strings.TrimSpace(candidate.ID)
+	rebind := candidate.ID != ""
 	if candidate.ID == "" {
 		candidate.ID = "pending-import"
 	}
@@ -179,16 +183,31 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 	if err != nil {
 		return ImportResult{}, err
 	}
-	existing, found := m.find(host)
+	var existing Host
+	var found bool
+	if rebind {
+		existing, found = m.store.Get(host.ID)
+		if !found {
+			return ImportResult{}, os.ErrNotExist
+		}
+		if existing.HostKeyFingerprint == "" || host.SSHAlias == "" {
+			return ImportResult{}, errors.New("changing the SSH route requires a verified machine and an SSH Config alias")
+		}
+	} else {
+		existing, found = m.find(host)
+	}
 	if found {
 		host.ID = existing.ID
+		if strings.TrimSpace(candidate.RemoteAddr) == "" {
+			host.RemoteAddr = existing.RemoteAddr
+		}
 		if host.APIToken == "" {
 			host.APIToken = existing.APIToken
 		}
 		host.HostKeyFingerprint = existing.HostKeyFingerprint
 	}
 	started := time.Now()
-	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, func(fingerprint string) (Host, error) {
+	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, !rebind, func(fingerprint string) (Host, error) {
 		host.HostKeyFingerprint = fingerprint
 		return host, nil
 	})
@@ -198,7 +217,12 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 	if !found {
 		host.ID = ""
 	}
-	saved, err := m.store.Upsert(host, false)
+	var saved Host
+	if rebind {
+		saved, err = m.store.replaceVerifiedRoute(existing, host)
+	} else {
+		saved, err = m.store.Upsert(host, false)
+	}
 	if err != nil {
 		_ = client.Close()
 		return ImportResult{}, err
@@ -218,7 +242,7 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 	}
 	started := time.Now()
 	previousToken := host.APIToken
-	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, func(fingerprint string) (Host, error) {
+	host, client, status, installed, err := m.verifyHost(ctx, host, trustOnFirstUse, true, func(fingerprint string) (Host, error) {
 		return m.store.SetHostKeyFingerprint(id, fingerprint)
 	})
 	if err != nil {
@@ -241,7 +265,7 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 // trusted fingerprint) and ensures the remote AgentMux service is reachable,
 // installing it when absent. On success ownership of the returned client
 // passes to the caller, who must cache or close it.
-func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse bool, pin func(fingerprint string) (Host, error)) (Host, remoteClient, map[string]any, bool, error) {
+func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse, installIfMissing bool, pin func(fingerprint string) (Host, error)) (Host, remoteClient, map[string]any, bool, error) {
 	client, fingerprint, err := m.dial(ctx, host, trustOnFirstUse)
 	if err != nil {
 		return host, nil, nil, false, err
@@ -261,7 +285,15 @@ func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse boo
 			return host, nil, nil, false, err
 		}
 	}
-	status, installed, err := m.ensureService(ctx, client, host)
+	var status map[string]any
+	var installed bool
+	if installIfMissing {
+		status, installed, err = m.ensureService(ctx, client, host)
+	} else {
+		probeCtx, cancel := context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+		status, err = requestStatus(probeCtx, client, host)
+	}
 	var response *remoteHTTPError
 	if errors.As(err, &response) && response.status == http.StatusUnauthorized {
 		authCtx, cancel := context.WithTimeout(ctx, m.timeout)
@@ -284,12 +316,17 @@ func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
 		return TestResult{}, os.ErrNotExist
 	}
 	started := time.Now()
-	status, err := retrySSH(ctx, m.timeout, func(attemptCtx context.Context) (map[string]any, error) {
+	// An initial probe may need a native handshake, OpenSSH authentication,
+	// and a separate tunnel. Give it the configured timeout within the caller's
+	// deadline, then share any remaining time between retries.
+	status, err := retrySSHWithInitialBudget(ctx, m.timeout, m.timeout, func(attemptCtx context.Context) (map[string]any, error) {
 		var usedMu sync.Mutex
 		var used remoteClient
 		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true,
 			DialContext: func(_ context.Context, network, _ string) (net.Conn, error) {
-				conn, client, err := m.dialOnce(attemptCtx, host, network)
+				// Health shares client initialization and OpenSSH's tunnel
+				// startup slot without waiting behind every queued data request.
+				conn, client, err := m.openTunnel(attemptCtx, host, network)
 				usedMu.Lock()
 				used = client
 				usedMu.Unlock()
@@ -581,11 +618,15 @@ func (m *Manager) dialOnce(ctx context.Context, host Host, network string) (conn
 		return nil, nil, err
 	}
 	defer func() { err = sshAttemptError(ctx, err); gate.finish(err) }()
-	client, err = m.client(ctx, host)
+	return m.openTunnel(ctx, host, network)
+}
+
+func (m *Manager) openTunnel(ctx context.Context, host Host, network string) (net.Conn, remoteClient, error) {
+	client, err := m.client(ctx, host)
 	if err != nil {
 		return nil, nil, err
 	}
-	conn, err = client.DialContext(ctx, network, host.RemoteAddr)
+	conn, err := client.DialContext(ctx, network, host.RemoteAddr)
 	if err == nil {
 		return conn, client, nil
 	}
@@ -672,7 +713,7 @@ func (m *Manager) client(ctx context.Context, host Host) (remoteClient, error) {
 	if host.HostKeyFingerprint == "" {
 		return nil, errors.New("SSH host key is not trusted; test the connection first")
 	}
-	client, _, err := m.dial(ctx, host, false)
+	client, _, err := m.dialSSH(ctx, host, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -699,6 +740,10 @@ func (m *Manager) connectionLock(id string) *contextMutex {
 }
 
 func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (remoteClient, string, error) {
+	return m.dialSSH(ctx, host, trustOnFirstUse, true)
+}
+
+func (m *Manager) dialSSH(ctx context.Context, host Host, trustOnFirstUse, verifyFallbackLogin bool) (remoteClient, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 	proxy, err := sshProxyCommand(ctx, host, m.timeout)
@@ -760,6 +805,11 @@ func (m *Manager) dial(ctx context.Context, host Host, trustOnFirstUse bool) (re
 	if observedKey != nil && isSSHAuthenticationError(err) {
 		fallback, fallbackErr := newOpenSSHRemoteClient(host, observedKey, m.timeout)
 		if fallbackErr == nil {
+			// For a saved, pinned host, the requested command or tunnel
+			// authenticates itself. A separate "true" would log in twice.
+			if !verifyFallbackLogin {
+				return fallback, observedFingerprint, nil
+			}
 			if _, fallbackErr = fallback.Run(ctx, "true", nil); fallbackErr == nil {
 				return fallback, observedFingerprint, nil
 			}

@@ -30,6 +30,10 @@ func (e *sshRetryError) Error() string {
 func (e *sshRetryError) Unwrap() error { return e.cause }
 
 func retrySSH[T any](ctx context.Context, timeout time.Duration, operation func(context.Context) (T, error)) (T, error) {
+	return retrySSHWithInitialBudget(ctx, timeout, 0, operation)
+}
+
+func retrySSHWithInitialBudget[T any](ctx context.Context, timeout, initialBudget time.Duration, operation func(context.Context) (T, error)) (T, error) {
 	var zero T
 	for attempt := 0; attempt < sshRetryAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -46,9 +50,12 @@ func retrySSH[T any](ctx context.Context, timeout time.Duration, operation func(
 		}
 		budget := timeout
 		if deadline, ok := ctx.Deadline(); ok {
-			// Leave time for subsequent attempts instead of spending the entire
-			// request deadline on one stale connection.
-			budget = min(budget, time.Until(deadline)/time.Duration(sshRetryAttempts-attempt))
+			remaining := time.Until(deadline)
+			share := remaining / time.Duration(sshRetryAttempts-attempt)
+			if attempt == 0 {
+				share = max(share, initialBudget)
+			}
+			budget = min(budget, share, remaining)
 		}
 		if budget <= 0 {
 			return zero, context.DeadlineExceeded

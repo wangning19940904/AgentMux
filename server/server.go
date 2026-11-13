@@ -26,6 +26,7 @@ import (
 	"github.com/wangning19940904/AgentMux/store"
 	"github.com/wangning19940904/AgentMux/superagent"
 	ttspkg "github.com/wangning19940904/AgentMux/tts"
+	"golang.org/x/sync/singleflight"
 )
 
 // Server is the management/bridge HTTP server.
@@ -55,6 +56,7 @@ type Server struct {
 	obs                *observabilityRuntime
 	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
+	remoteStatusChecks singleflight.Group
 	superAgents        *superagent.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory

@@ -59,6 +59,8 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
   const [discoveredHosts, setDiscoveredHosts] = useState<DiscoveredRemoteHost[]>([]);
   const [form, setForm] = useState<RemoteForm | null>(null);
+  const [replacementHost, setReplacementHost] = useState<RemoteHost | null>(null);
+  const [importAddr, setImportAddr] = useState("");
   const [hostDialogOpen, setHostDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
@@ -212,9 +214,10 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     if (!hostDialogOpen) return;
     const previousOverflow = document.body.style.overflow;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !importingName) {
         setHostDialogOpen(false);
         setForm(null);
+        setReplacementHost(null);
       }
     };
     document.body.style.overflow = "hidden";
@@ -223,20 +226,28 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [hostDialogOpen]);
+  }, [hostDialogOpen, importingName]);
 
   const importDiscovered = async (host: DiscoveredRemoteHost, trustOnFirstUse = false) => {
     setImportingName(host.name);
     setMessage("");
     setError("");
     try {
-      const result = await api.importRemoteHost(host, trustOnFirstUse);
+      const result = await api.importRemoteHost(host, trustOnFirstUse, {
+        remoteAddr: importAddr.trim() || undefined,
+        existingID: replacementHost?.id,
+      });
       setPendingImportFingerprints((current) => {
         const next = { ...current };
         delete next[host.name];
         return next;
       });
-      setMessage(result.installed ? t("remote.importInstalled") : t("remote.importSucceeded"));
+      if (replacementHost) {
+        closeHostDialog();
+        setMessage(t("remote.routeChanged", { name: result.host.name }));
+      } else {
+        setMessage(result.installed ? t("remote.importInstalled") : t("remote.importSucceeded"));
+      }
       const next = await load();
       if (next) notifyRemoteHostsChanged(next);
     } catch (cause) {
@@ -247,7 +258,10 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
       ) {
         setPendingImportFingerprints((current) => ({ ...current, [host.name]: cause.fingerprint! }));
       } else {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(t("remote.importFailed", {
+          name: host.name,
+          error: cause instanceof Error ? cause.message : String(cause),
+        }));
       }
     } finally {
       setImportingName("");
@@ -263,6 +277,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     );
 
   const edit = (host: RemoteHost) => {
+    setReplacementHost(null);
     setForm({
       id: host.id,
       name: host.name,
@@ -398,10 +413,14 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const closeHostDialog = () => {
     setHostDialogOpen(false);
     setForm(null);
+    setReplacementHost(null);
   };
 
-  const openAddDialog = () => {
+  const openImportDialog = (existing: RemoteHost | null = null) => {
     setForm(null);
+    setReplacementHost(existing);
+    setImportAddr(existing?.remote_addr ?? "");
+    setPendingImportFingerprints({});
     setMessage("");
     setError("");
     setHostDialogOpen(true);
@@ -411,10 +430,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   useEffect(() => {
     if (addRequest <= 0 || handledAddRequest.current === addRequest) return;
     handledAddRequest.current = addRequest;
-    openAddDialog();
+    openImportDialog();
   }, [addRequest]);
 
   const updateCandidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
+  const editedHost = hosts.find((host) => host.id === form?.id);
   const checkingHosts = hosts.some((host) => snapshots[host.id]?.health === "checking");
   const updateCheckUnavailable = hosts.some((host) =>
     !host.trusted || snapshots[host.id]?.health === "error" || !snapshots[host.id]?.version,
@@ -464,6 +484,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
         <button
           aria-label={t("common.close")}
           className="remote-host-dialog-backdrop"
+          disabled={Boolean(importingName)}
           onClick={closeHostDialog}
           type="button"
         />
@@ -583,6 +604,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               </label>
             )}
             <div className="remote-form-actions">
+              {editedHost?.trusted && (
+                <button className="ghost-action" type="button" onClick={() => openImportDialog(editedHost)}>
+                  {t("remote.changeSSHRoute")}
+                </button>
+              )}
               <button className="action" type="submit">
                 <Save size={15} />
                 {t("common.save")}
@@ -601,38 +627,60 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
       >
         <div className="surface-header">
           <div>
-            <h2 id="remote-host-dialog-title">{t("remote.add")}</h2>
-            <p className="subtle-copy">{t("remote.discoveredHint")}</p>
+            <h2 id="remote-host-dialog-title">
+              {replacementHost ? t("remote.changeSSHRoute") : t("remote.add")}
+            </h2>
+            <p className="subtle-copy">
+              {replacementHost
+                ? t("remote.changeSSHRouteHint", { name: replacementHost.name })
+                : t("remote.discoveredHint")}
+            </p>
           </div>
           <div className="remote-discovery-summary">
             <span className="pill">{discoveredHosts.length}</span>
             <button
               className="ghost-action"
               type="button"
-              disabled={discoveryLoading}
+              disabled={discoveryLoading || Boolean(importingName)}
               onClick={() => void loadDiscovered()}
             >
               <RefreshCw size={14} className={discoveryLoading ? "spin" : ""} />
               {t("common.refresh")}
             </button>
-            <button className="ghost-action" onClick={closeHostDialog} aria-label={t("common.close")}>
+            <button className="ghost-action" disabled={Boolean(importingName)} onClick={closeHostDialog} aria-label={t("common.close")}>
               <X size={15} />
               {t("common.close")}
             </button>
           </div>
         </div>
-        <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
+        {!replacementHost && <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
           <button aria-selected="true" className="active" role="tab" type="button">
             {t("remote.discovered")}
           </button>
           <button
             aria-selected="false"
+            disabled={Boolean(importingName)}
             onClick={() => setForm(emptyForm())}
             role="tab"
             type="button"
           >
             {t("remote.manualAdd")}
           </button>
+        </div>}
+        <div className="surface-body remote-host-form">
+          <label className="field">
+            <span>{t("remote.remoteAddr")}</span>
+            <input
+              value={importAddr}
+              placeholder="127.0.0.1:8765"
+              disabled={Boolean(importingName)}
+              onChange={(event) => {
+                setImportAddr(event.target.value);
+                setPendingImportFingerprints({});
+              }}
+            />
+            <small>{t("remote.remoteAddrHint")}</small>
+          </label>
         </div>
         {(message || error) && (
           <div className={`remote-feedback ${error ? "error" : "success"}`}>
@@ -664,7 +712,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             </div>
           )}
           {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
-            const configured = configuredHost(host);
+            const configured = replacementHost ? undefined : configuredHost(host);
             const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
             const pendingFingerprint = pendingImportFingerprints[host.name];
             const importing = importingName === host.name;
@@ -698,7 +746,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                         <code>{pendingFingerprint}</code>
                         <span>{t("remote.confirmFingerprintHint")}</span>
                       </div>
-                      <button className="action" onClick={() => void importDiscovered(host, true)}>
+                      <button className="action" disabled={Boolean(importingName)} onClick={() => void importDiscovered(host, true)}>
                         {t("remote.trustInstallAndConnect")}
                       </button>
                     </div>
@@ -708,13 +756,15 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   <button
                     className={configured?.trusted ? "ghost-action" : "action"}
                     type="button"
-                    disabled={Boolean(configured?.trusted) || importing}
+                    disabled={Boolean(configured?.trusted) || Boolean(importingName)}
                     onClick={() => void importDiscovered(host)}
                   >
                     {configured?.trusted ? <CheckCircle2 size={14} /> : <Plus size={14} />}
                     {importing
                       ? t("remote.importing")
-                      : configured?.trusted
+                      : replacementHost
+                        ? t("remote.useSSHRoute")
+                        : configured?.trusted
                         ? t("remote.imported")
                         : configured
                           ? t("remote.finishImport")
@@ -735,7 +785,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             <span className="pill">{hosts.length}</span>
           </div>
           <div className="remote-machines-toolbar">
-            <button className="action" type="button" onClick={openAddDialog}>
+            <button className="action" type="button" onClick={() => openImportDialog()}>
               <Plus size={15} />
               {t("remote.add")}
             </button>
@@ -811,6 +861,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <div>
                       <strong>{host.name}</strong>
                       <span>{host.user}@{host.host}:{host.port}</span>
+                      {host.ssh_alias && host.ssh_alias !== host.name && (
+                        <span>{t("remote.sshAlias", { alias: host.ssh_alias })}</span>
+                      )}
                     </div>
                     <span className={`status-badge ${healthTone}`} title={snapshot.error}>
                       {snapshot.health === "checking"

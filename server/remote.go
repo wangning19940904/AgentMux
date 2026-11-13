@@ -11,9 +11,14 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
+
+// Allow the usual 10-second SSH attempt and a short recovery window, while
+// keeping a single host probe shorter than the selector's polling interval.
+const remoteStatusTimeout = 14 * time.Second
 
 func (s *Server) registerRemoteRoutes() {
 	s.mux.HandleFunc("GET /api/v1/remote/hosts", s.handleRemoteHostsList)
@@ -106,6 +111,7 @@ func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
+		ExistingID      string `json:"existing_id"`
 		Name            string `json:"name"`
 		Host            string `json:"host"`
 		Port            int    `json:"port"`
@@ -120,7 +126,7 @@ func (s *Server) handleRemoteHostImport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	result, err := s.remote.Import(r.Context(), remotepkg.Host{
-		Name: req.Name, Host: req.Host, Port: req.Port, User: req.User,
+		ID: req.ExistingID, Name: req.Name, Host: req.Host, Port: req.Port, User: req.User,
 		KeyPath: req.KeyPath, SSHAlias: req.SSHAlias, RemoteAddr: req.RemoteAddr, APIToken: req.APIToken,
 	}, req.TrustOnFirstUse)
 	if err != nil {
@@ -245,6 +251,25 @@ func (s *Server) handleRemoteHostTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) checkRemoteStatus(ctx context.Context, id string) (remotepkg.TestResult, error) {
+	if err := ctx.Err(); err != nil {
+		return remotepkg.TestResult{}, err
+	}
+	// The selector and machine list often check the same host at once. Share
+	// the tunnel probe, but let each request stop waiting independently.
+	probe := s.remoteStatusChecks.DoChan(id, func() (any, error) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
+		defer cancel()
+		return s.remote.Status(probeCtx, id)
+	})
+	select {
+	case <-ctx.Done():
+		return remotepkg.TestResult{}, ctx.Err()
+	case result := <-probe:
+		return result.Val.(remotepkg.TestResult), result.Err
+	}
+}
+
 func (s *Server) handleRemoteHostStatus(w http.ResponseWriter, r *http.Request) {
 	if s.remote == nil {
 		writeErr(w, http.StatusServiceUnavailable, "remote SSH control unavailable")
@@ -255,7 +280,7 @@ func (s *Server) handleRemoteHostStatus(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	result, err := s.remote.Status(r.Context(), id)
+	result, err := s.checkRemoteStatus(r.Context(), id)
 	if err != nil {
 		writeRemoteConnectionError(w, err)
 		return

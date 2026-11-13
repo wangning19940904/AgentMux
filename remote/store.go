@@ -139,6 +139,21 @@ func (s *Store) Get(id string) (Host, bool) {
 func (s *Store) Upsert(host Host, clearAPIToken bool) (Host, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.upsertLocked(host, clearAPIToken)
+}
+
+// replaceVerifiedRoute saves a verified route only if the profile has not
+// been edited or deleted during SSH verification.
+func (s *Store) replaceVerifiedRoute(previous, host Host) (Host, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hosts[previous.ID] != previous {
+		return Host{}, errors.New("SSH machine changed during verification; refresh and retry")
+	}
+	return s.upsertLocked(host, false)
+}
+
+func (s *Store) upsertLocked(host Host, clearAPIToken bool) (Host, error) {
 	if host.ID == "" {
 		id, err := newID()
 		if err != nil {

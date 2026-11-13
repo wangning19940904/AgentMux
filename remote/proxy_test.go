@@ -163,6 +163,35 @@ Host *
 			if _, err := manager.Status(ctx, result.Host.ID); err != nil {
 				t.Fatalf("reconnect through proxy: %v", err)
 			}
+			if mode == "ProxyCommand" {
+				legacy, err := manager.Upsert(Host{
+					Name: "old-forward", Host: "127.0.0.1", Port: 22022, User: candidate.User,
+					RemoteAddr: candidate.RemoteAddr, APIToken: "existing-token",
+					HostKeyFingerprint: unknown.Fingerprint,
+				}, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manager.install = func(context.Context, remoteClient, Host) error {
+					t.Error("changing an existing route must not run the remote installer")
+					return errors.New("unexpected install")
+				}
+				replacement := candidate
+				replacement.ID = legacy.ID
+				replacement.RemoteAddr = "127.0.0.1:1"
+				if _, err := manager.Import(ctx, replacement, false); err == nil {
+					t.Fatal("saved a replacement with no running AgentMux")
+				}
+				if unchanged, _ := manager.Get(legacy.ID); unchanged.Name != legacy.Name || unchanged.RemoteAddr != legacy.RemoteAddr {
+					t.Fatal("failed replacement changed the existing profile")
+				}
+				replacement.RemoteAddr = ""
+				rebound, err := manager.Import(ctx, replacement, false)
+				if err != nil || rebound.Host.ID != legacy.ID || rebound.Host.SSHAlias != candidate.SSHAlias ||
+					rebound.Host.RemoteAddr != legacy.RemoteAddr || !rebound.Host.APITokenSet || rebound.Installed {
+					t.Fatalf("rebind existing route: %+v, error=%v", rebound, err)
+				}
+			}
 			candidate.HostKeyFingerprint = "SHA256:changed"
 			if _, _, err := manager.dial(ctx, candidate, true); err == nil || !strings.Contains(err.Error(), "host key changed") {
 				t.Fatalf("changed target key must be rejected, including with TOFU: %v", err)

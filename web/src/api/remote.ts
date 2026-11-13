@@ -39,6 +39,7 @@ export async function statusRemoteHost(id: string): Promise<RemoteTestResult> {
 export async function importRemoteHost(
   host: DiscoveredRemoteHost,
   trustOnFirstUse: boolean,
+  options?: { remoteAddr?: string; existingID?: string },
 ): Promise<RemoteImportResult> {
   const path = "/api/v1/remote/hosts/import";
   const response = await fetch(apiPath(path), {
@@ -46,7 +47,8 @@ export async function importRemoteHost(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...host,
-      remote_addr: "127.0.0.1:8765",
+      remote_addr: options?.remoteAddr,
+      existing_id: options?.existingID,
       trust_on_first_use: trustOnFirstUse,
     }),
   });

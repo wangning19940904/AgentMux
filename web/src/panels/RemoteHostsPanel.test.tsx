@@ -101,13 +101,42 @@ describe("SSH proxy imports", () => {
     expect(row.textContent).toContain("使用 SSH 代理");
     expect(button(row, "导入").disabled).toBe(false);
     await click(button(row, "导入"));
-    expect(api.importRemoteHost).toHaveBeenCalledWith(discovered, false);
+    expect(api.importRemoteHost).toHaveBeenCalledWith(discovered, false, {});
     expect(row.textContent).toContain("SHA256:target-key");
     expect(api.importRemoteHost).toHaveBeenCalledTimes(1);
     vi.mocked(api.importRemoteHost).mockResolvedValueOnce({ installed: false } as Awaited<ReturnType<typeof api.importRemoteHost>>);
     await click(button(row, "信任并继续"));
-    expect(api.importRemoteHost).toHaveBeenLastCalledWith(discovered, true);
+    expect(api.importRemoteHost).toHaveBeenLastCalledWith(discovered, true, {});
     expect(row.textContent).not.toContain("SHA256:target-key");
+  });
+
+  it("keeps the existing profile and AgentMux address when changing its SSH alias", async () => {
+    const existing = { ...hosts[0], remote_addr: "127.0.0.1:12101" };
+    const discovered = {
+      name: "home-box", ssh_alias: "home-box", host: "box-auto", port: 22,
+      user: existing.user, source: "~/.ssh/config", proxy_command: true,
+    };
+    vi.mocked(api.remoteHosts).mockResolvedValueOnce([existing]);
+    vi.mocked(api.syncRemoteHostsFromSSHConfig).mockResolvedValueOnce({
+      hosts: [existing], updated: 0, unchanged: 1, unmatched: 0, ambiguous: 0,
+    });
+    await click(button(container, "刷新"));
+    vi.mocked(api.discoveredRemoteHosts).mockResolvedValueOnce([discovered]);
+    const updated = { ...existing, name: discovered.name, ssh_alias: discovered.ssh_alias };
+    vi.mocked(api.importRemoteHost).mockResolvedValueOnce({
+      ok: true, installed: false, host: updated, name: updated.name, latency_ms: 1, host_key_fingerprint: "test",
+    });
+    vi.mocked(api.remoteHosts).mockResolvedValueOnce([updated]);
+    await click(button(container, "编辑"));
+    await click(button(container, "更换 SSH Config 别名"));
+    const importDialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(importDialog.querySelector("input")?.value).toBe(existing.remote_addr);
+    await click(button(importDialog, "验证并更换"));
+    expect(api.importRemoteHost).toHaveBeenCalledWith(discovered, false, {
+      existingID: existing.id, remoteAddr: existing.remote_addr,
+    });
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(notifyRemoteHostsChanged).toHaveBeenLastCalledWith([updated]);
   });
 });
 

@@ -307,6 +307,35 @@ func TestSSHInitialConnectionRetriesAreSharedAcrossCallers(t *testing.T) {
 	}
 }
 
+func TestSSHStatusLetsSlowFirstProbeComplete(t *testing.T) {
+	var requests atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		select {
+		case <-time.After(450 * time.Millisecond):
+			_, _ = io.WriteString(w, `{"ok":true,"version":"slow"}`)
+		case <-r.Context().Done():
+		}
+	}))
+	defer api.Close()
+	manager, host := cachedHTTPTestManager(t, api.Listener.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+
+	// Even a healthy host can have data requests queued for a tunnel.
+	gate := &sshAttemptGate{contextMutex: newContextMutex()}
+	if err := gate.acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer gate.finish(nil)
+	manager.attemptGates.Store(host.ID, gate)
+
+	result, err := manager.Status(ctx, host.ID)
+	if err != nil || result.Status["version"] != "slow" || requests.Load() != 1 {
+		t.Fatalf("result=%+v error=%v requests=%d", result, err, requests.Load())
+	}
+}
+
 func TestSSHStatusRetriesUnavailableResponsesButNotAuthorization(t *testing.T) {
 	for _, status := range []int{503, 401} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
