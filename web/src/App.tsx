@@ -72,7 +72,7 @@ import {
   type Tenant,
   type TenancySelf,
 } from "./api";
-import { resetFleetWarnings } from "./api/fleetWarnings";
+import { currentOfflineTargets, resetFleetWarnings } from "./api/fleetWarnings";
 import { usePolling } from "./hooks/usePolling";
 import {
   accountLabel,
@@ -382,6 +382,9 @@ function Shell({
   const [fleetWarnings, setFleetWarnings] = useState<string[]>(currentFleetWarnings);
   const [dismissedFleetWarnings, setDismissedFleetWarnings] = useState("");
   const fleetWarningKey = JSON.stringify(fleetWarnings);
+  // Set once every machine a warning found offline is connected again: what
+  // the page shows of them is then out of date and worth reloading.
+  const [fleetRecovered, setFleetRecovered] = useState("");
   const [machineScopeVersion, setMachineScopeVersion] = useState(0);
   const [remoteAddRequest, setRemoteAddRequest] = useState(0);
   const [createAgentRequested, setCreateAgentRequested] = useState(false);
@@ -578,6 +581,31 @@ function Shell({
     setFleetWarnings(currentFleetWarnings());
     return () => window.removeEventListener(FLEET_WARNING_EVENT, receiveWarnings);
   }, []);
+
+  useEffect(() => {
+    const offline = currentOfflineTargets();
+    if (!offline.length) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const targets = await api.fleetTargets();
+        if (cancelled) return;
+        const online = new Set(targets.filter((target) => target.online && !target.error).map((target) => target.id));
+        if (offline.every((id) => online.has(id))) {
+          setFleetRecovered(fleetWarningKey);
+          window.clearInterval(timer);
+        }
+      } catch {
+        // The next check tries again.
+      }
+    };
+    const timer = window.setInterval(check, 10_000);
+    void check();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [fleetWarningKey]);
 
   useEffect(() => {
     const refreshScope = () => {
@@ -1013,7 +1041,15 @@ function Shell({
 
         <main className={`main main-${visibleTab}`}>
           {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
-          {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && (
+          {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && fleetRecovered === fleetWarningKey && (
+            <div className="session-notice" role="status">
+              <strong>{t("remote.fleetRecovered")}</strong>
+              <span>{t("remote.fleetRecoveredHint")}</span>
+              <button className="ghost-action" type="button" onClick={() => window.dispatchEvent(new Event("agentmux:machine-scope-changed"))}>{t("common.refresh")}</button>
+              <button className="ghost-action" type="button" onClick={() => setDismissedFleetWarnings(fleetWarningKey)}>{t("common.close")}</button>
+            </div>
+          )}
+          {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && fleetRecovered !== fleetWarningKey && (
             <div className="session-notice warning" role="status">
               <strong>{t(fleetWarnings.every(isFleetStaleNotice) ? "remote.staleFleetNotice" : "remote.partialFleetWarning")}</strong>
               <span>{fleetWarnings.join(" · ")}</span>

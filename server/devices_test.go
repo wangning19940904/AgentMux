@@ -17,6 +17,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
+	"github.com/wangning19940904/AgentMux/store"
 )
 
 // liveServer runs a test Server behind a real listener, as a daemon does.
@@ -464,5 +465,104 @@ func TestHubKeepsWhatANodeReportsAndAnswersWhileItIsOffline(t *testing.T) {
 	}
 	if reported() != "" {
 		t.Fatal("the hub kept an unpaired node's data")
+	}
+}
+
+func TestDeviceDialWaitsOnlyForDevicesExpectedBack(t *testing.T) {
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "reconnect.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	pair := func(name string) string {
+		code, err := st.CreateDevicePairingCode(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		device, _, err := st.RedeemDevicePairingCode(ctx, code.Code, core.DeviceInfo{Name: name})
+		if err != nil || device == nil {
+			t.Fatal(err)
+		}
+		return device.ID
+	}
+	recent, stale, never := pair("recent"), pair("stale"), pair("never")
+	if err := st.TouchDevice(ctx, recent, core.DeviceInfo{}, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TouchDevice(ctx, stale, core.DeviceInfo{}, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	backend := &deviceBackend{st: st, hub: linkpkg.NewHub(st, nil)}
+	time.Sleep(10 * time.Millisecond)
+	if !backend.expectingReconnect(ctx, recent) {
+		t.Fatal("a device connected a minute ago is not expected back after a start")
+	}
+	if backend.expectingReconnect(ctx, stale) || backend.expectingReconnect(ctx, never) {
+		t.Fatal("a device gone long before the start is expected back")
+	}
+	// One that connected after the start and left is simply offline.
+	left := pair("left")
+	if err := st.TouchDevice(ctx, left, core.DeviceInfo{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.expectingReconnect(ctx, left) {
+		t.Fatal("a device that left after the start is expected back")
+	}
+	// Waiting is bounded by the request; an absent device still fails.
+	short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := backend.Dial(short, recent); !linkpkg.IsOffline(err) {
+		t.Fatalf("dial err = %v, want offline", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("the wait ignored the request's deadline")
+	}
+}
+
+func TestHubPeerIsMarkedAndLeftOutOfFleetTargets(t *testing.T) {
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "peer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	ids := map[string]string{}
+	for _, name := range []string{"laptop", "mac (hub)"} {
+		code, err := st.CreateDevicePairingCode(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		device, _, err := st.RedeemDevicePairingCode(ctx, code.Code, core.DeviceInfo{Name: name})
+		if err != nil || device == nil {
+			t.Fatal(err)
+		}
+		ids[name] = device.ID
+	}
+	manager, err := remotepkg.NewManager(filepath.Join(t.TempDir(), "hosts.json"), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{st: st, remote: manager}
+	s.linkHub = linkpkg.NewHub(st, nil)
+	s.devices = &deviceBackend{st: st, hub: s.linkHub, peer: func() string { return ids["mac (hub)"] }}
+	s.remote.SetLinkBackend(s.devices)
+
+	views := map[string]remotepkg.HostView{}
+	for _, view := range s.remote.List() {
+		views[view.Name] = view
+	}
+	if !views["mac (hub)"].HubPeer || views["laptop"].HubPeer {
+		t.Fatalf("hub peer flags = %+v", views)
+	}
+	targets, err := s.resolveFleetTargets([]string{"all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		if target.ID == ids["mac (hub)"] {
+			t.Fatal("this hub's failover identity is a fleet target")
+		}
 	}
 }

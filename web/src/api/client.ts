@@ -172,17 +172,28 @@ async function fleetBatch<T>(
     const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
     if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
     const receivedAt = new Date();
+    const offline = new Set<string>();
     updateWarnings((payload.targets ?? []).flatMap((target) => requests.flatMap((request) => {
       const response = target.responses.find((response) => response.key === request.key);
-      if (response?.ok) return response.reported_at ? [fleetStaleMessage(target.target.name)] : [];
+      if (response?.ok) {
+        if (!response.reported_at) return [];
+        offline.add(target.target.id);
+        return [fleetStaleMessage(target.target.name)];
+      }
+      if (isOfflineError(response?.error)) offline.add(target.target.id);
       return [fleetWarningWithContext(fleetWarningMessage(target.target.name, response?.error || "unavailable"), request, receivedAt)];
-    })));
+    })), [...offline]);
     return payload;
   } catch (error) {
     const receivedAt = new Date();
     updateWarnings(requests.map((request) => fleetWarningWithContext(error instanceof Error ? error.message : String(error), request, receivedAt)));
     throw error;
   }
+}
+
+// A linked machine without a connection; it comes back by itself.
+function isOfflineError(error?: string) {
+  return !!error && /device is offline/i.test(error);
 }
 
 export function fleetQuery<T>(requests: FleetOperation[], targetIDs?: string[]) {
@@ -214,7 +225,7 @@ function noteReportedAt(path: string, res: Response) {
   if (!remoteID || !res.headers) return;
   const update = beginFleetWarningUpdate(JSON.stringify(["reported", remoteID, fleetWarningResourceKey(path)]));
   const reportedAt = res.ok ? res.headers.get("X-AgentMux-Reported-At") : null;
-  update(reportedAt ? [fleetStaleMessage("This machine")] : []);
+  update(reportedAt ? [fleetStaleMessage("This machine")] : [], reportedAt ? [remoteID] : []);
 }
 
 export async function get<T>(path: string): Promise<T> {

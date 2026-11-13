@@ -84,6 +84,12 @@ type HubConfig struct {
 	// StateDir holds the hub's certificate and this machine's own membership
 	// of a hub. It defaults to the user's AgentMux configuration directory.
 	StateDir string `toml:"state_dir"`
+	// LeaseSecret (or LeaseSecretFile) turns on a standby hub: the relay in
+	// front of two hubs uses it to grant the lease that makes one of them
+	// the primary. Both hubs and the relay share it. Empty leaves this hub
+	// on its own, as before.
+	LeaseSecret     string `toml:"lease_secret"`
+	LeaseSecretFile string `toml:"lease_secret_file"`
 }
 
 // Hub TLS modes.

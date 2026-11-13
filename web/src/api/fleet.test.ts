@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activeMachineScope, fleetQuery, resolveMachineScope, resolveTenantScope, tenantScopeHeaders, tenantScopeKey } from "./client";
-import { beginFleetWarningUpdate, currentFleetWarnings, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
+import { beginFleetWarningUpdate, currentFleetWarnings, currentOfflineTargets, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import { api, mergeFleetObservationOverview, mergeFleetUsage } from "./index";
 import { fleetAdminReadArray, fleetCall, fleetReadArray, interactiveFleetGet } from "./fleet";
 import type { FleetBatchResult, ObservationOverview, UsageReport } from "./types";
@@ -332,11 +332,30 @@ describe("data an offline linked machine last reported", () => {
     await fleetReadArray<{ id: string }>("/api/v1/channels");
     expect(currentFleetWarnings()).toHaveLength(1);
 
+    expect(currentOfflineTargets()).toEqual(["dev_1"]);
+
     // Once the machine answers for itself again the notice goes.
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ targets: [target("dev_1", "home-box", "data", [{ id: "a" }])] }))));
     await fleetReadArray<{ id: string }>("/api/v1/agent-instances");
     await fleetReadArray<{ id: string }>("/api/v1/channels");
     expect(currentFleetWarnings()).toEqual([]);
+    expect(currentOfflineTargets()).toEqual([]);
+  });
+
+  it("remembers which machines failed because they were offline", async () => {
+    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "all" });
+    const failed = (id: string, name: string, error: string) => ({
+      target: { id, name, kind: "link", trusted: true, online: false },
+      responses: [{ key: "tools", status: 502, ok: false, error }],
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ targets: [
+      failed("dev_1", "home-box", "device is offline"),
+      failed("dev_2", "gpu-box", "remote gpu-box: connection refused"),
+    ] }))));
+    await fleetQuery([{ key: "tools", path: "/api/v1/tools" }]).catch(() => undefined);
+    expect(currentFleetWarnings()).toHaveLength(2);
+    // Only the machine that is merely away can come back by itself.
+    expect(currentOfflineTargets()).toEqual(["dev_1"]);
   });
 
   it("is noticed when that one machine is selected", async () => {

@@ -1,6 +1,9 @@
 export const FLEET_WARNING_EVENT = "agentmux:fleet-warning";
 
 const warningsByRequest = new Map<string, string[]>();
+// The machines each request found offline, so the Console can tell when
+// they are back and its data is worth reloading.
+const offlineByRequest = new Map<string, string[]>();
 const latestRequests = new Map<string, number>();
 let revision = 0;
 
@@ -48,6 +51,10 @@ export function currentFleetWarnings(): string[] {
   return [...new Set([...warningsByRequest.values()].flat())];
 }
 
+export function currentOfflineTargets(): string[] {
+  return [...new Set([...offlineByRequest.values()].flat())];
+}
+
 function publish() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent<string[]>(FLEET_WARNING_EVENT, { detail: currentFleetWarnings() }));
@@ -59,10 +66,12 @@ function publish() {
 export function beginFleetWarningUpdate(key: string) {
   const request = ++revision;
   latestRequests.set(key, request);
-  return (warnings: string[]) => {
+  return (warnings: string[], offline: string[] = []) => {
     if (latestRequests.get(key) !== request) return;
     if (warnings.length) warningsByRequest.set(key, warnings);
     else warningsByRequest.delete(key);
+    if (offline.length) offlineByRequest.set(key, [...new Set(offline)]);
+    else offlineByRequest.delete(key);
     publish();
   };
 }
@@ -70,5 +79,6 @@ export function beginFleetWarningUpdate(key: string) {
 export function resetFleetWarnings() {
   latestRequests.clear();
   warningsByRequest.clear();
+  offlineByRequest.clear();
   publish();
 }

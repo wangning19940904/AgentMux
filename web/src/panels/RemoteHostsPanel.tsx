@@ -141,7 +141,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     }
   };
 
-  const inspectHosts = async (nextHosts: RemoteHost[]) => {
+  const inspectHosts = async (allHosts: RemoteHost[]) => {
+    // This hub's failover identity is never a machine to probe.
+    const nextHosts = allHosts.filter((host) => !host.hub_peer);
     setSnapshots((current) => ({
       ...current,
       ...Object.fromEntries(nextHosts.map((host) => [
@@ -441,15 +443,16 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     openImportDialog();
   }, [addRequest]);
 
-  const updateCandidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
+  const managedHosts = hosts.filter((host) => !host.hub_peer);
+  const updateCandidates = remoteUpdateCandidates(managedHosts, snapshots, localVersion);
   const editedHost = hosts.find((host) => host.id === form?.id);
-  const checkingHosts = hosts.some((host) => snapshots[host.id]?.health === "checking");
-  const updateCheckUnavailable = hosts.some((host) =>
+  const checkingHosts = managedHosts.some((host) => snapshots[host.id]?.health === "checking");
+  const updateCheckUnavailable = managedHosts.some((host) =>
     !host.trusted || snapshots[host.id]?.health === "error" || !snapshots[host.id]?.version,
   );
 
   const updateAll = async () => {
-    const candidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
+    const candidates = remoteUpdateCandidates(hosts.filter((host) => !host.hub_peer), snapshots, localVersion);
     if (candidates.length === 0) return;
     const names = candidates.map((host) => host.name).join("\n");
     if (!window.confirm(t("remote.updateAllConfirm", { count: candidates.length, names }))) return;
@@ -913,6 +916,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               health: host.trusted ? "checking" as const : "unverified" as const,
             };
             const linked = host.kind === "link";
+            const peer = Boolean(host.hub_peer);
             const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
@@ -938,21 +942,28 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <div>
                       <strong>{host.name}</strong>
                       <span>
-                        {linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
+                        {peer ? t("remote.hubPeerHint") : linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
                         {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
                       </span>
                       {!linked && host.ssh_alias && host.ssh_alias !== host.name && (
                         <span>{t("remote.sshAlias", { alias: host.ssh_alias })}</span>
                       )}
                     </div>
-                    <span className={`status-badge ${healthTone}`} title={snapshot.error}>
-                      {snapshot.health === "checking"
-                        ? <RefreshCw size={13} className="spin" />
-                        : snapshot.health === "healthy"
-                          ? <CheckCircle2 size={13} />
-                          : <ShieldAlert size={13} />}
-                      {healthLabel}
-                    </span>
+                    {peer ? (
+                      <span className="status-badge" title={t("remote.hubPeerHint")}>
+                        <Server size={13} />
+                        {t("remote.hubPeer")}
+                      </span>
+                    ) : (
+                      <span className={`status-badge ${healthTone}`} title={snapshot.error}>
+                        {snapshot.health === "checking"
+                          ? <RefreshCw size={13} className="spin" />
+                          : snapshot.health === "healthy"
+                            ? <CheckCircle2 size={13} />
+                            : <ShieldAlert size={13} />}
+                        {healthLabel}
+                      </span>
+                    )}
                   </header>
                   {pendingFingerprint && (
                     <div className="host-key-confirmation">
@@ -969,7 +980,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   )}
                 </div>
                 <div className="remote-host-actions">
-                  <button
+                  {!peer && <button
                     className="ghost-action"
                     disabled={!host.trusted || checking || updatingID === host.id || updatingAll}
                     onClick={() => void (updateAvailable ? updateRemote(host) : inspectHosts([host]))}
@@ -983,7 +994,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                         : updateAvailable
                           ? t("remote.update")
                           : t("remote.checkUpdates")}
-                  </button>
+                  </button>}
                   {!linked && (
                     <button className="ghost-action" onClick={() => edit(host)}>
                       <Pencil size={14} />

@@ -38,6 +38,9 @@ connect_timeout_seconds = 10
 #                         # a reverse proxy, a forwarded port
 # pin_certificate = false # public_url still presents the hub's own certificate
 # state_dir = ""          # hub certificate and this machine's own membership
+# lease_secret = ""       # set on two hubs and their relay (`amux hub relay`)
+# lease_secret_file = ""  # to run one as a standby of the other; see
+#                         # docs/architecture/hub-and-super-agents.md §4.2
 
 # ---- Runtime resources ----
 # Agents, Channels, Triggers, Skills, MCP, Memory, and Guard policies are stored

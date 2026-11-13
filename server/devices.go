@@ -14,6 +14,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/hubha"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -32,11 +33,14 @@ type deviceBackend struct {
 	st   *store.Store
 	hub  *linkpkg.Hub
 	push *pushpkg.Service
+	// peer returns this hub's own failover identity, or "".
+	peer func() string
 }
 
 func (b *deviceBackend) linked(device core.Device) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
-	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt}
+	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
+		HubPeer: b.peer != nil && device.ID == b.peer()}
 }
 
 // lastReports is when each device last sent the hub its data.
@@ -79,8 +83,53 @@ func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.Linked
 	return b.linked(*device), true
 }
 
+const (
+	// reconnectGrace is how long after the hub starts, or takes over from
+	// another, devices are still expected to come back. They back off while
+	// the hub is away, so the first may take most of a minute.
+	reconnectGrace = 90 * time.Second
+	// reconnectWait bounds how long one request waits for its device.
+	reconnectWait = 10 * time.Second
+	// recentlyConnected is how close before the start a device must have
+	// been connected to be expected back. Devices gone longer fail at once.
+	recentlyConnected = 10 * time.Minute
+)
+
+// Dial opens a stream to the device. Right after the hub starts, its devices
+// have not reconnected yet; a request then waits briefly for its device
+// instead of failing, so a Console opened with the app does not load every
+// machine as offline.
 func (b *deviceBackend) Dial(ctx context.Context, id string) (net.Conn, error) {
+	conn, err := b.hub.Dial(ctx, id)
+	if err == nil || !linkpkg.IsOffline(err) || !b.expectingReconnect(ctx, id) {
+		return conn, err
+	}
+	// Leave the request time to fail as offline rather than time out.
+	wait := reconnectWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/2)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	if !b.hub.WaitConnected(waitCtx, id) {
+		return nil, err
+	}
 	return b.hub.Dial(ctx, id)
+}
+
+func (b *deviceBackend) expectingReconnect(ctx context.Context, id string) bool {
+	started := b.hub.StartedAt()
+	if time.Since(started) > reconnectGrace {
+		return false
+	}
+	device, err := b.st.GetDevice(ctx, id)
+	if err != nil || device == nil || device.LastSeenAt == nil {
+		return false
+	}
+	// A device seen since the start connected to this hub and left: it is
+	// offline, not on its way back.
+	gap := started.Sub(*device.LastSeenAt)
+	return gap > 0 && gap < recentlyConnected
 }
 
 // Remove unpairs the device and drops its connection, in that order, so a
@@ -114,8 +163,8 @@ func (s *Server) setupLink() {
 			s.mail.Wake()
 		}
 	})
-	s.linkHub.SetUplink(s.mailUplink(linkpkg.NewReportHandler(reports, s.log)))
-	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push}
+	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
+	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, peer: s.hubPeerDeviceID}
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
 	}
@@ -130,6 +179,7 @@ func (s *Server) registerDeviceRoutes() {
 	s.mux.HandleFunc("GET /api/v1/link", s.handleLinkStatus)
 	s.mux.HandleFunc("POST /api/v1/link/join", s.handleLinkJoin)
 	s.mux.HandleFunc("POST /api/v1/link/leave", s.handleLinkLeave)
+	s.registerHubStandbyRoutes()
 	if s.linkHub != nil {
 		// Devices that can reach the management port may pair through it. The
 		// two paths check their own credentials and sit outside /api/, so the
@@ -514,16 +564,27 @@ func (s *Server) startHubListener(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hub.addr: %w", err)
 	}
-	server := &http.Server{Handler: s.linkHub.Handler(), ReadHeaderTimeout: 15 * time.Second}
+	mux := http.NewServeMux()
+	s.linkHub.Register(mux)
+	if s.hubHA != nil {
+		// The relay in front of two hubs reaches each through this listener.
+		mux.HandleFunc("POST "+hubha.LeasePath, s.hubHA.controller.ServeLease)
+	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
 	secure := s.cfg.Hub.TLS != config.HubTLSOff
 	if secure {
-		cert, _, err := s.hubCertificate()
-		if err != nil {
+		if _, _, err := s.hubCertificate(); err != nil {
 			_ = listener.Close()
 			return err
 		}
-		// The device connection is a WebSocket, which needs HTTP/1.1.
-		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
+		// The device connection is a WebSocket, which needs HTTP/1.1. The
+		// certificate is read per handshake: a standby hub replaces it with
+		// the primary's while running.
+		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"},
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cert, _, err := s.hubCertificate()
+				return &cert, err
+			}}
 	}
 	go func() {
 		<-ctx.Done()
@@ -613,6 +674,18 @@ func (n *nodeLink) stop() {
 		n.cancel()
 	}
 	n.client, n.cancel = nil, nil
+}
+
+// uplink is the client for requests up this machine's link, or nil without
+// one.
+func (n *nodeLink) uplink() *http.Client {
+	n.mu.Lock()
+	client := n.client
+	n.mu.Unlock()
+	if client == nil {
+		return nil
+	}
+	return client.Uplink()
 }
 
 func (n *nodeLink) status() (linkpkg.ClientStatus, bool) {

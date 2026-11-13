@@ -380,6 +380,8 @@ CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data 
 		{version: 25, name: "push_notifications", sql: pushSchema},
 		// The mailbox: messages between agents and people, and their contacts.
 		{version: 26, name: "mailbox", sql: mailboxSchema},
+		// Hub replication: the change log a standby hub follows; see hubsync.go.
+		{version: 27, name: "hub_replication", sql: hubTriggerSQL()},
 	}
 }
 

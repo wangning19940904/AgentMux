@@ -60,6 +60,75 @@ type Hub struct {
 	attempts map[string][]time.Time
 	uplink   http.Handler
 	presence func(deviceID string, online bool)
+	gate     func() error
+	paired   func(ctx context.Context)
+	// started is when devices last had to connect afresh: the hub started
+	// or took over from another. attached is closed and replaced whenever a
+	// device connects.
+	started  time.Time
+	attached chan struct{}
+}
+
+// MarkStarted notes that every device has to reconnect now, as when this hub
+// takes over from another.
+func (h *Hub) MarkStarted() {
+	h.mu.Lock()
+	h.started = time.Now()
+	h.mu.Unlock()
+}
+
+// StartedAt is when devices last had to connect afresh.
+func (h *Hub) StartedAt() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.started
+}
+
+// WaitConnected waits until the device has a connection, and reports whether
+// it got one before ctx ended.
+func (h *Hub) WaitConnected(ctx context.Context, id string) bool {
+	for {
+		h.mu.Lock()
+		session := h.sessions[id]
+		attached := h.attached
+		h.mu.Unlock()
+		if session != nil && !session.mux.IsClosed() {
+			return true
+		}
+		select {
+		case <-attached:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// SetGate decides whether devices may pair and connect now. A hub standing by
+// for another refuses them, so they keep retrying until the relay sends them
+// to the primary. A nil gate, the default, always admits.
+func (h *Hub) SetGate(gate func() error) {
+	h.mu.Lock()
+	h.gate = gate
+	h.mu.Unlock()
+}
+
+// SetPairedHook runs after a device is paired and before its token is
+// returned, so a standby hub can receive the new device first.
+func (h *Hub) SetPairedHook(hook func(ctx context.Context)) {
+	h.mu.Lock()
+	h.paired = hook
+	h.mu.Unlock()
+}
+
+// admits reports why devices are refused now, if they are.
+func (h *Hub) admits() error {
+	h.mu.Lock()
+	gate := h.gate
+	h.mu.Unlock()
+	if gate == nil {
+		return nil
+	}
+	return gate()
 }
 
 // SetPresenceListener is told when a device connects (online) and when its
@@ -109,6 +178,8 @@ func NewHub(registry Registry, log *slog.Logger) *Hub {
 		upgrader: websocket.Upgrader{HandshakeTimeout: 15 * time.Second, CheckOrigin: func(*http.Request) bool { return true }},
 		sessions: map[string]*hubSession{},
 		attempts: map[string][]time.Time{},
+		started:  time.Now(),
+		attached: make(chan struct{}),
 	}
 }
 
@@ -138,6 +209,10 @@ type pairResponse struct {
 }
 
 func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
+	if err := h.admits(); err != nil {
+		writeLinkError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	if !h.allowPairAttempt(remoteIP(r), time.Now()) {
 		writeLinkError(w, http.StatusTooManyRequests, "too many pairing attempts; wait a minute")
 		return
@@ -158,6 +233,12 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.log.Info("device paired", "device", device.ID, "name", device.Name)
+	h.mu.Lock()
+	paired := h.paired
+	h.mu.Unlock()
+	if paired != nil {
+		paired(r.Context())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(pairResponse{DeviceID: device.ID, Name: device.Name, Token: token})
@@ -166,6 +247,10 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if version := r.Header.Get(headerProtocol); version != ProtocolVersion {
 		writeLinkError(w, http.StatusUpgradeRequired, "this device speaks link protocol "+version+"; the hub speaks "+ProtocolVersion)
+		return
+	}
+	if err := h.admits(); err != nil {
+		writeLinkError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	token, _ := strings.CutPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
@@ -224,6 +309,8 @@ func (h *Hub) attach(id string, session *hubSession) {
 	previous := h.sessions[id]
 	h.sessions[id] = session
 	presence := h.presence
+	close(h.attached)
+	h.attached = make(chan struct{})
 	h.mu.Unlock()
 	if previous != nil {
 		_ = previous.mux.Close()
