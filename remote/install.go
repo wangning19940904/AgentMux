@@ -408,9 +408,26 @@ database_url="postgresql:///agentmux?host=/var/run/postgresql&port=$port&sslmode
 printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
 		command = "/bin/bash -c " + shellQuote(script)
 	case "darwin":
-		databaseURL = remoteDarwinPostgresURL
-		command = `set -eu
-` + bridgeEnvironment + `"$HOME/.agentmux/bin/amux" --database-url ` + shellQuote(databaseURL) + ` database setup`
+		// A Homebrew cluster may listen on a port other than 5432. Use the
+		// running one instead of starting another on the default port; a
+		// machine with no running cluster gets the default.
+		script := `set -eu
+port=5432
+if [ ! -S /tmp/.s.PGSQL.5432 ]; then
+  for socket in /tmp/.s.PGSQL.*; do
+    [ -S "$socket" ] || continue
+    candidate=${socket##*.}
+    case "$candidate" in ''|*[!0-9]*) continue;; esac
+    port=$candidate
+    break
+  done
+fi
+set -- "$port"
+` + postgressetup.DarwinScript() + `
+database_url="postgresql:///agentmux?host=/tmp&port=$port&sslmode=disable"
+` + bridgeEnvironment + `"$HOME/.agentmux/bin/amux" --database-url "$database_url" database setup
+printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
+		command = "/bin/bash -c " + shellQuote(script)
 	default:
 		return "", fmt.Errorf("unsupported remote platform %q", remoteOS)
 	}
@@ -418,17 +435,15 @@ printf '\nAGENTMUX_DATABASE_URL=%s\n' "$database_url"`
 	if err != nil {
 		return "", fmt.Errorf("prepare remote PostgreSQL: %w: %s", err, strings.TrimSpace(output))
 	}
-	if remoteOS == "linux" {
-		const prefix = "AGENTMUX_DATABASE_URL="
-		for _, line := range strings.Split(output, "\n") {
-			line = strings.TrimSpace(line)
-			if value := strings.TrimSpace(strings.TrimPrefix(line, prefix)); strings.HasPrefix(line, prefix) && strings.HasPrefix(value, "postgresql:///") {
-				databaseURL = value
-			}
+	const prefix = "AGENTMUX_DATABASE_URL="
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if value := strings.TrimSpace(strings.TrimPrefix(line, prefix)); strings.HasPrefix(line, prefix) && strings.HasPrefix(value, "postgresql:///") {
+			databaseURL = value
 		}
-		if databaseURL == "" {
-			return "", fmt.Errorf("prepare remote PostgreSQL: missing database URL in output %q", output)
-		}
+	}
+	if databaseURL == "" {
+		return "", fmt.Errorf("prepare remote PostgreSQL: missing database URL in output %q", output)
 	}
 	return databaseURL, nil
 }

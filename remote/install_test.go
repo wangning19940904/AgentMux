@@ -78,6 +78,46 @@ func TestPrepareRemotePostgresProvisionsLinuxDatabase(t *testing.T) {
 	}
 }
 
+type darwinPostgresClient struct {
+	recordingRemoteClient
+	port string
+}
+
+func (c *darwinPostgresClient) Run(_ context.Context, command string, _ io.Reader) ([]byte, error) {
+	c.commands = append(c.commands, command)
+	return []byte("Local PostgreSQL is ready.\n\nAGENTMUX_DATABASE_URL=postgresql:///agentmux?host=/tmp&port=" + c.port + "&sslmode=disable\n"), nil
+}
+
+func TestPrepareRemotePostgresUsesRunningDarwinCluster(t *testing.T) {
+	client := &darwinPostgresClient{port: "5434"}
+	databaseURL, err := prepareRemotePostgres(context.Background(), client, "darwin", "bridge-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "postgresql:///agentmux?host=/tmp&port=5434&sslmode=disable"; databaseURL != want || len(client.commands) != 1 {
+		t.Fatalf("database URL = %q, commands = %d; want %q", databaseURL, len(client.commands), want)
+	}
+	command := client.commands[0]
+	for _, want := range []string{
+		`/bin/bash -c `,
+		`if [ ! -S /tmp/.s.PGSQL.5432 ]; then`,
+		`candidate=${socket##*.}`,
+		`port=${1:-5432}`,
+		`pg_isready -q -h /tmp -p "$port"`,
+		`createdb -w -h /tmp -p "$port" agentmux`,
+		`database_url="postgresql:///agentmux?host=/tmp&port=$port&sslmode=disable"`,
+		`AGENTMUX_BRIDGE_TOKEN=`,
+		`database setup`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("PostgreSQL preparation does not contain %q:\n%s", want, command)
+		}
+	}
+	if strings.Contains(command, "-p 5432") {
+		t.Fatalf("PostgreSQL preparation still pins port 5432:\n%s", command)
+	}
+}
+
 func TestMigrateRemoteSQLiteWritesCompletionMarker(t *testing.T) {
 	client := &recordingRemoteClient{}
 	if err := migrateRemoteSQLite(

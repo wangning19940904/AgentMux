@@ -31,6 +31,10 @@ var linuxScript string
 // first argument selects the port of an existing remote cluster.
 func LinuxScript() string { return linuxScript }
 
+// DarwinScript is shared by SSH installation and local startup. Like
+// LinuxScript, its optional first argument selects the cluster's port.
+func DarwinScript() string { return darwinScript }
+
 // Serialize installation in a process without retaining failures permanently.
 var setupSlot = make(chan struct{}, 1)
 

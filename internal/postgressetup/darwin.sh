@@ -3,6 +3,11 @@ export PATH="${PATH:-}:/usr/bin:/bin:/usr/sbin:/sbin"
 export PGCONNECT_TIMEOUT=3
 # Do not inherit a different database/user/password from the caller's libpq env.
 unset PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PGSERVICE PGSERVICEFILE PGOPTIONS
+# The optional first argument selects the port of an existing cluster; a
+# Homebrew PostgreSQL is not always on the default port.
+port=${1:-5432}
+case "$port" in ''|*[!0-9]*) echo "Invalid PostgreSQL port." >&2; exit 1;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || { echo "Invalid PostgreSQL port." >&2; exit 1; }
 
 find_brew() {
   command -v brew 2>/dev/null && return
@@ -42,23 +47,23 @@ fi
 pg_prefix=$("$brew_bin" --prefix "$formula")
 export PATH="$pg_prefix/bin:$PATH"
 
-if ! pg_isready -q -h /tmp -p 5432; then
+if ! pg_isready -q -h /tmp -p "$port"; then
   echo "Starting PostgreSQL…"
   "$brew_bin" services start "$formula"
 fi
 for ((attempt=0; attempt<60; attempt++)); do
-  if pg_isready -q -h /tmp -p 5432; then break; fi
-  if [ "$attempt" -eq 59 ]; then echo "PostgreSQL did not become ready on /tmp:5432. Check brew services list." >&2; exit 1; fi
+  if pg_isready -q -h /tmp -p "$port"; then break; fi
+  if [ "$attempt" -eq 59 ]; then echo "PostgreSQL did not become ready on /tmp:$port. Check brew services list." >&2; exit 1; fi
   sleep 0.5
 done
-version=$(psql -X -w -h /tmp -p 5432 -d postgres -Atqc 'SHOW server_version_num')
+version=$(psql -X -w -h /tmp -p "$port" -d postgres -Atqc 'SHOW server_version_num')
 if [ "$version" -lt 160000 ]; then
   echo "Existing PostgreSQL is older than 16. Migrate it before upgrading; existing data was not modified." >&2
   exit 1
 fi
-if [ "$(psql -X -w -h /tmp -p 5432 -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='agentmux'")" != 1 ]; then
+if [ "$(psql -X -w -h /tmp -p "$port" -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='agentmux'")" != 1 ]; then
   # Another AgentMux process may finish creating it while this process waits.
-  createdb -w -h /tmp -p 5432 agentmux || \
-    [ "$(psql -X -w -h /tmp -p 5432 -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='agentmux'")" = 1 ]
+  createdb -w -h /tmp -p "$port" agentmux || \
+    [ "$(psql -X -w -h /tmp -p "$port" -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname='agentmux'")" = 1 ]
 fi
 echo "Local PostgreSQL is ready."
