@@ -52,6 +52,10 @@ func openPostgresIntegrationStore(t *testing.T) *Store {
 	return st
 }
 
+func TestPostgresGatewayTokenCreationIsAtomic(t *testing.T) {
+	checkConcurrentGatewayTokens(t, []*Store{openPostgresIntegrationStore(t)})
+}
+
 func TestPostgresObservationBatchDeduplicatesConcurrently(t *testing.T) {
 	st := openPostgresIntegrationStore(t)
 	recorder, err := NewObservationRecorder(st, ObservationRecorderOptions{CaptureContent: false})

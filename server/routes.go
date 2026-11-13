@@ -47,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/system/directories", s.handleSystemDirectoryEnsure)
 	s.mux.HandleFunc("GET /api/v1/system/keep-awake", s.handleKeepAwakeGet)
 	s.mux.HandleFunc("PUT /api/v1/system/keep-awake", s.handleKeepAwakePut)
+	s.mux.HandleFunc("POST /api/v1/system/keep-awake/accessibility", s.handleKeepAwakeAccessibility)
 	s.mux.HandleFunc("GET /api/v1/system/metrics", s.handleSystemMetrics)
 	s.mux.HandleFunc("GET /api/v1/tts/models", s.handleTTSModels)
 	s.mux.HandleFunc("POST /api/v1/tts/models/download/stream", s.handleTTSModelDownload)

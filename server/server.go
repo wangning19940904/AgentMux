@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -233,26 +234,51 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err := s.cfg.ValidateListenSecurity(); err != nil {
 		return err
 	}
+	listener, err := net.Listen("tcp", s.cfg.Server.Addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ctx, listener)
+}
+
+// Serve uses the API listener reserved before daemon initialization.
+func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
+	if listener == nil {
+		return fmt.Errorf("server listener is required")
+	}
+	defer listener.Close()
+	if s == nil || s.cfg == nil {
+		return fmt.Errorf("server config is required")
+	}
+	if err := s.cfg.ValidateListenSecurity(); err != nil {
+		return err
+	}
 	defer s.keepAwake.Stop()
 	defer s.hostMetrics.Close()
 	if s.remote != nil {
 		defer s.remote.Close()
 	}
-	s.httpSrv = &http.Server{
+	httpSrv := &http.Server{
 		Addr:    s.cfg.Server.Addr,
 		Handler: s.withAuth(s.mux),
 	}
+	s.httpSrv = httpSrv
 	if s.providerMonitor != nil {
 		go s.providerMonitor.Run(ctx)
 	}
+	stopped := make(chan struct{})
+	defer close(stopped)
 	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.httpSrv.Shutdown(shutCtx)
+		select {
+		case <-ctx.Done():
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = httpSrv.Shutdown(shutCtx)
+		case <-stopped:
+		}
 	}()
-	s.log.Info("server listening", "addr", s.cfg.Server.Addr)
-	if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	s.log.Info("server listening", "addr", listener.Addr().String())
+	if err := httpSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

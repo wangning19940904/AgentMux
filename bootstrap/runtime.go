@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -51,6 +52,8 @@ type Runtime struct {
 	stop        sync.Once
 	authRefresh func(context.Context)
 	authWG      sync.WaitGroup
+	listener    net.Listener
+	proxyWG     sync.WaitGroup
 }
 
 // NewRuntime assembles the complete daemon under one cancellable lifecycle.
@@ -62,10 +65,30 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		log = slog.Default()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	if cfg != nil && (len(cfg.Projects) > 0 || len(cfg.Hooks) > 0) {
+	if cfg == nil {
+		cancel()
+		return nil, fmt.Errorf("server config is required")
+	}
+	if err := cfg.ValidateListenSecurity(); err != nil {
+		cancel()
+		return nil, err
+	}
+	if len(cfg.Projects) > 0 || len(cfg.Hooks) > 0 {
 		cancel()
 		return nil, fmt.Errorf("config.toml projects/hooks are no longer runtime resources; run `amux database import-config --apply`, then remove those sections")
 	}
+	listener, err := waitForDaemonListener(ctx, log, cfg.Server.Addr, daemonRetryInterval)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			cancel()
+			_ = listener.Close()
+		}
+	}()
 	if keys, err := framework.InheritShellProxyEnvironment(ctx); err != nil {
 		log.Warn("shell proxy settings unavailable; using service environment", "err", err)
 	} else if len(keys) > 0 {
@@ -140,9 +163,10 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			log.Error("observability unavailable; continuing without it", "err", obsErr)
 		}
 	}
+	initialized = true
 	return &Runtime{
 		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService, EventRelay: relay, SuperAgents: superAgents,
-		Usage: usageEngine, Engine: engine, Connect: connect,
+		Usage: usageEngine, Engine: engine, Connect: connect, listener: listener,
 		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
 	}, nil
 }
@@ -181,16 +205,47 @@ func (r *Runtime) Start() error {
 		r.cancel()
 		return fmt.Errorf("start super agents: %w", err)
 	}
-	if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
-		r.log.Warn("local routing restore failed", "err", err)
-	}
-	go func() { r.errCh <- runtimeResult{name: "http", err: r.Server.ListenAndServe(r.ctx)} }()
+	r.startProxyRestore(daemonRetryInterval)
+	go func() { r.errCh <- runtimeResult{name: "http", err: r.Server.Serve(r.ctx, r.listener)} }()
 	go func() { r.errCh <- runtimeResult{name: "engine", err: r.Engine.Start(r.ctx)} }()
 	if err := r.Connect.Start(r.ctx); err != nil {
 		r.Stop()
 		return fmt.Errorf("start connect runtime: %w", err)
 	}
 	return nil
+}
+
+// A transient proxy bind failure must not leave enabled tools disconnected for
+// the lifetime of the daemon. Each retry reads current takeover settings so a
+// tool disabled while waiting stays disabled.
+func (r *Runtime) startProxyRestore(retryInterval time.Duration) {
+	if err := r.Provider.RestoreProxyState(r.ctx); err == nil {
+		return
+	} else {
+		r.log.Warn("local routing restore failed; will retry", "err", err, "retry_in", retryInterval)
+	}
+	r.proxyWG.Add(1)
+	go func() {
+		defer r.proxyWG.Done()
+		ticker := time.NewTicker(retryInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.ctx.Done():
+				return
+			case <-ticker.C:
+				if r.ctx.Err() != nil {
+					return
+				}
+				if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
+					r.log.Warn("local routing restore failed; will retry", "err", err, "retry_in", retryInterval)
+					continue
+				}
+				r.log.Info("local routing state restored")
+				return
+			}
+		}
+	}()
 }
 
 // Wait blocks until cancellation or one long-running component exits, then
@@ -241,6 +296,7 @@ func (r *Runtime) Stop() {
 	r.stop.Do(func() {
 		r.cancel()
 		r.authWG.Wait()
+		r.proxyWG.Wait()
 		if r.SuperAgents != nil {
 			r.SuperAgents.Stop()
 		}
@@ -252,6 +308,9 @@ func (r *Runtime) Stop() {
 		}
 		if r.Provider != nil && r.Provider.Proxy() != nil {
 			_ = r.Provider.Proxy().Stop()
+		}
+		if r.listener != nil {
+			_ = r.listener.Close()
 		}
 	})
 }
