@@ -599,6 +599,30 @@ describe("SuperAgentsPanel", () => {
     expect(chips).toEqual(["codexAuto workers", "kimiAuto workers"]);
   });
 
+  it("lets an agent launch workers on another machine, and names the machine on its tickets", async () => {
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity, machines: [{ host_id: "h1", name: "GPU box", available: false, detail: "device is offline" }],
+      tickets: [{ id: "t3", title: "Train it", status: "running", worker: { id: "auto:codex@h1", agent_id: "sawr_sa_1_codex", host_id: "h1", label: "Repo keeper worker (codex)" }, updated_at: "2026-11-03T00:00:00Z" }],
+    });
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Train it"));
+    const chip = [...container.querySelectorAll(".super-agent-chip")].find((item) => item.textContent === "GPU boxlaunches workers");
+    expect(chip?.getAttribute("title")).toBe("device is offline");
+    expect(chip?.querySelector("i")?.className).toBe("offline");
+    expect(hasText("Repo keeper worker (codex) · GPU box")).toBe(true);
+
+    click(button(/^Edit$/));
+    await until(() => control(/^Directory on that machine/).value === "~/code");
+    // The only machine is already listed, so there is none left to add.
+    expect((button(/^Add machine$/) as HTMLButtonElement).disabled).toBe(true);
+    setValue(control(/^What this machine is for/), "Has the GPU");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ auto_workers: true, worker_machines: [{ host_id: "h1", dir: "~/code", capabilities: "Has the GPU" }] });
+  });
+
   it("edits an existing Super Agent's router, workers and triggers outside advanced settings", async () => {
     renderPanel();
     await until(() => hasText("Fix build"));

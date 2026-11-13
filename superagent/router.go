@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,6 +111,8 @@ type routerContext struct {
 	Notes    []string
 	Feedback string
 	Where    string
+	// Machines are the other machines a worker can be launched on.
+	Machines []core.SuperAgentMachineStatus
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -368,7 +371,7 @@ To have AgentMux act, end your final message with an action block holding one ac
 - "link": link this event's thread to an open ticket without disturbing its worker, so the thread hears when the ticket moves.
 - "post": send "text" to another thread or place. "to" is a ticket id (that ticket's thread), a "to" value from OPEN TICKETS or PLACES, or github:<owner/repo>#<number>. Your reply already goes to this event's thread.
 - "reason", on any action, is a short note for the operator's audit log.
-Without a block, AgentMux only sends your reply. Choose workers only from the roster. Entries named auto:<framework> launch a new worker with that framework; pick the framework that suits the work best. When no available worker can do the work, say so in your reply.
+Without a block, AgentMux only sends your reply. Choose workers only from the roster. Entries named auto:<framework> launch a new worker with that framework; pick the framework that suits the work best. Entries named auto:<framework>@<machine> launch it on another machine: choose one when the work belongs on that machine, and only when it is available. A ticket's files stay on the machine its worker runs on, so base_ticket only carries work between tickets on the same machine. When no available worker can do the work, say so in your reply.
 `
 
 const observeNote = `
@@ -433,6 +436,25 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	if agent.AutoWorkers {
 		for _, runtimeID := range agent.WorkerRuntimes {
 			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Available: true})
+		}
+		// One entry per framework on each of the operator's other machines,
+		// so the router sees which machine can take the work right now.
+		for index, machine := range agent.WorkerMachines {
+			status := core.SuperAgentMachineStatus{HostID: machine.HostID, Name: machine.HostID, Detail: "machine status unknown"}
+			if index < len(view.Machines) {
+				status = view.Machines[index]
+			}
+			for _, runtimeID := range agent.WorkerRuntimes {
+				entry := rosterEntry{
+					ID: machineWorkerRosterID(runtimeID, machine.HostID), Label: status.Name, Location: "machine " + status.Name,
+					Capabilities: strings.TrimSpace(fmt.Sprintf(machineGuidance, runtimeID, status.Name) + " " + machine.Capabilities),
+					Available:    status.Available && slices.Contains(status.Runtimes, runtimeID), Detail: status.Detail,
+				}
+				if status.Available && !entry.Available {
+					entry.Detail = runtimeID + " is not installed on " + status.Name
+				}
+				roster = append(roster, entry)
+			}
 		}
 	}
 	rosterJSON, _ := json.MarshalIndent(roster, "", "  ")

@@ -52,6 +52,9 @@ func (s *Service) Save(ctx context.Context, agent core.SuperAgent) (core.SuperAg
 	if err := s.store.UpsertSuperAgent(ctx, agent); err != nil {
 		return core.SuperAgent{}, err
 	}
+	if existing != nil {
+		s.releaseMachineWorkers(ctx, agent.ID, removedMachines(existing.WorkerMachines, agent.WorkerMachines))
+	}
 	if err := s.bindRouter(ctx, agent); err != nil {
 		return core.SuperAgent{}, err
 	}
@@ -90,6 +93,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	}
 	if err := s.deleteAutoWorkers(ctx, id); err != nil {
 		return err
+	}
+	if agent != nil {
+		s.releaseMachineWorkers(ctx, id, agent.WorkerMachines)
 	}
 	if agent != nil && ownsBrain(*agent) {
 		if err := s.store.DeleteAgentInstance(ctx, agent.RouterAgentID); err != nil {
@@ -151,6 +157,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 		return err
 	}
 	if err := s.normalizeAutoWorkers(agent, router); err != nil {
+		return err
+	}
+	if err := s.normalizeWorkerMachines(agent); err != nil {
 		return err
 	}
 	return normalizeSources(agent, existing)

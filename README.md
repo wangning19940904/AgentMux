@@ -195,6 +195,8 @@ amux leave                         # 在已接入的机器上：离开 Hub
 - Hub 不持有设备的 Bridge Token：设备在本机转发请求时自行附加，离开 Hub 或被移除后 Hub 即无法访问。接入 Hub 等于把这台机器的 AgentMux 管理权交给 Hub 的管理员，因此 `POST /api/v1/link/join` 只对管理员开放。
 - 通过 Hub 连接只能访问设备的 `/api/` 与 `/v1/` 接口。
 - **数据上报**：每台设备仍使用自己的 PostgreSQL。接入 Hub 后，它会沿同一条连接把 Agent、渠道、触发、Super Agent、编排、Skills、MCP、Guard 策略、Provider 与路由、租户等列表上报给 Hub，Hub 存入自己的数据库（`device_collections` / `device_resources`）。只发送有变化的条目，约 30 秒检查一次；重连后以 Hub 现有副本为准重新对齐。上报内容就是设备 API 返回给管理员的内容，密钥已按该 API 的规则脱敏。
+- **在其他机器上启动 Worker**：Hub 上的 Agent 开启自动 Worker 后，可以在「其他机器」里选择已连接的机器（关联设备或 SSH 机器），并为每台机器填写目录和用途。Agent 的名册里会出现 `auto:<框架>@<机器>`，并标明该机器此刻是否在线、是否装有该框架；选中后由那台机器自己创建并运行 Worker（校验框架、目录和审批模式，使用它自己的 Provider 与环境），Worker 的会话和文件留在那台机器上，工单、输入输出记录和进度留在 Agent 所在的机器。运行中的远程 Worker 可以中途接收追加输入；机器离线时工单会重试。从列表中移除机器或删除 Agent 时，那台机器上的 Worker 会被清理，文件保留。跨机器的工单之间不能用 `base_ticket` 传递提交。那台机器的 AgentMux 需要同样支持此功能，否则会提示需要更新。
+- **工单汇总**：每台机器的 `GET /api/v1/super-agents/tickets` 列出其全部 Agent 的最新工单（含 Worker 所在机器），并随数据上报进入 Hub，设备离线时仍可查看。
 - **离线可见**：设备离线时，Console 的「全部机器」与单机视图用 Hub 的副本显示它上报过的列表，并提示该机器离线；「远程机器」页显示最近一次上报时间。写操作和未上报的接口在设备离线时照常失败，设备在线时始终由设备自己回答。`GET /api/v1/devices/reports` 可查看 Hub 持有的各设备数据概况；取消配对会同时删除该设备的副本。
 - 未设置 `[hub] addr` 时，设备也可以经管理端口配对（例如同一台机器或已有反向代理）；经明文 `http://` 连接非本机地址时命令会给出提示。
 - Hub 自身也没有公网地址时，可把 Cloudflare Tunnel、frp 等隧道的地址填入 `public_url`。

@@ -61,6 +61,7 @@ var DefaultReports = []Report{
 	{"channels", "/api/v1/channels"},
 	{"triggers", "/api/v1/triggers"},
 	{"super_agents", "/api/v1/super-agents"},
+	{"tickets", "/api/v1/super-agents/tickets"},
 	{"orchestrations_active", "/api/v1/orchestrations?active=true"},
 	{"orchestrations", "/api/v1/orchestrations?active=false"},
 	{"skills", "/api/v1/skills"},

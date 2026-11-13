@@ -88,6 +88,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/send", s.handleSend)
 	s.mux.HandleFunc("POST /api/v1/invocations", s.handleInvocation)
 	s.mux.HandleFunc("POST /api/v1/invocations/stream", s.handleInvocationStream)
+	s.mux.HandleFunc("POST /api/v1/invocations/steer", s.handleInvocationSteer)
 	s.mux.HandleFunc("GET /api/v1/orchestrations", s.handleOrchestrationsList)
 	s.mux.HandleFunc("POST /api/v1/orchestrations", s.handleOrchestrationCreate)
 	s.mux.HandleFunc("POST /api/v1/orchestrations/cancel", s.handleOrchestrationCancel)

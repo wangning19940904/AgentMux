@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
@@ -36,6 +37,44 @@ func (s *Server) handleInvocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleInvocationSteer adds input to the turn a conversation is running, for
+// a caller on another machine whose worker runs here. Without a running turn
+// it answers 409 and the caller sends the input with the next turn.
+func (s *Server) handleInvocationSteer(w http.ResponseWriter, r *http.Request) {
+	steerer, ok := s.invoker.(core.InvocationSteerer)
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, core.ErrSteerUnsupported.Error())
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxInvocationRequestBytes)
+	body, decoded := decodeJSON[struct {
+		AgentID        string `json:"agent_id"`
+		ConversationID string `json:"conversation_id"`
+		Text           string `json:"text"`
+	}](w, r)
+	if !decoded {
+		return
+	}
+	if strings.TrimSpace(body.AgentID) == "" || strings.TrimSpace(body.ConversationID) == "" || strings.TrimSpace(body.Text) == "" {
+		writeErr(w, http.StatusBadRequest, "agent_id, conversation_id and text are required")
+		return
+	}
+	if !s.authorizeInvocationTarget(w, r, body.AgentID) {
+		return
+	}
+	err := steerer.SteerInvocation(r.Context(), body.AgentID, body.ConversationID, body.Text)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case errors.Is(err, core.ErrInvocationIdle):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, core.ErrSteerUnsupported):
+		writeErr(w, http.StatusNotImplemented, err.Error())
+	default:
+		writeErr(w, invocationErrorStatus(err), err.Error())
+	}
 }
 
 type invocationStreamOutcome struct {

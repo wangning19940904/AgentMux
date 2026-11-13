@@ -1557,6 +1557,21 @@ export interface SuperAgentWorker {
   capabilities?: string;
 }
 
+// A machine an agent may launch workers on, besides the one it lives on.
+export interface SuperAgentMachine {
+  host_id: string;
+  dir?: string;
+  capabilities?: string;
+}
+
+export interface SuperAgentMachineStatus {
+  host_id: string;
+  name?: string;
+  available: boolean;
+  runtimes?: string[];
+  detail?: string;
+}
+
 export interface SuperAgentSource {
   id: string;
   kind: SuperAgentSourceKind;
@@ -1633,6 +1648,7 @@ export interface SuperAgent {
   worker_runtimes?: string[];
   auto_worker_dir?: string;
   auto_worker_approval_mode?: string;
+  worker_machines?: SuperAgentMachine[];
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1794,6 +1810,7 @@ export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
   workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
+  machines?: SuperAgentMachineStatus[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
 }
 

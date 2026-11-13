@@ -1,7 +1,7 @@
 import { Bot, Play, Plus, RefreshCw, RotateCcw, Save, Square, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AgentInstance, SuperAgent, SuperAgentRouter, SuperAgentRouterList, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { AgentInstance, SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentRouterList, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -105,6 +105,16 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   {selected.auto_workers && (selected.worker_runtimes ?? []).map((runtime) => (
                     <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{t("superAgents.autoWorkersOn")}</small></span>
                   ))}
+                  {selected.auto_workers && (selected.worker_machines ?? []).map((machine) => {
+                    const status = activity.data?.machines?.find((item) => item.host_id === machine.host_id);
+                    return (
+                      <span key={machine.host_id} className="super-agent-chip" title={status?.detail || machine.capabilities}>
+                        <i className={status?.available ? "online" : "offline"} />
+                        {status?.name || machine.host_id}
+                        <small>{t("superAgents.workerMachine")}</small>
+                      </span>
+                    );
+                  })}
                   {selected.workers.map((worker) => {
                     const status = activity.data?.workers?.find((item) => item.worker_id === worker.id);
                     return (
@@ -157,7 +167,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                           {ticket.status === "failed" && <button className="ghost-action" disabled={Boolean(busy)} onClick={() => void run("retry", () => api.retrySuperAgentTicket(ticket.id))}><RotateCcw size={13} /> {t("common.retry")}</button>}
                         </span>
                       </header>
-                      <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? t("superAgents.remote") : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
+                      <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.worker.host_id)?.name ?? t("superAgents.remote")) : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
                       {ticket.output && <pre>{ticket.output}</pre>}
                       {ticket.error && <div className="error">{ticket.error}</div>}
                       {ticket.reply_error && <div className="error">{t("superAgents.replyFailed")}: {ticket.reply_error}</div>}
@@ -500,6 +510,11 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
 
   const toggleWorkerRuntime = (kind: string, checked: boolean) =>
     onChange(withWorkerRuntimes(draft, checked ? [...workerRuntimes, kind] : workerRuntimes.filter((item) => item !== kind)));
+  const machines = draft.worker_machines ?? [];
+  const unusedHosts = (hosts.data ?? []).filter((host) => !machines.some((machine) => machine.host_id === host.id));
+  const updateMachines = (list: SuperAgentMachine[]) => onChange({ ...draft, worker_machines: list });
+  const updateMachine = (index: number, patch: Partial<SuperAgentMachine>) =>
+    updateMachines(machines.map((machine, position) => position === index ? { ...machine, ...patch } : machine));
   const updateWorker = (index: number, patch: Partial<SuperAgentWorker>) =>
     onChange({ ...draft, workers: draft.workers.map((worker, position) => position === index ? { ...worker, ...patch } : worker) });
   const updateSource = (index: number, patch: Partial<SuperAgentSource>) =>
@@ -576,6 +591,34 @@ function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: {
                   <small>{t("superAgents.autoWorkerApprovalHelp")}</small>
                 </label>
               </div>
+            )}
+            {draft.auto_workers && (
+              <>
+                <div className="super-agent-section-head">
+                  <h4>{t("superAgents.workerMachines")}</h4>
+                  <button className="ghost-action" type="button" disabled={unusedHosts.length === 0} onClick={() => updateMachines([...machines, { host_id: unusedHosts[0].id }])}><Plus size={14} /> {t("superAgents.addMachine")}</button>
+                </div>
+                <small className="muted">{(hosts.data ?? []).length === 0 ? t("superAgents.noMachines") : t("superAgents.workerMachinesHelp")}</small>
+                {machines.map((machine, index) => (
+                  <div className="super-agent-card" key={machine.host_id}>
+                    <div className="field-grid">
+                      <label className="field"><span>{t("superAgents.machine")}</span>
+                        <select value={machine.host_id} onChange={(event) => updateMachine(index, { host_id: event.target.value })}>
+                          {!(hosts.data ?? []).some((host) => host.id === machine.host_id) && <option value={machine.host_id}>{machine.host_id}</option>}
+                          {(hosts.data ?? []).filter((host) => host.id === machine.host_id || unusedHosts.includes(host)).map((host) => <option key={host.id} value={host.id}>{host.name}</option>)}
+                        </select>
+                      </label>
+                      <label className="field"><span>{t("superAgents.machineDir")}</span>
+                        <input placeholder={t("superAgents.machineDirPlaceholder")} value={machine.dir ?? ""} onChange={(event) => updateMachine(index, { dir: event.target.value })} />
+                      </label>
+                    </div>
+                    <label className="field"><span>{t("superAgents.machineCapabilities")}</span>
+                      <input placeholder={t("superAgents.machineCapabilitiesPlaceholder")} value={machine.capabilities ?? ""} onChange={(event) => updateMachine(index, { capabilities: event.target.value })} />
+                    </label>
+                    <button className="ghost-action danger-action" type="button" onClick={() => updateMachines(machines.filter((_, position) => position !== index))}><Trash2 size={13} /> {t("superAgents.remove")}</button>
+                  </div>
+                ))}
+              </>
             )}
             <div className="super-agent-section-head">
               <h4>{t("superAgents.rosterWorkers")}</h4>

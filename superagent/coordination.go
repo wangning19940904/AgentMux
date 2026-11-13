@@ -109,7 +109,7 @@ type activity struct {
 
 // routerView assembles everything the router is shown with an event.
 func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket) routerContext {
-	view := routerContext{Memory: s.memoryIndex(agent.ID)}
+	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent)}
 	names := map[string]string{}
 	for _, source := range agent.Sources {
 		if !source.Enabled {

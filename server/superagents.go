@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +48,10 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("POST /api/v1/super-agents/routers", s.handleSuperAgentRouterUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/super-agents/routers", s.handleSuperAgentRouterDelete)
 	s.mux.HandleFunc("GET /api/v1/super-agents/activity", s.handleSuperAgentActivity)
+	s.mux.HandleFunc("GET /api/v1/super-agents/tickets", s.handleSuperAgentTickets)
+	// Workers this machine keeps for agents that live on another machine.
+	s.mux.HandleFunc("POST /api/v1/super-agents/workers/launch", s.handleHostedWorkerLaunch)
+	s.mux.HandleFunc("POST /api/v1/super-agents/workers/release", s.handleHostedWorkerRelease)
 	s.mux.HandleFunc("POST /api/v1/super-agents/setup", s.handleSuperAgentSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/trigger", s.handleSuperAgentTrigger)
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/stop", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
@@ -548,6 +553,70 @@ func splitQueryList(value string) []string {
 		}
 	}
 	return items
+}
+
+// handleSuperAgentTickets lists the newest Tickets of every agent here, for
+// views that span agents and machines.
+func (s *Server) handleSuperAgentTickets(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	tickets, err := s.superAgents.Tickets(r.Context(), limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, tickets)
+}
+
+// handleHostedWorkerLaunch keeps a worker here for an agent that lives on
+// another machine, which reaches this API as an administrator: over this
+// machine's link to its hub, or with this machine's token over SSH.
+func (s *Server) handleHostedWorkerLaunch(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	request, ok := decodeJSON[core.HostedWorkerRequest](w, r)
+	if !ok {
+		return
+	}
+	hosted, err := s.superAgents.HostWorker(r.Context(), request)
+	if err != nil {
+		writeHostedWorkerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, hosted)
+}
+
+func (s *Server) handleHostedWorkerRelease(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	body, ok := decodeJSON[struct {
+		OwnerID string `json:"owner_id"`
+	}](w, r)
+	if !ok {
+		return
+	}
+	removed, err := s.superAgents.ReleaseHostedWorkers(r.Context(), body.OwnerID)
+	if err != nil {
+		writeHostedWorkerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"removed": removed})
+}
+
+func writeHostedWorkerError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, superagent.ErrInvalid):
+		writeErr(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), superagent.ErrInvalid.Error()+": "))
+	case errors.Is(err, superagent.ErrConflict):
+		writeErr(w, http.StatusConflict, err.Error())
+	default:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func writeSuperAgentError(w http.ResponseWriter, err error) {

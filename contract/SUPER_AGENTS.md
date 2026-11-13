@@ -270,9 +270,47 @@ request, and the host starts a worker of that framework that was not configured 
   (a Super Agent that still routes with an ordinary Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
   which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
   where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
-- `max_concurrency` limits how many run at once. Auto workers run on this machine only.
+- `max_concurrency` limits how many run at once. Auto workers run on this machine unless
+  `worker_machines` lists others; see below.
 - Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
   with the Super Agent. Worktrees are kept after a Ticket ends, and so is the home.
+
+### Workers on other machines
+
+`worker_machines` lists machines connected to this AgentMux, as linked devices or SSH
+hosts, that the agent may also launch workers on:
+
+```json
+"worker_machines": [{ "host_id": "dev_23f0…", "dir": "~/code/app", "capabilities": "Has the GPU." }]
+```
+
+- The roster offers `auto:<framework>@<host_id>` for each machine and worker framework,
+  with the machine's name, the operator's `capabilities` text, and whether the machine is
+  reachable and has that framework installed right now. A decision can only name an entry
+  on the roster.
+- The machine itself creates the worker. The host sends the framework, `dir` and
+  `auto_worker_approval_mode` to `POST /api/v1/super-agents/workers/launch` on that machine,
+  which checks them as it would for its own agents: the framework must be installed, `dir`
+  must exist (empty gives the worker `~/.agentmux/hosted-workers/<agent id>/work`), and the
+  approval mode must be an unattended one. The worker is the Agent instance
+  `sawr_<agent id>_<framework>` there. It uses that machine's provider route, tools and
+  environment; nothing is inherited from the agent's machine.
+- The Ticket, its inputs, results and progress stay on the agent's machine. The worker's
+  session and files stay on its own, so `base_ticket` only carries commits between Tickets
+  on the same machine.
+- A follow-up for a running Ticket is delivered during its turn through
+  `POST /api/v1/invocations/steer` on the worker's machine. When that machine cannot take
+  it, the follow-up waits for the next turn.
+- An unreachable machine fails the turn as retryable, like any remote worker.
+- Removing a machine from the list, or deleting the agent, removes its workers there
+  (`POST /api/v1/super-agents/workers/release`). Their files are kept. A machine that is
+  offline at that moment keeps an idle Agent instance.
+- A machine whose AgentMux predates this answers the launch with an error naming the update.
+
+`GET /api/v1/super-agents/tickets?limit=` lists the newest Tickets of every agent on a
+machine, each with its agent's name and the machine its worker runs on. Reply addresses and
+queued inputs are left out and long output is cut. Machines linked to a hub report this list
+to it.
 
 ## Router agents
 
