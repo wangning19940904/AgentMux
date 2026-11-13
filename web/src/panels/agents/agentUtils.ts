@@ -128,11 +128,6 @@ export function routeToolForRuntime(runtime: string): string {
   return normalizeTool(runtime);
 }
 
-export function routeToolOptionsForRuntime(runtime: string): string[] {
-  const tool = routeToolForRuntime(runtime);
-  return tool ? [tool] : [];
-}
-
 export function runtimeLabel(runtime: string, t?: (key: string) => string): string {
   switch (runtime) {
     case "claude":

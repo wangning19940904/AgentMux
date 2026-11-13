@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -41,8 +42,10 @@ func TestAgentsEndpointOnlyReturnsInstalledRuntimes(t *testing.T) {
 	if !containsString(runtimes, "codex") {
 		t.Fatalf("runtimes = %v, want installed codex", runtimes)
 	}
-	if !containsString(runtimes, "codex-app") {
-		t.Fatalf("runtimes = %v, want Codex Desktop runtime when codex is installed", runtimes)
+	for _, hidden := range []string{"codex-app", "terminal"} {
+		if containsString(runtimes, hidden) {
+			t.Fatalf("runtimes = %v, %s must not be offered for new agents", runtimes, hidden)
+		}
 	}
 	if containsString(runtimes, "claudecode") {
 		t.Fatalf("runtimes = %v, missing claudecode must be filtered", runtimes)
@@ -201,9 +204,24 @@ func TestCodexDesktopAgentBindsVerifiedDesktopThread(t *testing.T) {
 	t.Setenv("NVM_DIR", filepath.Join(home, ".nvm-missing"))
 	t.Setenv("PNPM_HOME", filepath.Join(home, ".pnpm-missing"))
 
-	s, _ := newTestServer(t)
+	s, st := newTestServer(t)
 	recorder := doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
-		Name: "Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
+		Name: "New Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
+	})
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "cannot be used for new agents") {
+		t.Fatalf("new desktop agent code = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	// Agents created before Codex Desktop was retired still save and bind.
+	for _, id := range []string{"agent-desktop", "agent-desktop-2"} {
+		if err := st.UpsertAgentInstance(context.Background(), &core.AgentInstance{
+			ID: id, Name: id, RuntimeID: "codex-app", ProviderTool: "codex-app", Enabled: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorder = doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+		ID: "agent-desktop", Name: "Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
 	})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("code = %d body = %s", recorder.Code, recorder.Body.String())
@@ -217,7 +235,7 @@ func TestCodexDesktopAgentBindsVerifiedDesktopThread(t *testing.T) {
 	}
 
 	recorder = doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
-		Name: "Duplicate Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
+		ID: "agent-desktop-2", Name: "Duplicate Desktop Agent", RuntimeID: "codex-app", DesktopThreadID: "desktop-thread", Enabled: true,
 	})
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "already bound") {
 		t.Fatalf("duplicate code = %d body = %s", recorder.Code, recorder.Body.String())
