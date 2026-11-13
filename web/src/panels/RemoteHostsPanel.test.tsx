@@ -246,6 +246,22 @@ describe("machines that connect to the hub themselves", () => {
     expect(Array.from(ssh.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["更新", "编辑", "删除"]);
   });
 
+  it("shows this hub's failover identity as such, not as a broken machine", async () => {
+    const peer: RemoteHost = { id: "dev_peer", name: "mac (hub)", host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: false, hub_peer: true };
+    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], peer]);
+    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="peer" /></I18nProvider>); });
+    const row = Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes("mac (hub)"))!;
+    expect(row.textContent).toContain("本机 Hub 的接管身份");
+    expect(row.querySelector(".status-badge.danger, .status-badge.warning")).toBeNull();
+    // No update check, and it is never probed.
+    expect(Array.from(row.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["删除"]);
+    expect(vi.mocked(api.statusRemoteHost).mock.calls.some(([id]) => id === "dev_peer")).toBe(false);
+    // Deleting it first explains what that breaks.
+    await click(button(row, "删除"));
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("无法作为备用 Hub 重新加入");
+    expect(api.deleteRemoteHost).not.toHaveBeenCalled();
+  });
+
   it("creates a one-time join command", async () => {
     vi.mocked(api.createDevicePairingCode).mockResolvedValue({
       code: "ABCD2345", expires_at: "2026-11-12T12:30:00Z", hub_url: "https://10.0.0.2:8766",

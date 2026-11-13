@@ -26,6 +26,12 @@ const (
 	hubKeyFile  = "hub-key.pem"
 )
 
+// CertificateFiles are where the hub keeps its own certificate and key in
+// dir. A standby hub writes the primary's there, so both present one identity.
+func CertificateFiles(dir string) (cert, key string) {
+	return filepath.Join(dir, hubCertFile), filepath.Join(dir, hubKeyFile)
+}
+
 // Fingerprint is the SHA-256 of a certificate, in hex. A join token carries
 // the hub's, so a node can trust a hub that has no domain name.
 func Fingerprint(der []byte) string {

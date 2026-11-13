@@ -297,5 +297,6 @@ func hubCmd() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(pair, devices, remove)
+	cmd.AddCommand(hubStandbyCmds()...)
 	return cmd
 }

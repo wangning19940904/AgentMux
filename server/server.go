@@ -65,6 +65,7 @@ type Server struct {
 	push               *pushpkg.Service
 	devices            *deviceBackend
 	node               *nodeLink
+	hubHA              *hubStandby
 	superAgents        *superagent.Service
 	mail               *mailbox.Service
 	feishuDirectory    superagent.FeishuDirectory
@@ -287,6 +288,9 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	s.node.run(ctx)
+	if err := s.startHubStandby(ctx); err != nil {
+		return err
+	}
 	if s.mail != nil {
 		go s.mail.Run(ctx)
 	}

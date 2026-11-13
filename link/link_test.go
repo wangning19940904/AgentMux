@@ -308,3 +308,36 @@ func TestCertificateIsStable(t *testing.T) {
 		t.Fatalf("fingerprints %q, %q, %v", first, second, err)
 	}
 }
+
+func TestWaitConnectedReturnsWhenTheDeviceArrives(t *testing.T) {
+	registry := newFakeRegistry("CODE5678")
+	hub, join := startHub(t, registry)
+	join.Code = "CODE5678"
+	state, err := Pair(context.Background(), join, core.DeviceInfo{Name: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if hub.WaitConnected(short, state.DeviceID) {
+		t.Fatal("a device that never connected was reported connected")
+	}
+	before := hub.StartedAt()
+	hub.MarkStarted()
+	if !hub.StartedAt().After(before) {
+		t.Fatal("MarkStarted did not move the start time")
+	}
+	waited := make(chan bool, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		waited <- hub.WaitConnected(ctx, state.DeviceID)
+	}()
+	runClient(t, state, http.NotFoundHandler())
+	if !<-waited {
+		t.Fatal("the wait ended before the device connected")
+	}
+	if _, ok := hub.Connection(state.DeviceID); !ok {
+		t.Fatal("the device is not connected")
+	}
+}

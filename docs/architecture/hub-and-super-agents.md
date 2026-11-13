@@ -129,26 +129,35 @@ variables AgentMux already imports from the login shell.
 ### 4.2 Hub storage and a standby hub
 
 The hub starts as a single process, and node links reconnect with jitter and
-resume from cursors, so restarting it is safe. A second machine can later run as
-a **standby hub** that takes over when the primary shuts down or loses its
-network. Both rely on the rules below.
+resume from cursors, so restarting it is safe. A second machine can run as a
+**standby hub** that takes over when the primary shuts down or loses its
+network. The code is in [store/hubsync.go](../../store/hubsync.go),
+[hubha/](../../hubha) and [hubrelay/](../../hubrelay); the rules follow.
 
 **One PostgreSQL instance per machine.** Every machine, hub or not, runs exactly
-one PostgreSQL instance holding its own local data. A machine that can act as a
-hub keeps the shared data in a separate `hub` schema in the same database. Hub
-data never needs its own instance, and local data is never copied to another
-machine.
+one PostgreSQL instance holding its own data. Hub data is a fixed list of
+ordinary tables in that same database (`store.HubTables`): tenants and their
+tokens, accounts and their sessions, devices, pairing codes, what devices
+report, and Web Push keys and subscriptions. Every other table is the machine's
+own and is never copied. Hub data does not get its own instance or schema,
+because on a hub the Console already reads these tables where they are.
+
+The mailbox tables are not in the list yet. A node keeps its own outgoing mail
+in the same tables, so a standby could not send mail of its own while they
+followed the primary. Copying the hub's mailbox needs separate hub and node
+mail tables first; until then, messages waiting on the hub do not survive a
+failover.
 
 **Only the hub service writes hub data.** Nodes never connect to a hub's
 PostgreSQL. They send reports over the node link (§4.3), and the active hub
-process validates them and writes the `hub` schema:
+process validates them and writes hub data:
 
 - No database port or password leaves the hub machine. Each node authenticates
   with its own device token and can only write its own records.
-- The `hub` tables can change without upgrading every node; only the link
+- The hub tables can change without upgrading every node; only the link
   protocol has to stay compatible.
-- Every report carries `(node_id, stream, seq)`, so a node can resend after a
-  reconnect or a failover and the hub drops duplicates.
+- Reports are reconciled against hashes of what the hub holds, so after a
+  reconnect or a failover a node simply resends whatever the hub lacks.
 - With a single writer, fencing a stale primary (below) is a check in one place.
 
 **The standby copies hub data through the hub service, not through PostgreSQL.**
@@ -158,65 +167,93 @@ PostgreSQL's own replication was rejected for three reasons:
   and leaves the copy read-only, so the standby could no longer write its own
   local data. It also needs the same major version on both ends, and the first
   two hubs run PostgreSQL 18 and 16.
-- Logical replication of the `hub` schema avoids both problems, but the standby's
+- Logical replication of the hub tables avoids both problems, but the standby's
   subscription is an ordinary PostgreSQL client connection to the primary. The
   two hubs would need a direct network path and a database port open between
-  them, which defeats the outbound-only design. It also needs `wal_level=logical`
-  and a restart, and copies neither schema changes nor sequences.
+  them, which defeats the outbound-only design. It also needs
+  `wal_level=logical` and a restart, and copies neither schema changes nor
+  sequences.
 - Each hub would have to manage the database's publications and subscriptions,
   and swap their direction on every failover.
 
 Instead, the standby replicates over the same path as any node:
 
-1. The standby joins the primary as a link peer with `role=standby`, through the
-   relay, like any node. No extra port or network path is needed.
-2. The hub service appends every write to `hub.changes`
-   (`seq`, `epoch`, `table`, `key`, `op`, `row jsonb`) in the same transaction as
-   the write itself.
-3. The standby streams `hub.changes` from its cursor, applies each change in
-   `seq` order to its own `hub` schema, and acks cumulatively, like a report
-   stream. If its cursor is older than the pruned log, it first loads a snapshot,
-   then resumes from the snapshot's `seq`.
-4. Uploaded blobs (artifacts, result files) follow as content-addressed fetches
-   over the same link.
+1. The standby pairs with the primary like any device, through the relay, and
+   the primary's administrator allows it to follow (`amux hub standby
+   <device-id>`, which sets `devices.hub_role`). No extra port or network path
+   is needed.
+2. While a hub is the primary, a trigger on every hub table appends each row
+   change to `hub_changes` (`seq`, `epoch`, `tbl`, `op`, `row_data jsonb`) in the
+   same transaction as the write itself. Writers take an advisory lock, so
+   sequence order is commit order. A hub without a standby has the role `none`
+   and logs nothing.
+3. The standby long-polls `/uplink/v1/hub/changes?after=<seq>` up its link and
+   applies each batch to its own tables in one transaction. Asking for changes
+   after N acknowledges everything up to N. It starts from a snapshot of every
+   hub table (`/uplink/v1/hub/snapshot`), taken in one repeatable-read
+   transaction, and loads another whenever its cursor is older than the log the
+   primary keeps (7 days).
+4. The standby also copies the primary's TLS certificate and key
+   (`/uplink/v1/hub/identity`). Its hub listener reads the certificate on each
+   handshake, so devices' pinned fingerprints keep working after a failover.
 5. Each hub runs its own schema migrations at startup, as AgentMux does today.
-   A standby on an older schema version stops applying changes and reports the
-   mismatch rather than writing the wrong columns.
+   A standby at a different schema version than the primary stops applying
+   changes and reports the mismatch rather than writing the wrong columns.
 
 This works between any PostgreSQL versions and wherever both machines can reach
 the relay.
 
 **Failover and fencing**
 
-- **Lease:** the relay forwards the public address (443) to whichever hub holds
-  a short lease (about 15 seconds). Each hub keeps its own outbound tunnel to the
-  relay and renews the lease while it is healthy. When the lease expires, the
-  standby takes it and the relay switches forwarding.
-- **Epoch:** each lease grant increments an epoch. The hub stamps the epoch on
-  every change and every frame it sends. A hub without a current lease accepts no
-  writes, and nodes ignore frames from an older epoch.
-- **Same identity:** the standby holds the same TLS certificate and key, copied
-  over the link when it pairs, so nodes' pinned fingerprints keep working after
-  a failover.
-- **No lost writes:** while a standby is connected, the primary acks a node's
-  report only after the standby has acked the matching change. Nodes keep each
-  report in their outbox until it is acked, so whatever the old primary held but
-  had not copied is resent to the new primary. Without a standby, the primary
-  acks after its own commit.
-- **Return of the old primary:** it rejoins as the standby. It drops its changes
-  after the new primary's starting `seq`, since none of them were acked, and
-  resyncs from there. Moving the primary role back is a manual step in the
-  Console.
+- **Relay and lease:** `amux hub relay <config.toml>` runs on the public VPS.
+  Each hub keeps its own outbound tunnel there, and the relay forwards the
+  public port (443) as plain TCP to whichever hub holds the lease. It renews
+  that hub's lease (15 seconds by default) every 5 seconds through
+  `POST /hub/v1/lease` on the hub's device listener, authenticated with the
+  shared `[hub] lease_secret` and pinned to the hub certificate. The other hub
+  is told `active=false`, which makes it follow.
+- **Failover:** when the primary has not answered for the lease's length plus
+  one renewal, so its lease has certainly expired on its own, the relay
+  increments the epoch, records it, grants the lease to the standby if it holds
+  a copy, switches forwarding and closes the devices' connections to the old
+  hub. Devices reconnect through the relay to the new primary.
+- **Epoch and fencing:** a primary that hears nothing for the lease's length
+  fences itself. It refuses devices, drops their connections, and its trigger
+  rejects any write to hub data. A hub refuses a lease older than the epoch it
+  has seen. A primary that restarts starts fenced until the relay renews its
+  lease, which takes seconds.
+- **Not losing a new device:** pairing waits up to 10 seconds for an active
+  standby to hold the new device before returning its token. Without that, a
+  device paired just before a failover would be refused by the new primary and
+  stop reconnecting. Other hub data needs no wait: nodes resend reports, and
+  the rest is changed rarely by people.
+- **Return of the old primary:** the relay never moves the lease back on its
+  own. It tells the old primary `active=false`, so the old primary becomes a
+  standby, discards its position and loads a fresh snapshot. That drops
+  whatever it wrote and never copied. To follow, it links to the new primary
+  with the device membership it gave itself when its standby was set up
+  (`hub-peer.json` in the hub state directory). Moving the primary back is
+  manual, on the relay's local control port (`POST /relay/v1/switch?to=<name>`).
+- **While a machine is the standby,** hub data on it is read-only. Its Console
+  cannot pair devices, change accounts or tenants, or sign in with an account
+  (sign-in writes a session); use the primary for those.
 
 Live frames still come from one hub process at a time. Running several active
 hub processes on one database (with `LISTEN/NOTIFY` fan-out and sticky routing)
 remains out of scope.
 
-**First deployment:** this Mac is the primary and `bytedance-macmini` the standby.
-Its AgentMux database runs on the bundled PostgreSQL 16, while this Mac runs 18;
-the copy through the hub service does not care. The relay currently forwards 443
-to a single hub through an SSH reverse tunnel and `systemd-socket-proxyd`. The
-lease requires replacing that with a small relay process.
+**First deployment (2026-11-13):** this Mac is the primary and
+`bytedance-macmini` the standby. Its AgentMux database runs on the bundled
+PostgreSQL 16, while this Mac runs 18; copying through the hub service does not
+care. On the relay, `agentmux-relay.service` runs `amux hub relay` with
+`/etc/agentmux-relay/relay.toml`, replacing the earlier `systemd-socket-proxyd`
+units. Each hub reaches it through its own reverse tunnel: 18766 for this Mac
+and 18767 for the standby.
+
+Setting up a standby has one manual step: copy the primary's `hub-cert.pem` and
+`hub-key.pem` into its hub state directory first. The relay pins that
+certificate, so it cannot tell a hub that still presents its own certificate to
+follow. Once the hub follows, it keeps the copy current itself.
 
 ### 4.3 The node link
 
@@ -626,7 +663,7 @@ Ordered by value relative to effort, given what already exists.
 | D3 | Mobile | PWA first / native first | PWA in P3, native in P5 if needed |
 | D4 | How long to keep the `AgentInstance` API | One minor release / until Contract 4.0 | Shims until Contract 4.0, following the [LEGACY.md](../../LEGACY.md) policy |
 | D5 | Account sign-in on the hub | Email code / OIDC (Feishu, GitHub, Google) | Email code plus Feishu OIDC |
-| D6 | Hub storage and standby replication | A separate hub instance / PostgreSQL replication / copy through the hub service | **Decided (2026-11-13):** one instance per machine with a `hub` schema; only the hub service writes it; the standby copies it through the hub service over the link (§4.2) |
+| D6 | Hub storage and standby replication | A separate hub instance / PostgreSQL replication / copy through the hub service | **Decided (2026-11-13):** one instance per machine, with hub data as a fixed list of tables in it; only the hub service writes them; the standby copies them through the hub service over the link (§4.2) |
 
 ## 12. Risks
 
