@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -83,7 +82,7 @@ func (s *Server) handleFleetTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	views := slices.DeleteFunc(s.remote.List(), func(view remotepkg.HostView) bool { return view.HubPeer })
+	views := s.remote.List()
 	remoteTargets := make([]machineTarget, len(views))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
@@ -244,10 +243,6 @@ func (s *Server) resolveFleetTargets(ids []string) ([]machineTarget, error) {
 	}
 	if s.remote != nil {
 		for _, host := range s.remote.List() {
-			// This hub's own failover identity is not a machine to query.
-			if host.HubPeer && includeAll {
-				continue
-			}
 			if !includeAll && !requested[host.ID] {
 				continue
 			}

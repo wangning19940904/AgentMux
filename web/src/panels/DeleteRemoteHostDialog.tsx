@@ -70,7 +70,7 @@ export function DeleteRemoteHostDialog({ host, busy, error, onClose, onConfirm }
         <div className="meeting-dialog-icon tenant-delete-dialog-icon"><Trash2 size={22} /></div>
         <div className="meeting-dialog-heading">
           <h2 id="remote-delete-title">{t("remote.deleteConfirm", { name: host.name })}</h2>
-          <p id="remote-delete-description">{t(host.hub_peer ? "remote.hubPeerDeleteHint" : "remote.deleteHint")}</p>
+          <p id="remote-delete-description">{t(host.hub_role ? "remote.hubDeleteHint" : "remote.deleteHint")}</p>
         </div>
         {error && <div className="session-notice error" role="alert">{error}</div>}
         <div className="meeting-dialog-actions">

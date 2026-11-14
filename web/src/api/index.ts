@@ -13,6 +13,7 @@ import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
+  HubReplicationInfo,
   FeishuAddBotResult,
   FeishuChatList,
   FeishuScopeStatus,
@@ -447,6 +448,7 @@ export const api = {
 
   status: () => get<Status>("/api/v1/status"),
   localStatus: () => getLocal<Status>("/api/v1/status"),
+  hubReplication: () => getLocal<HubReplicationInfo>("/api/v1/hub/replication"),
   keepAwakeStatus: () => get<KeepAwakeStatus>("/api/v1/system/keep-awake"),
   setKeepAwake: (request: KeepAwakeRequest) =>
     put<KeepAwakeStatus>("/api/v1/system/keep-awake", request),

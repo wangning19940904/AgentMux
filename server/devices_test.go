@@ -521,7 +521,7 @@ func TestDeviceDialWaitsOnlyForDevicesExpectedBack(t *testing.T) {
 	}
 }
 
-func TestHubPeerIsMarkedAndLeftOutOfFleetTargets(t *testing.T) {
+func TestHubOwnRecordIsHiddenAndHubsAreLabelled(t *testing.T) {
 	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "peer.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -529,7 +529,7 @@ func TestHubPeerIsMarkedAndLeftOutOfFleetTargets(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	ctx := context.Background()
 	ids := map[string]string{}
-	for _, name := range []string{"laptop", "mac (hub)"} {
+	for _, name := range []string{"laptop", "standby-mac", "this-mac"} {
 		code, err := st.CreateDevicePairingCode(ctx, name)
 		if err != nil {
 			t.Fatal(err)
@@ -546,23 +546,31 @@ func TestHubPeerIsMarkedAndLeftOutOfFleetTargets(t *testing.T) {
 	}
 	s := &Server{st: st, remote: manager}
 	s.linkHub = linkpkg.NewHub(st, nil)
-	s.devices = &deviceBackend{st: st, hub: s.linkHub, peer: func() string { return ids["mac (hub)"] }}
+	s.devices = &deviceBackend{st: st, hub: s.linkHub,
+		self:     func() string { return ids["this-mac"] },
+		hubRoles: func(context.Context) map[string]string { return map[string]string{ids["standby-mac"]: "standby"} }}
 	s.remote.SetLinkBackend(s.devices)
 
 	views := map[string]remotepkg.HostView{}
 	for _, view := range s.remote.List() {
 		views[view.Name] = view
 	}
-	if !views["mac (hub)"].HubPeer || views["laptop"].HubPeer {
-		t.Fatalf("hub peer flags = %+v", views)
+	if _, ok := views["this-mac"]; ok {
+		t.Fatalf("this hub's own record is listed as another machine: %+v", views)
+	}
+	if views["standby-mac"].HubRole != "standby" || views["laptop"].HubRole != "" {
+		t.Fatalf("hub labels = %+v", views)
+	}
+	if _, ok := s.devices.Device(ctx, ids["this-mac"]); ok {
+		t.Fatal("this hub's own record resolves as a machine")
 	}
 	targets, err := s.resolveFleetTargets([]string{"all"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range targets {
-		if target.ID == ids["mac (hub)"] {
-			t.Fatal("this hub's failover identity is a fleet target")
+		if target.ID == ids["this-mac"] {
+			t.Fatal("this hub's own record is a fleet target")
 		}
 	}
 }

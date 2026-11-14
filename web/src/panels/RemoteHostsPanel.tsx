@@ -85,6 +85,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [updatingAll, setUpdatingAll] = useState(false);
   const [importingName, setImportingName] = useState("");
   const [localVersion, setLocalVersion] = useState("");
+  // This machine, listed first: its name and its part as a hub ("hub",
+  // "standby", or "" when it does not serve as one).
+  const [localMachine, setLocalMachine] = useState<{ name: string; role: "" | "hub" | "standby" } | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, RemoteHostSnapshot>>({});
   const [pendingFingerprints, setPendingFingerprints] = useState<Record<string, string>>({});
   const [pendingImportFingerprints, setPendingImportFingerprints] = useState<Record<string, string>>({});
@@ -142,9 +145,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     }
   };
 
-  const inspectHosts = async (allHosts: RemoteHost[]) => {
-    // This hub's failover identity is never a machine to probe.
-    const nextHosts = allHosts.filter((host) => !host.hub_peer);
+  const inspectHosts = async (nextHosts: RemoteHost[]) => {
     setSnapshots((current) => ({
       ...current,
       ...Object.fromEntries(nextHosts.map((host) => [
@@ -219,6 +220,12 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
 
   useEffect(() => {
     void load();
+    void api.hubReplication()
+      .then((info) => setLocalMachine({
+        name: info.name || t("remote.localMachine"),
+        role: info.enabled && info.status?.role === "standby" ? "standby" : info.hub || info.enabled ? "hub" : "",
+      }))
+      .catch(() => setLocalMachine(null));
   }, []);
 
   useEffect(() => {
@@ -444,16 +451,15 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     openImportDialog();
   }, [addRequest]);
 
-  const managedHosts = hosts.filter((host) => !host.hub_peer);
-  const updateCandidates = remoteUpdateCandidates(managedHosts, snapshots, localVersion);
+  const updateCandidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
   const editedHost = hosts.find((host) => host.id === form?.id);
-  const checkingHosts = managedHosts.some((host) => snapshots[host.id]?.health === "checking");
-  const updateCheckUnavailable = managedHosts.some((host) =>
+  const checkingHosts = hosts.some((host) => snapshots[host.id]?.health === "checking");
+  const updateCheckUnavailable = hosts.some((host) =>
     !host.trusted || snapshots[host.id]?.health === "error" || !snapshots[host.id]?.version,
   );
 
   const updateAll = async () => {
-    const candidates = remoteUpdateCandidates(hosts.filter((host) => !host.hub_peer), snapshots, localVersion);
+    const candidates = remoteUpdateCandidates(hosts, snapshots, localVersion);
     if (candidates.length === 0) return;
     const names = candidates.map((host) => host.name).join("\n");
     if (!(await confirmAction(t("remote.updateAllConfirm", { count: candidates.length, names })))) return;
@@ -815,7 +821,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
         <div className="surface-header remote-machines-header">
           <div className="remote-machines-heading">
             <h2>{t("remote.title")}</h2>
-            <span className="pill">{hosts.length}</span>
+            <span className="pill">{hosts.length + (localMachine ? 1 : 0)}</span>
           </div>
           <div className="remote-machines-toolbar">
             <button className="action" type="button" onClick={() => openImportDialog()}>
@@ -904,6 +910,37 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
         )}
         <div className="remote-host-list">
           {loading && <div className="empty-state">{t("common.loading")}</div>}
+          {localMachine && (
+            <article className="remote-host-card local-machine-card">
+              <div className="remote-host-icon">
+                <Laptop size={19} />
+              </div>
+              <div className="remote-host-main">
+                <header>
+                  <div>
+                    <strong>{localMachine.name}</strong>
+                    <span>
+                      {t("remote.localSubtitle")}
+                      {localVersion && ` · v${localVersion.replace(/^v/, "")}`}
+                    </span>
+                  </div>
+                  <span className="remote-host-badges">
+                    {localMachine.role && (
+                      <span className="status-badge" title={t(localMachine.role === "hub" ? "remote.localHubHint" : "remote.localStandbyHint")}>
+                        <Server size={13} />
+                        {t(localMachine.role === "hub" ? "remote.localHub" : "remote.localStandby")}
+                      </span>
+                    )}
+                    <span className="status-badge success">
+                      <CheckCircle2 size={13} />
+                      {t("remote.healthHealthy")}
+                    </span>
+                  </span>
+                </header>
+              </div>
+              <div className="remote-host-actions" />
+            </article>
+          )}
           {!loading && hosts.length === 0 && (
             <div className="empty-state">
               <Laptop size={28} />
@@ -917,7 +954,6 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               health: host.trusted ? "checking" as const : "unverified" as const,
             };
             const linked = host.kind === "link";
-            const peer = Boolean(host.hub_peer);
             const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
@@ -943,19 +979,20 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <div>
                       <strong>{host.name}</strong>
                       <span>
-                        {peer ? t("remote.hubPeerHint") : linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
+                        {linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
                         {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
                       </span>
                       {!linked && host.ssh_alias && host.ssh_alias !== host.name && (
                         <span>{t("remote.sshAlias", { alias: host.ssh_alias })}</span>
                       )}
                     </div>
-                    {peer ? (
-                      <span className="status-badge" title={t("remote.hubPeerHint")}>
-                        <Server size={13} />
-                        {t("remote.hubPeer")}
-                      </span>
-                    ) : (
+                    <span className="remote-host-badges">
+                      {host.hub_role && (
+                        <span className="status-badge" title={t(host.hub_role === "hub" ? "remote.hubRoleHubHint" : "remote.hubRoleStandbyHint")}>
+                          <Server size={13} />
+                          {t(host.hub_role === "hub" ? "remote.hubRoleHub" : "remote.hubRoleStandby")}
+                        </span>
+                      )}
                       <span className={`status-badge ${healthTone}`} title={snapshot.error}>
                         {snapshot.health === "checking"
                           ? <RefreshCw size={13} className="spin" />
@@ -964,7 +1001,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                             : <ShieldAlert size={13} />}
                         {healthLabel}
                       </span>
-                    )}
+                    </span>
                   </header>
                   {pendingFingerprint && (
                     <div className="host-key-confirmation">
@@ -981,7 +1018,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   )}
                 </div>
                 <div className="remote-host-actions">
-                  {!peer && <button
+                  <button
                     className="ghost-action"
                     disabled={!host.trusted || checking || updatingID === host.id || updatingAll}
                     onClick={() => void (updateAvailable ? updateRemote(host) : inspectHosts([host]))}
@@ -995,7 +1032,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                         : updateAvailable
                           ? t("remote.update")
                           : t("remote.checkUpdates")}
-                  </button>}
+                  </button>
                   {!linked && (
                     <button className="ghost-action" onClick={() => edit(host)}>
                       <Pencil size={14} />

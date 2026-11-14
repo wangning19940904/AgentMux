@@ -76,6 +76,13 @@ func (s *Server) setupHubStandby(uplink http.Handler) http.Handler {
 			// The devices now reconnect to this hub.
 			s.linkHub.MarkStarted()
 			s.stopHubPeerLink()
+			// Only the primary writes hub data, so a record left from an
+			// earlier version is renamed now.
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				s.tidyHubPeerName(ctx)
+			}()
 		},
 	}
 	s.hubHA = ha
@@ -155,6 +162,58 @@ func (s *Server) hubPeerDeviceID() string {
 	return state.DeviceID
 }
 
+// deviceHubLabels says which paired machines are hubs, for the machine list.
+// A device allowed to follow this hub is the standby while this hub is the
+// primary; while this hub follows, it is the one serving as the hub.
+func (s *Server) deviceHubLabels(ctx context.Context) map[string]string {
+	if s.hubHA == nil {
+		return nil
+	}
+	roles, err := s.st.DeviceHubRoles(ctx)
+	if err != nil || len(roles) == 0 {
+		return nil
+	}
+	label := "standby"
+	if state, err := s.st.HubReplication(ctx); err == nil && state.Role == store.HubRoleStandby {
+		label = "hub"
+	}
+	out := make(map[string]string, len(roles))
+	for id, role := range roles {
+		if role == "standby" {
+			out[id] = label
+		}
+	}
+	return out
+}
+
+// hubPeerSuffix marked this hub's own record in earlier versions, which
+// listed it as a machine of its own.
+const hubPeerSuffix = " (hub)"
+
+// tidyHubPeerName names this hub's own record after the machine, as every
+// other machine is named, so the other hub lists it as this machine.
+func (s *Server) tidyHubPeerName(ctx context.Context) {
+	path, err := s.hubPeerPath()
+	if err != nil {
+		return
+	}
+	state, ok, err := linkpkg.LoadState(path)
+	if err != nil || !ok {
+		return
+	}
+	device, err := s.st.GetDevice(ctx, state.DeviceID)
+	if err != nil || device == nil || !strings.HasSuffix(device.Name, hubPeerSuffix) {
+		return
+	}
+	name := strings.TrimSuffix(device.Name, hubPeerSuffix)
+	if err := s.st.RenameDevice(ctx, device.ID, name); err != nil {
+		s.log.Warn("rename this hub's own record", "err", err)
+		return
+	}
+	state.Name = name
+	_ = linkpkg.SaveState(path, state)
+}
+
 func (s *Server) hubPeerPath() (string, error) {
 	dir, err := s.linkStateDir()
 	if err != nil {
@@ -229,10 +288,15 @@ func (s *Server) registerHubStandbyRoutes() {
 	s.mux.HandleFunc("POST /api/v1/hub/standby", s.handleHubStandby)
 }
 
+// handleHubReplication reports this machine's part as a hub: whether it
+// serves as one at all (hub), its name for the machine list, and, with a
+// standby hub set up, the replication status.
 func (s *Server) handleHubReplication(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	hostname, _ := os.Hostname()
+	out := map[string]any{"enabled": false, "hub": s.linkHub != nil, "name": strings.TrimSuffix(hostname, ".local")}
 	if s.hubHA == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	status, err := s.hubHA.controller.Status(r.Context())
@@ -240,7 +304,8 @@ func (s *Server) handleHubReplication(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "status": status, "standbys": s.hubHA.tracker.Standbys()})
+	out["enabled"], out["status"], out["standbys"] = true, status, s.hubHA.tracker.Standbys()
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleHubStandby lets a paired device follow this hub's data, or stops it.
@@ -281,7 +346,9 @@ func (s *Server) handleHubStandby(w http.ResponseWriter, r *http.Request) {
 
 // ensureHubPeerMembership registers this hub as a standby-capable device of
 // itself. The record is hub data, so the other hub holds it too and accepts
-// this machine when it has to follow.
+// this machine when it has to follow. It is this machine's own entry: this hub
+// leaves it out of its machine list, and the other hub lists it under the
+// machine's name.
 func (s *Server) ensureHubPeerMembership(ctx context.Context) (linkpkg.State, error) {
 	path, err := s.hubPeerPath()
 	if err != nil {
@@ -290,6 +357,7 @@ func (s *Server) ensureHubPeerMembership(ctx context.Context) (linkpkg.State, er
 	if state, ok, err := linkpkg.LoadState(path); err != nil || ok {
 		if ok {
 			if device, _ := s.st.GetDevice(ctx, state.DeviceID); device != nil {
+				s.tidyHubPeerName(ctx)
 				return state, nil
 			}
 		} else {
@@ -304,7 +372,7 @@ func (s *Server) ensureHubPeerMembership(ctx context.Context) (linkpkg.State, er
 		return linkpkg.State{}, errors.New(address.warning)
 	}
 	hostname, _ := os.Hostname()
-	name := strings.TrimSuffix(hostname, ".local") + " (hub)"
+	name := strings.TrimSuffix(hostname, ".local")
 	code, err := s.st.CreateDevicePairingCode(ctx, name)
 	if err != nil {
 		return linkpkg.State{}, err

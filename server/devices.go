@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,14 +34,30 @@ type deviceBackend struct {
 	st   *store.Store
 	hub  *linkpkg.Hub
 	push *pushpkg.Service
-	// peer returns this hub's own failover identity, or "".
-	peer func() string
+	// self returns the device record this hub registered for itself, or "".
+	// That record is this machine, not another one to manage, so it is left
+	// out; the other hub uses it to accept this one after a failover.
+	self func() string
+	// hubRoles labels the devices that are hubs ("hub" or "standby"), or
+	// returns nil when this hub has no standby.
+	hubRoles func(ctx context.Context) map[string]string
 }
 
-func (b *deviceBackend) linked(device core.Device) remotepkg.LinkedDevice {
+func (b *deviceBackend) isSelf(id string) bool {
+	return b.self != nil && id != "" && id == b.self()
+}
+
+func (b *deviceBackend) roles(ctx context.Context) map[string]string {
+	if b.hubRoles == nil {
+		return nil
+	}
+	return b.hubRoles(ctx)
+}
+
+func (b *deviceBackend) linked(device core.Device, roles map[string]string) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
 	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
-		HubPeer: b.peer != nil && device.ID == b.peer()}
+		HubRole: roles[device.ID]}
 }
 
 // lastReports is when each device last sent the hub its data.
@@ -64,9 +81,13 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 		return nil, err
 	}
 	latest := b.lastReports(ctx)
+	roles := b.roles(ctx)
 	out := make([]remotepkg.LinkedDevice, 0, len(devices))
 	for _, device := range devices {
-		linked := b.linked(device)
+		if b.isSelf(device.ID) {
+			continue
+		}
+		linked := b.linked(device, roles)
 		if at, ok := latest[device.ID]; ok {
 			linked.ReportedAt = &at
 		}
@@ -76,11 +97,14 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 }
 
 func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.LinkedDevice, bool) {
+	if b.isSelf(id) {
+		return remotepkg.LinkedDevice{}, false
+	}
 	device, err := b.st.GetDevice(ctx, id)
 	if err != nil || device == nil {
 		return remotepkg.LinkedDevice{}, false
 	}
-	return b.linked(*device), true
+	return b.linked(*device, b.roles(ctx)), true
 }
 
 const (
@@ -164,7 +188,7 @@ func (s *Server) setupLink() {
 		}
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
-	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, peer: s.hubPeerDeviceID}
+	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels}
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
 	}
@@ -210,6 +234,10 @@ func (s *Server) visibleDevices(ctx context.Context, principal *core.Principal) 
 	devices, err := s.st.ListDevices(ctx)
 	if err != nil || len(devices) == 0 {
 		return devices, err
+	}
+	// This hub's own record is this machine, not a paired one.
+	if self := s.hubPeerDeviceID(); self != "" {
+		devices = slices.DeleteFunc(devices, func(device core.Device) bool { return device.ID == self })
 	}
 	names, err := s.st.TenantNames(ctx)
 	if err != nil {

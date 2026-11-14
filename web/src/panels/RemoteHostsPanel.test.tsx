@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
   api: {
     remoteHosts: vi.fn(),
     localStatus: vi.fn(),
+    hubReplication: vi.fn(),
     statusRemoteHost: vi.fn(),
     deleteRemoteHost: vi.fn(),
     syncRemoteHostsFromSSHConfig: vi.fn(),
@@ -75,6 +76,7 @@ beforeEach(async () => {
   vi.mocked(activeRemoteID).mockReturnValue("ecs_cn");
   vi.mocked(api.remoteHosts).mockResolvedValue(hosts);
   vi.mocked(api.localStatus).mockResolvedValue({ version: "0.1.8" } as Awaited<ReturnType<typeof api.localStatus>>);
+  vi.mocked(api.hubReplication).mockResolvedValue({ enabled: false });
   vi.mocked(api.statusRemoteHost).mockResolvedValue({ status: { version: "0.1.8" } } as Awaited<ReturnType<typeof api.statusRemoteHost>>);
   container = document.createElement("div");
   document.body.append(container);
@@ -205,12 +207,12 @@ describe("SSH machine deletion in the desktop console", () => {
     expect(button(dialog(), "删除").disabled).toBe(false);
     expect(setActiveMachineScope).not.toHaveBeenCalled();
     expect(notifyRemoteHostsChanged).not.toHaveBeenCalled();
-    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(container.querySelectorAll("article:not(.local-machine-card)")).toHaveLength(2);
     vi.mocked(api.deleteRemoteHost).mockResolvedValueOnce({ ok: true });
     await click(button(dialog(), "删除"));
     expect(setActiveMachineScope).toHaveBeenCalledTimes(1);
     expect(setActiveMachineScope).toHaveBeenCalledWith("all");
-    expect(container.querySelectorAll("article")).toHaveLength(1);
+    expect(container.querySelectorAll("article:not(.local-machine-card)")).toHaveLength(1);
   });
 
   it("ignores a stale list response that finishes after deletion", async () => {
@@ -223,7 +225,7 @@ describe("SSH machine deletion in the desktop console", () => {
     await openDelete();
     await click(button(dialog(), "删除"));
     await act(async () => { refresh.resolve(hosts); });
-    expect(container.querySelectorAll("article")).toHaveLength(1);
+    expect(container.querySelectorAll("article:not(.local-machine-card)")).toHaveLength(1);
     expect(container.textContent).not.toContain("lemon_claw");
     expect(notifyRemoteHostsChanged).toHaveBeenCalledTimes(1);
     expect(notifyRemoteHostsChanged).toHaveBeenCalledWith([hosts[0]]);
@@ -246,19 +248,26 @@ describe("machines that connect to the hub themselves", () => {
     expect(Array.from(ssh.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["更新", "编辑", "删除"]);
   });
 
-  it("shows this hub's failover identity as such, not as a broken machine", async () => {
-    const peer: RemoteHost = { id: "dev_peer", name: "mac (hub)", host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: false, hub_peer: true };
-    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], peer]);
-    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="peer" /></I18nProvider>); });
-    const row = Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes("mac (hub)"))!;
-    expect(row.textContent).toContain("本机 Hub 的接管身份");
-    expect(row.querySelector(".status-badge.danger, .status-badge.warning")).toBeNull();
-    // No update check, and it is never probed.
-    expect(Array.from(row.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["删除"]);
-    expect(vi.mocked(api.statusRemoteHost).mock.calls.some(([id]) => id === "dev_peer")).toBe(false);
+  it("labels the standby hub and this machine's hub role", async () => {
+    const standby: RemoteHost = { id: "dev_standby", name: "standby-mac", host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: true, hub_role: "standby" };
+    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], standby]);
+    vi.mocked(api.hubReplication).mockResolvedValue({ enabled: true, hub: true, name: "this-mac", status: { role: "primary" } });
+    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="hub" /></I18nProvider>); });
+    // This machine is listed first, as the local hub, with nothing to manage.
+    const local = container.querySelector("article.local-machine-card")!;
+    expect(container.querySelector("article")).toBe(local);
+    expect(local.textContent).toContain("this-mac");
+    expect(local.textContent).toContain("本机 Hub");
+    expect(local.querySelectorAll("button")).toHaveLength(0);
+    expect(container.querySelector(".remote-machines-heading .pill")?.textContent).toBe("3");
+    const row = Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes("standby-mac"))!;
+    expect(row.textContent).toContain("备用 Hub");
+    // It is still a machine like any other: checked and updatable.
+    expect(Array.from(row.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["检查更新", "删除"]);
+    expect(vi.mocked(api.statusRemoteHost).mock.calls.some(([id]) => id === "dev_standby")).toBe(true);
     // Deleting it first explains what that breaks.
     await click(button(row, "删除"));
-    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("无法作为备用 Hub 重新加入");
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("无法接管");
     expect(api.deleteRemoteHost).not.toHaveBeenCalled();
   });
 

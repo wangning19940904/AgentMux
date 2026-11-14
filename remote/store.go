@@ -58,8 +58,8 @@ type HostView struct {
 	Version    string     `json:"version,omitempty"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
-	// HubPeer is this hub's own failover identity (see LinkedDevice).
-	HubPeer bool `json:"hub_peer,omitempty"`
+	// HubRole marks a machine that is a hub (see LinkedDevice).
+	HubRole string `json:"hub_role,omitempty"`
 }
 
 func (h Host) View() HostView {

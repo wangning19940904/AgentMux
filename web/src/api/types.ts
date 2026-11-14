@@ -359,9 +359,9 @@ export interface RemoteHost {
   last_seen_at?: string;
   // When the machine last sent the hub its data.
   reported_at?: string;
-  // This hub's own identity as a device, kept to follow the other hub after
-  // a failover. It is offline while this hub is the primary, by design.
-  hub_peer?: boolean;
+  // "hub" for the machine serving as the hub, "standby" for one ready to take
+  // over from it.
+  hub_role?: "hub" | "standby";
 }
 
 export interface DevicePairingCode {
@@ -2237,4 +2237,12 @@ export interface EventDeliveryPage {
   limit: number;
   offset: number;
   has_more: boolean;
+}
+
+export interface HubReplicationInfo {
+  enabled: boolean;
+  // Whether this machine serves as a hub, and its name.
+  hub?: boolean;
+  name?: string;
+  status?: { role: "none" | "primary" | "standby" | "fenced" };
 }

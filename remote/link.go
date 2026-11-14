@@ -39,9 +39,9 @@ type LinkedDevice struct {
 	LastSeenAt *time.Time
 	// ReportedAt is when the device last sent the hub its data.
 	ReportedAt *time.Time
-	// HubPeer marks this hub's own identity as a device, which it uses to
-	// follow the other hub after a failover. It is not a machine to manage.
-	HubPeer bool
+	// HubRole is "hub" for the machine serving as the hub and "standby" for
+	// one ready to take over from it; empty for other machines.
+	HubRole string
 }
 
 // LinkBackend supplies the devices paired with this hub.
@@ -75,7 +75,7 @@ func (d LinkedDevice) view() HostView {
 	return HostView{
 		ID: d.ID, Name: d.Name, Kind: KindLink, RemoteAddr: linkedRemoteAddr,
 		Trusted: true, Online: &online, Version: d.Version, LastSeenAt: d.LastSeenAt, ReportedAt: d.ReportedAt,
-		HubPeer: d.HubPeer,
+		HubRole: d.HubRole,
 	}
 }
 

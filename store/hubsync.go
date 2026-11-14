@@ -445,6 +445,28 @@ func (s *Store) SetDeviceHubRole(ctx context.Context, id, role string) error {
 	return nil
 }
 
+// DeviceHubRoles maps each device that may act as a hub to its role
+// ("standby"). Without PostgreSQL there is no hub replication and it is empty.
+func (s *Store) DeviceHubRoles(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	if !s.IsPostgres() {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, hub_role FROM devices WHERE hub_role IS NOT NULL AND hub_role <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, role string
+		if err := rows.Scan(&id, &role); err != nil {
+			return nil, err
+		}
+		out[id] = role
+	}
+	return out, rows.Err()
+}
+
 // DeviceHubRole returns what a device may do as a hub ("standby" or "").
 func (s *Store) DeviceHubRole(ctx context.Context, id string) (string, error) {
 	var role sql.NullString
