@@ -144,3 +144,42 @@ it("shows every kind of agent on one page, with its workers and activity", async
     expect(drawer.textContent).not.toContain("Create Super Agent");
   } finally { await act(async () => root.unmount()); }
 });
+
+it("creates every new agent as a Super Agent, and keeps the old form for agents made before", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("agentmux:active-remote", "local");
+  for (const key of ["agentInstances", "providers", "activeRoutes", "channels", "triggers", "mcp", "skills", "remoteHosts"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  vi.spyOn(api, "agents").mockResolvedValue(["codex"]);
+  vi.spyOn(api, "superAgents").mockResolvedValue([]);
+  vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
+  vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, warnings: [], frameworks: [
+    { spec: { kind: "codex", display: "Codex", kind_type: "cli", install_supported: true, install_requires_npm: false, update_supported: true, supported: true }, installed: true, registered: true },
+  ] } as never);
+  vi.spyOn(api, "superAgentRouters").mockResolvedValue({ routers: [], mcp_servers: [], frameworks: [{ runtime_id: "codex", can_route: true, mcp_servers: false }] });
+  vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue({ kind: "codex", defaults: {}, capabilities: {} } as never);
+  vi.spyOn(api, "saveSuperAgentRouter").mockImplementation(async (router) => ({ ...router, id: "sar_new", used_by: [] }));
+  const save = vi.spyOn(api, "saveSuperAgent").mockImplementation(async (agent) => ({ ...agent, id: "sa_new" }));
+  const upsert = vi.spyOn(api, "upsertAgentInstance");
+  const handled = vi.fn();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<I18nProvider language="en"><AgentsPanel createRequested onCreateRequestHandled={handled} /></I18nProvider>));
+    expect(handled).toHaveBeenCalledTimes(1);
+    const dialog = () => container.querySelector('[aria-labelledby="super-agent-drawer-title"]');
+    expect(dialog()?.textContent).toContain("New agent");
+    expect(container.querySelector("[data-save]")).toBeNull();
+    const name = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Frontend on-call"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Ops");
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const saveButton = () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Save")!;
+    await vi.waitFor(() => expect(saveButton().disabled).toBe(false));
+    await act(async () => saveButton().click());
+    await vi.waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0][0]).toMatchObject({ name: "Ops", router_agent_id: "sar_new", worker_runtimes: ["codex"] });
+    expect(upsert).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+  } finally { await act(async () => root.unmount()); }
+});
