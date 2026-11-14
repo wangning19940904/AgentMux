@@ -771,7 +771,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		ID: id, SuperAgentID: agent.ID, SourceID: trigger.SourceID, SourceKind: trigger.SourceKind,
 		ThreadKey: trigger.ThreadKey, TriggerID: trigger.ID, Title: title, Actor: trigger.Actor,
 		Worker: worker, ConversationID: "superagent-" + id, Status: core.SuperAgentTicketQueued,
-		Inputs:    []string{workerAssignment(trigger, action, s.ticketBackground(ctx, agent.ID, action.DependsOn, base))},
+		Inputs:    []string{workerAssignment(agent, trigger, action, s.ticketBackground(ctx, agent.ID, action.DependsOn, base))},
 		Reply:     trigger.Reply,
 		DependsOn: action.DependsOn, BaseTicket: base,
 		CreatedAt: now, UpdatedAt: now,

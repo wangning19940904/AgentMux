@@ -48,6 +48,9 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("GET /api/v1/super-agents", s.handleSuperAgentsList)
 	s.mux.HandleFunc("POST /api/v1/super-agents", s.handleSuperAgentUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/super-agents", s.handleSuperAgentDelete)
+	s.mux.HandleFunc("GET /api/v1/super-agents/prompts", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, superagent.PromptParts())
+	})
 	s.mux.HandleFunc("GET /api/v1/super-agents/routers", s.handleSuperAgentRoutersList)
 	s.mux.HandleFunc("POST /api/v1/super-agents/routers", s.handleSuperAgentRouterUpsert)
 	s.mux.HandleFunc("DELETE /api/v1/super-agents/routers", s.handleSuperAgentRouterDelete)

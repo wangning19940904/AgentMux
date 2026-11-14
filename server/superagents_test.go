@@ -74,6 +74,24 @@ func TestSuperAgentRoutesAreNotOpenToMembers(t *testing.T) {
 	}
 }
 
+func TestSuperAgentPromptPartsAreListed(t *testing.T) {
+	srv := &Server{mux: http.NewServeMux()}
+	srv.registerSuperAgentRoutes()
+	recorder := httptest.NewRecorder()
+	srv.mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/super-agents/prompts", nil))
+	var parts []superagent.PromptPart
+	if err := json.Unmarshal(recorder.Body.Bytes(), &parts); err != nil || recorder.Code != http.StatusOK {
+		t.Fatalf("status %d, %v", recorder.Code, err)
+	}
+	index := slices.IndexFunc(parts, func(part superagent.PromptPart) bool { return part.ID == "router.role" })
+	if index < 0 || !parts[index].Editable || parts[index].Version == "" || !strings.Contains(parts[index].Text, "{name}") {
+		t.Fatalf("parts = %+v", parts)
+	}
+	if memberRouteAllowed(http.MethodGet, "/api/v1/super-agents/prompts") {
+		t.Fatal("prompt parts are for the Console")
+	}
+}
+
 func TestSuperAgentGitHubHookStatusCodes(t *testing.T) {
 	srv := &Server{mux: http.NewServeMux(), superAgents: superagent.New(superagent.Options{Store: emptySuperAgentStore{}})}
 	srv.registerSuperAgentRoutes()

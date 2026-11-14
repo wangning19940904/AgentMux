@@ -3,7 +3,6 @@ package superagent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,29 +17,11 @@ import (
 // as it would a router's. Ticket updates reach the brain as router turns and
 // are posted to the chat the Ticket came from.
 
-// brainCharter is the brief's first part. It is shorter than the router's:
-// the brain is talking with the person, and the channel engine already tells
-// it about the chat.
-const brainCharter = `AGENTMUX CONTEXT (the person cannot see this part; the chat message follows it)
-You are %q, an agent in AgentMux. You can start workers: separate sessions that do longer work on their own while you stay available here.
-- Answer directly when you can do it well in this turn: questions, quick lookups, small changes.
-- Start a worker for work that takes longer, can run in parallel, or belongs to another repository or machine. Check OPEN TICKETS first: never start a second ticket for work that already has one; attach to it instead.
-- Say in your reply what you started or changed. AgentMux tells you when a worker finishes a turn, and posts your report to this chat.
-
-YOUR HOME
-%s holds tickets/<ticket id>/ (ticket.json, inputs.md, result.md, progress.md, work/) and memory/, indexed by memory/MEMORY.md, shown below. Keep what will help later in memory/; never store secrets.
-
-ACTIONS
-To have AgentMux act, end your reply with one block, holding one action or a JSON list of them. AgentMux removes it before the person sees your reply:
-` + actionOpen + `
-{"action":"accept","worker_id":"","title":"","instructions":"","reason":""}
-` + actionClose + `
-- "accept" starts a ticket: worker_id from the roster, a short title, and instructions with everything the worker needs.
-- "attach" passes this message to an open ticket, with an optional note in "instructions"; "stop" stops one; both take "ticket_id".
-- "follow_up" wakes you later about this chat: give "in" (such as "30m", "18h" or "3d") or "at" (a time written like NOW below), and a "note" telling your later self what to check and do. Use it when you are waiting on someone or promised to check back, never to watch a worker. Your reply then is posted to this chat. "cancel_timer" withdraws one listed under TIMERS ON THIS THREAD, by its "timer_id".
-- "reason" is a short note for the operator's audit log.
-Name only workers on the roster and tickets listed below.
-`
+// brainHeader opens the brief, so the brain can tell it from the chat message.
+// The chat parts that follow are shorter than the router's: the brain is
+// talking with the person, and the channel engine already tells it about the
+// chat.
+const brainHeader = "AGENTMUX CONTEXT (the person cannot see this part; the chat message follows it)"
 
 const brainObserveNote = `
 OBSERVE MODE
@@ -67,7 +48,8 @@ func (s *Service) BrainBrief(ctx context.Context, brainID string, msg *core.Mess
 	trigger := chatTrigger(*agent, msg)
 	view := s.routerView(ctx, *agent, trigger, tickets)
 	var brief strings.Builder
-	fmt.Fprintf(&brief, brainCharter, agent.Name, home)
+	brief.WriteString(brainHeader + "\n")
+	brief.WriteString(promptFor(*agent, promptRoleChat, "{name}", agent.Name, "{home}", home))
 	if agent.Mode == core.SuperAgentModeObserve {
 		brief.WriteString(brainObserveNote)
 	}

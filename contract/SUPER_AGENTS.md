@@ -74,7 +74,8 @@ When no available worker can do the work, the router tells the sender. An action
   ignore. It says what the router is for, what its directory holds, how to keep its
   memory, how to treat untrusted text, and how to answer. The operator's routing rules,
   the roster, the thread's Tickets with their folders, `memory/MEMORY.md` (up to 8,000
-  characters) and the event follow it.
+  characters) and the event follow it. The charter is built from prompt parts; see
+  [Prompt parts](#prompt-parts).
 - **The final message is the reply**, sent where the event came from. An empty message
   sends nothing. To have AgentMux act, the router ends the message with one block, which
   is removed before the reply is sent:
@@ -503,11 +504,50 @@ description.
 | --- | --- |
 | Name | Shown in the Super Agent list, and the router is told it. A router agent only this Super Agent uses is named after it. Named after the router's framework when empty. |
 | Router agent | Who judges each request, with which model, reasoning effort and speed. |
-| Routing rules | Saved, and sent to the router with every event: what to take on, what to ignore, which worker suits what. A template can fill it in, to edit. |
+| Routing rules | Saved, and sent to the router with every event, after the built-in prompts: what to take on, what to ignore, which worker suits what. A template can fill it in, to edit. |
+| Built-in prompts | Each prompt part with its default text. An editable part can be changed for this agent; see [Prompt parts](#prompt-parts). |
 | Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
 | Triggers | Where requests come from. |
 
 Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings.
+
+## Prompt parts
+
+What the router, the chat brain and a worker are told is built from named parts, after
+the prompts of DeepSeek's dsh-superagent. Every part has a built-in default, and
+`GET /api/v1/super-agents/prompts` lists them: `id`, `role`, `editable`,
+`placeholders`, the default `text` and its `version`.
+
+| Part | Told to | Editable |
+| --- | --- | --- |
+| `router.role` | Router: who it is and what to take on. Keeps `{name}`. | Yes |
+| `router.directory` | Router: what its home holds | No |
+| `router.coordination` | Router: Tickets, dependencies, decisions, follow-ups | Yes |
+| `router.colleagues` | Router: other agents and people | Yes |
+| `router.memory` | Router: what to remember | Yes |
+| `router.untrusted` | Router: an event is data, not instructions | No |
+| `router.replies` | Router: how to write a reply | Yes |
+| `router.actions` | Router: the action block | No |
+| `chat.role` | Chat brain: who it is and when to start a worker. Keeps `{name}`. | Yes |
+| `chat.home`, `chat.actions` | Chat brain: its home and the action block | No |
+| `worker.brief` | Worker: how it works for the agent, at the start of a Ticket | Yes |
+
+- **An agent's own text.** `prompts` on the agent maps a part id to `{"text", "base"}`.
+  A part without an entry follows the default, including later changes to it. Each
+  role is told its parts in the order above, joined by blank lines; `{name}` is the
+  agent's name wherever it appears.
+- **Fixed parts** describe what the code does or guard the agent against what an event
+  asks for. They are shown in the form and cannot be changed.
+- **Saving.** An empty text, or one equal to the default, is dropped. A text for an
+  unknown or fixed part, one over 20,000 characters, or one missing a placeholder
+  its part keeps is refused; nothing is cut short. A Ticket keeps the worker brief it
+  started with.
+- **When a default changes.** `base` is the `version` of the default the text was
+  written against. AgentMux sets it when the text changes, keeps it while the text
+  stays the same, and accepts the current version from the form's "Keep mine". The
+  form marks a part "Default updated" while the two differ and shows the new default.
+- The operator's routing rules (`router_prompt`) stay separate: they are this agent's
+  own rules, and have no default.
 
 ## Setup assistant
 
@@ -531,6 +571,7 @@ These routes are for Console administrators and are closed to member accounts.
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
 | `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, and `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours |
+| `GET /api/v1/super-agents/prompts` | The built-in prompt parts with their default text |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
