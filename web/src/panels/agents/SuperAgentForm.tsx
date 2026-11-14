@@ -211,7 +211,7 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
               </div>
             ) : routerDraft ? (
               <>
-                <div className="field-grid">
+                <div className="field-grid super-agent-router-grid">
                   {routerDraft.id ? (
                     <div className="field"><span>{t("superAgentForm.routerFramework")}</span><strong>{display(routerDraft.runtime_id)}</strong><small>{t("superAgentForm.routerFrameworkFixed")}</small></div>
                   ) : (

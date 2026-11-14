@@ -125,7 +125,7 @@ const codexSettings = {
   },
 };
 const picker = () => container.querySelector<HTMLButtonElement>(".model-picker-trigger")!;
-const fastSwitch = () => container.querySelector<HTMLInputElement>(".model-picker input[role=switch]");
+const fastSwitch = () => container.querySelector<HTMLButtonElement>(".model-picker .model-picker-fast-toggle");
 // The effort slider's stops, least thinking first, and what it reads now.
 const efforts_ = () => [...container.querySelectorAll(".model-picker-stop")].map((item) => item.getAttribute("aria-label"));
 const effortStop = (name: string) => [...container.querySelectorAll(".model-picker-stop")].find((item) => item.getAttribute("aria-label") === name);

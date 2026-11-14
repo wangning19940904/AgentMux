@@ -1,6 +1,6 @@
 import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Zap } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { api } from "../api";
 import type { FrameworkRuntimeSettings, RuntimeOption } from "../api";
 import { useI18n } from "../i18n";
@@ -154,7 +154,7 @@ export function describeModelChoice(t: (key: string, values?: Record<string, str
 
 // ModelPicker chooses a model, its reasoning effort and its speed in one
 // popover, after the model menus of Claude and Codex: a model list, an effort
-// slider, a fast-mode switch, and a second page for a model the framework
+// slider with a fast-mode lightning button, and a second page for a model the framework
 // does not list.
 export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   runtime: string;
@@ -234,6 +234,14 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   const unknownModel = value.model && !catalog.models.includes(value.model);
   const triggerModel = value.model ? catalog.modelLabel(value.model) : t("superAgents.modelDefaultShort");
   const listed = !catalog.loading && catalog.models.length > 0;
+  // Fast mode is a lightning button beside the effort, lit while it is on.
+  const fastButton = fastTier ? (
+    <button type="button" className="model-picker-fast-toggle" aria-pressed={fast} aria-label={t("superAgents.fastMode")}
+      title={`${t("superAgents.fastMode")}: ${t("superAgents.fastModeHelp")}`}
+      onClick={() => onChange({ ...value, service_tier: fast ? "" : fastTier })}>
+      <Zap size={14} fill={fast ? "currentColor" : "none"} aria-hidden />
+    </button>
+  ) : null;
 
   return (
     <div className="model-picker" ref={root}>
@@ -280,19 +288,16 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
                   <ChevronRight size={14} aria-hidden />
                 </button>
               )}
-              {efforts.length > 0 && (
+              {efforts.length > 0 ? (
                 <EffortSlider efforts={efforts} value={value.reasoning_effort} defaultEffort={catalog.defaults.reasoning_effort}
-                  onChange={(effort) => onChange({ ...value, reasoning_effort: effort })} />
-              )}
-              {fastTier && (
-                <label className="model-picker-row model-picker-toggle">
-                  <span className="model-picker-toggle-text">
-                    <span><Zap size={13} aria-hidden /> {t("superAgents.fastMode")}</span>
-                    <small>{t("superAgents.fastModeHelp")}</small>
-                  </span>
-                  <input type="checkbox" role="switch" className="model-picker-switch" checked={fast}
-                    onChange={(event) => onChange({ ...value, service_tier: event.target.checked ? fastTier : "" })} />
-                </label>
+                  onChange={(effort) => onChange({ ...value, reasoning_effort: effort })} extra={fastButton} />
+              ) : fastButton && (
+                <div className="model-picker-effort model-picker-speed">
+                  <div className="model-picker-effort-head">
+                    <span className="model-picker-effort-title">{t("superAgents.fastMode")}</span>
+                    {fastButton}
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -305,11 +310,12 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
 // EffortSlider picks a reasoning effort on a track of stops, least thinking on
 // the left. With no effort chosen the thumb rests, hollow, on the framework's
 // default; the reset button returns to it.
-function EffortSlider({ efforts, value, defaultEffort, onChange }: {
+function EffortSlider({ efforts, value, defaultEffort, onChange, extra }: {
   efforts: string[];
   value: string;
   defaultEffort: string;
   onChange: (effort: string) => void;
+  extra?: ReactNode;
 }) {
   const { t } = useI18n();
   const track = useRef<HTMLDivElement>(null);
@@ -347,6 +353,7 @@ function EffortSlider({ efforts, value, defaultEffort, onChange }: {
           disabled={chosen < 0} onClick={() => onChange("")}>
           <RotateCcw size={13} aria-hidden />
         </button>
+        {extra}
       </div>
       <div ref={track} className="model-picker-slider" role="slider" tabIndex={0} data-default={chosen < 0 || undefined}
         aria-label={t("superAgents.reasoningEffort")} aria-valuemin={0} aria-valuemax={efforts.length - 1}
