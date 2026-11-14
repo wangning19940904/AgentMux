@@ -227,21 +227,6 @@ func TestFollowUpLimitsAreCheckedBeforeAnythingIsCarriedOut(t *testing.T) {
 	}
 }
 
-func TestObserveModeSetsNoFollowUp(t *testing.T) {
-	h := newHarness(t)
-	h.agent.Mode = core.SuperAgentModeObserve
-	h.store.agents[h.agent.ID] = h.agent
-	h.followUpRouter(`"in":"18h"`, "look again", "")
-	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
-	if len(h.store.timers) != 0 {
-		t.Fatalf("observe mode set a timer: %+v", h.store.timers)
-	}
-	if event := h.disposition(0); event.Disposition != core.SuperAgentDispositionObserved || !strings.Contains(event.Reason, "would follow_up in 18h") {
-		t.Fatalf("event = %+v", event)
-	}
-}
-
 func TestStoppingATicketCancelsItsFollowUps(t *testing.T) {
 	h := newHarness(t)
 	h.router.answer = func(core.InvocationRequest) (string, error) {

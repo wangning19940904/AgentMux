@@ -14,8 +14,8 @@ worker's report. This proposal lets it act because time passed.
   at 9, post the open-ticket digest".
 
 Neither starts a brain turn directly. A due timer becomes an ordinary row in
-`super_agent_triggers`, so it gets the per-thread ordering, retries, observe
-mode and audit trail that every other event has. This is the timer primitive
+`super_agent_triggers`, so it gets the per-thread ordering, retries and
+audit trail that every other event has. This is the timer primitive
 from Anthropic's
 [Building always-on agents](https://claude.com/resources/articles/building-always-on-agents),
 fitted to the trigger inbox AgentMux already has.
@@ -139,8 +139,6 @@ already arrive on their own.
 - `apply` creates or cancels the timer. The trigger's disposition is unchanged
   by these actions: a turn that only sets a follow-up is `answered` or
   `ignored` as before, with the follow-up named in its reason.
-- In observe mode nothing is created, and the summary reads "would follow up
-  at …", which falls out of the existing early return in `evaluate`.
 
 Chats on bound channels need nothing extra. `BrainFinished`
 ([superagent/brain.go:80](../../superagent/brain.go)) already passes the
@@ -208,7 +206,7 @@ The Console lists an agent's timers beside its Tickets, with a cancel button:
 
 Tests for step 1: a timer fires once across a restart between insert and
 update; a late timer says so; a disabled agent's timers wait; limits reject in
-`preflight`; observe mode creates nothing; stopping a Ticket cancels its
+`preflight`; stopping a Ticket cancels its
 follow-ups; a follow-up set from a chat replies in that chat's thread; cron
 advance across a daylight-saving change.
 

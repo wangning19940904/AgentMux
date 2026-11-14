@@ -51,7 +51,6 @@ type setupAnswer struct {
 	Reply          string         `json:"reply"`
 	Name           *string        `json:"name"`
 	RouterPrompt   *string        `json:"router_prompt"`
-	Mode           *string        `json:"mode"`
 	MaxConcurrency *int           `json:"max_concurrency"`
 	AutoWorkerDir  *string        `json:"auto_worker_dir"`
 	Sources        *[]setupSource `json:"sources"`
@@ -133,12 +132,6 @@ func applySetupAnswer(draft *core.SuperAgent, answer setupAnswer) error {
 	}
 	if answer.RouterPrompt != nil {
 		draft.RouterPrompt = strings.TrimSpace(*answer.RouterPrompt)
-	}
-	if answer.Mode != nil {
-		if *answer.Mode != core.SuperAgentModeAct && *answer.Mode != core.SuperAgentModeObserve {
-			return fmt.Errorf("assistant proposed unknown mode %q", *answer.Mode)
-		}
-		draft.Mode = *answer.Mode
 	}
 	if answer.MaxConcurrency != nil {
 		draft.MaxConcurrency = *answer.MaxConcurrency
@@ -240,7 +233,7 @@ func (s *Service) setupPrompt(ctx context.Context, draft core.SuperAgent, instru
 	}
 	redacted := redactAgent(draft)
 	current, err := json.MarshalIndent(map[string]any{
-		"name": redacted.Name, "router_prompt": redacted.RouterPrompt, "mode": redacted.Mode,
+		"name": redacted.Name, "router_prompt": redacted.RouterPrompt,
 		"max_concurrency": redacted.MaxConcurrency, "auto_worker_dir": redacted.AutoWorkerDir, "sources": redacted.Sources,
 	}, "", "  ")
 	if err != nil {
@@ -253,12 +246,11 @@ func (s *Service) setupPrompt(ctx context.Context, draft core.SuperAgent, instru
 	return `You help an administrator configure a Super Agent, which routes events from triggers to workers. Translate the instruction into configuration changes. Do not call tools, edit files or run commands: AgentMux shows your proposal to the administrator, who decides whether to save it.
 
 Answer with one JSON object and nothing else. Include only the fields you change, and always include "reply":
-{"reply":"","name":"","router_prompt":"","mode":"observe|act","max_concurrency":2,"auto_worker_dir":"","sources":[{"id":"","kind":"","enabled":true,"allowed_actors":[],"config":{}}]}
+{"reply":"","name":"","router_prompt":"","max_concurrency":2,"auto_worker_dir":"","sources":[{"id":"","kind":"","enabled":true,"allowed_actors":[],"config":{}}]}
 
 - "reply": one or two sentences in the administrator's language, saying what you changed or asking the one thing you need.
 - "sources": the complete list of triggers after the change. Keep the "id" of a trigger you keep, and leave it empty for a new one. A trigger left out is removed.
 - "router_prompt": standing guidance for routing decisions, such as which kinds of request to accept.
-- "mode": "observe" only records decisions. Set "act" only when the administrator asks for it to run for real.
 
 Trigger kinds and their config keys:
 - feishu_message: channel_id (required, from FEISHU CHANNELS), chat_ids (comma separated; empty means every chat). allowed_actors are open_ids, or "*" for everyone who can reach the bot.

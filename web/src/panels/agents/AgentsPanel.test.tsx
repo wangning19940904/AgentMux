@@ -117,8 +117,8 @@ it("shows every kind of agent on one page, with its workers and activity", async
   for (const key of ["channels", "triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
   vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
   vi.spyOn(api, "superAgents").mockResolvedValue([
-    { id: "ning", name: "宁宝", router_agent_id: "ning", mode: "act", max_concurrency: 2, workers: [], sources: [], enabled: true },
-    { id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", mode: "observe", max_concurrency: 2, workers: [], auto_workers: true, worker_runtimes: ["codex"], sources: [], enabled: true },
+    { id: "ning", name: "宁宝", router_agent_id: "ning", max_concurrency: 2, workers: [], sources: [], enabled: true },
+    { id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", max_concurrency: 2, workers: [], auto_workers: true, worker_runtimes: ["codex"], sources: [], enabled: true },
   ]);
   vi.spyOn(api, "superAgentActivity").mockResolvedValue({ tickets: [], triggers: [], workers: [], sources: {} });
   const container = document.createElement("div");

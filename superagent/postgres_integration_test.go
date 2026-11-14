@@ -71,7 +71,7 @@ func TestPostgresStartupUnifiesExistingAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacy := core.SuperAgent{
-		ID: "sa_ops", Name: "Ops", RouterAgentID: "sar_legacy", Mode: core.SuperAgentModeObserve, MaxConcurrency: 2, Enabled: true,
+		ID: "sa_ops", Name: "Ops", RouterAgentID: "sar_legacy", MaxConcurrency: 2, Enabled: true,
 		Workers:   []core.SuperAgentWorker{{ID: "w", AgentID: "agent_chat"}},
 		Sources:   []core.SuperAgentSource{{ID: "gh", Kind: core.SuperAgentSourceGitHub, Enabled: true, AllowedActors: []string{"alice"}}},
 		CreatedAt: created, UpdatedAt: created,
@@ -104,14 +104,14 @@ func TestPostgresStartupUnifiesExistingAgents(t *testing.T) {
 		t.Fatalf("agents = %+v", agents)
 	}
 	chat := byID["agent_chat"]
-	if chat.RouterAgentID != "agent_chat" || chat.Mode != core.SuperAgentModeAct || !chat.Enabled || len(chat.Sources) != 0 || canStartWorkers(chat) {
+	if chat.RouterAgentID != "agent_chat" || !chat.Enabled || len(chat.Sources) != 0 || canStartWorkers(chat) {
 		t.Fatalf("chat agent = %+v", chat)
 	}
 	if idle := byID["agent_idle"]; idle.Enabled || idle.RouterAgentID != "agent_idle" {
 		t.Fatalf("idle agent = %+v", idle)
 	}
 	ops := byID["sa_ops"]
-	if ops.RouterAgentID != "sar_legacy" || ops.Mode != core.SuperAgentModeObserve || len(ops.Sources) != 1 || len(ops.Workers) != 1 {
+	if ops.RouterAgentID != "sar_legacy" || len(ops.Sources) != 1 || len(ops.Workers) != 1 {
 		t.Fatalf("the Super Agent changed: %+v", ops)
 	}
 	if kept, _ := st.GetSuperAgentTicket(ctx, "tkt_1"); kept == nil || kept.Status != core.SuperAgentTicketReady {

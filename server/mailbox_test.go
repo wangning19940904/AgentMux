@@ -49,7 +49,7 @@ func (r *mailRecords) addAgent(t *testing.T, id, name string) {
 	if err := r.UpsertAgentInstance(ctx, &core.AgentInstance{ID: id, Name: name, RuntimeID: "claudecode", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.UpsertSuperAgent(ctx, core.SuperAgent{ID: id, Name: name, RouterAgentID: id, Mode: core.SuperAgentModeAct, Enabled: true}); err != nil {
+	if err := r.UpsertSuperAgent(ctx, core.SuperAgent{ID: id, Name: name, RouterAgentID: id, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1448,7 +1448,6 @@ export interface SuperAgent {
   router_prompt?: string;
   // The operator's own text for built-in prompt parts, by part id.
   prompts?: Record<string, SuperAgentPrompt>;
-  mode: "act" | "observe";
   max_concurrency: number;
   workers: SuperAgentWorker[];
   auto_workers?: boolean;

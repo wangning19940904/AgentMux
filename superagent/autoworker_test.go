@@ -150,19 +150,6 @@ func TestAutoWorkersOffRefusesTheLaunch(t *testing.T) {
 	}
 }
 
-func TestObserveModeLaunchesNothing(t *testing.T) {
-	h := newHarness(t)
-	h.enableAutoWorkers(t.TempDir())
-	h.agent.Mode = core.SuperAgentModeObserve
-	h.store.agents[h.agent.ID] = h.agent
-	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh"), nil }
-	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
-	if worker, _ := h.store.GetAgentInstance(context.Background(), autoWorkerAgentID(h.agent.ID, "dsh")); worker != nil || h.workers.callCount() != 0 {
-		t.Fatalf("worker = %+v, calls = %d", worker, h.workers.callCount())
-	}
-}
-
 func TestConcurrencyLimitAppliesToAutoWorkers(t *testing.T) {
 	h := newHarness(t)
 	h.enableAutoWorkers(t.TempDir())
@@ -203,7 +190,7 @@ func TestSaveAutoWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Name != "Super Agent (dsh)" || !slices.Equal(saved.WorkerRuntimes, []string{"dsh"}) || saved.AutoWorkerApprovalMode != "" || saved.Mode != core.SuperAgentModeObserve {
+	if saved.Name != "Super Agent (dsh)" || !slices.Equal(saved.WorkerRuntimes, []string{"dsh"}) || saved.AutoWorkerApprovalMode != "" {
 		t.Fatalf("saved = %+v", saved)
 	}
 	for name, agent := range map[string]core.SuperAgent{
@@ -225,7 +212,7 @@ func TestSaveAutoWorkers(t *testing.T) {
 func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	saved, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, Enabled: true, Mode: core.SuperAgentModeAct})
+	saved, err := h.service.Save(ctx, core.SuperAgent{RouterRuntime: "codex", AutoWorkers: true, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

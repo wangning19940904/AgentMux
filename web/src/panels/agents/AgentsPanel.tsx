@@ -585,7 +585,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 </div>
                 <div className="agent-list-meta">
                   {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
-                  <span className="pill">{t(`superAgents.mode.${agent.mode}`)}</span>
                   <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
                 </div>
                 <div className="agent-row-actions">

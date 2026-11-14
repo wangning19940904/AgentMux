@@ -126,13 +126,6 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 		agent.CreatedAt = now
 	}
 	agent.UpdatedAt = now
-	switch agent.Mode {
-	case "":
-		agent.Mode = core.SuperAgentModeObserve
-	case core.SuperAgentModeAct, core.SuperAgentModeObserve:
-	default:
-		return fmt.Errorf("unknown mode %q", agent.Mode)
-	}
 	if agent.MaxConcurrency == 0 {
 		agent.MaxConcurrency = defaultConcurrency
 	}

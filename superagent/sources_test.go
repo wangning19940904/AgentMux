@@ -134,7 +134,7 @@ func feishuHarness(t *testing.T) *harness {
 	h := newHarness(t)
 	h.service.channelHasAgent = func(context.Context, string) bool { return true }
 	saved, err := h.service.Save(context.Background(), core.SuperAgent{
-		ID: h.agent.ID, Name: "sa", RouterAgentID: "router", Mode: core.SuperAgentModeAct, Enabled: true, Workers: h.agent.Workers,
+		ID: h.agent.ID, Name: "sa", RouterAgentID: "router", Enabled: true, Workers: h.agent.Workers,
 		Sources: []core.SuperAgentSource{
 			{ID: "msg", Kind: core.SuperAgentSourceFeishuMessage, Enabled: true, AllowedActors: []string{"ou_alice"}, Config: map[string]string{"channel_id": "ch1", "chat_ids": "oc_team"}},
 			{ID: "doc", Kind: core.SuperAgentSourceFeishuDoc, Enabled: true, AllowedActors: []string{"ou_alice"}, Config: map[string]string{

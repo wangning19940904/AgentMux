@@ -19,13 +19,6 @@ const (
 	SuperAgentSourceChannel = "channel"
 )
 
-// Super Agent modes. Observe records what the router would do without creating
-// Tickets, so a new deployment can be tuned before it acts.
-const (
-	SuperAgentModeAct     = "act"
-	SuperAgentModeObserve = "observe"
-)
-
 // Trigger dispositions record what happened to each stored event.
 const (
 	SuperAgentDispositionPending  = "pending"
@@ -34,7 +27,6 @@ const (
 	SuperAgentDispositionAccepted = "accepted"
 	SuperAgentDispositionIgnored  = "ignored"
 	SuperAgentDispositionAnswered = "answered"
-	SuperAgentDispositionObserved = "observed"
 	SuperAgentDispositionStopped  = "stopped"
 	SuperAgentDispositionFailed   = "failed"
 )
@@ -87,7 +79,6 @@ type SuperAgent struct {
 	// Prompts are the operator's own text for built-in prompt parts, by part
 	// id. A part without one follows the built-in default.
 	Prompts        map[string]SuperAgentPrompt `json:"prompts,omitempty"`
-	Mode           string                      `json:"mode"`
 	MaxConcurrency int                         `json:"max_concurrency"`
 	Workers        []SuperAgentWorker          `json:"workers"`
 	// AutoWorkers lets the router launch a worker for a Ticket when none on the

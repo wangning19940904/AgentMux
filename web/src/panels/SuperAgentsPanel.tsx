@@ -79,7 +79,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
             {items.map((item) => (
               <button key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => setSelectedID(item.id)}>
                 <Bot size={16} />
-                <span><strong>{item.name}</strong><small>{t(`superAgents.mode.${item.mode}`)} · {item.auto_workers ? t("superAgents.autoWorkersOn") : t("superAgents.workerCount", { count: item.workers.length })}</small></span>
+                <span><strong>{item.name}</strong><small>{item.auto_workers ? t("superAgents.autoWorkersOn") : t("superAgents.workerCount", { count: item.workers.length })}</small></span>
                 <span className={`status-badge status-${item.enabled ? "running" : "cancelled"}`}>{t(item.enabled ? "common.enabled" : "common.disabled")}</span>
               </button>
             ))}
@@ -89,7 +89,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
             {selected ? (
               <>
                 <header>
-                  <div><h3>{selected.name}</h3><p className="muted">{selected.description || t(`superAgents.modeHelp.${selected.mode}`)}</p></div>
+                  <div><h3>{selected.name}</h3><p className="muted">{selected.description || t("superAgents.defaultDescription")}</p></div>
                   <div className="control-row">
                     <button className="ghost-action" onClick={() => setDraft(structuredClone(selected))}>{embedded ? t("agents.work.edit") : t("common.edit")}</button>
                     {!embedded && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={async () => {

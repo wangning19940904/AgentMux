@@ -1,4 +1,4 @@
-import { Bot, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X, Zap } from "lucide-react";
+import { Bot, ChevronRight, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { isDesktopApp } from "../../api/desktop";
@@ -257,38 +257,6 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                 </div>
               </>
             )}
-            {routerDraft && !legacyBrain && (
-              <details className="super-agent-advanced">
-                <summary>{t("superAgentForm.routerAdvanced")}</summary>
-                <div className="super-agent-form">
-                  {routerApproval && (
-                    <div className="field">
-                      <span>{t("superAgents.routerApproval")}</span>
-                      <small>{routerApproval === "auto" ? t("superAgents.routerApprovalAuto")
-                        : t("superAgents.routerApprovalFallback", { mode: t(`superAgents.routerApprovalShort.${routerApproval}`) })}</small>
-                    </div>
-                  )}
-                  <div className="field" role="group" aria-labelledby="saf-router-tools">
-                    <span id="saf-router-tools">{t("superAgents.routerToolsTitle")}</span>
-                    {routerDraft.runtime_id && !routerCapability?.mcp_servers ? (
-                      <small>{t("superAgents.routerToolsMCPUnsupported")}</small>
-                    ) : availableMCP.length === 0 ? (
-                      <small>{t("superAgents.routerToolsNoMCP")}</small>
-                    ) : (
-                      <div className="super-agent-chips">
-                        {availableMCP.map((name) => (
-                          <label key={name} className="super-agent-chip super-agent-toggle">
-                            <input type="checkbox" checked={routerDraft.mcp_servers.includes(name)} onChange={(event) => toggleMCP(name, event.target.checked)} />
-                            {name}
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                    <small>{t("superAgents.routerToolsNever")}</small>
-                  </div>
-                </div>
-              </details>
-            )}
           </section>
 
           <section className="super-agent-section" aria-labelledby="saf-dirs">
@@ -346,40 +314,15 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
 
           <section className="super-agent-section" aria-labelledby="saf-workers">
             <header><h3 id="saf-workers"><Zap size={15} aria-hidden="true" /> {t("superAgentForm.section.workers")}</h3><p>{t("superAgentForm.section.workersHelp")}</p></header>
-            <div className="field" role="group" aria-labelledby="saf-worker-frameworks">
-              <span id="saf-worker-frameworks">{t("superAgentForm.workerFrameworks")}</span>
-              <div className="super-agent-chips">
-                {workerFrameworks.map((item) => (
-                  <label key={item.kind} className="super-agent-chip super-agent-toggle">
-                    <input type="checkbox" checked={workerRuntimes.includes(item.kind)} onChange={(event) => toggleWorkerRuntime(item.kind, event.target.checked)} />
-                    {item.display}
-                  </label>
-                ))}
-              </div>
-              <small>{t("superAgentForm.workerFrameworksHelp")}</small>
-            </div>
-            <div className="field-grid">
-              <label className="field"><span>{t("superAgentForm.workerApproval")}</span>
-                <select value={draft.auto_worker_approval_mode ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_approval_mode: event.target.value })}>
-                  <option value="">{t("superAgents.autoWorkerApprovalDefault")}</option>
-                  <option value="auto_edit">{t("approval.auto_edit")}</option>
-                  <option value="auto">{t("approval.auto")}</option>
-                  <option value="yolo">{t("approval.yolo")}</option>
-                </select>
-                <small>{t("superAgents.autoWorkerApprovalHelp")}</small>
-              </label>
-              <label className="field"><span>{t("superAgents.concurrency")}</span>
-                <input type="number" min={1} max={32} value={draft.max_concurrency} onChange={(event) => onChange({ ...draft, max_concurrency: Number(event.target.value) })} />
-                <small>{t("superAgentForm.concurrencyHelp")}</small>
-              </label>
-            </div>
-            {(promptParts.data ?? []).length > 0 && (
-              <div className="field" role="group" aria-labelledby="saf-worker-prompts">
-                <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>
-                <small>{t("superAgentPrompts.workerHelp")}</small>
-                <SuperAgentPrompts parts={promptParts.data ?? []} roles={["worker"]} value={draft.prompts} onChange={setPrompts} />
-              </div>
-            )}
+            <label className="field"><span>{t("superAgentForm.workerApproval")}</span>
+              <select value={draft.auto_worker_approval_mode ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_approval_mode: event.target.value })}>
+                <option value="auto">{t("approval.auto")}</option>
+                <option value="auto_edit">{t("approval.auto_edit")}</option>
+                <option value="yolo">{t("approval.yolo")}</option>
+                <option value="">{t("superAgents.autoWorkerApprovalDefault")}</option>
+              </select>
+              <small>{t("superAgents.autoWorkerApprovalHelp")}</small>
+            </label>
             {draft.workers.length > 0 && (
               <div className="field">
                 <span>{t("superAgentForm.legacyWorkers")}</span>
@@ -428,19 +371,71 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
             ))}
           </section>
 
-          <details className="super-agent-advanced">
-            <summary>{t("superAgents.advanced")}</summary>
-            <div className="super-agent-form">
-              <label className="field"><span>{t("superAgents.modeLabel")}</span>
-                <select value={draft.mode} onChange={(event) => onChange({ ...draft, mode: event.target.value as SuperAgent["mode"] })}>
-                  <option value="observe">{t("superAgents.mode.observe")}</option>
-                  <option value="act">{t("superAgents.mode.act")}</option>
-                </select>
-                <small>{t(`superAgents.modeHelp.${draft.mode}`)}</small>
-              </label>
-              <label className="super-agent-check"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} /> {t("common.enabled")}</label>
-            </div>
-          </details>
+          <section className="super-agent-section" aria-labelledby="saf-advanced">
+            <details className="super-agent-advanced-section">
+              <summary>
+                <h3 id="saf-advanced"><ChevronRight size={15} aria-hidden="true" className="super-agent-advanced-chevron" /> {t("superAgents.advanced")}</h3>
+                <p>{t("superAgentForm.section.advancedHelp")}</p>
+              </summary>
+              <div className="super-agent-form">
+                <h4 className="super-agent-subhead"><Zap size={13} aria-hidden="true" /> {t("superAgentForm.section.workers")}</h4>
+                <div className="field" role="group" aria-labelledby="saf-worker-frameworks">
+                  <span id="saf-worker-frameworks">{t("superAgentForm.workerFrameworks")}</span>
+                  <div className="super-agent-chips">
+                    {workerFrameworks.map((item) => (
+                      <label key={item.kind} className="super-agent-chip super-agent-toggle">
+                        <input type="checkbox" checked={workerRuntimes.includes(item.kind)} onChange={(event) => toggleWorkerRuntime(item.kind, event.target.checked)} />
+                        {item.display}
+                      </label>
+                    ))}
+                  </div>
+                  <small>{t("superAgentForm.workerFrameworksHelp")}</small>
+                </div>
+                <label className="field"><span>{t("superAgents.concurrency")}</span>
+                  <input type="number" min={1} max={32} value={draft.max_concurrency} onChange={(event) => onChange({ ...draft, max_concurrency: Number(event.target.value) })} />
+                  <small>{t("superAgentForm.concurrencyHelp")}</small>
+                </label>
+                {(promptParts.data ?? []).length > 0 && (
+                  <div className="field" role="group" aria-labelledby="saf-worker-prompts">
+                    <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>
+                    <small>{t("superAgentPrompts.workerHelp")}</small>
+                    <SuperAgentPrompts parts={promptParts.data ?? []} roles={["worker"]} value={draft.prompts} onChange={setPrompts} />
+                  </div>
+                )}
+                {routerDraft && !legacyBrain && (
+                  <>
+                    <h4 className="super-agent-subhead"><Bot size={13} aria-hidden="true" /> {t("superAgentForm.routerAdvanced")}</h4>
+                    {routerApproval && (
+                      <div className="field">
+                        <span>{t("superAgents.routerApproval")}</span>
+                        <small>{routerApproval === "auto" ? t("superAgents.routerApprovalAuto")
+                          : t("superAgents.routerApprovalFallback", { mode: t(`superAgents.routerApprovalShort.${routerApproval}`) })}</small>
+                      </div>
+                    )}
+                    <div className="field" role="group" aria-labelledby="saf-router-tools">
+                      <span id="saf-router-tools">{t("superAgents.routerToolsTitle")}</span>
+                      {routerDraft.runtime_id && !routerCapability?.mcp_servers ? (
+                        <small>{t("superAgents.routerToolsMCPUnsupported")}</small>
+                      ) : availableMCP.length === 0 ? (
+                        <small>{t("superAgents.routerToolsNoMCP")}</small>
+                      ) : (
+                        <div className="super-agent-chips">
+                          {availableMCP.map((name) => (
+                            <label key={name} className="super-agent-chip super-agent-toggle">
+                              <input type="checkbox" checked={routerDraft.mcp_servers.includes(name)} onChange={(event) => toggleMCP(name, event.target.checked)} />
+                              {name}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      <small>{t("superAgents.routerToolsNever")}</small>
+                    </div>
+                  </>
+                )}
+                <label className="super-agent-check"><input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} /> {t("common.enabled")}</label>
+              </div>
+            </details>
+          </section>
 
           {problems.length > 0 && <ul className="super-agent-problems">{problems.map((problem) => <li key={problem}>{t(problem)}</li>)}</ul>}
           <div className="agent-drawer-actions">

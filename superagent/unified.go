@@ -57,8 +57,8 @@ func (s *Service) unifiedAgent(instance core.AgentInstance) core.SuperAgent {
 	}
 	return core.SuperAgent{
 		ID: instance.ID, Name: name, RouterAgentID: instance.ID,
-		Mode: core.SuperAgentModeAct, MaxConcurrency: defaultConcurrency,
-		Workers: []core.SuperAgentWorker{}, Sources: []core.SuperAgentSource{},
+		MaxConcurrency: defaultConcurrency,
+		Workers:        []core.SuperAgentWorker{}, Sources: []core.SuperAgentSource{},
 		Enabled: instance.Enabled, CreatedAt: created, UpdatedAt: now,
 	}
 }

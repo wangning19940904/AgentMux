@@ -123,19 +123,3 @@ func TestAttachPassesTheRoutersNote(t *testing.T) {
 		t.Fatalf("trigger = %+v, replies = %v", trigger, h.replies.sent())
 	}
 }
-
-func TestObserveModeIsInTheRoutersCharter(t *testing.T) {
-	h := newHarness(t)
-	h.ingest("alice", "github:o/r#1", "work", true)
-	h.settle()
-	h.agent.Mode = core.SuperAgentModeObserve
-	h.store.agents[h.agent.ID] = h.agent
-	h.ingest("alice", "github:o/r#2", "work", true)
-	h.settle()
-	if strings.Contains(h.router.prompts[0], "OBSERVE MODE") || !strings.Contains(h.router.prompts[1], "OBSERVE MODE") {
-		t.Fatal("only an observing router is told it observes")
-	}
-	if trigger := h.disposition(1); trigger.Disposition != core.SuperAgentDispositionObserved || !strings.Contains(trigger.Reason, `reply "on it"`) {
-		t.Fatalf("observed trigger must record the reply: %+v", trigger)
-	}
-}

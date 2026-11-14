@@ -35,8 +35,8 @@ migration reuses AgentMux's existing seams so that each phase ships on its own
 
 **What is already good and should stay:** the single Go binary;
 PostgreSQL as the single source of truth; adapter registries; the Super Agent
-safety model (host-enforced allowed senders, roster-checked actions, observe
-mode, untrusted-text charter); durable channel tasks; encrypted observability;
+safety model (host-enforced allowed senders, roster-checked actions,
+untrusted-text charter); durable channel tasks; encrypted observability;
 Guard. (Tenancy grant levels `read`/`use`/`manage` were listed here; they were
 removed with tenancy in contract 3.0, and agent sharing will need its own model.)
 

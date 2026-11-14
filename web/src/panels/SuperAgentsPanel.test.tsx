@@ -82,7 +82,7 @@ function focus(element: HTMLElement) {
 const chips = (label: RegExp) => [...(control(label).closest(".super-agent-picker")?.querySelectorAll(".super-agent-token") ?? [])].map((item) => item.textContent);
 
 const saved: SuperAgent = {
-  id: "sa_1", name: "Repo keeper", router_agent_id: "router", mode: "act", max_concurrency: 2, enabled: true,
+  id: "sa_1", name: "Repo keeper", router_agent_id: "router", max_concurrency: 2, enabled: true,
   workers: [
     { id: "w1", agent_id: "coder", label: "Laptop" },
     { id: "w2", agent_id: "gpu", host_id: "h1", label: "GPU box" },
@@ -242,12 +242,12 @@ describe("SuperAgentsPanel", () => {
     expect(hasText("Follow-ups")).toBe(false);
   });
 
-  it("opens the create form on request, once, and defaults to observing", async () => {
+  it("opens the create form on request, once, with workers in Auto", async () => {
     const handled = vi.fn();
     renderPanel({ createRequested: true, onCreateRequestHandled: handled });
     await until(() => container.querySelector("[role=dialog]"));
     expect(handled).toHaveBeenCalledTimes(1);
-    expect(hasText("Records what the router would do")).toBe(true);
+    expect(valueOf(/^Worker approval mode/)).toBe("auto");
   });
 
   it("creates an agent with a router of its own, a remote working directory and a Feishu trigger", async () => {
@@ -308,7 +308,7 @@ describe("SuperAgentsPanel", () => {
     await until(() => save.mock.calls.length > 0);
     expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "Triage router", runtime_id: "codex" });
     const body = save.mock.calls[0][0];
-    expect(body).toMatchObject({ name: "Triage", router_agent_id: "sar_new", router_runtime: "", mode: "observe", worker_runtimes: ["codex"], workers: [] });
+    expect(body).toMatchObject({ name: "Triage", router_agent_id: "sar_new", router_runtime: "", worker_runtimes: ["codex"], workers: [] });
     expect(body.worker_machines).toEqual([{ host_id: "h1", dir: "~/models" }]);
     expect(body.sources[0]).toMatchObject({ kind: "feishu_message", allowed_actors: ["ou_a", "ou_b"], config: { channel_id: "c1", chat_ids: "oc_team" } });
     await until(() => !container.querySelector("[role=dialog]"));
@@ -634,10 +634,17 @@ describe("SuperAgentsPanel", () => {
     // There is no Provider to choose.
     expect(hasText("Provider override")).toBe(false);
     // A router always runs in Auto; there is no mode to choose, and the
-    // explanation is folded away.
+    // explanation is folded away in Advanced settings, a section of its own.
     expect(() => control(/^Permissions/)).toThrow();
     expect(hasText("The router runs unattended in Auto mode")).toBe(true);
-    expect(container.querySelector(".super-agent-advanced")?.hasAttribute("open")).toBe(false);
+    expect(container.querySelector(".super-agent-advanced-section")?.hasAttribute("open")).toBe(false);
+    expect(container.querySelector(".super-agent-advanced-section")?.parentElement?.matches(".super-agent-form > section")).toBe(true);
+    const advanced = container.querySelector(".super-agent-advanced-section")!;
+    for (const id of ["saf-worker-frameworks", "saf-router-tools"]) expect(advanced.querySelector(`#${id}`)).not.toBeNull();
+    expect(advanced.querySelector("input[type=number]")).not.toBeNull();
+    expect(hasText("Observe")).toBe(false);
+    // Workers approve what looks safe unless the operator says otherwise.
+    expect(valueOf(/^Worker approval mode/)).toBe("auto");
     expect(button(/Draft settings/)).toBeUndefined();
 
     setValue(control(/^Agent name/), "Ops");
@@ -655,7 +662,8 @@ describe("SuperAgentsPanel", () => {
     await until(() => save.mock.calls.length > 0);
     expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
     expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "Ops router", runtime_id: "codex", model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] });
-    expect(save.mock.calls[0][0]).toMatchObject({ name: "Ops", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
+    expect(save.mock.calls[0][0]).toMatchObject({ name: "Ops", router_runtime: "", router_agent_id: "sar_new", auto_workers: true, worker_runtimes: ["codex"], auto_worker_approval_mode: "auto", workers: [] });
+    expect(save.mock.calls[0][0]).not.toHaveProperty("mode");
     const github = save.mock.calls[0][0].sources[0];
     expect(github).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", delivery: "poll", github_token: "ghp_x" } });
     expect(github.id).toMatch(/^src_[0-9a-f-]{36}$/);
@@ -745,7 +753,10 @@ describe("SuperAgentsPanel", () => {
     for (const label of [/^Agent name/, /^Routing rules/, /^Worker approval mode/, /^Agent's GitHub login/, /^Add trigger/]) {
       expect(control(label).closest("details")).toBeNull();
     }
-    expect(control(/^Mode/).closest("details")).toBeTruthy();
+    // Worker frameworks, concurrency and the router's tools are advanced.
+    expect(control(/^Maximum concurrent tickets/).closest("details")).toBeTruthy();
+    expect(container.querySelector("#saf-worker-frameworks")?.closest("details")).toBeTruthy();
+    expect(container.querySelector("#saf-router-tools")?.closest("details")).toBeTruthy();
     // Workers from an older roster are listed, to be removed.
     expect(hasText("Existing Agent workers (legacy)")).toBe(true);
     expect(hasText("Laptop")).toBe(true);
@@ -1030,7 +1041,7 @@ describe("superAgentModel", () => {
 
   it("shows one agent with its own brain: its bound channels are listed, not edited, and saving needs no workers", async () => {
     const own: SuperAgent = {
-      id: "coder", name: "Coder", router_agent_id: "coder", mode: "act", max_concurrency: 2, enabled: true, workers: [],
+      id: "coder", name: "Coder", router_agent_id: "coder", max_concurrency: 2, enabled: true, workers: [],
       sources: [{ id: "channel:c1", kind: "channel", name: "Team bot", enabled: true, allowed_actors: [], config: { channel_id: "c1" } }],
     };
     vi.mocked(api.superAgents).mockResolvedValue([saved, own]);

@@ -1600,8 +1600,14 @@
 .model-picker-typed-row > input { flex: 1 1 auto; min-width: 0; }
 .model-picker-typed-row > button { flex: none; min-height: 31px; }
 .super-agent-router-editor .field > strong { font-size: 13px; }
-.super-agent-advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
-.super-agent-advanced > .super-agent-form { margin-top: 12px; }
+.super-agent-advanced-section > summary { display: grid; gap: 2px; cursor: pointer; list-style: none; }
+.super-agent-advanced-section > summary::-webkit-details-marker { display: none; }
+.super-agent-advanced-section > summary h3 { display: flex; align-items: center; gap: 4px; margin: 0; font-size: 14px; }
+.super-agent-advanced-section > summary p { margin: 0 0 0 19px; color: var(--muted); font-size: 12px; }
+.super-agent-advanced-chevron { flex: none; transition: transform 0.15s ease; }
+.super-agent-advanced-section[open] .super-agent-advanced-chevron { transform: rotate(90deg); }
+.super-agent-advanced-section > .super-agent-form { margin-top: 12px; }
+.super-agent-subhead { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; font-size: 13px; }
 .field textarea { width: 100%; font: inherit; }
 .super-agent-picker {
   position: relative;

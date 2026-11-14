@@ -407,7 +407,7 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 	view.Feedback = s.routerFeedback[trigger.ID]
 	s.mu.Unlock()
 	decision, err := s.route(ctx, *agent, trigger, view)
-	if err == nil && agent.Mode == core.SuperAgentModeAct {
+	if err == nil {
 		// Every action is checked before any is carried out, so a mistake
 		// in one never leaves the others half done.
 		if err = s.preflight(ctx, *agent, trigger, decision); err != nil {
@@ -426,10 +426,6 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
-	if agent.Mode == core.SuperAgentModeObserve {
-		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionObserved, decision.summary(), "")
-		return
-	}
 	s.apply(ctx, *agent, trigger, decision)
 }
 
@@ -477,25 +473,21 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	}
 	if trigger.Kind == core.SuperAgentTriggerTicketUpdate {
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error()+"; sent the worker's report as it was", trigger.TicketID)
-		if agent.Mode == core.SuperAgentModeAct {
-			s.relayReport(ctx, agent, trigger)
-		}
+		s.relayReport(ctx, agent, trigger)
 		return
 	}
-	if live := latestLiveTicket(tickets); live != nil && agent.Mode == core.SuperAgentModeAct {
+	if live := latestLiveTicket(tickets); live != nil {
 		if err := s.attach(ctx, agent, live.ID, trigger, ""); err == nil {
 			s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFollowUp, "router unavailable; delivered to the thread's ticket", live.ID)
 			return
 		}
 	}
 	s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), "")
-	if agent.Mode == core.SuperAgentModeAct {
-		message := "I could not process this request because my router is unavailable. Please try again later."
-		if errors.As(cause, new(decisionError)) {
-			message = "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent."
-		}
-		s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, message)
+	message := "I could not process this request because my router is unavailable. Please try again later."
+	if errors.As(cause, new(decisionError)) {
+		message = "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent."
 	}
+	s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, message)
 }
 
 func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {

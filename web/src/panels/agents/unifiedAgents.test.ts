@@ -4,7 +4,7 @@ import { canStartWorkers, ownsBrain, superAgentProblems } from "../superAgentMod
 import { agentsWithoutRow, isAgentPart, newAgent, unifiedAgentFor, workPolicy } from "./agentUtils";
 
 function agent(patch: Partial<SuperAgent>): SuperAgent {
-  return { id: "", name: "", router_agent_id: "", mode: "act", max_concurrency: 2, workers: [], sources: [], enabled: true, ...patch };
+  return { id: "", name: "", router_agent_id: "", max_concurrency: 2, workers: [], sources: [], enabled: true, ...patch };
 }
 
 describe("unified agents", () => {

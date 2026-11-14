@@ -351,11 +351,6 @@ func validateDecision(decision routerDecision) error {
 	return nil
 }
 
-const observeNote = `
-OBSERVE MODE
-This Super Agent is in observe mode: AgentMux records your reply and actions, but does not send or carry them out. Do not change files or run commands that change anything.
-`
-
 func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuses []core.SuperAgentWorkerStatus, view routerContext) string {
 	event := map[string]any{
 		"source": trigger.SourceKind, "actor": firstNonEmpty(trigger.ActorName, trigger.Actor),
@@ -382,9 +377,6 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuse
 	// against what an event asks for, beyond the sender's allowed list and its
 	// approval mode.
 	prompt.WriteString(promptFor(agent, promptRoleRouter, "{name}", agent.Name))
-	if agent.Mode == core.SuperAgentModeObserve {
-		prompt.WriteString(observeNote)
-	}
 	writeRouterContext(&prompt, agent, statuses, view)
 	if view.Feedback != "" {
 		fmt.Fprintf(&prompt, "\nEVENT %s. Your previous answer to it was not carried out: %s. Nothing happened: no ticket was created or changed and nothing was sent. Answer it again:\n%s\n", trigger.ID, view.Feedback, eventJSON)

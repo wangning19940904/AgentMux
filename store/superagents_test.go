@@ -13,7 +13,7 @@ func TestSuperAgentPersistence(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 3, 1, 2, 3, 0, time.UTC)
 	agent := core.SuperAgent{
-		ID: "sa", Name: "keeper", RouterAgentID: "router", Mode: core.SuperAgentModeAct, Enabled: true,
+		ID: "sa", Name: "keeper", RouterAgentID: "router", Enabled: true,
 		Workers:   []core.SuperAgentWorker{{ID: "w", HostID: "h", AgentID: "a"}},
 		Sources:   []core.SuperAgentSource{{ID: "src", Kind: core.SuperAgentSourceEmail, Enabled: true, AllowedActors: []string{"a@b.c"}, Config: map[string]string{"password": "pw"}}},
 		CreatedAt: now, UpdatedAt: now,

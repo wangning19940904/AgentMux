@@ -18,14 +18,14 @@ func (h *harness) setup(answer string, draft core.SuperAgent) (SetupResult, erro
 func TestSetupProposesATriggerAndStoresNothing(t *testing.T) {
 	h := newHarness(t)
 	before, _ := h.store.ListSuperAgents(context.Background())
-	result, err := h.setup(`{"reply":"Added.","name":"Triage","mode":"act","router_prompt":"accept bugs","sources":[
+	result, err := h.setup(`{"reply":"Added.","name":"Triage","router_prompt":"accept bugs","sources":[
 		{"kind":"feishu_message","allowed_actors":["*"],"config":{"channel_id":"c1"}}]}`,
-		core.SuperAgent{RouterAgentID: "router", AutoWorkers: true, Mode: core.SuperAgentModeObserve})
+		core.SuperAgent{RouterAgentID: "router", AutoWorkers: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	draft := result.Draft
-	if result.Reply != "Added." || draft.Name != "Triage" || draft.Mode != core.SuperAgentModeAct || draft.RouterPrompt != "accept bugs" {
+	if result.Reply != "Added." || draft.Name != "Triage" || draft.RouterPrompt != "accept bugs" {
 		t.Fatalf("result = %+v", result)
 	}
 	if len(draft.Sources) != 1 || draft.Sources[0].ID == "" || !draft.Sources[0].Enabled || draft.Sources[0].Config["channel_id"] != "c1" {
@@ -163,7 +163,6 @@ func TestSetupRefusals(t *testing.T) {
 		t.Error("a yolo router must be refused")
 	}
 	for name, answer := range map[string]string{
-		"mode": `{"reply":"ok","mode":"chaos"}`,
 		"kind": `{"reply":"ok","sources":[{"kind":"smoke-signal"}]}`,
 	} {
 		if _, err := h.setup(answer, core.SuperAgent{RouterAgentID: "router"}); err == nil {

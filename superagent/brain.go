@@ -23,11 +23,6 @@ import (
 // chat.
 const brainHeader = "AGENTMUX CONTEXT (the person cannot see this part; the chat message follows it)"
 
-const brainObserveNote = `
-OBSERVE MODE
-AgentMux records the actions you ask for but does not carry them out. Answer the person as usual.
-`
-
 // BrainBrief implements core.BrainHook. An agent with no worker policy, or
 // one that is disabled, gets no brief, so its turn is a plain chat turn.
 func (s *Service) BrainBrief(ctx context.Context, brainID string, msg *core.Message) string {
@@ -50,9 +45,6 @@ func (s *Service) BrainBrief(ctx context.Context, brainID string, msg *core.Mess
 	var brief strings.Builder
 	brief.WriteString(brainHeader + "\n")
 	brief.WriteString(promptFor(*agent, promptRoleChat, "{name}", agent.Name, "{home}", home))
-	if agent.Mode == core.SuperAgentModeObserve {
-		brief.WriteString(brainObserveNote)
-	}
 	writeRouterContext(&brief, *agent, s.workerStatuses(ctx, *agent), view)
 	return brief.String()
 }
@@ -85,18 +77,12 @@ func (s *Service) BrainFinished(ctx context.Context, brainID string, msg *core.M
 	}
 	s.recordEvent(trigger.SourceID, now)
 	decision.Reply = ""
-	if parseErr == nil && agent.Mode == core.SuperAgentModeAct {
+	if parseErr == nil {
 		parseErr = s.preflight(ctx, *agent, trigger, decision)
 	}
 	if parseErr != nil {
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "brain asked for something AgentMux cannot carry out: "+parseErr.Error(), "")
-		if agent.Mode == core.SuperAgentModeAct {
-			_ = s.sendReply(ctx, *agent, trigger.SourceID, trigger.Reply, "AgentMux could not carry out what I asked for, so nothing was started: "+parseErr.Error())
-		}
-		return
-	}
-	if agent.Mode == core.SuperAgentModeObserve {
-		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionObserved, decision.summary(), "")
+		_ = s.sendReply(ctx, *agent, trigger.SourceID, trigger.Reply, "AgentMux could not carry out what I asked for, so nothing was started: "+parseErr.Error())
 		return
 	}
 	s.apply(ctx, *agent, trigger, decision)

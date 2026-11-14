@@ -53,8 +53,8 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
 
 export function newSuperAgent(): SuperAgent {
   return {
-    id: "", name: "", router_agent_id: "", mode: "observe", max_concurrency: 2,
-    workers: [], auto_workers: false, worker_runtimes: [], sources: [], enabled: true,
+    id: "", name: "", router_agent_id: "", max_concurrency: 2,
+    workers: [], auto_workers: false, worker_runtimes: [], auto_worker_approval_mode: "auto", sources: [], enabled: true,
   };
 }
 

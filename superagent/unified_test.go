@@ -26,7 +26,7 @@ func TestUnifyAgentsGivesEveryAgentARecordOnce(t *testing.T) {
 	store.local["saw_x_codex"] = core.AgentInstance{ID: "saw_x_codex", Name: "worker", Source: autoWorkerAgentSource}
 	// A Super Agent saved before router agents existed routes with "yolo":
 	// that Agent already is a brain.
-	store.agents["sa_legacy"] = core.SuperAgent{ID: "sa_legacy", Name: "Legacy", RouterAgentID: "yolo", Mode: core.SuperAgentModeAct, Enabled: true}
+	store.agents["sa_legacy"] = core.SuperAgent{ID: "sa_legacy", Name: "Legacy", RouterAgentID: "yolo", Enabled: true}
 	service := newUnifiedService(t, store)
 
 	count, err := service.UnifyAgents(ctx)
@@ -40,7 +40,7 @@ func TestUnifyAgentsGivesEveryAgentARecordOnce(t *testing.T) {
 	if coder == nil {
 		t.Fatal("coder has no agent record")
 	}
-	if coder.RouterAgentID != "coder" || coder.Name != "Coder" || coder.Mode != core.SuperAgentModeAct || !coder.Enabled {
+	if coder.RouterAgentID != "coder" || coder.Name != "Coder" || !coder.Enabled {
 		t.Fatalf("coder record = %+v", coder)
 	}
 	if !coder.CreatedAt.Equal(created) || canStartWorkers(*coder) || len(coder.Sources) != 0 {
@@ -101,7 +101,7 @@ func TestEnsureAgentCreatesAndFollowsItsBrain(t *testing.T) {
 	instance := core.AgentInstance{ID: "agent_new", Name: "New", RuntimeID: "codex", Enabled: true}
 	store.local[instance.ID] = instance
 	agent, err := service.EnsureAgent(ctx, instance)
-	if err != nil || agent == nil || agent.ID != "agent_new" || agent.RouterAgentID != "agent_new" || agent.Mode != core.SuperAgentModeAct {
+	if err != nil || agent == nil || agent.ID != "agent_new" || agent.RouterAgentID != "agent_new" {
 		t.Fatalf("EnsureAgent = %+v, %v", agent, err)
 	}
 	instance.Name, instance.Enabled = "Renamed", false
@@ -157,7 +157,7 @@ func TestChannelSourcesComeFromBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(saved.Sources) != 1 || saved.Mode != core.SuperAgentModeAct {
+	if len(saved.Sources) != 1 {
 		t.Fatalf("saved = %+v", saved)
 	}
 	if stored, _ := store.GetSuperAgent(ctx, "coder"); len(stored.Sources) != 0 {

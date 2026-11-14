@@ -79,7 +79,7 @@ func TestAgentInstancesCreateUnifiedAgents(t *testing.T) {
 	if err != nil || agent == nil {
 		t.Fatalf("no unified agent for %s: %v", saved.ID, err)
 	}
-	if agent.RouterAgentID != saved.ID || agent.Mode != core.SuperAgentModeAct || !agent.Enabled || agent.Name != "Research" {
+	if agent.RouterAgentID != saved.ID || !agent.Enabled || agent.Name != "Research" {
 		t.Fatalf("unified agent = %+v", agent)
 	}
 

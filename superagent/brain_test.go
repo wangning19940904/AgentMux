@@ -136,23 +136,6 @@ func TestBrainActionsAreCheckedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
-func TestObservingBrainRecordsActionsOnly(t *testing.T) {
-	h := newBrainHarness(t, true)
-	agent := h.agent
-	agent.Mode = core.SuperAgentModeObserve
-	_ = h.store.UpsertSuperAgent(context.Background(), agent)
-	if brief := h.service.BrainBrief(context.Background(), "coder", h.msg); !strings.Contains(brief, "OBSERVE MODE") {
-		t.Fatal("an observing brain was not told")
-	}
-	h.service.BrainFinished(context.Background(), "coder", h.msg, acceptAnswer("local"))
-	if len(h.store.allTickets()) != 0 || len(h.replies.sent()) != 0 {
-		t.Fatal("an observing agent acted")
-	}
-	if trigger := h.store.triggers[0]; trigger.Disposition != core.SuperAgentDispositionObserved || !strings.Contains(trigger.Reason, "would accept") {
-		t.Fatalf("trigger = %+v", trigger)
-	}
-}
-
 func TestPlainAnswersRecordNothing(t *testing.T) {
 	h := newBrainHarness(t, true)
 	h.service.BrainFinished(context.Background(), "coder", h.msg, `{"action":"accept","worker_id":"local"}`)
