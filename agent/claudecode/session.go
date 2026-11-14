@@ -134,6 +134,9 @@ func (s *session) args(text string) []string {
 		args = append(args, "--effort", effort)
 	}
 	args = append(args, claudeApprovalArgs[s.CurrentRuntimeSettings().ApprovalMode]...)
+	if s.agent.healthCheck {
+		args = append(args, "--tools=", "--max-turns", "1", "--no-session-persistence")
+	}
 	// Resume prior context when we already know the native session id, so the
 	// conversation carries across turns and process restarts.
 	s.mu.Lock()

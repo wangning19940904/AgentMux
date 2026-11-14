@@ -44,6 +44,7 @@ func init() {
 		if env, ok := cfg["env"].(map[string]string); ok {
 			a.env = env
 		}
+		a.healthCheck, _ = cfg[core.AgentConfigHealthCheck].(bool)
 		return a, nil
 	})
 }
@@ -58,6 +59,8 @@ type Agent struct {
 	supportedReasoningEfforts []string
 	supportedApprovalModes    []string
 	env                       map[string]string
+	// healthCheck runs a throwaway turn: no tools, one turn, no transcript.
+	healthCheck bool
 }
 
 // Name returns the registered name.
