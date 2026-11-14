@@ -15,9 +15,59 @@ import type { FrameworkAccountFieldKey, FrameworkAccountSummary } from "./framew
 
 export type FrameworkBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "logout" | "complete" | "cancel";
 
+// One framework's header row in the catalog: its identity plus a summary of
+// every machine it is installed on, with one action to update the outdated ones.
+export function FrameworkGroupRow({
+  item,
+  machineCount,
+  latestVersion,
+  outdatedCount,
+  updateDisabled,
+  onUpdateOutdated,
+}: {
+  item: Framework;
+  machineCount: number;
+  latestVersion?: string;
+  outdatedCount: number;
+  updateDisabled: boolean;
+  onUpdateOutdated: () => void;
+}) {
+  const { t } = useI18n();
+  const { spec } = item;
+  return (
+    <tr className="framework-group-row">
+      <td colSpan={4}>
+        <div className="framework-group-head">
+          <span className="provider-icon"><Package size={16} /></span>
+          <span className="framework-group-copy">
+            <strong>{spec.display}</strong>
+            <span className="framework-meta-tags">
+              <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
+              <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+            </span>
+          </span>
+          <span className="framework-group-summary">
+            <span>{t("resources.machineCount", { count: machineCount })}</span>
+            {latestVersion && <span className="mono">{t("frameworks.latestVersion")} v{latestVersion}</span>}
+            {outdatedCount > 0
+              ? <span className="framework-update-state warning">{t("frameworks.groupOutdated", { count: outdatedCount })}</span>
+              : null}
+          </span>
+          {outdatedCount > 0 && (
+            <button className="ghost-action" disabled={updateDisabled} onClick={onUpdateOutdated} type="button">
+              <Download size={14} />{t("frameworks.updateGroup", { count: outdatedCount })}
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// One machine's install of a framework: its version, signed-in account and
+// actions. Every machine gets its own row so versions can be compared at a glance.
 export function FrameworkTableRows({
   item,
-  machineInstances,
   busy,
   progress,
   check,
@@ -39,7 +89,6 @@ export function FrameworkTableRows({
   onCopyCode,
 }: {
   item: Framework;
-  machineInstances?: React.ReactNode;
   busy?: FrameworkBusyAction;
   progress?: OperationProgress;
   check?: FrameworkUpdateCheck;
@@ -82,8 +131,10 @@ export function FrameworkTableRows({
 
   return (
     <>
-      <tr className="catalog-row framework-installed-row">
-        <FrameworkIdentityCell account={account} item={item}>{machineInstances}</FrameworkIdentityCell>
+      <tr className={`catalog-row framework-installed-row framework-instance-row${hasUpdate ? " outdated" : ""}`}>
+        <td className="framework-machine-cell" data-label={t("frameworks.machine")}>
+          <span className="framework-machine-name" title={currentMachine}>{currentMachine}</span>
+        </td>
         <td data-label={t("frameworks.versionAndUpdate")}>
           <span className="framework-version-copy">
             <strong className="mono">{item.version ? `v${item.version}` : "—"}</strong>
@@ -93,6 +144,11 @@ export function FrameworkTableRows({
               </span>
             ) : <span className="framework-update-state">{t("tools.checkingUpdate")}</span>}
           </span>
+        </td>
+        <td className="framework-account-cell" data-label={t("frameworks.account")}>
+          {account
+            ? <FrameworkAccountLine account={account} />
+            : <span className="muted">{supportsLogin && !authChecking ? t("tools.authLoginRequired") : "—"}</span>}
         </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
           <div className="framework-row-actions">
@@ -143,10 +199,10 @@ export function FrameworkTableRows({
           </div>
         </td>
       </tr>
-      {progress && <tr className="catalog-progress-row"><td colSpan={3}><OperationProgressView progress={progress} /></td></tr>}
+      {progress && <tr className="catalog-progress-row"><td colSpan={4}><OperationProgressView progress={progress} /></td></tr>}
       {loginFlow && (
         <tr className="catalog-progress-row framework-auth-row">
-          <td colSpan={3}>
+          <td colSpan={4}>
             <FrameworkAuthPrompt
               busy={busy}
               copiedCode={copiedCode}
@@ -184,16 +240,17 @@ export function FrameworkInstallingRow({ item, progress }: { item: Framework; pr
             <span className="framework-update-state"><RefreshCw className="spin" size={13} />{t("frameworks.installing")}</span>
           </span>
         </td>
+        <td className="framework-account-cell" />
         <td className="catalog-action-cell" data-label={t("common.actions")} />
       </tr>
       <tr className="catalog-progress-row">
-        <td colSpan={3}><OperationProgressView progress={progress ?? { phase: "preparing", percent: 4 }} /></td>
+        <td colSpan={4}><OperationProgressView progress={progress ?? { phase: "preparing", percent: 4 }} /></td>
       </tr>
     </>
   );
 }
 
-function FrameworkIdentityCell({ item, account, children }: { item: Framework; account?: FrameworkAccountSummary | null; children?: React.ReactNode }) {
+function FrameworkIdentityCell({ item }: { item: Framework }) {
   const { t } = useI18n();
   const { spec } = item;
   return (
@@ -206,8 +263,6 @@ function FrameworkIdentityCell({ item, account, children }: { item: Framework; a
           <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
           <TargetBadge target_id={item.target_id} target_name={item.target_name} />
         </span>
-        {account && <FrameworkAccountLine account={account} />}
-        {children}
       </span>
     </td>
   );

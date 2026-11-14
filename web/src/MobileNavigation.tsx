@@ -15,7 +15,7 @@ export type MobileNavItem<T extends string> = { id: T; labelKey: string; icon: I
 export type MobileNavGroup<T extends string> = { id: string; labelKey: string; icon: Icon; items: MobileNavItem<T>[] };
 
 // The tab bar shows these destinations, in this order, when they exist.
-export const MOBILE_TAB_IDS = ["overview", "agents", "super-agents", "messages", "machines"] as const;
+export const MOBILE_TAB_IDS = ["overview", "agents", "super-agents", "machines"] as const;
 
 // A badge is a small count on a destination, such as unread messages.
 export type MobileNavBadges = Partial<Record<string, number>>;

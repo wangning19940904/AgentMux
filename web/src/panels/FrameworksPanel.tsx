@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Package, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
@@ -11,12 +11,11 @@ import {
 } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
-import { MachineInstances } from "../components/MachineInstances";
-import { groupResources, selectedGroupMember } from "../components/resourceGroups";
+import { groupResources } from "../components/resourceGroups";
 import { targetKey } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { FrameworkBusyAction, FrameworkInstallingRow, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
+import { FrameworkBusyAction, FrameworkGroupRow, FrameworkInstallingRow, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
 import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
@@ -71,7 +70,6 @@ export function FrameworksPanel() {
     .filter((item) => !item.installed && item.spec.supported && item.spec.install_supported)
     .sort((left, right) => left.spec.display.localeCompare(right.spec.display)), [items]);
   const installingItems = installableItems.filter((item) => operations[targetKey(item.target_id, item.spec.kind)]?.action === "install");
-  const [selectedInstances, setSelectedInstances] = useState<Record<string, string>>({});
   const installedGroups = groupResources(installedItems, (item) => item.spec.kind, (item) => targetKey(item.target_id, item.spec.kind), activeMachineScope() === "all");
   const frameworkPagination = useCatalogPagination(installedGroups);
   const selectedRemoteID = activeRemoteID();
@@ -83,6 +81,19 @@ export function FrameworksPanel() {
   const nodeMissing = Boolean(prereqs && (!prereqs.node || !prereqs.npm));
   // Install settings belong to one machine and are edited on that machine.
   const settingsEditable = activeMachineScope() === "local";
+
+  function machineLabel(item: Framework) {
+    if (item.target_id === "local") return t("remote.localMachine");
+    return item.target_name || item.target_id || currentMachine;
+  }
+
+  // The local machine comes first, then the others by name.
+  function compareMachines(left: Framework, right: Framework) {
+    const leftLocal = !left.target_id || left.target_id === "local";
+    const rightLocal = !right.target_id || right.target_id === "local";
+    if (leftLocal !== rightLocal) return leftLocal ? -1 : 1;
+    return machineLabel(left).localeCompare(machineLabel(right));
+  }
 
   function markBusy(key: string, action: FrameworkBusyAction) {
     setBusy((current) => ({ ...current, [key]: action }));
@@ -227,11 +238,15 @@ export function FrameworksPanel() {
   }, [operations]);
 
   function requestUpdateAll() {
-    if (bulkRunning.current || updateAllBlocked || updateCandidates.length === 0) return;
+    requestUpdateMany(updateCandidates);
+  }
+
+  function requestUpdateMany(selection: Framework[]) {
+    if (bulkRunning.current || updateAllBlocked || selection.length === 0) return;
     // Capture the selection before starting: later scope changes must never
     // redirect a queued update to a different machine (or to the whole fleet).
     const targetID = selectedRemoteID || "local";
-    const candidates = [...updateCandidates];
+    const candidates = [...selection];
     confirmCustomCommands(candidates.map((item) => ({ item, action: "update" })), (confirmed) => {
       void updateAllFrameworks(candidates, targetID, confirmed);
     });
@@ -343,8 +358,9 @@ export function FrameworksPanel() {
         <div className="catalog-table-wrap">
           <table className="catalog-table framework-table">
             <thead><tr>
-              <th>{t("frameworks.framework")}</th>
+              <th>{t("frameworks.machine")}</th>
               <th>{t("frameworks.versionAndUpdate")}</th>
+              <th>{t("frameworks.account")}</th>
               <th>{t("common.actions")}</th>
             </tr></thead>
             <tbody>
@@ -353,36 +369,50 @@ export function FrameworksPanel() {
                 return <FrameworkInstallingRow key={`installing:${key}`} item={item} progress={progress[key]} />;
               })}
               {frameworkPagination.pageItems.map((group) => {
-                const item = selectedGroupMember(group, selectedInstances[group.key], (item) => targetKey(item.target_id, item.spec.kind));
-                const key = targetKey(item.target_id, item.spec.kind);
-                return <FrameworkTableRows
-                  key={group.key}
-                  machineInstances={<MachineInstances selected={key}
-                    instances={group.members.map((item) => ({ key: targetKey(item.target_id, item.spec.kind), targetID: item.target_id, name: item.target_name, detail: item.version ? `v${item.version}` : "—" }))}
-                    onSelect={(key) => setSelectedInstances((current) => ({ ...current, [group.key]: key }))} />}
-                  item={item}
-                  busy={busy[key]}
-                  progress={progress[key]}
-                  check={checks[key]}
-                  auth={frameworkAuth.auth[key]}
-                  loginFlow={frameworkAuth.loginFlows[key]}
-                  loginCode={frameworkAuth.loginCodes[key] ?? ""}
-                  copiedCode={frameworkAuth.copiedCode === key}
-                  currentMachine={item.target_name || item.target_id || currentMachine}
-                  disabled={!item.spec.supported || Boolean(bulkProgress)}
-                  onCheck={() => void checkUpdate(item)}
-                  onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
-                  onUninstall={() => requestUninstall(item)}
-                  onAuth={() => void frameworkAuth.startAuth(item)}
-                  onLogout={() => void frameworkAuth.logout(item)}
-                  onLoginCodeChange={(code) => frameworkAuth.setLoginCode(item, code)}
-                  onCompleteAuth={(sessionID) => void frameworkAuth.completeAuth(item, sessionID)}
-                  onCancelAuth={(sessionID) => void frameworkAuth.cancelAuth(item, sessionID)}
-                  onDismissAuth={() => frameworkAuth.dismissAuth(item)}
-                  onCopyCode={(code) => void frameworkAuth.copyCode(item, code)}
-                />
+                const members = [...group.members].sort(compareMachines);
+                const keys = members.map((item) => targetKey(item.target_id, item.spec.kind));
+                const outdated = updateCandidates.filter((item) => keys.includes(targetKey(item.target_id, item.spec.kind)));
+                const latestVersion = keys.map((key) => checks[key]?.latest_version).find(Boolean);
+                return (
+                  <Fragment key={group.key}>
+                    <FrameworkGroupRow
+                      item={members[0]}
+                      machineCount={members.length}
+                      latestVersion={latestVersion}
+                      outdatedCount={outdated.length}
+                      updateDisabled={updateAllBlocked}
+                      onUpdateOutdated={() => requestUpdateMany(outdated)}
+                    />
+                    {members.map((item) => {
+                      const key = targetKey(item.target_id, item.spec.kind);
+                      return <FrameworkTableRows
+                        key={key}
+                        item={item}
+                        busy={busy[key]}
+                        progress={progress[key]}
+                        check={checks[key]}
+                        auth={frameworkAuth.auth[key]}
+                        loginFlow={frameworkAuth.loginFlows[key]}
+                        loginCode={frameworkAuth.loginCodes[key] ?? ""}
+                        copiedCode={frameworkAuth.copiedCode === key}
+                        currentMachine={machineLabel(item)}
+                        disabled={!item.spec.supported || Boolean(bulkProgress)}
+                        onCheck={() => void checkUpdate(item)}
+                        onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
+                        onUninstall={() => requestUninstall(item)}
+                        onAuth={() => void frameworkAuth.startAuth(item)}
+                        onLogout={() => void frameworkAuth.logout(item)}
+                        onLoginCodeChange={(code) => frameworkAuth.setLoginCode(item, code)}
+                        onCompleteAuth={(sessionID) => void frameworkAuth.completeAuth(item, sessionID)}
+                        onCancelAuth={(sessionID) => void frameworkAuth.cancelAuth(item, sessionID)}
+                        onDismissAuth={() => frameworkAuth.dismissAuth(item)}
+                        onCopyCode={(code) => void frameworkAuth.copyCode(item, code)}
+                      />;
+                    })}
+                  </Fragment>
+                );
               })}
-              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={3}>{t("frameworks.noInstalled")}</td></tr>}
+              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={4}>{t("frameworks.noInstalled")}</td></tr>}
             </tbody>
           </table>
         </div>

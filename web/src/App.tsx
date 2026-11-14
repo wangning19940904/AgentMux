@@ -26,7 +26,6 @@ import {
   Search,
   ServerCog,
   MessageSquareText,
-  MessagesSquare,
   MonitorDot,
   Settings,
   ShieldCheck,
@@ -55,10 +54,7 @@ import {
 	activeTenantScopeKey,
   activeMachineScope,
   api,
-  APIError,
   FLEET_WARNING_EVENT,
-  MAILBOX_UNREAD_EVENT,
-  mailboxAPI,
   currentFleetWarnings,
   isFleetStaleNotice,
   getLaunchAtLogin,
@@ -73,7 +69,6 @@ import {
   type TenancySelf,
 } from "./api";
 import { currentOfflineTargets, resetFleetWarnings } from "./api/fleetWarnings";
-import { usePolling } from "./hooks/usePolling";
 import {
   accountLabel,
   resolveTenancyGateWithRetry,
@@ -121,8 +116,6 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Bot,
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
-      { id: "messages", labelKey: "nav.messages", icon: MessagesSquare },
-      { id: "orchestrations", labelKey: "nav.orchestrations", icon: Workflow },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
       { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
       { id: "skills", labelKey: "nav.skills", icon: Sparkles },
@@ -171,7 +164,6 @@ const NAV_GROUPS: NavGroup[] = [
 
 const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
 const MOBILE_TABS = mobileTabItems(TABS);
-const UNREAD_POLL_INTERVAL_MS = 30_000;
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -399,8 +391,6 @@ function Shell({
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
-  const unreadMessages = useUnreadMessages(tenantGate.state === "ready", visibleTab === "messages");
-  const navBadges = useMemo(() => ({ messages: unreadMessages }), [unreadMessages]);
   const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const preferencesButtonRef = useRef<HTMLButtonElement>(null);
   const preferencesPanelRef = useRef<HTMLDivElement>(null);
@@ -762,7 +752,6 @@ function Shell({
             const GroupIcon = group.icon;
             const hasActive = group.items.some((item) => item.id === visibleTab);
             const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
-            const hasUnread = unreadMessages > 0 && group.items.some((item) => item.id === "messages");
             return (
               <button
                 key={group.id}
@@ -777,7 +766,6 @@ function Shell({
               >
                 <GroupIcon size={18} />
                 <span>{t(group.shortLabelKey ?? group.labelKey)}</span>
-                {hasUnread && <i className="nav-badge-dot" aria-hidden="true" />}
               </button>
             );
           })}
@@ -786,7 +774,6 @@ function Shell({
         <MobileTabBar
           items={MOBILE_TABS}
           active={visibleTab}
-          badges={navBadges}
           drawerOpen={mobileNavOpen}
           isDisabled={(id) => navigationLocked && id !== "tenants"}
           onSelect={setTab}
@@ -944,11 +931,6 @@ function Shell({
               >
                 <Icon size={16} />
                 <span>{t(item.labelKey)}</span>
-                {item.id === "messages" && unreadMessages > 0 && (
-                  <span className="nav-badge" aria-label={t("messages.unreadCount", { count: unreadMessages })}>
-                    {unreadMessages > 99 ? "99+" : unreadMessages}
-                  </span>
-                )}
               </button>
             );
           })}
@@ -967,7 +949,6 @@ function Shell({
         overview={OVERVIEW_ITEM}
         groups={NAV_GROUPS}
         active={visibleTab}
-        badges={navBadges}
         isDisabled={(id) => navigationLocked && id !== "tenants"}
         onSelect={(id) => {
           setMobileNavOpen(false);
@@ -1204,40 +1185,6 @@ function SidebarResizeHandle({
       <span aria-hidden="true" />
     </div>
   );
-}
-
-// useUnreadMessages counts the direct messages the signed-in person has not
-// read, for the navigation badge. The Messages page reports the count itself
-// while it is open, so this only asks when that page is closed. It stops
-// asking where there is no mailbox for the caller.
-function useUnreadMessages(enabled: boolean, pageOpen: boolean): number {
-  const [unread, setUnread] = useState(0);
-  const [available, setAvailable] = useState(true);
-  const polling = enabled && available && !pageOpen;
-
-  const refresh = useCallback(() => {
-    mailboxAPI.overview()
-      .then((overview) => setUnread(overview.unread))
-      .catch((error) => {
-        if (error instanceof APIError && [403, 404, 503].includes(error.status)) setAvailable(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (polling) refresh();
-  }, [polling, refresh]);
-  usePolling(refresh, UNREAD_POLL_INTERVAL_MS, { enabled: polling });
-
-  useEffect(() => {
-    const receive = (event: Event) => {
-      const count = (event as CustomEvent<number>).detail;
-      if (typeof count === "number") setUnread(count);
-    };
-    window.addEventListener(MAILBOX_UNREAD_EVENT, receive);
-    return () => window.removeEventListener(MAILBOX_UNREAD_EVENT, receive);
-  }, []);
-
-  return unread;
 }
 
 function useTenancyGate(): {

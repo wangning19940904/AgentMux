@@ -91,8 +91,6 @@ describe("navigation search", () => {
       znt: "agents",
       "zhi neng ti": "agents",
       assistant: "agents",
-      bp: "orchestrations",
-      workflow: "orchestrations",
       zcb: "mcp",
       duihua: "sessions",
       feishu: "channels",
