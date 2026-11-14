@@ -64,6 +64,9 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/retry", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
 		return s.superAgents.RetryTicket(r.Context(), id)
 	}))
+	s.mux.HandleFunc("POST /api/v1/super-agents/timers/cancel", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
+		return s.superAgents.CancelTimer(r.Context(), id)
+	}))
 	s.mux.HandleFunc("GET /api/v1/super-agents/feishu/chats", s.handleFeishuDirectory(func(r *http.Request, channelID string) (any, error) {
 		return s.feishuDirectory.Chats(r.Context(), channelID)
 	}))

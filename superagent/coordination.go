@@ -148,7 +148,9 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 	view.Places = append(view.Places, s.mailPlaces(ctx, agent)...)
 	view.Where = describeThread(trigger.ThreadKey, trigger.DedupeKey, names)
 	view.Asks = s.asksIn(agent.ID, trigger.ThreadKey, names)
+	view.Timers = s.timerViews(ctx, agent.ID, trigger.ThreadKey)
 	now := s.now()
+	view.Now = now.Format(time.RFC3339) + " (" + now.Weekday().String() + ")"
 	shown := 0
 	for _, ticket := range newestFirst(tickets) {
 		onThread := ticket.ThreadKey == trigger.ThreadKey

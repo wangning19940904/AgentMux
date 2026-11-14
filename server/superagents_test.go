@@ -36,6 +36,7 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/stop"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/retry"},
+		{http.MethodPost, "/api/v1/super-agents/timers/cancel"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/chats?channel_id=c"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members?channel_id=c"},
 		{http.MethodPost, "/api/v1/super-agents/feishu/users?channel_id=c"},

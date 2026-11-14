@@ -44,6 +44,20 @@ const (
 // for a decision. An event from a Source has no kind.
 const SuperAgentTriggerTicketUpdate = "ticket_update"
 
+// SuperAgentTriggerTimer tells the router that a timer it set is due. Like a
+// ticket update it comes from AgentMux, on the thread the timer was set on.
+const SuperAgentTriggerTimer = "timer"
+
+// SuperAgentTimerFollowUp is a one-off wake-up the router set for itself.
+const SuperAgentTimerFollowUp = "follow_up"
+
+// Timer states. A follow-up is done once it has fired.
+const (
+	SuperAgentTimerActive    = "active"
+	SuperAgentTimerDone      = "done"
+	SuperAgentTimerCancelled = "cancelled"
+)
+
 // Ticket states. A Ticket defines its own state instead of following the
 // worker session: a follow-up can resume a ready Ticket on the same worker.
 const (
@@ -214,6 +228,32 @@ type SuperAgentTicketLink struct {
 	ThreadKey string          `json:"thread_key"`
 	SourceID  string          `json:"source_id"`
 	Reply     json.RawMessage `json:"reply,omitempty"`
+}
+
+// SuperAgentTimer wakes an agent's router later. A due timer never starts a
+// turn itself: it becomes a Trigger on ThreadKey, so it is ordered, retried
+// and recorded like any other event. SourceID, SourceKind and Reply are those
+// of the Trigger that set it, so the router's reply goes back to the same place.
+type SuperAgentTimer struct {
+	ID           string          `json:"id"`
+	SuperAgentID string          `json:"super_agent_id"`
+	Kind         string          `json:"kind"`
+	Status       string          `json:"status"`
+	ThreadKey    string          `json:"thread_key"`
+	SourceID     string          `json:"source_id"`
+	SourceKind   string          `json:"source_kind"`
+	Reply        json.RawMessage `json:"reply,omitempty"`
+	// TicketID is the Ticket a follow-up is about, if any. Stopping that
+	// Ticket cancels the follow-up.
+	TicketID string `json:"ticket_id,omitempty"`
+	// Note is what the router told its later self to do when the timer fires.
+	Note  string    `json:"note"`
+	DueAt time.Time `json:"due_at"`
+	// SetBy is the Trigger whose turn set the timer.
+	SetBy     string    `json:"set_by,omitempty"`
+	FiredAt   time.Time `json:"fired_at,omitzero"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // SuperAgentWorkerStatus is the router's and the Console's view of a worker.

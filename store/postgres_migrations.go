@@ -369,6 +369,22 @@ CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data 
 		// Multi-tenancy is retired: an administrator manages everything, and
 		// a member account owns only its devices and direct messages.
 		{version: 29, name: "retire_tenancy", sql: retireTenancySQL},
+		// Wake-ups an agent's router set for itself; see core.SuperAgentTimer.
+		// The time columns are whole seconds in UTC, so they compare as text.
+		{version: 30, name: "super_agent_timers", sql: `
+CREATE TABLE IF NOT EXISTS super_agent_timers (
+	id TEXT PRIMARY KEY,
+	super_agent_id TEXT NOT NULL,
+	thread_key TEXT NOT NULL,
+	status TEXT NOT NULL,
+	due_at TEXT NOT NULL,
+	data TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_super_agent_timers_due ON super_agent_timers(status,due_at);
+CREATE INDEX IF NOT EXISTS idx_super_agent_timers_agent ON super_agent_timers(super_agent_id,status,updated_at);
+`},
 	}
 }
 

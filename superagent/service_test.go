@@ -1,6 +1,7 @@
 package superagent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ type memoryStore struct {
 	agents   map[string]core.SuperAgent
 	triggers []core.SuperAgentTrigger
 	tickets  map[string]core.SuperAgentTicket
+	timers   map[string]core.SuperAgentTimer
 	state    map[string]string
 	local    map[string]core.AgentInstance
 	channels []core.Channel
@@ -28,6 +30,7 @@ type memoryStore struct {
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		agents: map[string]core.SuperAgent{}, tickets: map[string]core.SuperAgentTicket{}, state: map[string]string{},
+		timers: map[string]core.SuperAgentTimer{},
 		local: map[string]core.AgentInstance{
 			"router": {ID: "router", Name: "router", Enabled: true, DefaultApprovalMode: core.ApprovalModePlan, Source: routerAgentSource},
 			"coder":  {ID: "coder", Name: "coder", Enabled: true},
@@ -148,6 +151,56 @@ func (m *memoryStore) ListSuperAgentTicketsByStatus(_ context.Context, statuses 
 		}
 	}
 	return out, nil
+}
+func (m *memoryStore) UpsertSuperAgentTimer(_ context.Context, timer core.SuperAgentTimer) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.timers[timer.ID] = timer
+	return nil
+}
+func (m *memoryStore) GetSuperAgentTimer(_ context.Context, id string) (*core.SuperAgentTimer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if timer, ok := m.timers[id]; ok {
+		return &timer, nil
+	}
+	return nil, nil
+}
+
+// timersWhere returns the timers that match, the soonest due first.
+func (m *memoryStore) timersWhere(match func(core.SuperAgentTimer) bool) []core.SuperAgentTimer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []core.SuperAgentTimer{}
+	for _, timer := range m.timers {
+		if match(timer) {
+			out = append(out, timer)
+		}
+	}
+	slices.SortFunc(out, func(a, b core.SuperAgentTimer) int {
+		return cmp.Or(a.DueAt.Compare(b.DueAt), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+func (m *memoryStore) ListDueSuperAgentTimers(_ context.Context, now time.Time, _ int) ([]core.SuperAgentTimer, error) {
+	return m.timersWhere(func(timer core.SuperAgentTimer) bool {
+		return timer.Status == core.SuperAgentTimerActive && !timer.DueAt.After(now)
+	}), nil
+}
+func (m *memoryStore) ListActiveSuperAgentTimers(_ context.Context, id string) ([]core.SuperAgentTimer, error) {
+	return m.timersWhere(func(timer core.SuperAgentTimer) bool {
+		return timer.SuperAgentID == id && timer.Status == core.SuperAgentTimerActive
+	}), nil
+}
+func (m *memoryStore) ListFinishedSuperAgentTimers(_ context.Context, id string, since time.Time, _ int) ([]core.SuperAgentTimer, error) {
+	return m.timersWhere(func(timer core.SuperAgentTimer) bool {
+		return timer.SuperAgentID == id && timer.Status != core.SuperAgentTimerActive && !timer.UpdatedAt.Before(since)
+	}), nil
+}
+func (m *memoryStore) CountSuperAgentTimersFired(_ context.Context, id string, since time.Time) (int, error) {
+	return len(m.timersWhere(func(timer core.SuperAgentTimer) bool {
+		return timer.SuperAgentID == id && timer.Status == core.SuperAgentTimerDone && !timer.UpdatedAt.Before(since)
+	})), nil
 }
 func (m *memoryStore) GetSuperAgentSourceState(_ context.Context, id string) (string, error) {
 	m.mu.Lock()

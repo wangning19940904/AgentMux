@@ -199,6 +199,32 @@ describe("SuperAgentsPanel", () => {
     expect(retry).toHaveBeenCalledWith("t2");
   });
 
+  it("lists the agent's follow-ups and cancels one that is still set", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      timers: [
+        { id: "stm_1", kind: "follow_up", status: "active", thread_key: "github:o/r#1", ticket_id: "t1", note: "Check whether Li approved.", due_at: "2026-11-04T09:00:00Z" },
+        { id: "stm_2", kind: "follow_up", status: "done", thread_key: "github:o/r#2", note: "Ask about the release.", due_at: "2026-11-02T09:00:00Z", fired_at: "2026-11-02T09:00:01Z" },
+      ],
+      timer_warning: "2 more are due and wait.",
+    });
+    const cancel = vi.spyOn(api, "cancelSuperAgentTimer").mockResolvedValue({ ok: true });
+    renderPanel();
+    await until(() => hasText("Check whether Li approved."));
+    for (const text of ["Follow-ups", "github:o/r#1 · Fix build", "Ask about the release.", "Fired", "2 more are due and wait."]) expect(hasText(text)).toBe(true);
+    // Only the follow-up that is still set can be cancelled.
+    expect([...container.querySelectorAll("button")].filter((item) => /^Cancel$/.test((item.textContent ?? "").trim()))).toHaveLength(1);
+    click(button(/^Cancel$/));
+    await until(() => cancel.mock.calls.length > 0);
+    expect(cancel).toHaveBeenCalledWith("stm_1");
+  });
+
+  it("shows no follow-ups section for an agent that set none", async () => {
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    expect(hasText("Follow-ups")).toBe(false);
+  });
+
   it("opens the create form on request, once, and defaults to observing", async () => {
     const handled = vi.fn();
     renderPanel({ createRequested: true, onCreateRequestHandled: handled });

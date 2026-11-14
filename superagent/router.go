@@ -21,6 +21,10 @@ const (
 	actionStop   = "stop"
 	actionPost   = "post"
 	actionLink   = "link"
+	// actionFollowUp and actionCancelTimer set and withdraw a wake-up on the
+	// event's thread; see timers.go.
+	actionFollowUp    = "follow_up"
+	actionCancelTimer = "cancel_timer"
 )
 
 const recoveryNote = "AgentMux restarted while you were working on this ticket. Check the current state of your work, then continue."
@@ -50,7 +54,13 @@ type routerAction struct {
 	BaseTicket   string   `json:"base_ticket,omitempty"`
 	To           string   `json:"to,omitempty"`
 	Text         string   `json:"text,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
+	// In or At says when a follow_up is due, Note what to do then. TimerID
+	// names the timer a cancel_timer withdraws.
+	In      string `json:"in,omitempty"`
+	At      string `json:"at,omitempty"`
+	Note    string `json:"note,omitempty"`
+	TimerID string `json:"timer_id,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // routerDecision is the router's reply to this event's thread and the
@@ -82,6 +92,15 @@ func (d routerDecision) summary() string {
 		if action.To != "" {
 			part += " to " + action.To
 		}
+		if action.In != "" {
+			part += " in " + action.In
+		}
+		if action.At != "" {
+			part += " at " + action.At
+		}
+		if action.TimerID != "" {
+			part += " timer " + action.TimerID
+		}
 		if len(action.DependsOn) > 0 {
 			part += " after " + strings.Join(action.DependsOn, ", ")
 		}
@@ -104,10 +123,14 @@ func (d routerDecision) summary() string {
 
 // routerContext is what the router is shown besides the event.
 type routerContext struct {
-	Memory   string
-	Tickets  []ticketView
-	Places   []placeView
-	Asks     []askView
+	Memory  string
+	Tickets []ticketView
+	Places  []placeView
+	Asks    []askView
+	// Timers are the follow-ups still set on the event's thread, and Now is
+	// the daemon's time, which the router needs to set one.
+	Timers   []timerView
+	Now      string
 	Notes    []string
 	Feedback string
 	Where    string
@@ -310,8 +333,19 @@ func validateDecision(decision routerDecision) error {
 			if strings.TrimSpace(action.To) == "" || strings.TrimSpace(action.Text) == "" {
 				return errors.New("a post action needs both to and text")
 			}
+		case actionFollowUp:
+			if strings.TrimSpace(action.Note) == "" {
+				return errors.New("a follow_up action needs a note saying what to check and do when it is due")
+			}
+			if (strings.TrimSpace(action.In) == "") == (strings.TrimSpace(action.At) == "") {
+				return errors.New(`a follow_up action needs exactly one of "in" and "at"`)
+			}
+		case actionCancelTimer:
+			if strings.TrimSpace(action.TimerID) == "" {
+				return errors.New("a cancel_timer action has no timer_id")
+			}
 		default:
-			return fmt.Errorf("unknown action %q; use accept, attach, stop, link or post", action.Action)
+			return fmt.Errorf("unknown action %q; use accept, attach, stop, link, post, follow_up or cancel_timer", action.Action)
 		}
 	}
 	return nil
@@ -342,6 +376,7 @@ COORDINATING WORK
 - When you post a question elsewhere on behalf of a thread, AgentMux remembers it. When the answer arrives, the event lists it under QUESTIONS YOU ASKED HERE: pass the answer back to the people waiting with post, then act on it.
 - When a worker needs a decision ("DECISION NEEDED"), work out who should make it from your memory, PEOPLE and who asked, then ask that person directly, with an @mention, in the place they will see it. When they answer, attach the answer to the ticket.
 - attach reaches a running worker within seconds when its framework allows, otherwise after its current turn. A stopped ticket never resumes.
+- When you are waiting on someone, or promised to check back, set a follow_up. AgentMux wakes you on this thread at that time with a timer event that carries your note, so write the note for your later self: what to check and what to do then. When it arrives, do that if it still applies, and leave your reply empty if nothing is needed. TIMERS ON THIS THREAD lists the ones still set: cancel one when the answer came first. Never set one to watch a worker, since its ticket_update arrives on its own.
 
 OTHER AGENTS AND PEOPLE IN AGENTMUX
 PLACES also lists the agents and people you can write to directly, by address (agent:<id>, person:<login>). post to an address sends a direct message; the answer arrives later as an event with source "mailbox", and your reply to such an event goes back to its sender.
@@ -377,6 +412,8 @@ To have AgentMux act, end your final message with an action block holding one ac
 - "stop": stop an open ticket on any thread.
 - "link": link this event's thread to an open ticket without disturbing its worker, so the thread hears when the ticket moves.
 - "post": send "text" to another thread or place. "to" is a ticket id (that ticket's thread), a "to" value from OPEN TICKETS or PLACES (including the address of an agent or person there), or github:<owner/repo>#<number>. Your reply already goes to this event's thread.
+- "follow_up": wake yourself later on this event's thread. Give "in" (such as "30m", "18h" or "3d") or "at" (a time written like NOW, with its offset), and a "note". "ticket_id" is optional and names the ticket it is about.
+- "cancel_timer": withdraw a follow-up, by its "timer_id" from TIMERS ON THIS THREAD.
 - "reason", on any action, is a short note for the operator's audit log.
 Without a block, AgentMux only sends your reply. Choose workers only from the roster. Entries named auto:<framework> launch a new worker with that framework; pick the framework that suits the work best. Entries named auto:<framework>@<machine> launch it on another machine: choose one when the work belongs on that machine, and only when it is available. A ticket's files stay on the machine its worker runs on, so base_ticket only carries work between tickets on the same machine. When no available worker can do the work, say so in your reply.
 `
@@ -399,7 +436,9 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuse
 	}
 	if trigger.Kind != "" {
 		event["kind"] = trigger.Kind
-		event["ticket_id"] = trigger.TicketID
+		if trigger.TicketID != "" {
+			event["ticket_id"] = trigger.TicketID
+		}
 		delete(event, "addressed_to_you")
 	}
 	eventJSON, _ := json.MarshalIndent(event, "", "  ")
@@ -485,6 +524,13 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	if len(view.Asks) > 0 {
 		asksJSON, _ := json.MarshalIndent(view.Asks, "", "  ")
 		fmt.Fprintf(prompt, "\nQUESTIONS YOU ASKED HERE (on behalf of other threads, which wait for the answer):\n%s\n", asksJSON)
+	}
+	if len(view.Timers) > 0 {
+		timersJSON, _ := json.MarshalIndent(view.Timers, "", "  ")
+		fmt.Fprintf(prompt, "\nTIMERS ON THIS THREAD (follow-ups you set that are still to come):\n%s\n", timersJSON)
+	}
+	if view.Now != "" {
+		fmt.Fprintf(prompt, "\nNOW: %s\n", view.Now)
 	}
 	for _, note := range view.Notes {
 		prompt.WriteString("\nNOTE: " + note + "\n")
