@@ -51,6 +51,15 @@ function control(label: RegExp): HTMLInputElement | HTMLSelectElement | HTMLText
   return found;
 }
 
+// valueOf reads a control that may not be rendered yet.
+function valueOf(label: RegExp): string | undefined {
+  try {
+    return control(label).value;
+  } catch {
+    return undefined;
+  }
+}
+
 function setValue(element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string) {
   const prototype = Object.getPrototypeOf(element) as object;
   Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
@@ -200,28 +209,27 @@ describe("SuperAgentsPanel", () => {
     expect(hasText("Records what the router would do")).toBe(true);
   });
 
-  it("creates a Super Agent with a remote worker and a Feishu trigger", async () => {
+  it("creates an agent with a router of its own, a remote working directory and a Feishu trigger", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
     const saveButton = () => button(/^Save$/) as HTMLButtonElement;
-    // The first router agent nobody routes with is chosen, and workers start on its framework.
-    await until(() => control(/^Router agent/).value === "router");
+    // Every agent gets a new router, even when an unused one exists, and its
+    // workers start on the router's framework.
+    await until(() => valueOf(/^Framework/) === "codex");
     expect(workerFramework("Codex")?.checked).toBe(true);
+    expect(hasOption("Router (Codex)")).toBe(false);
+    // The name is required.
+    expect(saveButton().disabled).toBe(true);
+    setValue(control(/^Agent name/), "Triage");
     expect(saveButton().disabled).toBe(false);
 
-    setValue(control(/^Name/), "Triage");
-    click(button(/Add worker/) as HTMLButtonElement);
-    await until(() => hasOption("Coder (claudecode)"));
-    expect(hasOption("Elsewhere (dsh)")).toBe(false);
-    expect(hasOption("Router (codex)")).toBe(false);
-    expect(saveButton().disabled).toBe(true);
-    await until(() => hasOption("GPU box"));
-    setValue(control(/^Machine/), "h1");
-    await until(() => hasOption("GPU coder (dsh)"));
-    expect(api.remoteAgentInstances).toHaveBeenCalledWith("h1");
-    setValue(control(/^Agent$/), "gpu");
+    // A remote path allows workers on that machine.
+    await until(() => !(button(/^Add remote path$/) as HTMLButtonElement).disabled);
+    click(button(/^Add remote path$/));
+    expect(workerFramework("GPU box")?.checked).toBe(true);
+    setValue(control(/^Directory on that machine/), "~/models");
     setValue(control(/^Add trigger/), "feishu_message");
 
     await until(() => hasOption("Team bot"));
@@ -256,12 +264,30 @@ describe("SuperAgentsPanel", () => {
 
     click(saveButton());
     await until(() => save.mock.calls.length > 0);
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "Triage router", runtime_id: "codex" });
     const body = save.mock.calls[0][0];
-    expect(body).toMatchObject({ name: "Triage", router_agent_id: "router", router_runtime: "", mode: "observe", worker_runtimes: ["codex"] });
-    expect(body.workers).toEqual([{ id: "", agent_id: "gpu", host_id: "h1" }]);
-    expect(api.saveSuperAgentRouter).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ name: "Triage", router_agent_id: "sar_new", router_runtime: "", mode: "observe", worker_runtimes: ["codex"], workers: [] });
+    expect(body.worker_machines).toEqual([{ host_id: "h1", dir: "~/models" }]);
     expect(body.sources[0]).toMatchObject({ kind: "feishu_message", allowed_actors: ["ou_a", "ou_b"], config: { channel_id: "c1", chat_ids: "oc_team" } });
     await until(() => !container.querySelector("[role=dialog]"));
+  });
+
+  it("works in a folder it creates by default, or in a local path chosen for it", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
+    renderPanel({ createRequested: true });
+    await until(() => valueOf(/^Framework/) === "codex");
+    expect(hasText("Default directory (created automatically)")).toBe(true);
+    click(button(/Choose a local path$/));
+    setValue(control(/^Local path/), "~/code/app");
+    click(button(/^Use default$/));
+    expect(() => control(/^Local path/)).toThrow();
+    click(button(/Choose a local path$/));
+    setValue(control(/^Local path/), "~/code/web");
+    setValue(control(/^Agent name/), "Web");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ auto_worker_dir: "~/code/web" });
   });
 
   it("guides a GitHub trigger: the token fills in the login, and a local install gets a forward command", async () => {
@@ -417,6 +443,7 @@ describe("SuperAgentsPanel", () => {
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
+    setValue(control(/^Agent name/), "Bot");
     setValue(control(/^Add trigger/), "feishu_message");
     expect(hasText("there is no App ID or secret to copy")).toBe(true);
 
@@ -523,19 +550,19 @@ describe("SuperAgentsPanel", () => {
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
     await until(() => container.querySelector("[role=dialog]"));
-    // With no router agent yet, the form configures a new one.
-    await until(() => control(/^Router agent/).value === "__new_router__");
-    expect(control(/^Framework/).value).toBe("codex");
+    await until(() => valueOf(/^Framework/) === "codex");
     expect(hasOption("Gemini")).toBe(false);
     expect(hasOption("Remote DSH")).toBe(false);
-    // A new router acts on its own unless the operator chooses otherwise.
+    // There is no Provider to choose.
+    expect(hasText("Provider override")).toBe(false);
+    // A new router acts on its own unless the operator chooses otherwise; its
+    // permissions are folded away.
     expect(control(/^Permissions/).value).toBe("yolo");
+    expect(control(/^Permissions/).closest("details")?.open).toBe(false);
     expect(hasText("With YOLO it answers from files")).toBe(true);
-    // Nothing drafts the configuration for the operator.
-    expect(hasText("What should it do")).toBe(false);
     expect(button(/Draft settings/)).toBeUndefined();
-    expect(container.querySelector("details")?.open).toBe(false);
 
+    setValue(control(/^Agent name/), "Ops");
     setValue(control(/^Add trigger/), "github_webhook");
     setValue(control(/^Agent's GitHub login/), "bot");
     setValue(control(/^Allowed senders/), "alice");
@@ -549,8 +576,8 @@ describe("SuperAgentsPanel", () => {
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
     expect(api.saveSuperAgentRouter).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "", runtime_id: "codex", model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] });
-    expect(save.mock.calls[0][0]).toMatchObject({ name: "", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "", name: "Ops router", runtime_id: "codex", model: "", reasoning_effort: "", service_tier: "", mcp_servers: [] });
+    expect(save.mock.calls[0][0]).toMatchObject({ name: "Ops", router_runtime: "", router_agent_id: "sar_new", mode: "observe", auto_workers: true, worker_runtimes: ["codex"], workers: [] });
     const github = save.mock.calls[0][0].sources[0];
     expect(github).toMatchObject({ kind: "github_webhook", allowed_actors: ["alice"], config: { agent_login: "bot", delivery: "poll", github_token: "ghp_x" } });
     expect(github.id).toMatch(/^src_[0-9a-f-]{36}$/);
@@ -566,8 +593,9 @@ describe("SuperAgentsPanel", () => {
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
     await until(() => workerFramework("Kimi"));
-    await until(() => control(/^Framework/).value === "codex");
+    await until(() => valueOf(/^Framework/) === "codex");
     expect(option("Kimi (can't run unattended)")?.disabled).toBe(true);
+    setValue(control(/^Agent name/), "Kimi helper");
     expect(workerFramework("Codex")?.checked).toBe(true);
     // MCP servers are off until allowed.
     const oncall = workerFramework("oncall")!;
@@ -616,63 +644,43 @@ describe("SuperAgentsPanel", () => {
     click(button(/^Edit$/));
     await until(() => control(/^Directory on that machine/).value === "~/code");
     // The only machine is already listed, so there is none left to add.
-    expect((button(/^Add machine$/) as HTMLButtonElement).disabled).toBe(true);
+    await until(() => hasOption("GPU box"));
+    expect((button(/^Add remote path$/) as HTMLButtonElement).disabled).toBe(true);
+    expect(workerFramework("GPU box")?.checked).toBe(true);
     setValue(control(/^What this machine is for/), "Has the GPU");
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
     expect(save.mock.calls[0][0]).toMatchObject({ auto_workers: true, worker_machines: [{ host_id: "h1", dir: "~/code", capabilities: "Has the GPU" }] });
+
+    // Unchecking the machine removes it and its directory.
+    vi.mocked(api.saveSuperAgent).mockClear();
+    click(button(/^Edit$/));
+    await until(() => workerFramework("GPU box")?.checked);
+    click(workerFramework("GPU box")!);
+    expect(() => control(/^Directory on that machine/)).toThrow();
   });
 
-  it("edits an existing Super Agent's router, workers and triggers outside advanced settings", async () => {
+  it("edits an existing agent's own router, directories, workers and triggers outside advanced settings", async () => {
     renderPanel();
     await until(() => hasText("Fix build"));
     click(button(/^Edit$/));
-    await until(() => control(/^Router agent/).value === "router");
-    expect(hasText("Codex · Default model · Read-only")).toBe(true);
-    // A router saved before routers could act stays read-only, and says so.
-    expect(hasText("This router is read-only")).toBe(true);
-    for (const label of [/^Router agent/, /^Routing rules/, /^Agent$/, /^Agent's GitHub login/, /^Add trigger/]) {
+    await until(() => hasText("A router's framework cannot change once it is created."));
+    expect(() => control(/^Framework/)).toThrow();
+    for (const label of [/^Agent name/, /^Router prompt/, /^Worker approval mode/, /^Agent's GitHub login/, /^Add trigger/]) {
       expect(control(label).closest("details")).toBeNull();
     }
     expect(control(/^Mode/).closest("details")).toBeTruthy();
-    // A router used by this Super Agent cannot be deleted from here.
-    expect(button(/Delete router/)).toBeUndefined();
+    // Workers from an older roster are listed, to be removed.
+    expect(hasText("Existing Agent workers (legacy)")).toBe(true);
+    expect(hasText("Laptop")).toBe(true);
   });
 
-  it("does not offer a router agent that another Super Agent routes with", async () => {
-    renderPanel({ createRequested: true });
-    await until(() => container.querySelector("[role=dialog]"));
-    // "Router" belongs to Repo keeper, so a new Super Agent gets a router of its own.
-    await until(() => control(/^Router agent/).value === "__new_router__");
-    expect(hasOption("Router (Codex)")).toBe(false);
-    expect(hasText("It belongs to this Super Agent and works in its folder")).toBe(true);
-    expect(hasText("Also used by")).toBe(false);
-  });
-
-  it("edits a router agent with the Super Agent, and deletes an unused one", async () => {
-    vi.spyOn(api, "superAgentRouters").mockResolvedValue({ ...routerList, routers: [
-      ...routerList.routers,
-      { id: "spare", name: "Spare", runtime_id: "codex", mcp_servers: [], used_by: [] },
-    ] });
-    const remove = vi.spyOn(api, "deleteSuperAgentRouter").mockResolvedValue({ ok: true });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("edits the agent's router with it", async () => {
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
     renderPanel();
     await until(() => hasText("Fix build"));
     click(button(/^Edit$/));
-    await until(() => control(/^Router agent/).value === "router");
-
-    setValue(control(/^Router agent/), "spare");
-    click(button(/Delete router/));
-    await until(() => remove.mock.calls.length > 0);
-    expect(remove).toHaveBeenCalledWith("spare");
-
-    setValue(control(/^Router agent/), "router");
-    click(button(/^Edit router$/));
-    expect(hasText("A router agent's framework can't change")).toBe(true);
-    // The router has no name of its own to edit.
-    expect(() => control(/^Router name/)).toThrow();
-    expect(control(/^Permissions/).value).toBe("plan");
+    await until(() => valueOf(/^Permissions/) === "plan");
     setValue(control(/^Permissions/), "yolo");
     click(workerFramework("oncall")!);
     click(button(/^Save$/) as HTMLButtonElement);
@@ -681,41 +689,31 @@ describe("SuperAgentsPanel", () => {
     expect(save.mock.calls[0][0]).toMatchObject({ id: "sa_1", router_agent_id: "router" });
   });
 
-  it("offers only router agents as routers, and a Super Agent's own agents as neither", async () => {
-    vi.spyOn(api, "agentInstances").mockResolvedValue([
-      { id: "router", name: "Router", runtime_id: "codex", enabled: true, target_id: "local", source: "super_agent_router" } as never,
-      { id: "saw_1", name: "Managed", runtime_id: "dsh", enabled: true, target_id: "local", source: "super_agent" } as never,
-      { id: "coder", name: "Coder", runtime_id: "claudecode", enabled: true } as never,
-    ]);
-    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
-    renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "router");
-    const routerOptions = [...(control(/^Router agent/) as HTMLSelectElement).options].map((item) => item.textContent);
-    expect(routerOptions).toEqual(["Router (Codex)", "New router agent…"]);
-    click(button(/Add worker/) as HTMLButtonElement);
-    await until(() => hasOption("Coder (claudecode)"));
-    expect(hasOption("Managed (dsh)")).toBe(false);
-    expect(hasOption("Router (codex)")).toBe(false);
-  });
 
-  it("keeps an ordinary Agent a Super Agent already routes with, until it switches", async () => {
+
+
+  it("keeps an ordinary Agent an older agent routes with, read-only", async () => {
     vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, router_agent_id: "coder" }]);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
     renderPanel();
     await until(() => hasText("Fix build"));
     click(button(/^Edit$/));
-    await until(() => hasOption("Coder (an ordinary Agent, kept)"));
-    expect(control(/^Router agent/).value).toBe("coder");
-    expect(hasText("chosen before router agents existed")).toBe(true);
-    setValue(control(/^Router agent/), "router");
-    expect(hasOption("Coder (an ordinary Agent, kept)")).toBe(false);
+    await until(() => hasText("This agent routes with an older Agent"));
+    expect(hasText("Coder · claudecode")).toBe(true);
+    expect(() => control(/^Permissions/)).toThrow();
+    click(workerFramework("Codex")!);
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(api.saveSuperAgentRouter).not.toHaveBeenCalled();
+    expect(save.mock.calls[0][0]).toMatchObject({ router_agent_id: "coder" });
   });
 
   it("fills the routing rules from a template, replacing them only when asked", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
     renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "router");
-    const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
+    await until(() => valueOf(/^Framework/) === "codex");
+    const rules = () => control(/^Router prompt/) as HTMLTextAreaElement;
     click(button(/^Use template$/));
     await until(() => /^Take on:/.test(rules().value));
     expect(confirm).not.toHaveBeenCalled();
@@ -735,9 +733,8 @@ describe("SuperAgentsPanel", () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "__new_router__");
-    setValue(control(/^Name/), "Triage");
-    expect(hasText("Created when you save, as “Triage router”.")).toBe(true);
+    await until(() => valueOf(/^Framework/) === "codex");
+    setValue(control(/^Agent name/), "Triage");
     expect(picker().textContent).toBe("Default model");
     click(picker());
     await until(() => models().length > 0);
@@ -776,7 +773,7 @@ describe("SuperAgentsPanel", () => {
       capabilities: { ...codexSettings.capabilities, reasoning_efforts: efforts("low", "ultra"), service_tiers: efforts("default", "priority") },
     } as never);
     renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "__new_router__");
+    await until(() => valueOf(/^Framework/) === "codex");
     click(picker());
     await until(() => models().length > 0);
     expect(models()[0]).toBe("Default model");
@@ -792,7 +789,7 @@ describe("SuperAgentsPanel", () => {
       meta: { supported_models: ["acme-large", "acme-small"], supported_reasoning_efforts: ["low", "high"], supported_service_tiers: ["default", "fast"] },
     }]);
     renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "__new_router__");
+    await until(() => valueOf(/^Framework/) === "codex");
     click(picker());
     await until(() => models().length > 0);
     expect(models()).toEqual(["Default (acme-large)", "acme-large", "acme-small"]);
@@ -807,7 +804,7 @@ describe("SuperAgentsPanel", () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
     vi.spyOn(api, "frameworkRuntimeSettings").mockRejectedValue(new Error("not signed in"));
     renderPanel({ createRequested: true });
-    await until(() => control(/^Router agent/).value === "__new_router__");
+    await until(() => valueOf(/^Framework/) === "codex");
     click(picker());
     await until(() => hasText("Couldn't read the models: not signed in."));
     const input = container.querySelector<HTMLInputElement>(".model-picker-popover input")!;
@@ -831,8 +828,8 @@ describe("SuperAgentsPanel", () => {
     await until(() => button(/Create Super Agent/));
     click(button(/Create Super Agent/));
     await until(() => container.querySelector("[role=dialog]"));
-    setValue(control(/^Name/), "x");
-    await until(() => control(/^Router agent/).value === "router");
+    setValue(control(/^Agent name/), "x");
+    await until(() => valueOf(/^Framework/) === "codex");
     click(button(/^Save$/));
     await until(() => hasText("the router cannot use yolo"));
     expect(container.querySelector("[role=dialog]")).toBeTruthy();
@@ -900,9 +897,9 @@ describe("superAgentModel", () => {
     expect(hasText("Bound channel · Team bot")).toBe(true);
     expect(button(/^Delete$/)).toBeUndefined();
     click(button(/Edit workers and triggers/));
-    await until(() => hasText("This agent answers with its own framework"));
-    expect([...container.querySelectorAll("label.field span")].some((item) => item.textContent === "Router agent")).toBe(false);
-    expect(container.querySelector(".super-agent-section .super-agent-chip")?.textContent).toContain("Team bot");
+    await until(() => hasText("This agent answers with its pre-migration Agent settings"));
+    expect(() => control(/^Framework/)).toThrow();
+    expect([...container.querySelectorAll("[role=dialog] .super-agent-chip")].some((item) => item.textContent?.includes("Team bot"))).toBe(true);
     click(await until(() => workerFramework("Codex")));
     click(button(/Save/));
     await until(() => save.mock.calls.length > 0);

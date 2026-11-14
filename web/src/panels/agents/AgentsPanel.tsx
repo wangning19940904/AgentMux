@@ -18,7 +18,6 @@ import {
   isAgentPart,
   isReadOnlyAgent,
   readOnlyNoticeKey,
-  newAgent,
   ownerBadge,
   routeToolForRuntime,
   syncAgentConnectBindings,
@@ -31,6 +30,8 @@ import { AgentForm } from "./AgentForm";
 import { ChannelLogoGroup } from "./ChannelLogo";
 import { AgentAvatar } from "./AgentAvatar";
 import { RuntimeBadge } from "./RuntimeBadge";
+import { SuperAgentDrawer } from "./SuperAgentForm";
+import { newSuperAgent } from "../superAgentModel";
 import { confirmAction } from "../../components/ConfirmDialog";
 
 // An agent's workers, triggers and Tickets open over the Agents page.
@@ -62,6 +63,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     triggers.reload(), mcpServers.reload(), skills.reload(), tools.reload(), unified.reload(),
   ]);
   const [workAgentID, setWorkAgentID] = useState("");
+  // Every agent created here is a Super Agent; the Agent form only edits
+  // agents made before that.
+  const [superDraft, setSuperDraft] = useState<SuperAgent | null>(null);
+  const [superNotice, setSuperNotice] = useState("");
+  const [superBusy, setSuperBusy] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<AgentInstance | null>(null);
   const [selectedChannelIDs, setSelectedChannelIDs] = useState<string[]>([]);
@@ -141,13 +147,26 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const workAgent = unifiedItems.find((agent) => agent.id === workAgentID);
 
   const startNew = useCallback(() => {
-    setDrawerMode("create");
-    setDrawerDraft(newAgent(runtimeOptions));
-    setSelectedChannelIDs([]);
-    setSelectedTriggerIDs([]);
+    setSuperDraft(newSuperAgent());
+    setSuperNotice("");
     setNotice("");
     setNoticeIsError(false);
-  }, [runtimeOptions]);
+  }, []);
+
+  async function saveSuperAgent(prepare: () => Promise<SuperAgent>) {
+    setSuperBusy(true);
+    setSuperNotice("");
+    try {
+      await api.saveSuperAgent(await prepare());
+      await Promise.all([agents.reload(), unified.reload(), channels.reload()]);
+      setSuperDraft(null);
+      setNotice(t("agents.saved"));
+    } catch (error) {
+      setSuperNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSuperBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!createRequested) {
@@ -397,6 +416,17 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             </div>
           </aside>
         </div>
+      )}
+
+      {superDraft && (
+        <SuperAgentDrawer
+          draft={superDraft}
+          notice={superNotice}
+          busy={superBusy}
+          onChange={setSuperDraft}
+          onClose={() => { setSuperDraft(null); setSuperNotice(""); }}
+          onSave={(prepare) => void saveSuperAgent(prepare)}
+        />
       )}
 
       {workAgent && (
