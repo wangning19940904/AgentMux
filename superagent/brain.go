@@ -37,6 +37,7 @@ To have AgentMux act, end your reply with one block, holding one action or a JSO
 ` + actionClose + `
 - "accept" starts a ticket: worker_id from the roster, a short title, and instructions with everything the worker needs.
 - "attach" passes this message to an open ticket, with an optional note in "instructions"; "stop" stops one; both take "ticket_id".
+- "follow_up" wakes you later about this chat: give "in" (such as "30m", "18h" or "3d") or "at" (a time written like NOW below), and a "note" telling your later self what to check and do. Use it when you are waiting on someone or promised to check back, never to watch a worker. Your reply then is posted to this chat. "cancel_timer" withdraws one listed under TIMERS ON THIS THREAD, by its "timer_id".
 - "reason" is a short note for the operator's audit log.
 Name only workers on the roster and tickets listed below.
 `
@@ -103,7 +104,7 @@ func (s *Service) BrainFinished(ctx context.Context, brainID string, msg *core.M
 	s.recordEvent(trigger.SourceID, now)
 	decision.Reply = ""
 	if parseErr == nil && agent.Mode == core.SuperAgentModeAct {
-		parseErr = s.preflight(ctx, *agent, decision)
+		parseErr = s.preflight(ctx, *agent, trigger, decision)
 	}
 	if parseErr != nil {
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "brain asked for something AgentMux cannot carry out: "+parseErr.Error(), "")

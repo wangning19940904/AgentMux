@@ -64,6 +64,12 @@ type Store interface {
 	ListSuperAgentTickets(context.Context, string, int) ([]core.SuperAgentTicket, error)
 	ListSuperAgentThreadTickets(context.Context, string, string) ([]core.SuperAgentTicket, error)
 	ListSuperAgentTicketsByStatus(context.Context, ...string) ([]core.SuperAgentTicket, error)
+	UpsertSuperAgentTimer(context.Context, core.SuperAgentTimer) error
+	GetSuperAgentTimer(context.Context, string) (*core.SuperAgentTimer, error)
+	ListDueSuperAgentTimers(context.Context, time.Time, int) ([]core.SuperAgentTimer, error)
+	ListActiveSuperAgentTimers(context.Context, string) ([]core.SuperAgentTimer, error)
+	ListFinishedSuperAgentTimers(context.Context, string, time.Time, int) ([]core.SuperAgentTimer, error)
+	CountSuperAgentTimersFired(context.Context, string, time.Time) (int, error)
 	GetSuperAgentSourceState(context.Context, string) (string, error)
 	SetSuperAgentSourceState(context.Context, string, string, string) error
 	GetAgentInstance(context.Context, string) (*core.AgentInstance, error)
@@ -110,8 +116,11 @@ type Service struct {
 	now     func() time.Time
 	wake    chan struct{}
 
-	mu             sync.Mutex
-	asksMu         sync.Mutex
+	mu     sync.Mutex
+	asksMu sync.Mutex
+	// timersMu makes each change to a timer one step. It is taken after mu,
+	// never before it.
+	timersMu       sync.Mutex
 	running        map[string]context.CancelFunc
 	stopping       map[string]bool
 	evaluating     map[string]bool
@@ -161,6 +170,10 @@ type Activity struct {
 	// Machines are the other machines the agent may launch workers on.
 	Machines []core.SuperAgentMachineStatus `json:"machines"`
 	Sources  map[string]SourceHealth        `json:"sources"`
+	// Timers are the wake-ups the agent set for itself: those still set, then
+	// those that fired or were cancelled lately.
+	Timers       []core.SuperAgentTimer `json:"timers"`
+	TimerWarning string                 `json:"timer_warning,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -253,8 +266,12 @@ func (s *Service) notify() {
 	}
 }
 
-// Pass evaluates pending Triggers and starts queued Tickets once.
+// Pass fires due timers, evaluates pending Triggers and starts queued
+// Tickets once.
 func (s *Service) Pass(ctx context.Context) {
+	if err := s.fireDueTimers(ctx); err != nil && ctx.Err() == nil {
+		s.log.Error("super agent timer pass failed", "err", err)
+	}
 	if err := s.evaluatePending(ctx); err != nil && ctx.Err() == nil {
 		s.log.Error("super agent evaluation pass failed", "err", err)
 	}
@@ -393,7 +410,7 @@ func (s *Service) evaluate(ctx context.Context, trigger core.SuperAgentTrigger) 
 	if err == nil && agent.Mode == core.SuperAgentModeAct {
 		// Every action is checked before any is carried out, so a mistake
 		// in one never leaves the others half done.
-		if err = s.preflight(ctx, *agent, decision); err != nil {
+		if err = s.preflight(ctx, *agent, trigger, decision); err != nil {
 			err = decisionError{err}
 		}
 	}
@@ -452,6 +469,12 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
+	if trigger.Kind == core.SuperAgentTriggerTimer {
+		// Nobody is waiting for an answer to a follow-up, and its note is for
+		// the router, not for a worker.
+		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), trigger.TicketID)
+		return
+	}
 	if trigger.Kind == core.SuperAgentTriggerTicketUpdate {
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error()+"; sent the worker's report as it was", trigger.TicketID)
 		if agent.Mode == core.SuperAgentModeAct {
@@ -489,8 +512,19 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 // Ticket must belong to this Super Agent, and a post must go somewhere this
 // Super Agent already talks. A ref names a Ticket accepted earlier in the
 // same decision.
-func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, decision routerDecision) error {
+func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
 	refs := map[string]string{}
+	// The thread's and the agent's follow-ups, read when an action first
+	// needs them.
+	var timers *timerLedger
+	ledger := func() (*timerLedger, error) {
+		if timers != nil {
+			return timers, nil
+		}
+		var err error
+		timers, err = s.timerLedger(ctx, agent.ID, trigger.ThreadKey)
+		return timers, err
+	}
 	resolve := func(id string) (string, error) {
 		id = strings.TrimSpace(id)
 		if _, ok := refs[id]; ok {
@@ -538,6 +572,36 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, decision
 			if _, err := s.resolveDestination(ctx, agent, action.To, nil); err != nil {
 				return err
 			}
+		case actionFollowUp:
+			if _, err := followUpDue(action, s.now()); err != nil {
+				return err
+			}
+			if id := strings.TrimSpace(action.TicketID); id != "" {
+				status, err := resolve(id)
+				if err != nil {
+					return err
+				}
+				if status == core.SuperAgentTicketStopped {
+					return fmt.Errorf("ticket %s was stopped, so there is nothing to follow up on", id)
+				}
+			}
+			counts, err := ledger()
+			if err != nil {
+				return err
+			}
+			if err := counts.add(); err != nil {
+				return err
+			}
+		case actionCancelTimer:
+			timer, err := s.threadTimer(ctx, agent.ID, trigger.ThreadKey, action.TimerID)
+			if err != nil {
+				return err
+			}
+			counts, err := ledger()
+			if err != nil {
+				return err
+			}
+			counts.cancel(timer.ID)
 		}
 	}
 	return nil
@@ -644,6 +708,18 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 					posted = true
 					s.notePost(agent.ID, trigger.ThreadKey, trigger.SourceID, trigger.Reply, target, action.Text)
 				}
+			}
+		case actionFollowUp:
+			var timer core.SuperAgentTimer
+			if timer, err = s.setFollowUp(ctx, agent, trigger, action, resolve(action.TicketID)); err == nil {
+				reasons = append(reasons, fmt.Sprintf("set follow-up %s for %s", timer.ID, timer.DueAt.Format(time.RFC3339)))
+			}
+		case actionCancelTimer:
+			// preflight checked that the timer is this thread's. One that
+			// fired in the meantime is left alone.
+			var cancelled bool
+			if cancelled, err = s.cancelTimer(ctx, strings.TrimSpace(action.TimerID)); cancelled {
+				reasons = append(reasons, "cancelled follow-up "+strings.TrimSpace(action.TimerID))
 			}
 		}
 		if err != nil {
@@ -1020,6 +1096,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 		s.stopping[id] = true
 		cancel()
 	}
+	s.cancelTicketTimers(ctx, *ticket)
 	return nil
 }
 
@@ -1086,7 +1163,14 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	if err != nil {
 		return nil, err
 	}
-	activity := &Activity{Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Machines: s.machineStatuses(ctx, *agent), Sources: map[string]SourceHealth{}}
+	timers, timerWarning, err := s.activityTimers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	activity := &Activity{
+		Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Machines: s.machineStatuses(ctx, *agent),
+		Sources: map[string]SourceHealth{}, Timers: timers, TimerWarning: timerWarning,
+	}
 	s.mu.Lock()
 	for _, source := range agent.Sources {
 		activity.Sources[source.ID] = s.health[source.ID]

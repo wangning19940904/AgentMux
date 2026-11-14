@@ -105,8 +105,57 @@ func TestSuperAgentPersistence(t *testing.T) {
 		t.Fatalf("state=%q", state)
 	}
 
+	// Timer times are kept as whole seconds, so a due time with a fraction
+	// of a second still compares correctly as text.
+	timer := core.SuperAgentTimer{
+		ID: "tm1", SuperAgentID: "sa", Kind: core.SuperAgentTimerFollowUp, Status: core.SuperAgentTimerActive,
+		ThreadKey: "thread", SourceID: "src", Note: "look again", Reply: []byte(`{"to":"a@b.c"}`),
+		DueAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	later := timer
+	later.ID, later.ThreadKey, later.DueAt = "tm2", "other", now.Add(2*time.Hour)
+	for _, item := range []core.SuperAgentTimer{later, timer} {
+		if err := st.UpsertSuperAgentTimer(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if due, err := st.ListDueSuperAgentTimers(ctx, now.Add(time.Hour-time.Second), 10); err != nil || len(due) != 0 {
+		t.Fatalf("due early=%+v err=%v", due, err)
+	}
+	if due, err := st.ListDueSuperAgentTimers(ctx, now.Add(time.Hour+500*time.Millisecond), 10); err != nil || len(due) != 1 || due[0].ID != "tm1" || string(due[0].Reply) != `{"to":"a@b.c"}` {
+		t.Fatalf("due=%+v err=%v", due, err)
+	}
+	if active, err := st.ListActiveSuperAgentTimers(ctx, "sa"); err != nil || len(active) != 2 || active[0].ID != "tm1" {
+		t.Fatalf("active=%+v err=%v", active, err)
+	}
+	timer.Status, timer.FiredAt, timer.UpdatedAt = core.SuperAgentTimerDone, now.Add(time.Hour), now.Add(time.Hour)
+	if err := st.UpsertSuperAgentTimer(ctx, timer); err != nil {
+		t.Fatal(err)
+	}
+	if fired, err := st.GetSuperAgentTimer(ctx, "tm1"); err != nil || fired == nil || fired.Status != core.SuperAgentTimerDone || !fired.FiredAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("timer=%+v err=%v", fired, err)
+	}
+	if due, _ := st.ListDueSuperAgentTimers(ctx, now.Add(90*time.Minute), 10); len(due) != 0 {
+		t.Fatalf("a fired timer is still due: %+v", due)
+	}
+	if count, err := st.CountSuperAgentTimersFired(ctx, "sa", now); err != nil || count != 1 {
+		t.Fatalf("fired count=%d err=%v", count, err)
+	}
+	if count, _ := st.CountSuperAgentTimersFired(ctx, "sa", now.Add(2*time.Hour)); count != 0 {
+		t.Fatalf("fired since later=%d", count)
+	}
+	if finished, err := st.ListFinishedSuperAgentTimers(ctx, "sa", now, 10); err != nil || len(finished) != 1 || finished[0].ID != "tm1" {
+		t.Fatalf("finished=%+v err=%v", finished, err)
+	}
+	if missing, err := st.GetSuperAgentTimer(ctx, "nope"); missing != nil || err != nil {
+		t.Fatalf("missing=%+v err=%v", missing, err)
+	}
+
 	if err := st.DeleteSuperAgent(ctx, "sa"); err != nil {
 		t.Fatal(err)
+	}
+	if left, _ := st.ListActiveSuperAgentTimers(ctx, "sa"); len(left) != 0 {
+		t.Fatalf("timers outlived their agent: %+v", left)
 	}
 	if listed, _ := st.ListSuperAgents(ctx); len(listed) != 0 {
 		t.Fatalf("agents=%+v", listed)

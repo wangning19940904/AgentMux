@@ -925,6 +925,7 @@ export const api = {
   triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
+  cancelSuperAgentTimer: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/timers/cancel", { id }),
   superAgentGitHubSetup: () => getChecked<SuperAgentGitHubSetup>("/api/v1/super-agents/github/setup"),
   githubOperator: (apiBase = "") =>
     getChecked<GitHubOperator>(`/api/v1/super-agents/github/operator?api_base=${encodeURIComponent(apiBase)}`),

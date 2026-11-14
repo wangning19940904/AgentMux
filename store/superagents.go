@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
@@ -42,6 +43,7 @@ func (s *Store) DeleteSuperAgent(ctx context.Context, id string) error {
 	for _, query := range []string{
 		`DELETE FROM super_agent_tickets WHERE super_agent_id=?`,
 		`DELETE FROM super_agent_triggers WHERE super_agent_id=?`,
+		`DELETE FROM super_agent_timers WHERE super_agent_id=?`,
 		`DELETE FROM super_agent_source_state WHERE super_agent_id=?`,
 		`DELETE FROM super_agents WHERE id=?`,
 	} {
@@ -147,6 +149,70 @@ func (s *Store) ListSuperAgentTicketsByStatus(ctx context.Context, statuses ...s
 		out = append(out, items...)
 	}
 	return out, nil
+}
+
+// formatTimerTime writes a timer's times as whole seconds in UTC. Every value
+// then has the same width, so the text columns sort and compare as times.
+func formatTimerTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339)
+}
+
+func (s *Store) UpsertSuperAgentTimer(ctx context.Context, timer core.SuperAgentTimer) error {
+	data, err := json.Marshal(timer)
+	if err != nil {
+		return err
+	}
+	_, err = s.writer.ExecContext(ctx, `INSERT INTO super_agent_timers
+		(id,super_agent_id,thread_key,status,due_at,data,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET status=excluded.status,due_at=excluded.due_at,data=excluded.data,updated_at=excluded.updated_at`,
+		timer.ID, timer.SuperAgentID, timer.ThreadKey, timer.Status, formatTimerTime(timer.DueAt), string(data),
+		formatTimerTime(timer.CreatedAt), formatTimerTime(timer.UpdatedAt))
+	return err
+}
+
+func (s *Store) GetSuperAgentTimer(ctx context.Context, id string) (*core.SuperAgentTimer, error) {
+	return getSuperAgentRow[core.SuperAgentTimer](ctx, s, `SELECT data FROM super_agent_timers WHERE id=?`, id)
+}
+
+// ListDueSuperAgentTimers returns the active timers due at or before now,
+// the longest overdue first.
+func (s *Store) ListDueSuperAgentTimers(ctx context.Context, now time.Time, limit int) ([]core.SuperAgentTimer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT data FROM super_agent_timers WHERE status=? AND due_at<=?
+		ORDER BY due_at, id LIMIT ?`, core.SuperAgentTimerActive, formatTimerTime(now), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanSuperAgentRows[core.SuperAgentTimer](rows)
+}
+
+// ListActiveSuperAgentTimers returns an agent's timers that have yet to fire,
+// the soonest first.
+func (s *Store) ListActiveSuperAgentTimers(ctx context.Context, superAgentID string) ([]core.SuperAgentTimer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT data FROM super_agent_timers WHERE super_agent_id=? AND status=?
+		ORDER BY due_at, id`, superAgentID, core.SuperAgentTimerActive)
+	if err != nil {
+		return nil, err
+	}
+	return scanSuperAgentRows[core.SuperAgentTimer](rows)
+}
+
+// ListFinishedSuperAgentTimers returns an agent's timers that fired or were
+// cancelled since a time, the latest first.
+func (s *Store) ListFinishedSuperAgentTimers(ctx context.Context, superAgentID string, since time.Time, limit int) ([]core.SuperAgentTimer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT data FROM super_agent_timers WHERE super_agent_id=? AND status<>? AND updated_at>=?
+		ORDER BY updated_at DESC, id LIMIT ?`, superAgentID, core.SuperAgentTimerActive, formatTimerTime(since), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanSuperAgentRows[core.SuperAgentTimer](rows)
+}
+
+// CountSuperAgentTimersFired counts an agent's timers that fired since a time.
+func (s *Store) CountSuperAgentTimersFired(ctx context.Context, superAgentID string, since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM super_agent_timers WHERE super_agent_id=? AND status=? AND updated_at>=?`,
+		superAgentID, core.SuperAgentTimerDone, formatTimerTime(since)).Scan(&count)
+	return count, err
 }
 
 // GetSuperAgentSourceState returns a Source's read position, such as an IMAP

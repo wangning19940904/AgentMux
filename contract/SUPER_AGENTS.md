@@ -86,10 +86,65 @@ When no available worker can do the work, the router tells the sender. An action
   ```
 
   `accept` starts a Ticket, `attach` passes the event to a Ticket on the thread with the
-  router's optional note, and `stop` stops one. `reason` goes to the audit log. A
-  JSON-only answer in the form routers used before is still read as an action.
+  router's optional note, and `stop` stops one. `follow_up` and `cancel_timer` set
+  and withdraw a wake-up; see [Follow-ups](#follow-ups). `reason` goes to the audit
+  log. A JSON-only answer in the form routers used before is still read as an action.
 - **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
   keeps. A read-only router can read it but not change it.
+
+## Follow-ups
+
+An agent can act because time passed. The router sets a follow-up for itself, and
+AgentMux wakes it on the same thread when the follow-up is due:
+
+```
+<agentmux-action>
+{"action":"follow_up","in":"18h","note":"Check whether Li approved the migration.","ticket_id":"tkt_…"}
+</agentmux-action>
+```
+
+- **When.** `in` takes minutes, hours or days (`30m`, `18h`, `3d`, `1d12h`). `at`
+  takes a time with an offset, such as `2026-11-15T09:00:00+08:00`; a time without
+  one is read in the daemon's zone. Exactly one is given. Every event tells the
+  router the daemon's time as `NOW`.
+- **What.** `note` is required: it is what the router reads when it is woken.
+  `ticket_id` is optional and names the Ticket the follow-up is about.
+- **A due follow-up is an event**, never a turn of its own. AgentMux stores it as a
+  Trigger of kind `timer` on the thread it was set on, so it runs in that thread's
+  router conversation, in order with the thread's other events, and the router's
+  reply goes where the thread's replies go. An empty reply sends nothing. A
+  follow-up that fires more than two minutes late says how late it is.
+- **Still set.** Each event lists the follow-ups still set on its thread under
+  `TIMERS ON THIS THREAD`. `{"action":"cancel_timer","timer_id":"stm_…"}` withdraws
+  one of them; a timer on another thread is refused, and one that already fired or
+  was cancelled is left as it is.
+- **Fired once.** A daemon that stops while a follow-up fires stores no second
+  event when it starts again. Follow-ups that came due while the daemon was down,
+  or while the agent was disabled, fire late.
+- **Stopping a Ticket** cancels the follow-ups about it.
+- **Observe mode** records "would follow_up" and sets nothing.
+- **The Console** lists an agent's follow-ups between its Tickets and its events,
+  once it has any: those still set, each with a cancel button, then those that
+  fired or were cancelled in the last 72 hours.
+- **When the router fails** on a follow-up after its retries, the event is recorded
+  as failed. Nothing is sent, and the note is not passed to a worker.
+- **In a chat**, a brain with a worker policy sets follow-ups the same way. The
+  follow-up reaches it as a router turn outside the chat's conversation, like a
+  ticket update, and its reply is posted in the chat's thread.
+
+The host limits them, whatever the router asks for:
+
+| Limit | Value |
+| --- | --- |
+| Follow-ups set on one thread | 5 |
+| Follow-ups set by one agent | 50 |
+| Shortest delay | 1 minute |
+| Longest delay | 90 days |
+| Note length | 2,000 characters; longer notes are cut |
+| Follow-ups fired per agent in 24 hours | 200; further ones wait, and the activity response says so in `timer_warning` |
+
+A follow-up may set another, which is how "check every hour until it merges"
+works. The 24-hour limit is what bounds such a chain.
 
 ## What the host enforces
 
@@ -475,7 +530,7 @@ These routes are for Console administrators and are closed to member accounts.
 | Method and path | Purpose |
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
-| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health |
+| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, and `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
 | `POST /api/v1/super-agents/trigger` | Send a request from the Console |
@@ -485,6 +540,7 @@ These routes are for Console administrators and are closed to member accounts.
 | `POST /api/v1/super-agents/github/invite` | Local Console only: invite the agent to a repository as the operator (unless `invite` is false), then accept as the agent |
 | `POST /api/v1/super-agents/github/account` | The GitHub login, classic scopes and reachable repositories of a token in the body, or of a saved Source's token when the body sends it redacted with `super_agent_id` and `source_id` |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
+| `POST /api/v1/super-agents/timers/cancel` | Cancel a follow-up by `id`; `409` when it already fired or was cancelled |
 
 ## DeepSeek Harness runtime
 
@@ -514,5 +570,9 @@ the Agent's environment or in `$DSH_HOME/.env`.
 
 - One daemon owns a Super Agent's Tickets; running several against one database is
   not supported.
+- An agent with no worker policy gets no brief in its chats, so it cannot set
+  follow-ups there.
+- Recurring schedules do not go through follow-ups: an Agent's cron schedules still
+  run as chat turns.
 - Images and attachments on incoming messages are not passed to the router or workers.
 - Choosing a DSH model per Agent is not supported yet. DSH uses its configured default.

@@ -1,4 +1,4 @@
-import { Bot, Play, Plus, RefreshCw, RotateCcw, Square, Trash2 } from "lucide-react";
+import { Bot, Play, Plus, RefreshCw, RotateCcw, Square, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { SuperAgent } from "../api";
@@ -177,6 +177,33 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   ))}
                 </div>
 
+                {((activity.data?.timers ?? []).length > 0 || activity.data?.timer_warning) && (
+                  <>
+                    <h4>{t("superAgents.timers")}</h4>
+                    {activity.data?.timer_warning && <div className="warning super-agent-source-warning" role="status">{activity.data.timer_warning}</div>}
+                    <div className="orchestration-task-list">
+                      {(activity.data?.timers ?? []).map((timer) => {
+                        const about = timer.ticket_id ? activity.data?.tickets.find((ticket) => ticket.id === timer.ticket_id)?.title : "";
+                        return (
+                          <article key={timer.id}>
+                            <header>
+                              <strong>{timer.note}</strong>
+                              <span className="control-row">
+                                <span className={`status-badge status-${timerStatusClass(timer.status)}`}>{t(`superAgents.timer.${timer.status}`)}</span>
+                                {timer.status === "active" && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => void run("cancel-timer", () => api.cancelSuperAgentTimer(timer.id))}><X size={13} /> {t("common.cancel")}</button>}
+                              </span>
+                            </header>
+                            <small>{timer.thread_key}{about ? ` · ${about}` : ""}</small>
+                            {timer.status === "active" && <time>{t("superAgents.timerDue")}: {time(timer.due_at)}</time>}
+                            {timer.status === "done" && <time>{t("superAgents.timerFired")}: {time(timer.fired_at || timer.updated_at)}</time>}
+                            {timer.status === "cancelled" && <time>{t("superAgents.timerCancelled")}: {time(timer.updated_at)}</time>}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
                 <h4>{t("superAgents.triggers")}</h4>
                 <div className="orchestration-task-list">
                   {(activity.data?.triggers ?? []).length === 0 && <p className="muted">{t("superAgents.noTriggers")}</p>}
@@ -217,6 +244,10 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
 
 function ticketStatusClass(status: string) {
   return { queued: "queued", running: "running", ready: "succeeded", failed: "failed", stopped: "cancelled" }[status] ?? status;
+}
+
+function timerStatusClass(status: string) {
+  return { active: "queued", done: "succeeded", cancelled: "cancelled" }[status] ?? status;
 }
 
 function triggerStatusClass(disposition: string) {

@@ -1611,12 +1611,31 @@ export interface FeishuAddBotResult {
   pending?: boolean;
 }
 
+// SuperAgentTimer is a wake-up an agent set for itself on a thread. A
+// follow-up is done once it has fired.
+export interface SuperAgentTimer {
+  id: string;
+  kind: string;
+  status: "active" | "done" | "cancelled";
+  thread_key: string;
+  ticket_id?: string;
+  note: string;
+  due_at: string;
+  fired_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
   workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
   machines?: SuperAgentMachineStatus[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
+  // Timers still set come first, then those that fired or were cancelled
+  // lately. timer_warning says when the daily limit is holding due ones back.
+  timers?: SuperAgentTimer[];
+  timer_warning?: string;
 }
 
 export interface Orchestration {
