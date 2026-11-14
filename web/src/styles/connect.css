@@ -1472,9 +1472,79 @@
   min-width: 720px;
 }
 
-.framework-table th:nth-child(1) { width: 36%; }
-.framework-table th:nth-child(2) { width: 22%; }
-.framework-table th:nth-child(3) { width: 42%; }
+.framework-table th:nth-child(1) { width: 24%; }
+.framework-table th:nth-child(2) { width: 20%; }
+.framework-table th:nth-child(3) { width: 22%; }
+.framework-table th:nth-child(4) { width: 34%; }
+
+/* A framework's header row, followed by one row per machine it is on. */
+.framework-table .framework-group-row td {
+  padding: 14px 14px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+}
+
+.framework-table tbody .framework-group-row:first-child td {
+  border-top: 0;
+}
+
+.framework-group-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.framework-group-copy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.framework-group-copy strong {
+  font-size: 14px;
+}
+
+.framework-group-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.framework-group-head > .ghost-action {
+  white-space: nowrap;
+}
+
+.framework-table .framework-instance-row td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.framework-instance-row .framework-machine-cell {
+  padding-left: 52px;
+}
+
+.framework-machine-name {
+  display: block;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.framework-instance-row.outdated .framework-version-copy > strong {
+  color: var(--amber, #a16207);
+}
+
+.framework-account-cell .framework-account {
+  display: flex;
+}
 
 .framework-catalog-header > div,
 .framework-meta-tags,
@@ -2119,6 +2189,23 @@
   .framework-row-actions {
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+
+  .framework-table .framework-group-row {
+    display: block;
+  }
+
+  .framework-table .framework-group-row td {
+    display: block;
+    padding: 14px 16px 10px;
+  }
+
+  .framework-group-summary {
+    margin-left: 0;
+  }
+
+  .framework-instance-row .framework-machine-cell {
+    padding-left: 0;
   }
 
   .cli-auth-prompt {

@@ -227,4 +227,36 @@ describe("install settings", () => {
     await mountPanel();
     expect(button(container, "安装设置").disabled).toBe(true);
   });
+
+  it("lists every machine's version and updates only the outdated ones of a framework", async () => {
+    vi.mocked(activeMachineScope).mockReturnValue("all" as ReturnType<typeof activeMachineScope>);
+    vi.mocked(api.frameworks).mockResolvedValue({
+      prereqs: { node: true, npm: true },
+      frameworks: [
+        { ...dsh, installed: true, version: "0.2.0", target_id: "home", target_name: "home-macmini" },
+        { ...dsh, installed: true, version: "0.2.1", target_id: "local", target_name: "this-mac" },
+      ],
+    });
+    vi.mocked(api.checkFrameworkUpdate).mockImplementation(async (_kind, targetID) => (
+      targetID === "home"
+        ? { kind: "dsh", installed: true, update_available: true, current_version: "0.2.0", latest_version: "0.2.1" }
+        : { kind: "dsh", installed: true, update_available: false, latest_version: "0.2.1" }
+    ));
+    vi.mocked(api.installFramework).mockResolvedValue({ kind: "dsh", action: "update", ok: true });
+    await act(async () => { root.unmount(); });
+    await mountPanel();
+
+    const rows = Array.from(container.querySelectorAll<HTMLElement>(".framework-instance-row"));
+    expect(rows.map((row) => row.querySelector(".framework-machine-name")?.textContent)).toEqual(["本机", "home-macmini"]);
+    expect(rows[0].textContent).toContain("v0.2.1");
+    expect(rows[1].textContent).toContain("v0.2.0");
+    expect(rows[1].className).toContain("outdated");
+    const header = container.querySelector<HTMLElement>(".framework-group-row")!;
+    expect(header.textContent).toContain("DeepSeek Harness");
+    expect(header.textContent).toContain("2 台机器");
+
+    await click(button(header, "更新 1 台"));
+    expect(api.installFramework).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.installFramework).mock.calls[0][4]).toBe("home");
+  });
 });
