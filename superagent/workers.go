@@ -71,6 +71,10 @@ type Fleet struct {
 	Invoker core.Invoker
 	Agents  AgentLookup
 	Hosts   HostDialer
+	// Relay reaches machines linked to this machine's hub that this machine
+	// cannot reach itself.
+	Relay HubRelay
+	relay relayCache
 }
 
 func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error) {
@@ -139,19 +143,31 @@ func (f *Fleet) Status(ctx context.Context, worker core.SuperAgentWorker) core.S
 }
 
 func (f *Fleet) remoteClient(hostID string) (remote.Host, *http.Client, error) {
-	if f.Hosts == nil {
-		return remote.Host{}, nil, errors.New("remote SSH control is unavailable")
+	var uplink http.RoundTripper
+	if f.Relay != nil {
+		uplink = f.Relay.Uplink()
 	}
-	host, ok := f.Hosts.Get(hostID)
-	if !ok {
+	var host remote.Host
+	known := false
+	if f.Hosts != nil {
+		host, known = f.Hosts.Get(hostID)
+	}
+	if !known {
+		if uplink != nil {
+			if name, ok := f.relayDevices()[hostID]; ok {
+				return relayedHost(hostID, name), &http.Client{Transport: relayTransport{hostID: hostID, uplink: uplink}}, nil
+			}
+		}
+		if f.Hosts == nil {
+			return remote.Host{}, nil, errors.New("remote SSH control is unavailable")
+		}
 		return remote.Host{}, nil, fmt.Errorf("remote host %q not found", hostID)
 	}
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return f.Hosts.DialContext(ctx, hostID, network)
-		},
-		DisableKeepAlives: true,
+	var transport http.RoundTripper = f.directTransport(hostID)
+	if uplink != nil && host.Kind == remote.KindLink {
+		// A device this machine knows of but is not connected to, as on a
+		// standby hub, is reached through the hub.
+		transport = fallbackTransport{direct: transport, relay: relayTransport{hostID: hostID, uplink: uplink}}
 	}
 	return host, &http.Client{Transport: transport}, nil
 }

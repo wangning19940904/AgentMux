@@ -82,6 +82,12 @@ type ReportSink interface {
 
 type deviceContextKey struct{}
 
+// WithDeviceID marks ctx as a request up the named device's link, as the hub
+// does for every stream a device opens.
+func WithDeviceID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, deviceContextKey{}, id)
+}
+
 // DeviceID returns the device whose link a request arrived on. The link
 // authenticated it, so a handler needs no further credential.
 func DeviceID(ctx context.Context) string {

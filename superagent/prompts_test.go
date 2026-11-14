@@ -8,15 +8,6 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-func partVersion(t *testing.T, id string) string {
-	t.Helper()
-	part, ok := promptPart(id)
-	if !ok {
-		t.Fatalf("no prompt part %q", id)
-	}
-	return part.Version
-}
-
 func TestPromptPartsAreListedWithTheirDefaults(t *testing.T) {
 	seen := map[string]bool{}
 	for _, part := range PromptParts() {

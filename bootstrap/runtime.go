@@ -140,7 +140,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 	superAgents := superagent.New(superagent.Options{
 		Store: superAgentStore, Invoker: connect, Log: log,
-		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts()},
+		Workers:          &superagent.Fleet{Invoker: connect, Agents: st, Hosts: srv.RemoteHosts(), Relay: srv.HubRelay()},
 		Replies:          &superagent.Replies{Chats: engine},
 		Mail:             &superagent.IMAPClient{},
 		GitHub:           &superagent.GitHubClient{},

@@ -484,14 +484,15 @@ func (s *Service) ReleaseHostedWorkers(ctx context.Context, ownerID string) (int
 // --- the Fleet's side: calling another machine ---
 
 func (f *Fleet) MachineName(hostID string) (string, bool) {
-	if f.Hosts == nil {
-		return "", false
+	if f.Hosts != nil {
+		if host, ok := f.Hosts.Get(hostID); ok {
+			return firstNonEmpty(host.Name, hostID), true
+		}
 	}
-	host, ok := f.Hosts.Get(hostID)
-	if !ok {
-		return "", false
+	if name, ok := f.relayDevices()[hostID]; ok {
+		return firstNonEmpty(name, hostID), true
 	}
-	return firstNonEmpty(host.Name, hostID), true
+	return "", false
 }
 
 // remoteJSON calls a machine's API and decodes its answer.

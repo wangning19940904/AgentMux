@@ -79,48 +79,6 @@ type decisionError struct{ err error }
 func (e decisionError) Error() string { return e.err.Error() }
 func (e decisionError) Unwrap() error { return e.err }
 
-func (d routerDecision) summary() string {
-	var parts []string
-	for _, action := range d.Actions {
-		part := "would " + action.Action
-		if action.WorkerID != "" {
-			part += " worker " + action.WorkerID
-		}
-		if action.TicketID != "" {
-			part += " ticket " + action.TicketID
-		}
-		if action.To != "" {
-			part += " to " + action.To
-		}
-		if action.In != "" {
-			part += " in " + action.In
-		}
-		if action.At != "" {
-			part += " at " + action.At
-		}
-		if action.TimerID != "" {
-			part += " timer " + action.TimerID
-		}
-		if len(action.DependsOn) > 0 {
-			part += " after " + strings.Join(action.DependsOn, ", ")
-		}
-		if action.Reason != "" {
-			part += " (" + action.Reason + ")"
-		}
-		parts = append(parts, part)
-	}
-	if len(parts) == 0 {
-		parts = append(parts, "would take no action")
-		if d.Reason != "" {
-			parts[0] += " (" + d.Reason + ")"
-		}
-	}
-	if reply := strings.TrimSpace(d.Reply); reply != "" {
-		parts = append(parts, fmt.Sprintf("reply %q", truncateRunes(reply, 300)))
-	}
-	return strings.Join(parts, "; ")
-}
-
 // routerContext is what the router is shown besides the event.
 type routerContext struct {
 	Memory  string

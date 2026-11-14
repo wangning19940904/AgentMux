@@ -645,3 +645,20 @@ func writeSuperAgentError(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	}
 }
+
+// HubRelay is this machine's link to its hub, through which its agents reach
+// the other machines linked to the hub.
+func (s *Server) HubRelay() superagent.HubRelay { return nodeRelay{s} }
+
+type nodeRelay struct{ s *Server }
+
+func (r nodeRelay) Uplink() http.RoundTripper {
+	if r.s.node == nil {
+		return nil
+	}
+	client := r.s.node.uplink()
+	if client == nil {
+		return nil
+	}
+	return client.Transport
+}
