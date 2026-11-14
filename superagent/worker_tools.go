@@ -1,6 +1,7 @@
 package superagent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,6 +11,9 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // Tools a worker can use besides reading and writing code. The router reads
@@ -26,6 +30,9 @@ const workerToolsPath = "/api/v1/super-agents/workers/tools"
 // tools its workers there can use.
 type WorkerTools struct {
 	Runtimes map[string][]string `json:"runtimes"`
+	// Notes say, for each framework and tool, how a worker reaches it, so a
+	// worker that is given such work knows what to use.
+	Notes map[string]map[string]string `json:"notes,omitempty"`
 	// Desktop says a person's desktop session is open on the machine, which
 	// computer use needs.
 	Desktop bool `json:"desktop"`
@@ -56,22 +63,46 @@ func DetectWorkerTools(runtimes []string) WorkerTools {
 }
 
 func (p toolProbe) detect(runtimes []string) WorkerTools {
-	result := WorkerTools{Runtimes: map[string][]string{}, Desktop: p.desktop()}
-	sharedBrowser := slices.ContainsFunc(browserCLIs, func(name string) bool {
-		_, err := p.lookPath(name)
-		return err == nil
-	})
+	result := WorkerTools{Runtimes: map[string][]string{}, Notes: map[string]map[string]string{}, Desktop: p.desktop()}
+	browserCLI := ""
+	for _, name := range browserCLIs {
+		if _, err := p.lookPath(name); err == nil {
+			browserCLI = name
+			break
+		}
+	}
 	for _, runtimeID := range runtimes {
 		var tools []string
+		notes := map[string]string{}
 		names := p.mcpServers(runtimeID)
-		if sharedBrowser || slices.ContainsFunc(names, browserToolName.MatchString) {
-			tools = append(tools, WorkerToolBrowser)
+		slices.Sort(names)
+		var browsers []string
+		for _, name := range names {
+			if browserToolName.MatchString(name) {
+				browsers = append(browsers, "the "+name+" MCP server")
+			}
 		}
-		if result.Desktop && slices.ContainsFunc(names, computerToolName.MatchString) {
-			tools = append(tools, WorkerToolComputerUse)
+		if browserCLI != "" {
+			browsers = append(browsers, "the "+browserCLI+" command-line tool (run `"+browserCLI+" --help` first)")
+		}
+		if len(browsers) > 0 {
+			tools = append(tools, WorkerToolBrowser)
+			notes[WorkerToolBrowser] = strings.Join(browsers, ", or ")
+		}
+		if result.Desktop {
+			var desktops []string
+			for _, name := range names {
+				if computerToolName.MatchString(name) {
+					desktops = append(desktops, "the "+name+" MCP server")
+				}
+			}
+			if len(desktops) > 0 {
+				tools = append(tools, WorkerToolComputerUse)
+				notes[WorkerToolComputerUse] = strings.Join(desktops, ", or ")
+			}
 		}
 		if len(tools) > 0 {
-			result.Runtimes[runtimeID] = tools
+			result.Runtimes[runtimeID], result.Notes[runtimeID] = tools, notes
 		}
 	}
 	return result
@@ -105,7 +136,13 @@ func (p toolProbe) mcpServers(runtimeID string) []string {
 	case "codex":
 		var names []string
 		for _, match := range codexMCPHeader.FindAllSubmatch(read(".codex", "config.toml"), -1) {
-			names = append(names, strings.TrimSpace(string(match[2])))
+			name := strings.TrimSpace(string(match[2]))
+			if match[1] == nil || len(match[1]) == 0 {
+				name, _, _ = strings.Cut(name, ".") // [mcp_servers.x.env] belongs to x
+			}
+			if !slices.Contains(names, name) {
+				names = append(names, name)
+			}
 		}
 		return names
 	case "traecli":
@@ -129,4 +166,57 @@ func desktopSession() bool {
 		return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
 	}
 	return false
+}
+
+// toolNotesLine tells a worker which tools its machine gives it and how to
+// reach them, or "" when it has none.
+func toolNotesLine(notes map[string]string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, tool := range []string{WorkerToolBrowser, WorkerToolComputerUse} {
+		if how := notes[tool]; how != "" {
+			label := map[string]string{WorkerToolBrowser: "a web browser", WorkerToolComputerUse: "this machine's desktop"}[tool]
+			parts = append(parts, "for "+label+", use "+how)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "TOOLS ON YOUR MACHINE: " + strings.Join(parts, "; ") + ". Prefer these to other browser or desktop tools your framework may list, which may not work here."
+}
+
+// workerToolNotes finds how the worker an action names reaches its tools:
+// on this machine, or by asking the machine the worker runs on.
+func (s *Service) workerToolNotes(ctx context.Context, agent core.SuperAgent, workerID string) map[string]string {
+	runtimeID, pathID, ok := parseAutoWorkerID(workerID)
+	if !ok {
+		return nil
+	}
+	hostID := ""
+	if pathID != "" {
+		machine, listed := agentMachine(agent, pathID)
+		if !listed {
+			return nil
+		}
+		hostID = machine.HostID
+	}
+	if hostID == "" {
+		if s.detectTools == nil {
+			return nil
+		}
+		return s.detectTools([]string{runtimeID}).Notes[runtimeID]
+	}
+	tooled, ok := s.machineFleet().(MachineToolsFleet)
+	if !ok {
+		return nil
+	}
+	toolsCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	tools, err := tooled.Tools(toolsCtx, hostID)
+	if err != nil {
+		return nil
+	}
+	return tools.Notes[runtimeID]
 }

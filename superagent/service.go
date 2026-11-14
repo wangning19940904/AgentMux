@@ -758,6 +758,10 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 	if base == "" && len(action.DependsOn) == 1 {
 		base = action.DependsOn[0]
 	}
+	background := s.ticketBackground(ctx, agent.ID, action.DependsOn, base)
+	if line := toolNotesLine(s.workerToolNotes(ctx, agent, action.WorkerID)); line != "" {
+		background = append(background, line)
+	}
 	now := s.now().UTC()
 	id := "tkt_" + uuid.NewString()
 	title := strings.TrimSpace(action.Title)
@@ -768,7 +772,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		ID: id, SuperAgentID: agent.ID, SourceID: trigger.SourceID, SourceKind: trigger.SourceKind,
 		ThreadKey: trigger.ThreadKey, TriggerID: trigger.ID, Title: title, Actor: trigger.Actor,
 		Worker: worker, ConversationID: "superagent-" + id, Status: core.SuperAgentTicketQueued,
-		Inputs:    []string{workerAssignment(agent, trigger, action, s.ticketBackground(ctx, agent.ID, action.DependsOn, base))},
+		Inputs:    []string{workerAssignment(agent, trigger, action, background)},
 		Reply:     trigger.Reply,
 		DependsOn: action.DependsOn, BaseTicket: base,
 		CreatedAt: now, UpdatedAt: now,

@@ -122,3 +122,48 @@ func TestRosterListsTheToolsEachMachineReports(t *testing.T) {
 		t.Fatalf("the router is not told what tools mean")
 	}
 }
+
+func TestNotesSayHowAWorkerReachesItsTools(t *testing.T) {
+	home := t.TempDir()
+	writeHomeFile(t, home, ".codex/config.toml", "[mcp_servers.node_repl]\ncommand = \"x\"\n[mcp_servers.node_repl.env]\nA = \"1\"\n[mcp_servers.chrome-devtools]\n[mcp_servers.chrome-devtools.env]\n")
+	probe := toolProbe{home: home, desktop: func() bool { return false }, lookPath: func(name string) (string, error) {
+		if name == "agent-browser" {
+			return "/bin/agent-browser", nil
+		}
+		return "", errors.New("not found")
+	}}
+	if names := probe.mcpServers("codex"); !slices.Equal(names, []string{"node_repl", "chrome-devtools"}) {
+		t.Fatalf("a server's sub-tables are not servers of their own: %v", names)
+	}
+	notes := probe.detect([]string{"codex"}).Notes["codex"]
+	if !strings.Contains(notes[WorkerToolBrowser], "chrome-devtools MCP server") || !strings.Contains(notes[WorkerToolBrowser], "agent-browser --help") {
+		t.Fatalf("notes = %v", notes)
+	}
+	line := toolNotesLine(notes)
+	if !strings.HasPrefix(line, "TOOLS ON YOUR MACHINE: for a web browser, use the chrome-devtools MCP server") {
+		t.Fatalf("line = %q", line)
+	}
+	if toolNotesLine(nil) != "" {
+		t.Fatal("a worker without tools gets no line")
+	}
+}
+
+func TestAWorkerIsToldHowToReachItsMachinesBrowser(t *testing.T) {
+	h := newHarness(t)
+	stub := toolMachineStub{machineStub: h.withMachines(), tools: map[string]WorkerTools{
+		"dev_1": {Runtimes: map[string][]string{"dsh": {WorkerToolBrowser}}, Notes: map[string]map[string]string{"dsh": {WorkerToolBrowser: "the agent-browser command-line tool"}}},
+	}}
+	h.service.workers = stub
+	if line := toolNotesLine(h.service.workerToolNotes(context.Background(), h.agent, "auto:dsh@dev_1")); !strings.Contains(line, "agent-browser command-line tool") {
+		t.Fatalf("remote worker line = %q", line)
+	}
+	h.service.detectTools = func(runtimes []string) WorkerTools {
+		return WorkerTools{Notes: map[string]map[string]string{runtimes[0]: {WorkerToolBrowser: "the playwright MCP server"}}}
+	}
+	if line := toolNotesLine(h.service.workerToolNotes(context.Background(), h.agent, "auto:codex")); !strings.Contains(line, "playwright MCP server") {
+		t.Fatalf("local worker line = %q", line)
+	}
+	if notes := h.service.workerToolNotes(context.Background(), h.agent, "auto:dsh@nowhere"); notes != nil {
+		t.Fatalf("an unlisted directory has no notes: %v", notes)
+	}
+}
