@@ -81,12 +81,15 @@ type SuperAgent struct {
 	Description string `json:"description,omitempty"`
 	// RouterRuntime names an installed framework to route with. The host then
 	// creates the router Agent, and RouterAgentID records which one it is.
-	RouterRuntime  string             `json:"router_runtime,omitempty"`
-	RouterAgentID  string             `json:"router_agent_id"`
-	RouterPrompt   string             `json:"router_prompt,omitempty"`
-	Mode           string             `json:"mode"`
-	MaxConcurrency int                `json:"max_concurrency"`
-	Workers        []SuperAgentWorker `json:"workers"`
+	RouterRuntime string `json:"router_runtime,omitempty"`
+	RouterAgentID string `json:"router_agent_id"`
+	RouterPrompt  string `json:"router_prompt,omitempty"`
+	// Prompts are the operator's own text for built-in prompt parts, by part
+	// id. A part without one follows the built-in default.
+	Prompts        map[string]SuperAgentPrompt `json:"prompts,omitempty"`
+	Mode           string                      `json:"mode"`
+	MaxConcurrency int                         `json:"max_concurrency"`
+	Workers        []SuperAgentWorker          `json:"workers"`
 	// AutoWorkers lets the router launch a worker for a Ticket when none on the
 	// roster suits it. WorkerRuntimes are the frameworks it may launch one with,
 	// and default to the router's. AutoWorkerDir and AutoWorkerApprovalMode are
@@ -104,6 +107,14 @@ type SuperAgent struct {
 	Enabled        bool                `json:"enabled"`
 	CreatedAt      time.Time           `json:"created_at"`
 	UpdatedAt      time.Time           `json:"updated_at"`
+}
+
+// SuperAgentPrompt is an operator's text for one built-in prompt part. Base
+// names the version of the default it was written against, so the Console can
+// say when the default has changed since.
+type SuperAgentPrompt struct {
+	Text string `json:"text"`
+	Base string `json:"base,omitempty"`
 }
 
 // SuperAgentWorker is one Agent the router may assign work to. An empty HostID

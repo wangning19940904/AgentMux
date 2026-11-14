@@ -1446,6 +1446,8 @@ export interface SuperAgent {
   router_runtime?: string;
   router_agent_id: string;
   router_prompt?: string;
+  // The operator's own text for built-in prompt parts, by part id.
+  prompts?: Record<string, SuperAgentPrompt>;
   mode: "act" | "observe";
   max_concurrency: number;
   workers: SuperAgentWorker[];
@@ -1458,6 +1460,25 @@ export interface SuperAgent {
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+// An operator's text for one built-in prompt part. base is the version of the
+// default it was written against.
+export interface SuperAgentPrompt {
+  text: string;
+  base?: string;
+}
+
+// One built-in piece of what an agent's router, chat brain or workers are told.
+// text is the default; an agent may carry its own text for an editable part,
+// and that text must keep the placeholders listed.
+export interface SuperAgentPromptPart {
+  id: string;
+  role: "router" | "chat" | "worker";
+  editable: boolean;
+  placeholders?: string[];
+  text: string;
+  version: string;
 }
 
 // A router agent is made only to route: the host runs it read-only and gives it

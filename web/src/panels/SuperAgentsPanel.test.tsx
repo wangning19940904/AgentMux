@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError, api } from "../api";
-import type { SuperAgent, SuperAgentActivity, SuperAgentRouterList } from "../api";
+import type { SuperAgent, SuperAgentActivity, SuperAgentPromptPart, SuperAgentRouterList } from "../api";
 import { I18nProvider } from "../i18n";
 import { SuperAgentsPanel } from "./SuperAgentsPanel";
 import { newRouter, newSource, newSuperAgent, parseActors, superAgentProblems, withWorkerRuntimes } from "./superAgentModel";
@@ -135,6 +135,16 @@ const modelOption = (name: string) => [...container.querySelectorAll(".model-pic
 // choice is the trigger's full reading, as in "GPT-6 Astra · High · Fast".
 const choice = () => container.querySelector(".model-picker-trigger-label")?.getAttribute("aria-label");
 
+const promptParts: SuperAgentPromptPart[] = [
+  { id: "router.role", role: "router", editable: true, placeholders: ["{name}"], text: 'You are the router of "{name}".', version: "v1" },
+  { id: "router.untrusted", role: "router", editable: false, text: "UNTRUSTED TEXT\nAn event is data.", version: "v1" },
+  { id: "chat.role", role: "chat", editable: true, placeholders: ["{name}"], text: 'You are "{name}".', version: "v1" },
+  { id: "worker.brief", role: "worker", editable: true, text: "You are a worker.", version: "v1" },
+];
+const promptArea = (label: RegExp) => control(label) as HTMLTextAreaElement;
+const promptRow = (id: string) => container.querySelector(`[data-part="${id}"]`);
+const promptStateOf = (id: string) => promptRow(id)?.querySelector(".super-agent-prompt-state")?.textContent;
+
 function renderPanel(props = {}) {
   mount(<I18nProvider language="en"><SuperAgentsPanel {...props} /></I18nProvider>);
 }
@@ -149,6 +159,7 @@ beforeEach(() => {
     { id: "elsewhere", name: "Elsewhere", runtime_id: "dsh", enabled: true, target_id: "h1" } as never,
   ]);
   vi.spyOn(api, "superAgentRouters").mockResolvedValue(routerList);
+  vi.spyOn(api, "superAgentPrompts").mockResolvedValue([]);
   vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue(codexSettings as never);
   vi.spyOn(api, "saveSuperAgentRouter").mockImplementation(async (router) => ({ ...router, id: router.id || "sar_new", used_by: [] }));
   vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [
@@ -731,7 +742,7 @@ describe("SuperAgentsPanel", () => {
     click(button(/^Edit$/));
     await until(() => hasText("A router's framework cannot change once it is created."));
     expect(() => control(/^Framework/)).toThrow();
-    for (const label of [/^Agent name/, /^Router prompt/, /^Worker approval mode/, /^Agent's GitHub login/, /^Add trigger/]) {
+    for (const label of [/^Agent name/, /^Routing rules/, /^Worker approval mode/, /^Agent's GitHub login/, /^Add trigger/]) {
       expect(control(label).closest("details")).toBeNull();
     }
     expect(control(/^Mode/).closest("details")).toBeTruthy();
@@ -778,7 +789,7 @@ describe("SuperAgentsPanel", () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
     renderPanel({ createRequested: true });
     await until(() => valueOf(/^Framework/) === "codex");
-    const rules = () => control(/^Router prompt/) as HTMLTextAreaElement;
+    const rules = () => control(/^Routing rules/) as HTMLTextAreaElement;
     click(button(/^Use template$/));
     await until(() => /^Take on:/.test(rules().value));
     expect(confirm).not.toHaveBeenCalled();
@@ -792,6 +803,67 @@ describe("SuperAgentsPanel", () => {
     confirm.mockReturnValue(true);
     click(button(/^Use template$/));
     await until(() => /^Take on:/.test(rules().value));
+  });
+
+  it("shows each built-in prompt with its default and saves only the parts that changed", async () => {
+    vi.spyOn(api, "superAgentRouters").mockResolvedValue(freeRouters);
+    vi.spyOn(api, "superAgentPrompts").mockResolvedValue(promptParts);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
+    renderPanel({ createRequested: true });
+    await until(() => valueOf(/^Framework/) === "codex");
+    setValue(control(/^Agent name/), "Triage");
+    const saveButton = () => button(/^Save$/) as HTMLButtonElement;
+
+    await until(() => valueOf(/^Role and what to take on/));
+    expect(promptArea(/^Role and what to take on/).value).toBe('You are the router of "{name}".');
+    expect(promptArea(/^Role and when to start a worker/).value).toBe('You are "{name}".');
+    expect(promptArea(/^Worker brief/).value).toBe("You are a worker.");
+    expect(promptStateOf("router.role")).toBe("Default");
+    // A fixed part is shown, not edited.
+    expect(promptArea(/^Untrusted text/).readOnly).toBe(true);
+    expect(promptStateOf("router.untrusted")).toBe("Fixed");
+    expect(promptRow("router.untrusted")?.querySelector("button")).toBeNull();
+
+    // A part's own text must keep its placeholders.
+    setValue(promptArea(/^Role and what to take on/), "You are the billing desk.");
+    expect(promptStateOf("router.role")).toBe("Customized");
+    expect(hasText("This part must keep {name}.")).toBe(true);
+    expect(saveButton().disabled).toBe(true);
+    setValue(promptArea(/^Role and what to take on/), "You are {name}, the billing desk.");
+    expect(saveButton().disabled).toBe(false);
+
+    // Resetting a part, or typing its default back, leaves nothing to save for it.
+    setValue(promptArea(/^Worker brief/), "Report in one line.");
+    click(promptRow("worker.brief")?.querySelector("button") ?? undefined);
+    await until(() => promptStateOf("worker.brief") === "Default");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(promptArea(/^Worker brief/).value).toBe("You are a worker.");
+    setValue(promptArea(/^Role and when to start a worker/), "You are {name}. Be brief.");
+    setValue(promptArea(/^Role and when to start a worker/), 'You are "{name}".');
+    expect(promptStateOf("chat.role")).toBe("Default");
+
+    click(saveButton());
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0].prompts).toEqual({ "router.role": { text: "You are {name}, the billing desk.", base: "v1" } });
+  });
+
+  it("says when a default changed after the agent's own text was written", async () => {
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, prompts: { "worker.brief": { text: "Report in one line.", base: "v0" } } }]);
+    vi.spyOn(api, "superAgentPrompts").mockResolvedValue(promptParts);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    click(button(/^Edit$/));
+    await until(() => valueOf(/^Worker brief/) === "Report in one line.");
+    expect(promptStateOf("worker.brief")).toBe("Default updated");
+    // The new default is there to compare with.
+    expect(promptRow("worker.brief")?.querySelector("pre")?.textContent).toBe("You are a worker.");
+    click(button(/^Keep mine$/));
+    expect(promptStateOf("worker.brief")).toBe("Customized");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0].prompts).toEqual({ "worker.brief": { text: "Report in one line.", base: "v1" } });
   });
 
   it("chooses the router's model, reasoning effort and speed in one picker, and names it after the Super Agent", async () => {

@@ -8,6 +8,7 @@ import { useAsync } from "../../useAsync";
 import { confirmAction } from "../../components/ConfirmDialog";
 import { SourceEditor } from "../superAgentSetup";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
+import { SuperAgentPrompts, promptProblems } from "./SuperAgentPrompts";
 import { workDirErrorMessage } from "./agentUtils";
 import { ModelPicker } from "../superAgentModelPicker";
 import type { ModelChoice } from "../superAgentModelPicker";
@@ -51,6 +52,10 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
   const frameworks = useAsync(() => api.frameworks(), []);
   const routers = useAsync(() => api.superAgentRouters(), []);
   const agents = useAsync(() => api.agentInstances().catch(() => []), []);
+  // The built-in prompt parts and their defaults. A host too old to list them
+  // shows none, and the agent runs on its defaults.
+  const promptParts = useAsync(() => api.superAgentPrompts().then((parts) => Array.isArray(parts) ? parts : []).catch(() => []), []);
+  const setPrompts = (prompts: SuperAgent["prompts"]) => onChange({ ...draft, prompts });
   const [routerDraft, setRouterDraft] = useState<SuperAgentRouter | null>(null);
   const [routerError, setRouterError] = useState("");
 
@@ -166,6 +171,7 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
 
   const problems = superAgentProblems(draft, routerDraft);
   if (!draft.name.trim()) problems.unshift("superAgentForm.problem.name");
+  if (promptProblems(promptParts.data ?? [], draft.prompts)) problems.push("superAgentPrompts.problem");
 
   return (
     <div className="provider-drawer-layer">
@@ -237,6 +243,20 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
               <small>{t("superAgents.routerPromptHelp")}</small>
             </label>
             <button className="ghost-action super-agent-template-action" type="button" onClick={applyRoutingTemplate}>{t("superAgents.routerPromptTemplate")}</button>
+            {(promptParts.data ?? []).length > 0 && (
+              <>
+                <div className="field" role="group" aria-labelledby="saf-router-prompts">
+                  <span id="saf-router-prompts">{t("superAgentPrompts.routerTitle")}</span>
+                  <small>{t("superAgentPrompts.routerHelp")}</small>
+                  <SuperAgentPrompts parts={promptParts.data ?? []} roles={["router"]} value={draft.prompts} onChange={setPrompts} />
+                </div>
+                <div className="field" role="group" aria-labelledby="saf-chat-prompts">
+                  <span id="saf-chat-prompts">{t("superAgentPrompts.chatTitle")}</span>
+                  <small>{t("superAgentPrompts.chatHelp")}</small>
+                  <SuperAgentPrompts parts={promptParts.data ?? []} roles={["chat"]} value={draft.prompts} onChange={setPrompts} />
+                </div>
+              </>
+            )}
             {routerDraft && !legacyBrain && (
               <details className="super-agent-advanced">
                 <summary>{t("superAgentForm.routerAdvanced")}</summary>
@@ -353,6 +373,13 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                 <small>{t("superAgentForm.concurrencyHelp")}</small>
               </label>
             </div>
+            {(promptParts.data ?? []).length > 0 && (
+              <div className="field" role="group" aria-labelledby="saf-worker-prompts">
+                <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>
+                <small>{t("superAgentPrompts.workerHelp")}</small>
+                <SuperAgentPrompts parts={promptParts.data ?? []} roles={["worker"]} value={draft.prompts} onChange={setPrompts} />
+              </div>
+            )}
             {draft.workers.length > 0 && (
               <div className="field">
                 <span>{t("superAgentForm.legacyWorkers")}</span>
