@@ -10,9 +10,8 @@ vi.mock("../api", () => ({
   api: {
     usage: vi.fn(),
     menubarSettings: vi.fn(),
-    providers: vi.fn(),
     channelHealth: vi.fn(),
-    providerMonitor: vi.fn(),
+    frameworkHealthOverview: vi.fn(),
   },
 }));
 
@@ -38,9 +37,8 @@ beforeEach(() => {
   vi.spyOn(document, "hidden", "get").mockReturnValue(false);
   vi.mocked(api.usage).mockResolvedValue(report(100));
   vi.mocked(api.menubarSettings).mockResolvedValue({ cny_rate: 7 } as Awaited<ReturnType<typeof api.menubarSettings>>);
-  vi.mocked(api.providers).mockResolvedValue([]);
   vi.mocked(api.channelHealth).mockImplementation(async () => []);
-  vi.mocked(api.providerMonitor).mockImplementation(async () => ({}) as Awaited<ReturnType<typeof api.providerMonitor>>);
+  vi.mocked(api.frameworkHealthOverview).mockResolvedValue([]);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

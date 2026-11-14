@@ -7,8 +7,9 @@ export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
 export * from "./mailbox";
-import { activeMachineScope, activeRemoteID, fleetAdminQuery, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del, delChecked } from "./client";
-import { fleetAdminReadArray, fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
+import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del, delChecked } from "./client";
+import type { Targeted } from "./fleet";
+import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
@@ -41,7 +42,6 @@ import type {
   ChannelFeedback,
   ChannelInteraction,
   ChannelTask,
-  Claude3PStatus,
   DevicePairingCode,
   DiscoveredRemoteHost,
   FeishuSetupBeginResponse,
@@ -60,6 +60,8 @@ import type {
   FleetSyncPreview,
   FrameworkAuthStatus,
   FrameworkRuntimeSettings,
+  FrameworkSmokeResult,
+  FrameworkTestRequest,
   FrameworkInstallResult,
   FrameworkInstallSettings,
   FrameworkInstallSettingsResponse,
@@ -93,31 +95,17 @@ import type {
   Orchestration,
   OrchestrationTask,
   OperationProgress,
-  Provider,
-  ProviderMonitorConfig,
-  ProviderMonitorSnapshot,
-  ProviderProbeResult,
-  ProviderRoute,
-  ProxyStatus,
-  ProxyToolConfig,
-  ProxyTrace,
   RemoteHost,
   RemoteSSHConfigSyncResult,
   SessionMessage,
   Skill,
-  GrantableResourceType,
-  ResourceGrant,
   Status,
   SystemDirectoryListing,
-  TenancySelf,
   Account,
   AccountIdentity,
   AccountRole,
   AuthSession,
   PairedDevice,
-  Tenant,
-  TenantKind,
-  TenantToken,
   TerminalSessionView,
   ToolsResponse,
 	TTSCatalogStatus,
@@ -130,49 +118,6 @@ import type {
   WorkspaceInitResult,
 } from "./types";
 import { confirmAction } from "../components/ConfirmDialog";
-
-function normalizeProvider(provider: Partial<Provider> & Record<string, unknown>): Provider {
-  const extra =
-    provider.extra && typeof provider.extra === "object" && !Array.isArray(provider.extra)
-      ? (provider.extra as Record<string, string>)
-      : {};
-  const meta =
-    provider.meta && typeof provider.meta === "object" && !Array.isArray(provider.meta)
-      ? (provider.meta as Record<string, unknown>)
-      : {};
-
-  return {
-    id: typeof provider.id === "string" ? provider.id : "",
-    name: typeof provider.name === "string" ? provider.name : "Provider",
-    preset: typeof provider.preset === "string" ? provider.preset : undefined,
-    category: typeof provider.category === "string" ? provider.category : "custom",
-    base_url: typeof provider.base_url === "string" ? provider.base_url : "",
-    api_key_env: typeof provider.api_key_env === "string" ? provider.api_key_env : "",
-    api_key: typeof provider.api_key === "string" ? provider.api_key : "",
-    api_key_available: Boolean(provider.api_key_available),
-    api_key_issue: typeof provider.api_key_issue === "string" ? provider.api_key_issue : "",
-    model: typeof provider.model === "string" ? provider.model : "",
-    extra,
-    settings_config:
-      provider.settings_config && typeof provider.settings_config === "object" && !Array.isArray(provider.settings_config)
-        ? (provider.settings_config as Record<string, unknown>)
-        : undefined,
-    meta,
-    enabled: Boolean(provider.enabled),
-    in_failover_queue: Boolean(provider.in_failover_queue),
-    sort_index: typeof provider.sort_index === "number" ? provider.sort_index : 0,
-    target_id: typeof provider.target_id === "string" ? provider.target_id : undefined,
-    target_name: typeof provider.target_name === "string" ? provider.target_name : undefined,
-  };
-}
-
-async function getProviders(path: string): Promise<Provider[] | null> {
-  const providers = fleetMode()
-    ? await fleetReadArray<Provider>(path)
-    : await get<Provider[] | null>(path);
-  if (!Array.isArray(providers)) return providers;
-  return providers.map((provider) => normalizeProvider(provider as Partial<Provider> & Record<string, unknown>));
-}
 
 export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageReport {
   const reports: Array<{ targetID: string; targetName: string; report: UsageReport }> = [];
@@ -361,49 +306,6 @@ function mergeFleetTools(batch: FleetBatchResult<ToolsResponse>): ToolsResponse 
   return result;
 }
 
-function mergeFleetProviderMonitor(batch: FleetBatchResult<ProviderMonitorSnapshot>): ProviderMonitorSnapshot {
-  let config: ProviderMonitorConfig | undefined;
-  const result: ProviderMonitorSnapshot = {
-    config: { enabled: false, interval_minutes: 60, probe_models: false, max_models_per_provider: 10 },
-    running: false, providers: [], alerts: [], warnings: [],
-  };
-  let success = 0;
-  for (const target of batch.targets) {
-    const response = operationFor<ProviderMonitorSnapshot>(target.responses, "monitor");
-    if (!response?.ok || !response.data) {
-      result.warnings!.push(`${target.target.name}: ${response?.error || "unavailable"}`);
-      continue;
-    }
-    success += 1;
-    config ??= response.data.config;
-    result.running = result.running || response.data.running;
-    if (!result.last_run_at || (response.data.last_run_at && response.data.last_run_at > result.last_run_at)) result.last_run_at = response.data.last_run_at;
-    result.providers.push(...(response.data.providers ?? []).map((item) => ({ ...item, target_id: target.target.id, target_name: target.target.name })));
-    result.alerts.push(...(response.data.alerts ?? []).map((item) => ({ ...item, target_id: target.target.id, target_name: target.target.name })));
-  }
-  if (!success) throw new Error(result.warnings?.join("; ") || "No machine returned provider monitor data.");
-  if (config) result.config = config;
-  return result;
-}
-
-function mergeFleetProxyStatus(batch: FleetBatchResult<ProxyStatus>): ProxyStatus {
-  const result: ProxyStatus = { running: false, base_url: "", tools: [], warnings: [] };
-  let success = 0;
-  for (const target of batch.targets) {
-    const response = operationFor<ProxyStatus>(target.responses, "proxy");
-    if (!response?.ok || !response.data) {
-      result.warnings!.push(`${target.target.name}: ${response?.error || "unavailable"}`);
-      continue;
-    }
-    success += 1;
-    result.running = result.running || response.data.running;
-    if (!result.base_url) result.base_url = response.data.base_url;
-    result.tools.push(...(response.data.tools ?? []).map((item) => ({ ...item, target_id: target.target.id, target_name: target.target.name })));
-  }
-  if (!success) throw new Error(result.warnings?.join("; ") || "No machine returned proxy status.");
-  return result;
-}
-
 export const api = {
   eventSources: () => getChecked<EventSource[]>("/api/v1/event-sources"),
   eventSubscriptions: () => getChecked<EventSubscription[]>("/api/v1/event-subscriptions"),
@@ -438,7 +340,6 @@ export const api = {
     source_target_id: string;
     destination_target_ids: string[];
     categories?: string[];
-    provider_ids?: string[];
     include_credentials?: boolean;
     preserve_activation?: boolean;
     path_mappings?: Record<string, FleetSyncPathMapping[]>;
@@ -476,11 +377,6 @@ export const api = {
     return (await fleetCall<{ ok: boolean }>({ key: "agent", method: "DELETE", path }, targets)).first;
   },
 
-  // Tenancy. Everything except tenancySelf is administrator-only and returns
-  // 403 when the Console runs inside a tenant-scoped session.
-  // Login identity belongs to the Console's origin, independent of the last
-  // selected SSH machine or administrator tenant preview.
-  tenancySelf: () => getLocal<TenancySelf>("/api/v1/tenancy/self"),
   // Accounts and sign-in always concern this Console's own origin, never the
   // selected remote machine.
   authSession: () => getChecked<AuthSession>("/api/v1/auth/session", { local: true }),
@@ -498,87 +394,18 @@ export const api = {
     postChecked<{ ok: boolean; password?: string }>("/api/v1/accounts/password", { id, password }, { local: true }),
   pairedDevices: () => getChecked<{ devices: PairedDevice[] }>("/api/v1/devices", { local: true }).then((result) => result.devices ?? []),
   removePairedDevice: (id: string) => delChecked(`/api/v1/devices?id=${encodeURIComponent(id)}`),
-  registerTenant: (payload: { name: string; kind?: TenantKind; target_id?: string }) => {
-    const body = { ...payload }; delete body.target_id;
-    return fleetCall<{ tenant: Tenant; token: string; prefix: string }>({ key: "tenant", method: "POST", path: "/api/v1/tenancy/register", body }, writeTargetIDs(payload.target_id)).then((result) => result.first);
+  // assignDeviceOwner hands a device to an account; an empty accountID
+  // returns it to administrators only. Administrator-only. The device
+  // registry lives on the hub this Console talks to, so the call stays local
+  // unless a linked machine is named.
+  assignDeviceOwner: (id: string, accountID: string, targetID?: string) => {
+    const body = { id, account_id: accountID };
+    if (targetID && targetID !== "local") {
+      return fleetCall<{ ok: boolean }>({ key: "owner", method: "POST", path: "/api/v1/devices/owner", body }, [targetID], { confirm: false })
+        .then((result) => result.first);
+    }
+    return postChecked<{ ok: boolean }>("/api/v1/devices/owner", body, { local: true });
   },
-  tenants: () => fleetMode() ? fleetReadArray<Tenant>("/api/v1/tenancy/tenants") : get<Tenant[] | null>("/api/v1/tenancy/tenants"),
-	allTenants: () => fleetAdminReadArray<Tenant>("/api/v1/tenancy/tenants"),
-  upsertTenant: async (tenant: Partial<Tenant>) => {
-    const body = { ...tenant }; delete body.target_id; delete body.target_name;
-    return (await fleetCall<Tenant>({ key: "tenant", method: "POST", path: "/api/v1/tenancy/tenants", body }, writeTargetIDs(tenant.target_id))).first;
-  },
-  deleteTenant: async (id: string, targetID?: string) =>
-    (await fleetCall<{ ok: boolean }>({ key: "tenant", method: "DELETE", path: `/api/v1/tenancy/tenants?id=${encodeURIComponent(id)}` }, writeTargetIDs(targetID))).first,
-  tenantTokens: (tenantID: string, targetID?: string) => targetID
-    ? fleetGet<TenantToken[] | null>(`/api/v1/tenancy/tokens?tenant_id=${encodeURIComponent(tenantID)}`, targetID)
-    : get<TenantToken[] | null>(`/api/v1/tenancy/tokens?tenant_id=${encodeURIComponent(tenantID)}`),
-  createTenantToken: (payload: { tenant_id: string; name?: string; expires_in_hours?: number; target_id?: string }) => {
-    const body = { ...payload }; delete body.target_id;
-    return fleetCall<TenantToken>({ key: "token", method: "POST", path: "/api/v1/tenancy/tokens", body }, writeTargetIDs(payload.target_id)).then((result) => result.first);
-  },
-  revokeTenantToken: (id: string) =>
-    del<{ ok: boolean }>(`/api/v1/tenancy/tokens?id=${encodeURIComponent(id)}`),
-  resourceGrants: (tenantID?: string) => fleetMode()
-    ? fleetReadArray<ResourceGrant>(tenantID
-        ? `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(tenantID)}`
-        : "/api/v1/tenancy/grants")
-    : get<ResourceGrant[] | null>(
-      tenantID
-        ? `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(tenantID)}`
-        : "/api/v1/tenancy/grants",
-    ),
-  tenantAdminDetails: async (tenantID: string, targetID?: string) => {
-    const resolvedTargetID = targetID || singleTargetID();
-    const batch = await fleetAdminQuery<unknown>([
-      { key: "grants", path: `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(tenantID)}` },
-      { key: "agents", path: "/api/v1/agent-instances" },
-      { key: "channels", path: "/api/v1/channels" },
-      { key: "triggers", path: "/api/v1/triggers" },
-      { key: "providers", path: "/api/v1/providers" },
-    ], [resolvedTargetID]);
-    const target = batch.targets[0];
-    if (!target) throw new Error(`Unknown machine: ${resolvedTargetID}`);
-    const readArray = <T extends object>(key: string): Array<T & { target_id: string; target_name: string }> => {
-      const response = operationFor<T[]>(target.responses, key);
-      if (!response?.ok) throw new Error(`${target.target.name}: ${response?.error || `${key} unavailable`}`);
-      if (response.data == null) return [];
-      if (!Array.isArray(response.data)) throw new Error(`${target.target.name}: invalid ${key} response`);
-      return response.data.map((item) => ({
-        ...item,
-        target_id: target.target.id,
-        target_name: target.target.name,
-      }));
-    };
-    return {
-      grants: readArray<ResourceGrant>("grants"),
-      agents: readArray<AgentInstance>("agents"),
-      channels: readArray<Channel>("channels"),
-      triggers: readArray<Trigger>("triggers"),
-      providers: readArray<Provider>("providers").map((provider) =>
-        normalizeProvider(provider as Provider & Record<string, unknown>),
-      ),
-    };
-  },
-  upsertResourceGrant: (grant: ResourceGrant) => {
-    const body = { ...grant }; delete body.target_id; delete body.target_name;
-    return fleetCall<ResourceGrant>({ key: "grant", method: "POST", path: "/api/v1/tenancy/grants", body }, writeTargetIDs(grant.target_id)).then((result) => result.first);
-  },
-  deleteResourceGrant: (grant: Pick<ResourceGrant, "tenant_id" | "resource_type" | "resource_id" | "target_id">) =>
-    fleetCall<{ ok: boolean }>({ key: "grant", method: "DELETE", path:
-      `/api/v1/tenancy/grants?tenant_id=${encodeURIComponent(grant.tenant_id)}` +
-        `&resource_type=${encodeURIComponent(grant.resource_type)}` +
-        `&resource_id=${encodeURIComponent(grant.resource_id)}` }, writeTargetIDs(grant.target_id)).then((result) => result.first),
-  assignResourceOwner: (payload: {
-    resource_type: GrantableResourceType;
-    resource_id: string;
-    tenant_id: string;
-    target_id?: string;
-  }) => {
-    const body = { ...payload }; delete body.target_id;
-    return fleetCall<{ ok: boolean }>({ key: "owner", method: "POST", path: "/api/v1/tenancy/ownership", body }, writeTargetIDs(payload.target_id)).then((result) => result.first);
-  },
-
   tools: () => activeMachineScope() === "all"
     ? fleetQuery<ToolsResponse>([{ key: "tools", path: "/api/v1/tools" }]).then(mergeFleetTools)
     : get<ToolsResponse>("/api/v1/tools"),
@@ -641,67 +468,6 @@ export const api = {
       : onProgress
       ? postProgress<CLIInstallResult>("/api/v1/tools/cli/skills/sync/stream", { id }, onProgress)
       : postChecked<CLIInstallResult>("/api/v1/tools/cli/skills/sync", { id }),
-  providers: () => getProviders("/api/v1/providers"),
-  allProviders: async () => (await fleetAdminReadArray<Provider>("/api/v1/providers"))
-    .map((provider) => normalizeProvider(provider as Provider & Record<string, unknown>)),
-  activeRoutes: () => fleetMode() ? fleetReadArray<ProviderRoute>("/api/v1/providers/active") : get<ProviderRoute[] | null>("/api/v1/providers/active"),
-  presets: async () => (await getProviders("/api/v1/providers/presets")) ?? [],
-  upsertProvider: async (p: Provider, targetIDs?: string[]) => {
-    const targets = targetIDs ?? writeTargetIDs(p.target_id);
-    const payload = { ...p }; delete payload.target_id; delete payload.target_name;
-    if (!payload.id && targets[0] === "all") payload.id = `provider-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    return (await fleetCall<Provider>({ key: "provider", method: "POST", path: "/api/v1/providers", body: payload }, targets)).first;
-  },
-  probeProvider: (p: Provider) => postChecked<ProviderProbeResult>("/api/v1/providers/probe", p),
-  providerMonitor: () => fleetMode()
-    ? fleetQuery<ProviderMonitorSnapshot>([{ key: "monitor", path: "/api/v1/providers/monitor" }]).then(mergeFleetProviderMonitor)
-    : get<ProviderMonitorSnapshot>("/api/v1/providers/monitor"),
-  saveProviderMonitor: (config: ProviderMonitorConfig) => fleetMode()
-    ? fleetCall<ProviderMonitorSnapshot>({ key: "monitor", method: "PUT", path: "/api/v1/providers/monitor", body: config }, ["all"], { confirm: false }).then((result) => result.first)
-    : put<ProviderMonitorSnapshot>("/api/v1/providers/monitor", config),
-  refreshProviderModels: () => fleetMode()
-    ? fleetCall<ProviderMonitorSnapshot>({ key: "monitor", method: "POST", path: "/api/v1/providers/monitor/run?catalog_only=true", body: {} }, ["all"], { confirm: false }).then((result) => result.first)
-    : postChecked<ProviderMonitorSnapshot>("/api/v1/providers/monitor/run?catalog_only=true", {}),
-  runProviderMonitor: () => fleetMode()
-    ? fleetCall<ProviderMonitorSnapshot>({ key: "monitor", method: "POST", path: "/api/v1/providers/monitor/run", body: {} }, ["all"], { confirm: false }).then((result) => result.first)
-    : postChecked<ProviderMonitorSnapshot>("/api/v1/providers/monitor/run", {}),
-  dismissProviderMonitorAlert: (id = "", targetID?: string) => fleetMode()
-    ? fleetCall<ProviderMonitorSnapshot>({ key: "monitor", method: "DELETE", path:
-        `/api/v1/providers/monitor/alerts${id ? `?id=${encodeURIComponent(id)}` : ""}` }, writeTargetIDs(targetID)).then((result) => result.first)
-    : del<ProviderMonitorSnapshot>(
-      `/api/v1/providers/monitor/alerts${id ? `?id=${encodeURIComponent(id)}` : ""}`
-    ),
-  deleteProvider: async (id: string, targetID?: string) =>
-    (await fleetCall<{ ok: boolean }>({ key: "provider", method: "DELETE", path: `/api/v1/providers?id=${encodeURIComponent(id)}` }, writeTargetIDs(targetID))).first,
-  switchProvider: (id: string, tool: string, meta?: Record<string, unknown>, localTakeover?: boolean, targetID?: string) =>
-    fleetCall<{ ok: boolean }>({ key: "route", method: "POST", path: "/api/v1/providers/switch", body: { id, tool, meta, local_takeover: localTakeover } }, writeTargetIDs(targetID)).then((result) => result.first),
-  disableRoute: (tool: string, targetID?: string) =>
-    fleetCall<{ ok: boolean }>({ key: "route", method: "DELETE", path: `/api/v1/providers/active?tool=${encodeURIComponent(tool)}` }, writeTargetIDs(targetID)).then((result) => result.first),
-  proxyStatus: () => fleetMode()
-    ? fleetQuery<ProxyStatus>([{ key: "proxy", path: "/api/v1/proxy/status" }]).then(mergeFleetProxyStatus)
-    : get<ProxyStatus>("/api/v1/proxy/status"),
-  proxyTraces: ({ tool = "", sessionID = "", limit = 100 }: { tool?: string; sessionID?: string; limit?: number } = {}, targetID?: string) => {
-    const path = `/api/v1/proxy/traces?tool=${encodeURIComponent(tool)}&session_id=${encodeURIComponent(sessionID)}&limit=${limit}`;
-    return targetID ? fleetGet<ProxyTrace[] | null>(path, targetID) : get<ProxyTrace[] | null>(path);
-  },
-  setTakeover: (tool: string, enabled: boolean, targetID?: string) =>
-    fleetCall<ProxyStatus>({ key: "proxy", method: "POST", path: "/api/v1/proxy/takeover", body: { tool, enabled } }, writeTargetIDs(targetID)).then((result) => result.first),
-  setProxyToolConfig: (cfg: Partial<ProxyToolConfig> & { tool: string }, targetID?: string) => {
-    const body = { ...cfg }; delete body.target_id; delete body.target_name;
-    return fleetCall<ProxyStatus>({ key: "proxy", method: "POST", path: "/api/v1/proxy/config", body }, writeTargetIDs(targetID)).then((result) => result.first);
-  },
-  setFailoverQueue: (id: string, inQueue: boolean, sortIndex = 0, targetID?: string) =>
-    fleetCall<{ ok: boolean }>({ key: "provider", method: "POST", path: "/api/v1/providers/failover", body: {
-      id,
-      in_failover_queue: inQueue,
-      sort_index: sortIndex,
-    } }, writeTargetIDs(targetID)).then((result) => result.first),
-  claude3pStatus: () => get<Claude3PStatus>("/api/v1/system/claude-3p"),
-  setClaude3p: (enabled: boolean, providerID = "", targetID?: string) =>
-    fleetCall<Claude3PStatus>({ key: "claude3p", method: "POST", path: "/api/v1/system/claude-3p", body: {
-      enabled,
-      provider_id: providerID,
-    } }, writeTargetIDs(targetID)).then((result) => result.first),
   selectDirectory: (defaultDirectory = "") => selectSystemDirectory(defaultDirectory),
   directories: (path = "", targetID?: string) => {
     const remoteID = targetID ? (targetID === "local" ? "" : targetID) : activeRemoteID();
@@ -731,6 +497,24 @@ export const api = {
       `/api/v1/frameworks/runtime-settings?kind=${encodeURIComponent(kind)}` +
         (workDir ? `&work_dir=${encodeURIComponent(workDir)}` : "");
     return interactiveFleetGet<FrameworkRuntimeSettings>(path, targetID);
+  },
+  // Runs the framework with a model and checks that it replies "ok". It spends
+  // one short model call, so it only runs when a user asks for it.
+  frameworkTest: (request: FrameworkTestRequest, targetID?: string) => targetID && targetID !== "local"
+    ? fleetCall<FrameworkSmokeResult>({ key: "test", method: "POST", path: "/api/v1/frameworks/test", body: request }, [targetID], { confirm: false }).then((result) => result.first)
+    : postChecked<FrameworkSmokeResult>("/api/v1/frameworks/test", request),
+  frameworkHealth: (targetID?: string) =>
+    interactiveFleetGet<{ results: FrameworkSmokeResult[] }>("/api/v1/frameworks/health", targetID).then((value) => value?.results ?? []),
+  // The latest test results of every framework on the machines in view.
+  frameworkHealthOverview: async (): Promise<Targeted<FrameworkSmokeResult>[]> => {
+    if (activeMachineScope() !== "all") {
+      return (await get<{ results: FrameworkSmokeResult[] }>("/api/v1/frameworks/health")).results ?? [];
+    }
+    const batch = await fleetQuery<{ results: FrameworkSmokeResult[] }>([{ key: "health", path: "/api/v1/frameworks/health" }]);
+    return batch.targets.flatMap((target) => {
+      const response = operationFor<{ results: FrameworkSmokeResult[] }>(target.responses, "health");
+      return response?.ok ? (response.data?.results ?? []).map((result) => ({ ...result, target_id: target.target.id, target_name: target.target.name })) : [];
+    });
   },
   frameworkAuth: (kind: string, targetID?: string) =>
     interactiveFleetGet<FrameworkAuthStatus>(`/api/v1/frameworks/auth?kind=${encodeURIComponent(kind)}`, targetID),

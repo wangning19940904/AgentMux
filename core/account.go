@@ -8,12 +8,9 @@ import (
 
 // Accounts
 //
-// An account is a person who signs in to this AgentMux. Each account owns a
-// personal tenant namespace (a Tenant of kind TenantKindAccount), so what a
-// person owns is recorded in the same owner_tenant_id columns, public
-// visibility and resource grants that already scope host applications. There
-// is one permission system, and a member is simply a tenant principal that
-// also knows which person it is.
+// An account is a person who signs in to this AgentMux. An administrator
+// account manages the whole control plane; a member account reaches only what
+// it owns (its devices and direct messages, see Principal).
 //
 // How a person proves who they are is kept apart from the account: a session
 // records the method that created it, and an account need not have a
@@ -38,9 +35,6 @@ const (
 	SignInMethodPassword = "password"
 )
 
-// TenantKindAccount marks the tenant namespace that belongs to one account.
-const TenantKindAccount = "account"
-
 // Account is one person. The password hash never leaves the store.
 type Account struct {
 	ID           string     `json:"id"`
@@ -48,7 +42,6 @@ type Account struct {
 	DisplayName  string     `json:"display_name,omitempty"`
 	Role         string     `json:"role"`
 	Status       string     `json:"status"`
-	TenantID     string     `json:"tenant_id"`
 	HasPassword  bool       `json:"has_password"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -82,7 +75,6 @@ type AccountIdentity struct {
 	Login       string `json:"login"`
 	DisplayName string `json:"display_name,omitempty"`
 	Role        string `json:"role"`
-	TenantID    string `json:"tenant_id"`
 }
 
 // Identity returns the request-facing view of an account.
@@ -90,11 +82,11 @@ func (a *Account) Identity() *AccountIdentity {
 	if a == nil {
 		return nil
 	}
-	return &AccountIdentity{ID: a.ID, Login: a.Login, DisplayName: a.DisplayName, Role: a.Role, TenantID: a.TenantID}
+	return &AccountIdentity{ID: a.ID, Login: a.Login, DisplayName: a.DisplayName, Role: a.Role}
 }
 
 // AccountPrincipal is the principal for a signed-in person. An administrator
-// sees the whole control plane; a member is confined to their namespace.
+// sees the whole control plane; a member reaches only what they own.
 func AccountPrincipal(account *Account) *Principal {
 	if account == nil {
 		return nil
@@ -102,7 +94,7 @@ func AccountPrincipal(account *Account) *Principal {
 	if account.IsAdmin() {
 		return &Principal{Admin: true, Account: account.Identity()}
 	}
-	return &Principal{TenantID: account.TenantID, TenantName: account.Login, Account: account.Identity()}
+	return &Principal{Account: account.Identity()}
 }
 
 // NormalizeAccountRole maps arbitrary input to a role, defaulting to member
@@ -120,8 +112,7 @@ func NormalizeLogin(login string) string {
 }
 
 // ValidateLogin accepts 2 to 64 lowercase letters, digits, '.', '_' and '-',
-// starting with a letter or digit. Logins also name the account's tenant
-// namespace, so they stay plain.
+// starting with a letter or digit, so they stay plain in URLs and the CLI.
 func ValidateLogin(login string) error {
 	if len(login) < 2 || len(login) > 64 {
 		return fmt.Errorf("a login name must be 2 to 64 characters")

@@ -4,7 +4,7 @@ import { api, type FleetSyncApplyResult, type FleetSyncPathMapping, type FleetSy
 import { useI18n } from "../i18n";
 import { confirmAction } from "../components/ConfirmDialog";
 
-const CATEGORIES = ["agents", "providers", "channels", "triggers", "mcp", "skills", "guard", "memory"] as const;
+const CATEGORIES = ["agents", "channels", "triggers", "mcp", "skills", "guard", "memory"] as const;
 
 export function FleetSyncCenter({ hosts }: { hosts: RemoteHost[] }) {
   const { t } = useI18n();

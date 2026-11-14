@@ -16,9 +16,9 @@ func (s *Store) CreateOrchestration(ctx context.Context, orchestration core.Orch
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO orchestrations
-		(id,name,status,max_concurrency,error,owner_tenant_id,created_at,started_at,finished_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`, orchestration.ID, orchestration.Name, orchestration.Status,
-		orchestration.MaxConcurrency, orchestration.Error, nullableOwner(orchestration.OwnerTenantID),
+		(id,name,status,max_concurrency,error,created_at,started_at,finished_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, orchestration.ID, orchestration.Name, orchestration.Status,
+		orchestration.MaxConcurrency, orchestration.Error,
 		formatControlTime(orchestration.CreatedAt),
 		formatControlTime(orchestration.StartedAt), formatControlTime(orchestration.FinishedAt), formatControlTime(orchestration.UpdatedAt)); err != nil {
 		return err
@@ -56,7 +56,7 @@ func (s *Store) UpdateOrchestrationTask(ctx context.Context, task core.Orchestra
 	return err
 }
 
-const orchestrationColumns = `id,name,status,max_concurrency,error,owner_tenant_id,created_at,started_at,finished_at,updated_at`
+const orchestrationColumns = `id,name,status,max_concurrency,error,created_at,started_at,finished_at,updated_at`
 
 func (s *Store) GetOrchestration(ctx context.Context, id string) (*core.Orchestration, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+orchestrationColumns+`
@@ -77,15 +77,10 @@ func (s *Store) GetOrchestration(ctx context.Context, id string) (*core.Orchestr
 }
 
 func (s *Store) ListOrchestrations(ctx context.Context, activeOnly bool, limit int) ([]core.Orchestration, error) {
-	return s.listOrchestrations(ctx, activeOnly, limit, "")
+	return s.listOrchestrations(ctx, activeOnly, limit)
 }
 
-// ListOrchestrationsForTenant returns the orchestrations one tenant owns.
-func (s *Store) ListOrchestrationsForTenant(ctx context.Context, activeOnly bool, limit int, tenantID string) ([]core.Orchestration, error) {
-	return s.listOrchestrations(ctx, activeOnly, limit, tenantID)
-}
-
-func (s *Store) listOrchestrations(ctx context.Context, activeOnly bool, limit int, tenantID string) ([]core.Orchestration, error) {
+func (s *Store) listOrchestrations(ctx context.Context, activeOnly bool, limit int) ([]core.Orchestration, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -94,10 +89,6 @@ func (s *Store) listOrchestrations(ctx context.Context, activeOnly bool, limit i
 	conditions := []string{}
 	if activeOnly {
 		conditions = append(conditions, `status IN ('queued','running')`)
-	}
-	if tenantID != "" {
-		conditions = append(conditions, `owner_tenant_id=?`)
-		args = append(args, tenantID)
 	}
 	if len(conditions) > 0 {
 		query += ` WHERE ` + strings.Join(conditions, " AND ")
@@ -150,13 +141,12 @@ func (s *Store) listOrchestrationTasks(ctx context.Context, id string) ([]core.O
 
 func scanOrchestration(sc scanner) (*core.Orchestration, error) {
 	var orchestration core.Orchestration
-	var errText, ownerTenantID, createdAt, startedAt, finishedAt, updatedAt sql.NullString
+	var errText, createdAt, startedAt, finishedAt, updatedAt sql.NullString
 	if err := sc.Scan(&orchestration.ID, &orchestration.Name, &orchestration.Status, &orchestration.MaxConcurrency,
-		&errText, &ownerTenantID, &createdAt, &startedAt, &finishedAt, &updatedAt); err != nil {
+		&errText, &createdAt, &startedAt, &finishedAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	orchestration.Error = errText.String
-	orchestration.OwnerTenantID = ownerTenantID.String
 	orchestration.CreatedAt = parseControlTime(createdAt.String)
 	orchestration.StartedAt = parseControlTime(startedAt.String)
 	orchestration.FinishedAt = parseControlTime(finishedAt.String)

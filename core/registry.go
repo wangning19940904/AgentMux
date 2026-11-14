@@ -58,6 +58,12 @@ func CreatePlatform(name string, cfg map[string]any) (Platform, error) {
 	return f(cfg)
 }
 
+// AgentConfigHealthCheck is an optional agent config key (bool). When true the
+// agent is created only to check that the framework answers: adapters that can
+// should disable tools, limit the run to one turn and skip saving a transcript.
+// Adapters that cannot honour it ignore it.
+const AgentConfigHealthCheck = "health_check"
+
 // CreateAgent instantiates a registered agent.
 func CreateAgent(name string, cfg map[string]any) (Agent, error) {
 	regMu.RLock()

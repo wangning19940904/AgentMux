@@ -97,10 +97,10 @@ export function ConfirmHost() {
         aria-describedby="confirm-dialog-message"
         aria-labelledby="confirm-dialog-title"
         aria-modal="true"
-        className={`surface meeting-dialog${request.danger ? " tenant-delete-dialog" : ""}`}
+        className={`surface meeting-dialog${request.danger ? " confirm-delete-dialog" : ""}`}
         role="alertdialog"
       >
-        <div className={`meeting-dialog-icon${request.danger ? " tenant-delete-dialog-icon" : ""}`}>
+        <div className={`meeting-dialog-icon${request.danger ? " confirm-delete-dialog-icon" : ""}`}>
           {request.danger ? <Trash2 size={22} /> : <TriangleAlert size={22} />}
         </div>
         <div className="meeting-dialog-heading">

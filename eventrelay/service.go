@@ -282,7 +282,7 @@ func (s *Service) EventTypes(ref, source string) []string {
 	return types
 }
 func (s *Service) Refresh(ctx context.Context) error {
-	subs, err := s.store.ListEventSubscriptions(ctx, nil)
+	subs, err := s.store.ListEventSubscriptions(ctx)
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func (s *Service) Refresh(ctx context.Context) error {
 			continue
 		}
 		for _, ref := range sub.SourceRefs {
-			ok, err := s.store.EventSourceAllowed(ctx, sub.OwnerTenantID, ref)
+			ok, err := s.store.EventSourceExists(ctx, ref)
 			if err != nil {
 				return err
 			}
@@ -392,7 +392,7 @@ func (s *Service) deliver(ctx context.Context, d *core.EventDelivery) {
 	state, message := "blocked", "subscription unavailable"
 	if err == nil && sub != nil && !sub.Deleted && !sub.Paused {
 		var allowed bool
-		allowed, err = s.store.EventSourceAllowed(ctx, sub.OwnerTenantID, d.Event.SourceRef)
+		allowed, err = s.store.EventSourceExists(ctx, d.Event.SourceRef)
 		if err == nil && allowed {
 			err = s.send(ctx, d, sub)
 			if err != nil {

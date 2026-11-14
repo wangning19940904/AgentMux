@@ -10,33 +10,13 @@ import (
 )
 
 const agentInstanceColumns = `id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,
-	provider_tool,provider_id,default_model,default_reasoning_effort,default_service_tier,default_approval_mode,memory_scope,env,channel_bindings,schedules,mcp_servers,
-	skills,clis,enabled,source,owner_tenant_id,visibility,created_at,updated_at,private_chat_mode,group_chat_mode`
+	default_model,default_reasoning_effort,default_service_tier,default_approval_mode,memory_scope,env,channel_bindings,schedules,mcp_servers,
+	skills,clis,enabled,source,created_at,updated_at,private_chat_mode,group_chat_mode`
 
-// visibleToTenant restricts an owned resource table to what one tenant may
-// see: what it owns, what is public, and what an admin granted it.
-func visibleToTenant(resourceType string) string {
-	return `(owner_tenant_id=? OR visibility=? OR id IN (
-		SELECT resource_id FROM resource_grants WHERE tenant_id=? AND resource_type='` + resourceType + `'))`
-}
-
-func visibleToTenantArgs(tenantID string) []any {
-	return []any{tenantID, core.VisibilityPublic, tenantID}
-}
-
-// ListAgentInstances returns all console-managed Agent instances. This is the
-// admin and runtime view; use ListAgentInstancesForTenant to scope it.
+// ListAgentInstances returns all console-managed Agent instances.
 func (s *Store) ListAgentInstances(ctx context.Context) ([]core.AgentInstance, error) {
 	return s.queryAgentInstances(ctx,
 		`SELECT `+agentInstanceColumns+` FROM agent_instances ORDER BY updated_at DESC, name`)
-}
-
-// ListAgentInstancesForTenant returns the Agent instances one tenant may see.
-func (s *Store) ListAgentInstancesForTenant(ctx context.Context, tenantID string) ([]core.AgentInstance, error) {
-	return s.queryAgentInstances(ctx,
-		`SELECT `+agentInstanceColumns+` FROM agent_instances WHERE `+
-			visibleToTenant(core.ResourceTypeAgent)+` ORDER BY updated_at DESC, name`,
-		visibleToTenantArgs(tenantID)...)
 }
 
 func (s *Store) queryAgentInstances(ctx context.Context, query string, args ...any) ([]core.AgentInstance, error) {
@@ -84,24 +64,22 @@ func upsertAgentInstance(ctx context.Context, executor statementExecutor, a *cor
 		enabled = 1
 	}
 	_, err := executor.ExecContext(ctx, `INSERT INTO agent_instances
-		(id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,provider_tool,provider_id,memory_scope,
+		(id,name,runtime_id,desktop_thread_id,work_dir,workspace_mode,worktree_base_ref,session_backend,system_prompt,memory_scope,
 		 default_model,default_reasoning_effort,default_service_tier,default_approval_mode,env,channel_bindings,schedules,mcp_servers,skills,clis,enabled,source,
-		 owner_tenant_id,visibility,created_at,updated_at,private_chat_mode,group_chat_mode)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 created_at,updated_at,private_chat_mode,group_chat_mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,runtime_id=excluded.runtime_id,
 		desktop_thread_id=excluded.desktop_thread_id,work_dir=excluded.work_dir,workspace_mode=excluded.workspace_mode,worktree_base_ref=excluded.worktree_base_ref,session_backend=excluded.session_backend,system_prompt=excluded.system_prompt,
-		provider_tool=excluded.provider_tool,provider_id=excluded.provider_id,
 		memory_scope=excluded.memory_scope,default_model=excluded.default_model,
 		default_reasoning_effort=excluded.default_reasoning_effort,default_service_tier=excluded.default_service_tier,
 		default_approval_mode=excluded.default_approval_mode,env=excluded.env,
 		channel_bindings=excluded.channel_bindings,schedules=excluded.schedules,
 		mcp_servers=excluded.mcp_servers,skills=excluded.skills,clis=excluded.clis,enabled=excluded.enabled,
-		source=excluded.source,owner_tenant_id=excluded.owner_tenant_id,visibility=excluded.visibility,
+		source=excluded.source,
 		updated_at=excluded.updated_at,private_chat_mode=excluded.private_chat_mode,group_chat_mode=excluded.group_chat_mode`,
-		a.ID, a.Name, a.RuntimeID, a.DesktopThreadID, a.WorkDir, a.WorkspaceMode, a.WorktreeBaseRef, a.SessionBackend, a.SystemPrompt, a.ProviderTool,
-		a.ProviderID, a.MemoryScope, a.DefaultModel, a.DefaultReasoningEffort, a.DefaultServiceTier, a.DefaultApprovalMode, string(env), string(channels), string(schedules),
+		a.ID, a.Name, a.RuntimeID, a.DesktopThreadID, a.WorkDir, a.WorkspaceMode, a.WorktreeBaseRef, a.SessionBackend, a.SystemPrompt,
+		a.MemoryScope, a.DefaultModel, a.DefaultReasoningEffort, a.DefaultServiceTier, a.DefaultApprovalMode, string(env), string(channels), string(schedules),
 		string(mcpServers), string(skills), string(clis), enabled, a.Source,
-		nullableOwner(a.OwnerTenantID), a.Visibility,
 		a.CreatedAt.Format(time.RFC3339Nano), a.UpdatedAt.Format(time.RFC3339Nano), a.PrivateChatMode, a.GroupChatMode)
 	return err
 }
@@ -109,15 +87,6 @@ func upsertAgentInstance(ctx context.Context, executor statementExecutor, a *cor
 // DeleteAgentInstance removes a console-managed Agent instance.
 func (s *Store) DeleteAgentInstance(ctx context.Context, id string) error {
 	_, err := s.writer.ExecContext(ctx, `DELETE FROM agent_instances WHERE id=?`, id)
-	return err
-}
-
-// SetAgentInstanceOwner assigns (or with an empty tenantID clears) ownership.
-// Used by the Console to adopt resources that predate tenancy.
-func (s *Store) SetAgentInstanceOwner(ctx context.Context, id, tenantID string) error {
-	_, err := s.writer.ExecContext(ctx,
-		`UPDATE agent_instances SET owner_tenant_id=?, updated_at=? WHERE id=?`,
-		nullableOwner(tenantID), time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }
 
@@ -132,24 +101,15 @@ func (s *Store) UpdateAgentRuntimeSettings(ctx context.Context, id string, setti
 	return err
 }
 
-// nullableOwner keeps unassigned ownership as SQL NULL rather than an empty
-// string so the "no owner" case is a single representation in queries.
-func nullableOwner(tenantID string) any {
-	if tenantID == "" {
-		return nil
-	}
-	return tenantID
-}
-
 func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	var a core.AgentInstance
-	var desktopThreadID, workDir, workspaceMode, worktreeBaseRef, sessionBackend, systemPrompt, providerTool, providerID, defaultModel, defaultReasoningEffort, defaultServiceTier, defaultApprovalMode, memoryScope sql.NullString
-	var env, channels, schedules, mcpServers, skills, clis, source, ownerTenantID, visibility, created, updated sql.NullString
+	var desktopThreadID, workDir, workspaceMode, worktreeBaseRef, sessionBackend, systemPrompt, defaultModel, defaultReasoningEffort, defaultServiceTier, defaultApprovalMode, memoryScope sql.NullString
+	var env, channels, schedules, mcpServers, skills, clis, source, created, updated sql.NullString
 	var privateChatMode, groupChatMode sql.NullString
 	var enabled int
 	if err := sc.Scan(&a.ID, &a.Name, &a.RuntimeID, &desktopThreadID, &workDir, &workspaceMode, &worktreeBaseRef, &sessionBackend, &systemPrompt,
-		&providerTool, &providerID, &defaultModel, &defaultReasoningEffort, &defaultServiceTier, &defaultApprovalMode, &memoryScope, &env, &channels, &schedules,
-		&mcpServers, &skills, &clis, &enabled, &source, &ownerTenantID, &visibility, &created, &updated, &privateChatMode, &groupChatMode); err != nil {
+		&defaultModel, &defaultReasoningEffort, &defaultServiceTier, &defaultApprovalMode, &memoryScope, &env, &channels, &schedules,
+		&mcpServers, &skills, &clis, &enabled, &source, &created, &updated, &privateChatMode, &groupChatMode); err != nil {
 		return a, err
 	}
 	a.DesktopThreadID = desktopThreadID.String
@@ -158,8 +118,6 @@ func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	a.WorktreeBaseRef = worktreeBaseRef.String
 	a.SessionBackend = sessionBackend.String
 	a.SystemPrompt = systemPrompt.String
-	a.ProviderTool = providerTool.String
-	a.ProviderID = providerID.String
 	a.DefaultModel = defaultModel.String
 	a.DefaultReasoningEffort = defaultReasoningEffort.String
 	a.DefaultServiceTier = defaultServiceTier.String
@@ -169,8 +127,6 @@ func scanAgentInstance(sc scanner) (core.AgentInstance, error) {
 	a.MemoryScope = memoryScope.String
 	a.Enabled = enabled != 0
 	a.Source = source.String
-	a.OwnerTenantID = ownerTenantID.String
-	a.Visibility = visibility.String
 	if env.String != "" {
 		_ = json.Unmarshal([]byte(env.String), &a.Env)
 	}

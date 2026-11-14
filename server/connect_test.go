@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/provider"
 	"github.com/wangning19940904/AgentMux/store"
 	ttspkg "github.com/wangning19940904/AgentMux/tts"
 
@@ -35,18 +35,6 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	cfg := config.Default()
 	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
 	return New(Dependencies{Config: cfg, Store: st}), st
-}
-
-func newTestServerWithProvider(t *testing.T) (*Server, *store.Store) {
-	t.Helper()
-	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	cfg := config.Default()
-	cfg.Remote.HostsFile = filepath.Join(t.TempDir(), "missing-remotes.json")
-	return New(Dependencies{Config: cfg, Store: st, Provider: provider.NewManager(st)}), st
 }
 
 func doJSON(t *testing.T, s *Server, method, path string, body any) *httptest.ResponseRecorder {
@@ -328,70 +316,35 @@ func TestPlatformsIncludeLarkAlias(t *testing.T) {
 	}
 }
 
-func TestAgentDefaultModelValidation(t *testing.T) {
-	addTestRuntimeToPath(t, "codex")
-	s, st := newTestServerWithProvider(t)
-	ctx := context.Background()
-	p := &core.Provider{
-		ID:        "relay",
-		Name:      "Relay",
-		BaseURL:   "http://relay.local",
-		Model:     "gpt-5",
-		Meta:      core.ProviderMeta{SupportedModels: []string{"gpt-5-mini", "gpt-5"}},
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+// Agent model defaults are checked against the framework's own model list;
+// model IDs it does not list are accepted as typed.
+func TestAgentDefaultModelValidationUsesFrameworkCatalog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell mock is unix-only")
 	}
-	if err := st.UpsertProvider(ctx, p); err != nil {
+	bin := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"--list-models\" ]; then\n  printf 'Available models\\nauto - Auto (current, default)\\ncomposer-2\\n'\n  exit 0\nfi\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "cursor-agent"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetActiveProvider(ctx, "codex", p.ID); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	s, _ := newTestServer(t)
 
+	for _, model := range []string{"composer-2", "group/opus-anywhere"} {
+		rec := doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
+			Name: "Agent " + model, RuntimeID: "cursor",
+			DefaultModel: model, WorkDir: t.TempDir(), Enabled: true,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("model %s: code = %d body = %s", model, rec.Code, rec.Body.String())
+		}
+	}
 	rec := doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
-		Name:         "Research",
-		RuntimeID:    "codex",
-		ProviderTool: "codex",
-		DefaultModel: "gpt-5-mini",
-		Enabled:      true,
+		Name: "Bad effort", RuntimeID: "cursor", DefaultModel: "group/opus-anywhere",
+		DefaultReasoningEffort: "ultra", WorkDir: t.TempDir(), Enabled: true,
 	})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("valid default model: code = %d body = %s", rec.Code, rec.Body.String())
-	}
-	var saved core.AgentInstance
-	if err := json.Unmarshal(rec.Body.Bytes(), &saved); err != nil {
-		t.Fatal(err)
-	}
-	if saved.DefaultModel != "gpt-5-mini" {
-		t.Fatalf("saved default model = %q", saved.DefaultModel)
-	}
-
-	rec = doJSON(t, s, http.MethodPost, "/api/v1/agent-instances", core.AgentInstance{
-		Name:         "Bad model",
-		RuntimeID:    "codex",
-		ProviderTool: "codex",
-		DefaultModel: "missing-model",
-		Enabled:      true,
-	})
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not supported") {
-		t.Fatalf("invalid default model: code = %d body = %s", rec.Code, rec.Body.String())
-	}
-
-	override := core.AgentInstance{
-		Name:         "Override",
-		RuntimeID:    "codex",
-		ProviderTool: "codex",
-		ProviderID:   "relay",
-		DefaultModel: "gpt-5",
-		Enabled:      true,
-	}
-	if err := s.normalizeAgentInstance(ctx, &override); err != nil {
-		t.Fatalf("override valid model: %v", err)
-	}
-	override.ID = ""
-	override.DefaultModel = "nope"
-	if err := s.normalizeAgentInstance(ctx, &override); err == nil {
-		t.Fatal("override invalid model unexpectedly passed")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not offered") {
+		t.Fatalf("invalid effort: code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }
 

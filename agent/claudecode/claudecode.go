@@ -6,6 +6,7 @@ package claudecode
 import (
 	"context"
 	"os/exec"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 )
@@ -44,6 +45,7 @@ func init() {
 		if env, ok := cfg["env"].(map[string]string); ok {
 			a.env = env
 		}
+		a.healthCheck, _ = cfg[core.AgentConfigHealthCheck].(bool)
 		return a, nil
 	})
 }
@@ -58,6 +60,8 @@ type Agent struct {
 	supportedReasoningEfforts []string
 	supportedApprovalModes    []string
 	env                       map[string]string
+	// healthCheck runs a throwaway turn: no tools, one turn, no transcript.
+	healthCheck bool
 }
 
 // Name returns the registered name.
@@ -65,14 +69,39 @@ func (a *Agent) Name() string { return "claudecode" }
 
 // StartSession spawns a new Claude Code session in workDir.
 func (a *Agent) StartSession(ctx context.Context, workDir string) (core.AgentSession, error) {
-	return newSession(a, workDir)
+	return newSession(a.withModelCatalog(ctx, workDir), workDir)
 }
 
 // StartSessionResume spawns a session that resumes the given claude-native
 // session id, restoring prior context. Empty resumeID behaves like
 // StartSession. Implements core.ResumableAgent.
 func (a *Agent) StartSessionResume(ctx context.Context, workDir, resumeID string) (core.AgentSession, error) {
-	return newSessionResume(a, workDir, resumeID)
+	return newSessionResume(a.withModelCatalog(ctx, workDir), workDir, resumeID)
+}
+
+// sessionCatalogTimeout bounds how long starting a session waits for the
+// model list. A miss only means the in-chat model menu is empty this time.
+const sessionCatalogTimeout = 8 * time.Second
+
+// withModelCatalog fills the in-chat model menu from Claude Code's own model
+// list when the agent configuration supplies none. The list is cached, so
+// only the first session in a while pays for reading it.
+func (a *Agent) withModelCatalog(ctx context.Context, workDir string) *Agent {
+	if len(a.supportedModels) > 0 || a.healthCheck {
+		return a
+	}
+	ctx, cancel := context.WithTimeout(ctx, sessionCatalogTimeout)
+	defer cancel()
+	catalog, err := a.discoverCatalog(ctx, workDir)
+	if err != nil || len(catalog.models) == 0 {
+		return a
+	}
+	copied := *a
+	copied.supportedModels = make([]string, 0, len(catalog.models))
+	for _, model := range catalog.models {
+		copied.supportedModels = append(copied.supportedModels, model.Value)
+	}
+	return &copied
 }
 
 // ListSessions is not yet backed by persistent state; returns empty.

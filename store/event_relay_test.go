@@ -52,7 +52,7 @@ func testRelayDurability(t *testing.T, st *Store) {
 	if err := st.IngestRelayEvent(ctx, event, ""); err != nil {
 		t.Fatal(err)
 	}
-	list, err := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	list, err := st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("duplicate backfilled new subscriber: %v %v", list, err)
 	}
@@ -113,31 +113,25 @@ func TestPostgresEventRelayDurability(t *testing.T) {
 	testRelayDurability(t, openPostgresIntegrationStore(t))
 }
 
-func TestEventRelayPermissionAndFilters(t *testing.T) {
+func TestEventRelaySourcesAndFilters(t *testing.T) {
 	st := sqliteRelayStore(t)
 	ctx := context.Background()
 	sub, event := relayFixture(t, st)
-	now := time.Now()
-	tenant := &core.Tenant{ID: "consumer", Name: "consumer", Status: core.TenantStatusActive, CreatedAt: now, UpdatedAt: now}
-	if err := st.UpsertTenant(ctx, tenant); err != nil {
-		t.Fatal(err)
+	if exists, err := st.EventSourceExists(ctx, event.SourceRef); err != nil || !exists {
+		t.Fatalf("existing source: %v %v", exists, err)
 	}
-	channel, _ := st.GetChannel(ctx, "relay-channel")
-	channel.Visibility = core.VisibilityPublic
-	st.UpsertChannel(ctx, channel)
-	st.UpsertResourceGrant(ctx, &core.ResourceGrant{TenantID: tenant.ID, ResourceType: core.ResourceTypeChannel, ResourceID: channel.ID, Level: core.GrantLevelManage})
-	if allowed, err := st.EventSourceAllowed(ctx, tenant.ID, event.SourceRef); err != nil || allowed {
-		t.Fatalf("ordinary grant leaked events: %v %v", allowed, err)
+	if exists, err := st.EventSourceExists(ctx, "channel:missing"); err != nil || exists {
+		t.Fatalf("missing source: %v %v", exists, err)
 	}
-	st.UpsertResourceGrant(ctx, &core.ResourceGrant{TenantID: tenant.ID, ResourceType: core.ResourceTypeEventSource, ResourceID: event.SourceRef, Level: core.GrantLevelUse})
-	if allowed, err := st.EventSourceAllowed(ctx, tenant.ID, event.SourceRef); err != nil || !allowed {
-		t.Fatalf("explicit grant: %v %v", allowed, err)
+	if exists, err := st.EventSourceExists(ctx, "system"); err != nil || !exists {
+		t.Fatalf("system source: %v %v", exists, err)
 	}
 	sub.ID = ""
-	sub.OwnerTenantID = tenant.ID
-	sub.Key = "tenant"
+	sub.Key = "filtered"
 	sub.Filters = map[string][]string{"table_id": {"t1", "t2"}, "file_token": {"f1"}}
-	st.SaveEventSubscription(ctx, &sub)
+	if _, err := st.SaveEventSubscription(ctx, &sub); err != nil {
+		t.Fatal(err)
+	}
 	event.Attributes["table_id"] = "t2"
 	if sub.Matches(event) {
 		t.Fatal("missing attribute matched")
@@ -145,11 +139,6 @@ func TestEventRelayPermissionAndFilters(t *testing.T) {
 	event.Attributes["file_token"] = "f1"
 	if !sub.Matches(event) {
 		t.Fatal("AND/OR filter did not match")
-	}
-	tenant.Status = core.TenantStatusDisabled
-	st.UpsertTenant(ctx, tenant)
-	if allowed, err := st.EventSourceAllowed(ctx, tenant.ID, event.SourceRef); err != nil || allowed {
-		t.Fatal("disabled tenant retained event permission")
 	}
 }
 
@@ -189,7 +178,7 @@ func TestPostgresEventRelayFanoutAndClaims(t *testing.T) {
 	if claims != 1 {
 		t.Fatalf("claims=%d", claims)
 	}
-	list, err := st.ListEventDeliveries(ctx, nil, sub.ID, "", 100, 0)
+	list, err := st.ListEventDeliveries(ctx, sub.ID, "", 100, 0)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("fanout: %d %v", len(list), err)
 	}
@@ -249,14 +238,14 @@ func TestEventRelayAtomicFanoutAndRetention(t *testing.T) {
 	if err := st.PruneEventDeliveries(ctx, now.Add(8*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	list, _ := st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if len(list) != 2 {
 		t.Fatalf("7-day retention: %d", len(list))
 	}
 	if err := st.PruneEventDeliveries(ctx, now.Add(31*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	list, _ = st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	list, _ = st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if len(list) != 1 || list[0].Status != "pending" {
 		t.Fatalf("unfinished event pruned: %+v", list)
 	}

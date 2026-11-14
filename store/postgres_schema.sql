@@ -1,25 +1,4 @@
 
-CREATE TABLE IF NOT EXISTS providers (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	preset TEXT,
-	category TEXT,
-	base_url TEXT,
-	api_key_env TEXT,
-	model TEXT,
-	tools TEXT,
-	extra TEXT,
-	settings_config TEXT,
-	meta TEXT,
-	enabled BIGINT DEFAULT 0,
-	created_at TEXT,
-	updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS active_provider (
-	tool TEXT PRIMARY KEY,
-	provider_id TEXT,
-	meta TEXT
-);
 CREATE TABLE IF NOT EXISTS usage_records (
 	source TEXT,
 	session_id TEXT,
@@ -84,8 +63,6 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	worktree_base_ref TEXT,
 	session_backend TEXT,
 	system_prompt TEXT,
-	provider_tool TEXT,
-	provider_id TEXT,
 	default_model TEXT,
 	default_reasoning_effort TEXT,
 	default_service_tier TEXT,
@@ -101,44 +78,9 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	clis TEXT,
 	enabled BIGINT DEFAULT 1,
 	source TEXT,
-	owner_tenant_id TEXT,
-	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_agent_instances_owner ON agent_instances(owner_tenant_id);
-CREATE TABLE IF NOT EXISTS proxy_config (
-	tool TEXT PRIMARY KEY,
-	enabled BIGINT DEFAULT 0,
-	auto_failover BIGINT DEFAULT 0,
-	max_retries BIGINT DEFAULT 3,
-	failure_threshold BIGINT DEFAULT 4,
-	cooldown_seconds BIGINT DEFAULT 60
-);
-CREATE TABLE IF NOT EXISTS proxy_live_backup (
-	tool TEXT PRIMARY KEY,
-	original_config TEXT NOT NULL,
-	backed_up_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS proxy_traces (
-	id TEXT PRIMARY KEY,
-	timestamp TEXT NOT NULL,
-	tool TEXT,
-	provider_id TEXT,
-	provider_name TEXT,
-	client_protocol TEXT,
-	upstream_protocol TEXT,
-	client_model TEXT,
-	upstream_model TEXT,
-	status_code BIGINT,
-	success BIGINT DEFAULT 0,
-	error TEXT,
-	session_id TEXT,
-	project_dir TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_time ON proxy_traces(timestamp);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_tool_time ON proxy_traces(tool,timestamp);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_session_time ON proxy_traces(session_id,timestamp);
 CREATE TABLE IF NOT EXISTS channels (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -146,45 +88,9 @@ CREATE TABLE IF NOT EXISTS channels (
 	agent_id TEXT,
 	config TEXT,
 	enabled BIGINT DEFAULT 0,
-	owner_tenant_id TEXT,
-	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_tenant_id);
-CREATE TABLE IF NOT EXISTS tenants (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	kind TEXT,
-	status TEXT NOT NULL,
-	note TEXT,
-	created_at TEXT,
-	updated_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_name ON tenants(name);
-CREATE TABLE IF NOT EXISTS tenant_tokens (
-	id TEXT PRIMARY KEY,
-	tenant_id TEXT NOT NULL,
-	name TEXT,
-	token_hash TEXT NOT NULL,
-	prefix TEXT,
-	created_at TEXT,
-	last_used_at TEXT,
-	expires_at TEXT,
-	revoked_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_tokens_hash ON tenant_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
-CREATE TABLE IF NOT EXISTS resource_grants (
-	tenant_id TEXT NOT NULL,
-	resource_type TEXT NOT NULL,
-	resource_id TEXT NOT NULL,
-	level TEXT NOT NULL,
-	created_at TEXT,
-	updated_at TEXT,
-	PRIMARY KEY (tenant_id, resource_type, resource_id)
-);
-CREATE INDEX IF NOT EXISTS idx_resource_grants_lookup ON resource_grants(tenant_id, resource_type);
 CREATE TABLE IF NOT EXISTS triggers (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -203,11 +109,9 @@ CREATE TABLE IF NOT EXISTS triggers (
 	last_run TEXT,
 	last_status TEXT,
 	last_error TEXT,
-	owner_tenant_id TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_triggers_owner ON triggers(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS conversations (
 	id TEXT PRIMARY KEY,
 	scope TEXT NOT NULL,
@@ -297,13 +201,11 @@ CREATE TABLE IF NOT EXISTS orchestrations (
 	status TEXT NOT NULL,
 	max_concurrency BIGINT NOT NULL,
 	error TEXT,
-	owner_tenant_id TEXT,
 	created_at TEXT NOT NULL,
 	started_at TEXT,
 	finished_at TEXT,
 	updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_orchestrations_owner ON orchestrations(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS orchestration_tasks (
 	orchestration_id TEXT NOT NULL,
 	id TEXT NOT NULL,

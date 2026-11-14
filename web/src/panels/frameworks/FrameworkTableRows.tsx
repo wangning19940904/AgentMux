@@ -1,7 +1,8 @@
-import { CheckCircle2, Copy, Download, ExternalLink, LogIn, LogOut, Package, RefreshCw, Trash2, UserRound, X } from "lucide-react";
+import { CheckCircle2, Copy, Download, ExternalLink, List, LogIn, LogOut, Package, Play, RefreshCw, Trash2, UserRound, X } from "lucide-react";
 import type {
   Framework,
   FrameworkAuthStatus,
+  FrameworkSmokeResult,
   FrameworkUpdateCheck,
   OperationProgress,
 } from "../../api";
@@ -10,6 +11,7 @@ import { OperationProgress as OperationProgressView } from "../../components/Ope
 import { useI18n } from "../../i18n";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
 import { TargetBadge } from "../../components/TargetBadge";
+import { FrameworkSmokeResultView } from "./FrameworkSmokeResult";
 import { frameworkAccountSummary, frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
 import type { FrameworkAccountFieldKey, FrameworkAccountSummary } from "./frameworkPresentation";
 
@@ -36,7 +38,7 @@ export function FrameworkGroupRow({
   const { spec } = item;
   return (
     <tr className="framework-group-row">
-      <td colSpan={4}>
+      <td colSpan={5}>
         <div className="framework-group-head">
           <span className="provider-icon"><Package size={16} /></span>
           <span className="framework-group-copy">
@@ -77,6 +79,10 @@ export function FrameworkTableRows({
   copiedCode,
   currentMachine,
   disabled,
+  health,
+  testing,
+  onTest,
+  onModels,
   onCheck,
   onInstall,
   onUninstall,
@@ -98,6 +104,10 @@ export function FrameworkTableRows({
   copiedCode: boolean;
   currentMachine: string;
   disabled: boolean;
+  health?: FrameworkSmokeResult;
+  testing?: boolean;
+  onTest?: () => void;
+  onModels?: () => void;
   onCheck?: () => void;
   onInstall?: (action: "install" | "update") => void;
   onUninstall: () => void;
@@ -150,6 +160,22 @@ export function FrameworkTableRows({
             ? <FrameworkAccountLine account={account} />
             : <span className="muted">{supportsLogin && !authChecking ? t("tools.authLoginRequired") : "—"}</span>}
         </td>
+        <td data-label={t("frameworks.availability")}>
+          <div className="framework-health-cell">
+            <FrameworkSmokeResultView result={health} busy={testing} showModel />
+            {item.registered && (
+              <div className="framework-row-actions">
+                <button className="ghost-action" disabled={disabled || testing || authActive} onClick={onTest}
+                  title={t("frameworks.health.testHint")} type="button">
+                  <Play size={14} />{t("frameworks.health.test")}
+                </button>
+                <button className="ghost-action" disabled={disabled} onClick={onModels} type="button">
+                  <List size={14} />{t("frameworks.health.models")}
+                </button>
+              </div>
+            )}
+          </div>
+        </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
           <div className="framework-row-actions">
             {spec.update_supported && (
@@ -199,10 +225,10 @@ export function FrameworkTableRows({
           </div>
         </td>
       </tr>
-      {progress && <tr className="catalog-progress-row"><td colSpan={4}><OperationProgressView progress={progress} /></td></tr>}
+      {progress && <tr className="catalog-progress-row"><td colSpan={5}><OperationProgressView progress={progress} /></td></tr>}
       {loginFlow && (
         <tr className="catalog-progress-row framework-auth-row">
-          <td colSpan={4}>
+          <td colSpan={5}>
             <FrameworkAuthPrompt
               busy={busy}
               copiedCode={copiedCode}
@@ -241,10 +267,11 @@ export function FrameworkInstallingRow({ item, progress }: { item: Framework; pr
           </span>
         </td>
         <td className="framework-account-cell" />
+        <td data-label={t("frameworks.availability")} />
         <td className="catalog-action-cell" data-label={t("common.actions")} />
       </tr>
       <tr className="catalog-progress-row">
-        <td colSpan={4}><OperationProgressView progress={progress ?? { phase: "preparing", percent: 4 }} /></td>
+        <td colSpan={5}><OperationProgressView progress={progress ?? { phase: "preparing", percent: 4 }} /></td>
       </tr>
     </>
   );

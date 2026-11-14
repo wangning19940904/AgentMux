@@ -37,9 +37,6 @@ type AgentInstance struct {
 	WorktreeBaseRef        string                `json:"worktree_base_ref,omitempty"`
 	SessionBackend         string                `json:"session_backend,omitempty"`
 	SystemPrompt           string                `json:"system_prompt,omitempty"`
-	ProviderTool           string                `json:"provider_tool,omitempty"`
-	ProviderID             string                `json:"provider_id,omitempty"`
-	ProviderName           string                `json:"provider_name,omitempty"`
 	DefaultModel           string                `json:"default_model,omitempty"`
 	DefaultReasoningEffort string                `json:"default_reasoning_effort,omitempty"`
 	DefaultServiceTier     string                `json:"default_service_tier,omitempty"`
@@ -53,9 +50,6 @@ type AgentInstance struct {
 	CLIs                   []string              `json:"clis,omitempty"`
 	Enabled                bool                  `json:"enabled"`
 	Source                 string                `json:"source,omitempty"` // manual, console, config.toml
-	OwnerTenantID          string                `json:"owner_tenant_id,omitempty"`
-	OwnerTenantName        string                `json:"owner_tenant_name,omitempty"`
-	Visibility             string                `json:"visibility,omitempty"` // private, public
 	CreatedAt              time.Time             `json:"created_at"`
 	UpdatedAt              time.Time             `json:"updated_at"`
 	// Empty modes preserve legacy per-channel defaults until explicitly set.

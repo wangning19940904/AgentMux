@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APIError, tenantScopeKey } from "./client";
+import { APIError } from "./client";
 import { mailboxAPI } from "./mailbox";
 
 afterEach(() => {
@@ -13,8 +13,8 @@ function stubFetch(respond: (path: string, init?: RequestInit) => Response) {
 }
 
 describe("mailbox API", () => {
-  it("asks the Console's own server as the signed-in person, whatever machine or tenant is selected", async () => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? tenantScopeKey("ten_remote", "ssh-1") : "ssh-1" });
+  it("asks the Console's own server as the signed-in person, whatever machine is selected", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "ssh-1" });
     const fetchMock = stubFetch(() => new Response(JSON.stringify({ me: { address: "person:ning" }, admin: false, conversations: null, agent_conversations: null, controlled: null })));
 
     await expect(mailboxAPI.overview()).resolves.toEqual({
@@ -23,7 +23,6 @@ describe("mailbox API", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/mailbox");
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("X-AgentMux-Console")).toBe("1");
-    expect(headers.has("X-AgentMux-Tenant-Scope")).toBe(false);
   });
 
   it("reads the viewer's conversation with one address, or the one between two others", async () => {

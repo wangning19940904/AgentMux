@@ -22,7 +22,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChannelAvatar } from "../ChannelAvatar";
-import { AgentSession, ProxyTrace, SessionMessage, api } from "../api";
+import { AgentSession, SessionMessage, api } from "../api";
 import { useI18n } from "../i18n";
 import { usePolling } from "../hooks/usePolling";
 import { useAsync } from "../useAsync";
@@ -132,15 +132,6 @@ export function SessionsPanel() {
     [selected?.conversation_id, selected?.session_id, selected?.source_path, selected?.surface, selected?.target_id]
   );
   const traceSessionID = selected?.native_session_id || (selected?.origin !== "channel" ? selected?.session_id : "");
-  const traceTool = selected && traceSessionID ? routeToolForSession(selected) : "";
-  const sessionTraces = useAsync(
-    () => (traceTool && traceSessionID ? api.proxyTraces({ tool: traceTool, sessionID: traceSessionID, limit: 20 }, selected?.target_id) : Promise.resolve([])),
-    [traceTool, traceSessionID, selected?.target_id]
-  );
-  const recentTraces = useAsync(
-    () => (traceTool ? api.proxyTraces({ tool: traceTool, limit: 10 }, selected?.target_id) : Promise.resolve([])),
-    [traceTool, selected?.target_id]
-  );
   const channelConversations = useAsync(
     () => (bindChannelID ? api.channelConversations(bindChannelID) : Promise.resolve([])),
     [bindChannelID]
@@ -168,11 +159,6 @@ export function SessionsPanel() {
   const transcriptMessages = visibleMessages.filter((message) =>
     message.role === "user" || message.role === "assistant" || message.role === "tool"
   );
-  const selectedTraces = sessionTraces.data ?? [];
-  const fallbackTraces = recentTraces.data ?? [];
-  const routeTraces = selectedTraces.length > 0 ? selectedTraces : fallbackTraces;
-  const routeTraceFallback = !sessionTraces.loading && selectedTraces.length === 0 && fallbackTraces.length > 0;
-  const routeTraceLoading = sessionTraces.loading || (!sessionTraces.loading && selectedTraces.length === 0 && recentTraces.loading);
 	const selectedRunStatus = stopping
 		? "stopping"
 		: busy === "message"
@@ -674,7 +660,7 @@ export function SessionsPanel() {
                     ))}
                   </div>
                 )}
-                {(selected.provider_id === "codex" || traceTool || pendingInteractions.data?.length) && (
+                {(selected.provider_id === "codex" || pendingInteractions.data?.length) && (
                   <details className="session-advanced">
                     <summary>{t("sessions.advanced")}</summary>
                     {selected.provider_id === "codex" && selected.surface === "desktop" && selected.origin !== "channel" && (
@@ -784,17 +770,6 @@ export function SessionsPanel() {
                         </div>
                       );
                     })}
-
-                    {traceTool && (
-                      <RouteTracePanel
-                        error={sessionTraces.error || recentTraces.error}
-                        fallback={routeTraceFallback}
-                        language={language}
-                        loading={routeTraceLoading}
-                        traces={routeTraces}
-                        t={t}
-                      />
-                    )}
                   </details>
                 )}
               </>
@@ -849,12 +824,6 @@ function sessionStatusLabel(status: string, t: (key: string) => string) {
 		case "offline": return t("sessions.statusOffline");
 		default: return t("sessions.statusIdle");
 	}
-}
-
-function routeToolForSession(session: AgentSession) {
-  if (session.provider_id === "claude" || session.provider_id === "claudecode") return "claudecode";
-  if (session.provider_id === "codex") return "codex";
-  return session.provider_id;
 }
 
 function normalizeProvider(provider: string) {
@@ -985,77 +954,6 @@ function toolStatusLabel(status: string | undefined, t: (key: string) => string)
   if (tone === "success") return t("sessions.toolCompleted");
   if (tone === "error") return t("sessions.toolFailed");
   return t("sessions.toolCalled");
-}
-
-function RouteTracePanel({
-  error,
-  fallback,
-  language,
-  loading,
-  traces,
-  t,
-}: {
-  error: string | null;
-  fallback: boolean;
-  language: string;
-  loading: boolean;
-  traces: ProxyTrace[];
-  t: (key: string) => string;
-}) {
-  return (
-    <section className="route-trace-panel">
-      <div className="route-trace-head">
-        <strong>{t("sessions.routeTrace")}</strong>
-        {fallback && <span className="muted">{t("sessions.routeTraceFallback")}</span>}
-      </div>
-      {error && <div className="error">{error}</div>}
-      {loading && <div className="muted">{t("common.loading")}</div>}
-      {!error && !loading && traces.length === 0 && <div className="empty-state compact">{t("sessions.noRouteTrace")}</div>}
-      {!loading && traces.length > 0 && (
-        <div className="route-trace-list">
-          {traces.map((trace) => (
-            <article className="route-trace-item" key={trace.id}>
-              <div>
-                <strong>
-                  {toolLabel(trace.tool)} -&gt; {trace.provider_name || trace.provider_id || "-"}
-                </strong>
-                <span className="mono">
-                  {trace.client_model || "-"} -&gt; {trace.upstream_model || "-"}
-                </span>
-              </div>
-              <div>
-                <span className={trace.success ? "status-badge success" : "status-badge warning"}>
-                  <span className="status-dot" />
-                  {trace.success ? t("common.healthy") : t("common.degraded")}
-                </span>
-                <span className="muted">
-                  {protocolLabel(trace.client_protocol)} -&gt; {protocolLabel(trace.upstream_protocol)}
-                </span>
-                <time>{formatDate(trace.timestamp, language)}</time>
-              </div>
-              {trace.error && <small className="error">{trace.error}</small>}
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function toolLabel(tool: string) {
-  if (tool === "claudecode") return "Claude Code CLI";
-  if (tool === "claude-desktop") return "Claude Desktop";
-  if (tool === "codex") return "Codex CLI";
-  if (tool === "gemini") return "Gemini CLI";
-  return tool || "-";
-}
-
-function protocolLabel(protocol: string) {
-  if (protocol === "anthropic") return "Anthropic";
-  if (protocol === "openai_chat") return "OpenAI Chat";
-  if (protocol === "openai_responses") return "OpenAI Responses";
-  if (protocol === "gemini") return "Gemini";
-  return protocol || "-";
 }
 
 function formatDate(value: string | undefined, language: string) {

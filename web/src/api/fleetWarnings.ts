@@ -42,7 +42,7 @@ export function fleetWarningResourceKey(path: string): string {
   const params = new URLSearchParams(query);
   // Date/filter changes refresh one read; distinct CLI/provider identities
   // must not clear each other's failures just because the endpoint matches.
-  const identity = ["id", "kind", "tool", "provider_id", "channel_id", "tenant_id"]
+  const identity = ["id", "kind", "tool", "provider_id", "channel_id"]
     .filter((key) => params.has(key)).map((key) => [key, params.get(key)]);
   return JSON.stringify([base, identity]);
 }

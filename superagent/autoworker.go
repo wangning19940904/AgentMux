@@ -85,14 +85,12 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, r
 		WorkDir: workDir, WorkspaceMode: autoWorkerWorkspaceMode(ctx, workDir),
 		DefaultApprovalMode: firstNonEmpty(agent.AutoWorkerApprovalMode, defaultAutoWorkerApproval(runtimeID)),
 		Enabled:             true, Source: autoWorkerAgentSource,
-		OwnerTenantID: router.OwnerTenantID, OwnerTenantName: router.OwnerTenantName, Visibility: router.Visibility,
 		CreatedAt: createdAt, UpdatedAt: now,
 	}
-	// The router's provider, model and environment belong to its framework.
-	// Another framework uses its own active provider route.
+	// The router's model and environment belong to its framework; another
+	// framework uses its own defaults.
 	if runtimeID == router.RuntimeID {
 		instance.SessionBackend = router.SessionBackend
-		instance.ProviderTool, instance.ProviderID, instance.ProviderName = router.ProviderTool, router.ProviderID, router.ProviderName
 		instance.DefaultModel, instance.DefaultReasoningEffort, instance.DefaultServiceTier = router.DefaultModel, router.DefaultReasoningEffort, router.DefaultServiceTier
 		instance.Env = router.Env
 	}

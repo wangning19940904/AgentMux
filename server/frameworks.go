@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/framework"
@@ -93,6 +95,72 @@ func (s *Server) handleFrameworkRuntimeSettings(w http.ResponseWriter, r *http.R
 		Defaults:     defaults,
 		Capabilities: capabilities,
 	})
+}
+
+type frameworkTestRequest struct {
+	Kind            string `json:"kind"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ServiceTier     string `json:"service_tier,omitempty"`
+	// AgentID lends that Agent's environment. Without Kind, the Agent is
+	// tested as saved: its runtime and default model settings.
+	AgentID        string `json:"agent_id,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+}
+
+// handleFrameworkTest runs a framework smoke test: it asks the framework,
+// through the same runtime Agents use, to reply "ok" with the chosen model.
+// It spends one short model call, so it only runs when a user asks for it.
+func (s *Server) handleFrameworkTest(w http.ResponseWriter, r *http.Request) {
+	var req frameworkTestRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	opts := framework.SmokeOptions{
+		Kind:            strings.TrimSpace(req.Kind),
+		Model:           strings.TrimSpace(req.Model),
+		ReasoningEffort: strings.TrimSpace(req.ReasoningEffort),
+		ServiceTier:     strings.TrimSpace(req.ServiceTier),
+		Timeout:         time.Duration(req.TimeoutSeconds) * time.Second,
+	}
+	if id := strings.TrimSpace(req.AgentID); id != "" {
+		agent, err := s.st.GetAgentInstance(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if agent == nil {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		// Without a kind, test the Agent as saved. With one, test exactly the
+		// requested settings (such as an unsaved form) in the Agent's environment.
+		if opts.Kind == "" {
+			opts.Kind = agent.RuntimeID
+			opts.Model = agent.DefaultModel
+			opts.ReasoningEffort = agent.DefaultReasoningEffort
+			opts.ServiceTier = agent.DefaultServiceTier
+		}
+		opts.Env = agent.Env
+	}
+	if opts.Kind == "" {
+		writeErr(w, http.StatusBadRequest, "framework kind is required")
+		return
+	}
+	result, err := framework.SmokeTest(r.Context(), opts)
+	if errors.Is(err, framework.ErrUnknownFramework) {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.recordFrameworkHealth(r.Context(), result); err != nil {
+		s.log.Warn("record framework health", "kind", result.Kind, "err", err)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, result)
 }
 
 type frameworkInstallRequest struct {

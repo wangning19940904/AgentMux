@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Package, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
+import { Package, Play, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
   activeRemoteID,
@@ -18,6 +18,8 @@ import { useAsync } from "../useAsync";
 import { FrameworkBusyAction, FrameworkGroupRow, FrameworkInstallingRow, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
+import { latestHealthResult, useFrameworkHealth } from "./frameworks/useFrameworkHealth";
+import { FrameworkModelsDialog } from "./frameworks/FrameworkModelsDialog";
 import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
 import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
 import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
@@ -59,6 +61,7 @@ export function FrameworksPanel() {
   const [pendingCustom, setPendingCustom] = useState<{ entries: CustomCommandEntry[]; run: () => void } | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkUpdateProgress | null>(null);
   const [bulkResults, setBulkResults] = useState<BulkUpdateResult<Framework>[]>([]);
+  const [modelsFor, setModelsFor] = useState<Framework | null>(null);
   const bulkRunning = useRef(false);
 
   const prereqs = frameworks.data?.prereqs;
@@ -117,6 +120,12 @@ export function FrameworksPanel() {
       setNotice(value);
     },
   });
+
+  const health = useFrameworkHealth(installedItems);
+  // Test all covers every machine row shown on this page.
+  const testCandidates = frameworkPagination.pageItems
+    .flatMap((group) => group.members)
+    .filter((item) => item.registered && item.spec.supported);
 
   const updateCandidates = frameworkUpdateCandidates(installedItems, checks);
   const updateAllBlocked = frameworks.loading || Boolean(frameworks.error) || Boolean(bulkProgress)
@@ -332,6 +341,15 @@ export function FrameworksPanel() {
             <span className="pill on">{installedGroups.length}</span>
           </div>
           <div className="catalog-bulk-actions">
+            <button
+              className="ghost-action"
+              disabled={health.testingAll || testCandidates.length === 0 || Boolean(bulkProgress)}
+              onClick={() => void health.testAll(testCandidates)}
+              title={t("frameworks.health.testAllHint", { machine: currentMachine })}
+              type="button"
+            >
+              <Play size={15} />{health.testingAll ? t("frameworks.health.testing") : t("frameworks.health.testAll")}
+            </button>
             <BulkUpdateButton
               count={updateCandidates.length}
               progress={bulkProgress}
@@ -361,6 +379,7 @@ export function FrameworksPanel() {
               <th>{t("frameworks.machine")}</th>
               <th>{t("frameworks.versionAndUpdate")}</th>
               <th>{t("frameworks.account")}</th>
+              <th>{t("frameworks.availability")}</th>
               <th>{t("common.actions")}</th>
             </tr></thead>
             <tbody>
@@ -397,6 +416,10 @@ export function FrameworksPanel() {
                         copiedCode={frameworkAuth.copiedCode === key}
                         currentMachine={machineLabel(item)}
                         disabled={!item.spec.supported || Boolean(bulkProgress)}
+                        health={latestHealthResult(health.results[key])}
+                        testing={Object.keys(health.testing[key] ?? {}).length > 0}
+                        onTest={() => void health.test(item)}
+                        onModels={() => setModelsFor(item)}
                         onCheck={() => void checkUpdate(item)}
                         onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
                         onUninstall={() => requestUninstall(item)}
@@ -412,7 +435,7 @@ export function FrameworksPanel() {
                   </Fragment>
                 );
               })}
-              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={4}>{t("frameworks.noInstalled")}</td></tr>}
+              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("frameworks.noInstalled")}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -435,6 +458,15 @@ export function FrameworksPanel() {
         </section>
       )}
 
+      {modelsFor && (
+        <FrameworkModelsDialog
+          item={modelsFor}
+          results={health.results[targetKey(modelsFor.target_id, modelsFor.spec.kind)] ?? {}}
+          testing={health.testing[targetKey(modelsFor.target_id, modelsFor.spec.kind)] ?? {}}
+          onTest={(model) => void health.test(modelsFor, model)}
+          onClose={() => setModelsFor(null)}
+        />
+      )}
       {installerOpen && (
         <FrameworkInstallDialog
           busy={busy}
@@ -579,8 +611,8 @@ function FrameworkUninstallDialog({
         onClick={onClose}
         type="button"
       />
-      <section aria-labelledby="framework-uninstall-title" aria-modal="true" className="surface meeting-dialog tenant-delete-dialog" role="alertdialog">
-        <div className="meeting-dialog-icon tenant-delete-dialog-icon"><Trash2 size={22} /></div>
+      <section aria-labelledby="framework-uninstall-title" aria-modal="true" className="surface meeting-dialog confirm-delete-dialog" role="alertdialog">
+        <div className="meeting-dialog-icon confirm-delete-dialog-icon"><Trash2 size={22} /></div>
         <div className="meeting-dialog-heading">
           <h2 id="framework-uninstall-title">{t("frameworks.uninstallTitle", { framework: item.spec.display })}</h2>
           <p>{t("frameworks.uninstallConfirm", { framework: item.spec.display })}</p>

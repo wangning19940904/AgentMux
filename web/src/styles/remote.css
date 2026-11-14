@@ -933,69 +933,6 @@
   .feedback-list { border-right: 0; border-bottom: 1px solid var(--border); }
 }
 
-.route-trace-panel {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.route-trace-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-}
-
-.route-trace-list {
-  display: grid;
-  gap: 8px;
-}
-
-.route-trace-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-width: 0;
-  padding: 9px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.route-trace-item > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  min-width: 0;
-}
-
-.route-trace-item > div:first-child {
-  display: grid;
-  gap: 4px;
-}
-
-.route-trace-item strong,
-.route-trace-item .mono {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.route-trace-item time {
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
 .transcript {
   display: grid;
   flex: 1 1 auto;
@@ -1565,6 +1502,9 @@
 .model-picker-option svg { color: var(--accent); flex: none; }
 .model-picker-section { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
 .model-picker-section > small, .model-picker-toggle > small { color: var(--muted); }
+.model-picker-typed-row { display: flex; gap: 6px; }
+.model-picker-typed-row > input { flex: 1 1 auto; min-width: 0; }
+.model-picker-typed-row > button { flex: none; }
 .model-picker-segments { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg-subtle); }
 .model-picker-segments button {
   flex: 1 1 auto; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-soft); font-size: 12px;

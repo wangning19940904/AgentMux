@@ -15,8 +15,8 @@ import (
 )
 
 // The accounts command group manages the people who sign in to the Console.
-// It works on the database directly, like the tenants group, so it also
-// recovers a machine where every administrator lost their password.
+// It works on the database directly, so it also recovers a machine where
+// every administrator lost their password.
 
 func accountsCmd() *cobra.Command {
 	command := &cobra.Command{
@@ -34,6 +34,76 @@ created becomes an administrator.`,
 	command.AddCommand(accountsStatusCmd("enable", core.AccountStatusActive, "Enable a disabled account"))
 	command.AddCommand(accountsRoleCmd())
 	command.AddCommand(accountsResetPasswordCmd())
+	command.AddCommand(accountsAssignDeviceCmd())
+	return command
+}
+
+// withAccountStore removes the open/close boilerplate from every subcommand.
+func withAccountStore(cmd *cobra.Command, run func(st *store.Store) error) error {
+	cfg, _, err := loadConfig(false)
+	if err != nil {
+		return err
+	}
+	if flagDatabaseURL != "" {
+		cfg.Database.URL = flagDatabaseURL
+	}
+	st, err := openRuntimeStore(cmd.Context(), cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return run(st)
+}
+
+// accountsAssignDeviceCmd hands a paired device to a member, who then sees
+// and manages it in their Console; --unassign returns it to administrators.
+func accountsAssignDeviceCmd() *cobra.Command {
+	var unassign bool
+	command := &cobra.Command{
+		Use:   "assign-device <login> <device-id>",
+		Short: "Give a paired device to an account (or --unassign <device-id>)",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withAccountStore(cmd, func(st *store.Store) error {
+				accountID, deviceID, owner := "", "", ""
+				if unassign {
+					if len(args) != 1 {
+						return fmt.Errorf("--unassign takes <device-id>")
+					}
+					deviceID = strings.TrimSpace(args[0])
+				} else {
+					if len(args) != 2 {
+						return fmt.Errorf("assign-device takes <login> <device-id>")
+					}
+					account, err := st.GetAccountByLogin(cmd.Context(), core.NormalizeLogin(args[0]))
+					if err != nil {
+						return err
+					}
+					if account == nil {
+						return fmt.Errorf("unknown account %q", args[0])
+					}
+					accountID, owner, deviceID = account.ID, account.Login, strings.TrimSpace(args[1])
+				}
+				device, err := st.GetDevice(cmd.Context(), deviceID)
+				if err != nil {
+					return err
+				}
+				if device == nil {
+					return fmt.Errorf("unknown device %q", deviceID)
+				}
+				if err := st.SetDeviceOwner(cmd.Context(), deviceID, accountID); err != nil {
+					return err
+				}
+				if accountID == "" {
+					cmd.Printf("Device %s is now visible to administrators only.\n", device.Name)
+					return nil
+				}
+				cmd.Printf("Device %s now belongs to %s.\n", device.Name, owner)
+				return nil
+			})
+		},
+	}
+	command.Flags().BoolVar(&unassign, "unassign", false, "return the device to administrators only")
 	return command
 }
 
@@ -42,7 +112,7 @@ func accountsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List accounts",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withTenantStore(cmd, func(st *store.Store) error {
+			return withAccountStore(cmd, func(st *store.Store) error {
 				accounts, err := st.ListAccounts(cmd.Context())
 				if err != nil {
 					return err
@@ -83,7 +153,7 @@ should change it after signing in.`,
 			if err != nil {
 				return err
 			}
-			return withTenantStore(cmd, func(st *store.Store) error {
+			return withAccountStore(cmd, func(st *store.Store) error {
 				count, err := st.CountAccounts(cmd.Context())
 				if err != nil {
 					return err
@@ -186,7 +256,7 @@ func accountsResetPasswordCmd() *cobra.Command {
 }
 
 func withAccount(cmd *cobra.Command, login string, run func(*store.Store, *core.Account) error) error {
-	return withTenantStore(cmd, func(st *store.Store) error {
+	return withAccountStore(cmd, func(st *store.Store) error {
 		account, err := st.GetAccountByLogin(cmd.Context(), login)
 		if err != nil {
 			return err

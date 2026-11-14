@@ -188,3 +188,31 @@ func TestPostgresHubReplicationPruneAndSchemaCheck(t *testing.T) {
 		t.Fatalf("schema mismatch err = %v", err)
 	}
 }
+
+// A standby runs the same migrations as the primary, so a migration that
+// rewrites hub rows must not be refused there (or logged on a primary).
+func TestPostgresMigrationsRunOnStandby(t *testing.T) {
+	ctx := context.Background()
+	standby := openPostgresIntegrationStore(t)
+	now := time.Now().UTC()
+	if err := standby.UpsertPushSubscription(ctx, core.PushSubscription{ID: "legacy", Subscriber: "tenant:gone",
+		Endpoint: "https://push.example/legacy", P256dh: "k", Auth: "a", Kinds: []string{"message"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := standby.SetHubRole(ctx, HubRoleStandby, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := standby.CreateDevicePairingCode(ctx, "refused"); err == nil {
+		t.Fatal("standby accepted a hub write")
+	}
+	if _, err := standby.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version=29`); err != nil {
+		t.Fatal(err)
+	}
+	if err := standby.migratePostgres(ctx); err != nil {
+		t.Fatalf("migrations on a standby: %v", err)
+	}
+	var left int
+	if err := standby.db.QueryRowContext(ctx, `SELECT count(*) FROM push_subscriptions WHERE subscriber LIKE 'tenant:%'`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("legacy push rows left = %d, %v", left, err)
+	}
+}

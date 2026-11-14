@@ -54,16 +54,15 @@ await client.send({ channelId: "channel-id", conversationKey: "root:message-id",
 
 ## Build a native host integration page
 
-Use the SDK from the host backend/BFF; never expose its tenant token to browser
+Use the SDK from the host backend/BFF; never expose its bridge token to browser
 code:
 
 ```ts
 const snapshot = await client.integration.snapshot({ orchestrationLimit: 8 });
-console.log(snapshot.identity.tenant, snapshot.agents, snapshot.triggers);
+console.log(snapshot.capabilities.contract_version, snapshot.agents, snapshot.triggers);
 ```
 
-The aggregate uses only public SDK resources and is filtered by the caller's
-tenant scope. The normative architecture and acceptance checklist live in
+The aggregate uses only public SDK resources. The normative architecture and acceptance checklist live in
 [`contract/HOST_INTEGRATION.md`](../../contract/HOST_INTEGRATION.md).
 
 ## Embed the Console (backend)
@@ -73,44 +72,29 @@ const session = await client.console.createSession();
 // Redirect the browser or use session.enter_url as a sandboxed iframe src.
 ```
 
-The session inherits the client's scope: with a tenant token the embedded
-Console shows only that application's agents and channels.
+Minting a Console session requires the bridge token and yields an
+administrator Console.
 
-## Register as a tenant
+## Authentication
 
-One AgentMux instance can be shared by several applications. Each is a
-*tenant* and sees only the resources it owns, the ones marked public, and the
-ones an administrator granted it.
-
-Your backend self-registers once and stores the returned token. New tenants
-start empty; an administrator grants resources later:
-
-```ts
-const registrationClient = new AgentMuxClient({ baseUrl: "http://127.0.0.1:8765" });
-const result = await registrationClient.tenancy.register("homebook", "web");
-await saveSecret("AGENTMUX_TENANT_TOKEN", result.token); // shown once
-```
-
-To check what a credential can see:
-
-```ts
-const report = await client.health();
-if (report.capabilities?.auth?.scope === "tenant") {
-  console.log("scoped to", report.capabilities.auth.tenant);
-}
-
-const identity = await client.tenancy.self();
-```
-
-Agents and channels carry `owner_tenant_id`, `owner_tenant_name` and
-`visibility`. Ownership is assigned by the server from the calling credential.
+Third-party integrations authenticate with the AgentMux bridge token
+(`[bridge].token` in `config.toml`), sent as `Authorization: Bearer <token>`.
+It grants administrator access to every route and resource, so keep it on your
+backend/BFF and never ship it to a browser. Contract 3.0 removed multi-tenancy:
+there are no tenant tokens, registration endpoints, ownership or visibility
+fields. `capabilities.auth.scope` is `"admin"` for the bridge token (`"member"`
+only appears for signed-in Console member accounts).
 
 ## Contract
 
-This SDK speaks contract major `2` as defined in
+This SDK speaks contract major `3` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
-Feature-detect tenancy with
-`capabilities.features.includes("tenancy")`.
+Servers reporting another major are reported as `incompatible`. Contract 3.0
+is breaking: `client.tenancy`, the `Tenant`, `TenantRegistration`,
+`TenancySelf` and `ResourceVisibility` types, `IntegrationSnapshot.identity`,
+`auth.tenant`/`tenant_id`, and the `owner_tenant_id`, `owner_tenant_name` and
+`visibility` fields were removed. Feature-detect optional surfaces with
+`capabilities.features.includes(...)`.
 
 ## Local event subscriptions (contract 2.2)
 
@@ -123,4 +107,5 @@ Keep that secret in the receiving backend, never in browser configuration.
 `verifyEventSignature(secret, { timestamp, deliveryId, signature }, rawBytes)`
 uses Web Crypto to verify the exact request body and a five-minute timestamp
 window. Persist event IDs to deduplicate work before acknowledging callbacks.
+Subscription keys are unique per AgentMux instance.
 See [the event contract](../../contract/EVENT_SUBSCRIPTIONS.md).

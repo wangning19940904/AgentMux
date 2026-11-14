@@ -30,7 +30,7 @@ import (
 // among them: a node keeps its own outgoing mail in the same tables, so a
 // standby could not write its own mail while they followed the primary.
 var HubTables = []string{
-	"tenants", "tenant_tokens", "accounts", "account_sessions",
+	"accounts", "account_sessions",
 	"devices", "device_pairing_codes", "device_collections", "device_resources",
 	"push_vapid_keys", "push_subscriptions",
 }

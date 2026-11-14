@@ -23,7 +23,6 @@ export type {
   Capabilities,
   Channel,
   ConsoleSession,
-  TenantRegistration,
   HealthReport,
   HealthState,
   InvocationEvent,
@@ -36,9 +35,6 @@ export type {
   OrchestrationStatus,
   OrchestrationTask,
   OrchestrationTaskInput,
-  ResourceVisibility,
-  TenancySelf,
-  Tenant,
   Trigger,
   TurnUsage,
 } from "./types.js";

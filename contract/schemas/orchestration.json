@@ -24,10 +24,6 @@
       "omitempty": false,
       "type": "string"
     },
-    "owner_tenant_id": {
-      "omitempty": true,
-      "type": "string"
-    },
     "started_at": {
       "omitempty": true,
       "type": "datetime"

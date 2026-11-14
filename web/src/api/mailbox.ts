@@ -1,8 +1,7 @@
 // Direct messages ("the mailbox"): people write to agents and agents write
 // back, agents write to each other, and contacts connect parties that have
 // different owners. Like push, these calls always go to the Console's own
-// server and never carry a previewed tenant scope: the mailbox belongs to
-// the person signed in to this Console.
+// server: the mailbox belongs to the person signed in to this Console.
 import { APIError } from "./client";
 
 export type MailPartyKind = "agent" | "person";

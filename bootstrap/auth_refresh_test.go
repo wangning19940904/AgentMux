@@ -22,7 +22,6 @@ func TestAuthMaintenanceTargetsEnabledLocalTraeAgentsAndLogsTransitions(t *testi
 	st := authStoreStub{agents: []core.AgentInstance{
 		{ID: "active", RuntimeID: "traecli", Enabled: true, Env: map[string]string{"TRAE_HOME": "/custom/trae"}},
 		{ID: "disabled", RuntimeID: "traecli"},
-		{ID: "provider", RuntimeID: "traecli", Enabled: true, ProviderID: "provider"},
 		{ID: "codex", RuntimeID: "codex", Enabled: true},
 	}}
 	var output bytes.Buffer

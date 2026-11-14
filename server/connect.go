@@ -55,20 +55,10 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	healthView := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("view")), "health")
-	principal := requestPrincipal(r)
-	var channels []core.Channel
-	var err error
-	if principal.IsTenant() {
-		channels, err = s.st.ListChannelsForTenant(r.Context(), principal.TenantID)
-	} else {
-		channels, err = s.st.ListChannels(r.Context())
-	}
+	channels, err := s.st.ListChannels(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if !healthView {
-		s.labelChannelOwners(r.Context(), channels)
 	}
 	statuses := map[string]core.ChannelStatus{}
 	if s.connect != nil {
@@ -147,7 +137,7 @@ func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	ch, ok := s.authorizeChannel(w, r, id, core.GrantLevelRead)
+	ch, ok := s.lookupChannel(w, r, id)
 	if !ok {
 		return
 	}
@@ -166,7 +156,7 @@ func (s *Server) handleChannelAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", avatar.contentType)
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	w.Header().Set("Vary", "Authorization, Cookie, X-AgentMux-Tenant-Scope")
+	w.Header().Set("Vary", "Authorization, Cookie")
 	_, _ = w.Write(avatar.body)
 }
 
@@ -316,27 +306,10 @@ func (s *Server) handleChannelUpsert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Editing an existing channel requires manage access. An unknown ID is a
-	// create with a caller-chosen ID and needs no prior authorization.
-	var existing *core.Channel
-	if id := strings.TrimSpace(ch.ID); id != "" {
-		found, err := s.st.GetChannel(r.Context(), id)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if found != nil {
-			if _, authorized := s.authorizeChannel(w, r, id, core.GrantLevelManage); !authorized {
-				return
-			}
-			existing = found
-		}
-	}
 	if err := s.normalizeChannel(r.Context(), &ch); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.stampChannelOwnership(requestPrincipal(r), &ch, existing)
 	s.channelClaimMu.Lock()
 	defer s.channelClaimMu.Unlock()
 	if isExclusiveLongConnection(ch) {
@@ -386,7 +359,7 @@ func (s *Server) handleChannelDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, authorized := s.authorizeChannel(w, r, id, core.GrantLevelManage); !authorized {
+	if _, authorized := s.lookupChannel(w, r, id); !authorized {
 		return
 	}
 	if err := s.st.DeleteChannel(r.Context(), id); err != nil {
@@ -403,7 +376,7 @@ func (s *Server) handleChannelRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.st != nil {
-		if _, authorized := s.authorizeChannel(w, r, id, core.GrantLevelManage); !authorized {
+		if _, authorized := s.lookupChannel(w, r, id); !authorized {
 			return
 		}
 	}
@@ -423,14 +396,7 @@ func (s *Server) handleTriggersList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []apiTrigger{})
 		return
 	}
-	principal := requestPrincipal(r)
-	var triggers []core.Trigger
-	var err error
-	if principal.IsTenant() {
-		triggers, err = s.st.ListTriggersForTenant(r.Context(), principal.TenantID)
-	} else {
-		triggers, err = s.st.ListTriggers(r.Context())
-	}
+	triggers, err := s.st.ListTriggers(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -466,33 +432,9 @@ func (s *Server) handleTriggerUpsert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	principal := requestPrincipal(r)
-	if id := strings.TrimSpace(tr.ID); id != "" {
-		found, err := s.st.GetTrigger(r.Context(), id)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if found != nil {
-			if _, authorized := s.authorizeTrigger(w, r, id, core.GrantLevelManage); !authorized {
-				return
-			}
-			tr.OwnerTenantID = found.OwnerTenantID
-		}
-	}
 	if err := s.normalizeTrigger(r.Context(), &tr); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	// A trigger fires an agent, so a tenant may only point one at an agent it
-	// is allowed to run.
-	if principal.IsTenant() {
-		tr.OwnerTenantID = principal.TenantID
-		if agentID := strings.TrimSpace(tr.AgentID); agentID != "" {
-			if _, authorized := s.authorizeAgent(w, r, agentID, core.GrantLevelUse); !authorized {
-				return
-			}
-		}
 	}
 	if err := s.st.UpsertTrigger(r.Context(), &tr); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -511,7 +453,7 @@ func (s *Server) handleTriggerDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, authorized := s.authorizeTrigger(w, r, id, core.GrantLevelManage); !authorized {
+	if _, authorized := s.lookupTrigger(w, r, id); !authorized {
 		return
 	}
 	if err := s.st.DeleteTrigger(r.Context(), id); err != nil {
@@ -532,7 +474,7 @@ func (s *Server) handleTriggerRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.st != nil {
-		if _, authorized := s.authorizeTrigger(w, r, id, core.GrantLevelUse); !authorized {
+		if _, authorized := s.lookupTrigger(w, r, id); !authorized {
 			return
 		}
 	}

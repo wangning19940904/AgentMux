@@ -26,11 +26,11 @@ import (
 // this hub and its machines are addressed to it.
 const SubscriberAdmin = "admin"
 
-// SubscriberFor names the subscriber behind a request's principal. A user
-// identity from the accounts work only needs a new case here.
+// SubscriberFor names the subscriber behind a request's principal: a member
+// account by its account ID, everyone else as the administrator.
 func SubscriberFor(principal *core.Principal) string {
-	if principal.IsTenant() {
-		return "tenant:" + principal.TenantID
+	if principal.IsMember() {
+		return "account:" + principal.Account.ID
 	}
 	return SubscriberAdmin
 }

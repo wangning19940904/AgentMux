@@ -38,7 +38,6 @@ var contractTypes = map[string]any{
 	"orchestration.json":           core.Orchestration{},
 	"orchestration_task.json":      core.OrchestrationTask{},
 	"turn_usage.json":              core.TurnUsage{},
-	"tenant.json":                  core.Tenant{},
 }
 
 func TestContractGolden(t *testing.T) {
@@ -162,7 +161,7 @@ func TestContractTypeInventory(t *testing.T) {
 		"agent_instance.json", "channel.json",
 		"event_delivery.json", "event_delivery_attempt.json", "event_ingestion_health.json", "event_source.json", "event_subscription.json", "invocation_request.json",
 		"invocation_result.json", "invocation_stream_event.json",
-		"orchestration.json", "orchestration_task.json", "relay_event.json", "tenant.json",
+		"orchestration.json", "orchestration_task.json", "relay_event.json",
 		"trigger.json", "turn_usage.json",
 	}
 	var got []string

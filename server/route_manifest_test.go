@@ -46,9 +46,6 @@ func TestPublicRouteManifestMatchesOpenAPIAndMux(t *testing.T) {
 		if pattern == "" {
 			t.Errorf("manifest route is not registered: %s %s", route.Method, route.Path)
 		}
-		if route.Tenant && strings.HasPrefix(route.Path, "/api/") && !tenantRouteAllowed(route.Method, route.Path) {
-			t.Errorf("manifest tenant route is denied: %s %s", route.Method, route.Path)
-		}
 	}
 	sort.Strings(documented)
 	sort.Strings(manifest)

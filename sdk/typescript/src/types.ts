@@ -5,7 +5,7 @@
  */
 
 /** Contract major this SDK speaks; servers outside it report `incompatible`. */
-export const SUPPORTED_CONTRACT_MAJOR = 2;
+export const SUPPORTED_CONTRACT_MAJOR = 3;
 
 /** Unified 5-state health machine (see contract/CONTRACT.md). */
 export type HealthState =
@@ -34,13 +34,10 @@ export interface Capabilities {
   auth?: {
     bridge_enabled: boolean;
     /**
-     * "admin" when the credential sees the whole instance, "tenant" when it is
-     * confined to one application. Servers older than contract 1.1 omit it,
-     * which means there is no tenancy and the scope is effectively admin.
+     * "admin" for the bridge token and administrator accounts, "member" for a
+     * signed-in Console member account. Servers that omit it are admin-only.
      */
-    scope?: "admin" | "tenant";
-    tenant?: string;
-    tenant_id?: string;
+    scope?: "admin" | "member";
   };
 }
 
@@ -151,9 +148,6 @@ export interface AgentInstance {
 	worktree_base_ref?: string;
 	session_backend?: string;
   system_prompt?: string;
-  provider_tool?: string;
-	provider_id?: string;
-	provider_name?: string;
   default_model?: string;
   default_reasoning_effort?: string;
   default_service_tier?: string;
@@ -168,9 +162,6 @@ export interface AgentInstance {
 	skills?: string[];
 	clis?: string[];
   source?: string;
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
-  visibility?: ResourceVisibility;
 	created_at: string;
 	updated_at: string;
 }
@@ -183,48 +174,8 @@ export interface Channel {
   enabled: boolean;
   agent_id?: string;
   config?: Record<string, string>;
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
-  visibility?: ResourceVisibility;
 	created_at: string;
 	updated_at: string;
-}
-
-/**
- * Tenancy (contract 1.1). One AgentMux instance is shared by several host
- * applications; each is a tenant that sees only its own resources, the ones
- * marked public, and the ones an administrator granted it.
- */
-export type ResourceVisibility = "private" | "public";
-
-/** A registered host application (contract/schemas/tenant.json). */
-export interface Tenant {
-  id: string;
-  name: string;
-  status: "active" | "disabled" | (string & {});
-  kind?: "app" | "web" | "service" | (string & {});
-  note?: string;
-	created_at: string;
-	updated_at: string;
-}
-
-/**
- * Result of registering a tenant. `token` is returned once and cannot be
- * recovered, so the host backend must persist it before discarding this object.
- */
-export interface TenantRegistration {
-  tenant: Tenant;
-  token: string;
-  prefix?: string;
-}
-
-/** Response of GET /api/v1/tenancy/self. */
-export interface TenancySelf {
-  admin: boolean;
-  tenant?: string;
-  tenant_id?: string;
-  kind?: string;
-  status?: string;
 }
 
 /** Automation trigger (contract/schemas/trigger.json). */
@@ -246,7 +197,6 @@ export interface Trigger {
 	last_run?: string;
   last_status?: string;
   last_error?: string;
-	owner_tenant_id?: string;
 	created_at: string;
 	updated_at: string;
 }
@@ -287,7 +237,6 @@ export interface Orchestration {
   max_concurrency: number;
   error?: string;
   tasks?: OrchestrationTask[];
-	owner_tenant_id?: string;
 	created_at: string;
 	started_at?: string;
 	finished_at?: string;
@@ -295,12 +244,11 @@ export interface Orchestration {
 }
 
 /**
- * Tenant-scoped host application view composed from public AgentMux APIs by
+ * Host application view composed from public AgentMux APIs by
  * `client.integration.snapshot()`.
  */
 export interface IntegrationSnapshot {
   capabilities: Capabilities;
-  identity: TenancySelf;
   runtimes: string[];
   platforms: string[];
   agents: AgentInstance[];
@@ -356,7 +304,6 @@ export interface RelayEvent {
 }
 export interface EventSubscriptionInput {
   id?: string;
-  owner_tenant_id?: string;
   key: string;
   name: string;
   source: "agentmux" | "feishu" | "lark";
@@ -369,7 +316,6 @@ export interface EventSubscriptionInput {
 export interface EventSubscription extends EventSubscriptionInput {
   id: string;
   paused: boolean;
-  owner_tenant_id?: string;
   created_at: string;
   updated_at: string;
   deleted?: boolean;

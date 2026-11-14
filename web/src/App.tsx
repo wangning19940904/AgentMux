@@ -9,7 +9,6 @@ import {
   Brain,
   Cable,
   CalendarClock,
-  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   ExternalLink,
@@ -31,7 +30,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Workflow,
+  UsersRound,
   Video,
   Zap,
 } from "lucide-react";
@@ -48,10 +47,8 @@ import { NotificationSettings } from "./pwa/NotificationSettings";
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
-const TenantsPanel = lazy(() => import("./panels/TenantsPanel").then((m) => ({ default: m.TenantsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
-	activeTenantScopeKey,
   activeMachineScope,
   api,
   FLEET_WARNING_EVENT,
@@ -61,26 +58,26 @@ import {
   isDesktopApp,
   LaunchAtLoginStatus,
   openLocalWebUI,
-  setActiveTenantScopeID,
   setActiveMachineScope,
   setLaunchAtLogin,
-	tenantScopeKey,
-  type Tenant,
-  type TenancySelf,
+  type AuthSession,
 } from "./api";
 import { currentOfflineTargets, resetFleetWarnings } from "./api/fleetWarnings";
 import {
   accountLabel,
-  resolveTenancyGateWithRetry,
-  tenancyNavigationLocked,
-  type TenancyGateState,
-} from "./tenancyGate";
+  AUTH_CHANGED_EVENT,
+  consoleRole,
+  loadSessionWithRetry,
+} from "./signIn";
 import { SignInGate } from "./SignInGate";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import {
+  MEMBER_LANDING_TAB,
+  navigationForRole,
   navigationGroupForTab,
   primaryGroupDestination,
   searchNavigationItems,
+  tabAllowedForRole,
 } from "./navigationModel";
 import {
   NAVIGATION_GROUP_SEARCH_ALIASES,
@@ -117,7 +114,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
-      { id: "gateway", labelKey: "nav.gateway", icon: Workflow },
       { id: "skills", labelKey: "nav.skills", icon: Sparkles },
       { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
       { id: "memory", labelKey: "nav.memory", icon: Brain },
@@ -156,14 +152,13 @@ const NAV_GROUPS: NavGroup[] = [
     icon: PanelTop,
     items: [
       { id: "machines", labelKey: "nav.machines", icon: ServerCog },
-      { id: "tenants", labelKey: "nav.tenants", icon: ShieldCheck },
+      { id: "accounts", labelKey: "nav.accounts", icon: UsersRound },
       { id: "settings", labelKey: "nav.settings", icon: Settings },
     ],
   },
 ];
 
 const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
-const MOBILE_TABS = mobileTabItems(TABS);
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -175,27 +170,6 @@ const LANG_OPTIONS: { id: Language; labelKey: string }[] = [
   { id: "en", labelKey: "lang.en" },
   { id: "zh", labelKey: "lang.zh" },
 ];
-
-const TENANT_OPTIONS_CACHE_KEY = "agentmux:tenant-options";
-
-function cachedTenantOptions(): Tenant[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(TENANT_OPTIONS_CACHE_KEY) || "[]") as unknown;
-    if (!Array.isArray(value)) return [];
-    return value.filter((item): item is Tenant => Boolean(
-      item && typeof item === "object" &&
-      typeof (item as Tenant).id === "string" &&
-      typeof (item as Tenant).name === "string" &&
-      ["active", "disabled"].includes((item as Tenant).status),
-    ));
-  } catch {
-    return [];
-  }
-}
-
-function cacheTenantOptions(tenants: Tenant[]) {
-  localStorage.setItem(TENANT_OPTIONS_CACHE_KEY, JSON.stringify(tenants));
-}
 
 function initialLanguage(): Language {
   const stored = localStorage.getItem("agentmux:language");
@@ -213,8 +187,11 @@ function tabFromHash(): Tab | null {
   const value = window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0];
   if (value === "tools") return "skills";
   if (value === "menubar") return "settings";
-  if (value === "providers") return "gateway";
+  // Providers and routing moved to the frameworks; old links land there.
+  if (value === "providers" || value === "gateway") return "frameworks";
   if (value === "connect") return "channels";
+  // Tenants are gone; account management took their place.
+  if (value === "tenants") return "accounts";
   return TABS.some((item) => item.id === value) ? value as Tab : null;
 }
 
@@ -276,16 +253,14 @@ export function App() {
   return (
     <I18nProvider language={language}>
       <SignInGate>
-        <MeetingProvider>
-          <Shell
-            tab={tab}
-            setTab={selectTab}
-            language={language}
-            setLanguage={setLanguage}
-            themeMode={themeMode}
-            setThemeMode={setThemeMode}
-          />
-        </MeetingProvider>
+        <Shell
+          tab={tab}
+          setTab={selectTab}
+          language={language}
+          setLanguage={setLanguage}
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+        />
       </SignInGate>
       <ConfirmHost />
     </I18nProvider>
@@ -308,39 +283,33 @@ function Shell({
   setThemeMode: (mode: ThemeMode) => void;
 }) {
   const { t } = useI18n();
-  const tenantGate = useTenancyGate();
-  const tenantIdentity = tenantGate.identity;
+  const identity = useConsoleIdentity();
+  const session = identity.session;
   const nativeDesktopAdmin = window.location.protocol === "wails:";
-  const identityIsAdmin = tenantIdentity?.admin === true || (!tenantIdentity && nativeDesktopAdmin);
-  const [tenantOptions, setTenantOptions] = useState<Tenant[]>(cachedTenantOptions);
-  const [tenantOptionsLoaded, setTenantOptionsLoaded] = useState(false);
-	const [tenantOptionsRevision, setTenantOptionsRevision] = useState(0);
-	const [selectedTenantScopeID, setSelectedTenantScopeID] = useState(activeTenantScopeKey);
-  const activeTenantOptions = useMemo(
-    () => tenantOptions.filter((tenant) => tenant.status === "active"),
-    [tenantOptions],
+  const role = consoleRole(session, nativeDesktopAdmin);
+  const identityIsAdmin = role === "admin";
+  // Admin-only requests wait until the session confirms the role, so a member
+  // never fires them while the session is still loading.
+  const adminReady = identityIsAdmin && (identity.state === "ready" || nativeDesktopAdmin);
+  // A member reaches only their own account (password and devices).
+  const navGroups = useMemo(() => navigationForRole(NAV_GROUPS, role).map((group) => role === "member"
+    ? { ...group, items: group.items.map((item) => item.id === "accounts" ? { ...item, labelKey: "nav.myAccount" } : item) }
+    : group), [role]);
+  const navTabs = useMemo(
+    () => [...(identityIsAdmin ? [OVERVIEW_ITEM] : []), ...navGroups.flatMap((group) => group.items)],
+    [identityIsAdmin, navGroups],
   );
-	const selectedTenant = identityIsAdmin
-		? activeTenantOptions.find((tenant) => {
-			const canonical = tenantScopeKey(tenant.id, tenant.target_id || "local");
-			return canonical === selectedTenantScopeID || tenant.id === selectedTenantScopeID;
-		})
-    : undefined;
-	const selectedTenantTargetID = selectedTenant?.target_id || (selectedTenant ? "local" : undefined);
-  const identityName = selectedTenant?.name ?? (tenantIdentity?.account
-    ? accountLabel(tenantIdentity.account)
-    : identityIsAdmin
-    ? t("app.admin")
-    : tenantIdentity?.tenant || t("app.tenant"));
-  const navigationLocked = tenancyNavigationLocked(tenantGate.state, nativeDesktopAdmin);
-  const visibleTab = navigationLocked && tenantGate.state === "required" ? "tenants" : tab;
+  const mobileTabs = useMemo(() => mobileTabItems(navTabs), [navTabs]);
+  const identityName = session?.account ? accountLabel(session.account) : t("app.admin");
+  const navigationLocked = identity.state !== "ready" && !nativeDesktopAdmin;
+  const visibleTab = tabAllowedForRole(tab, role) ? tab : MEMBER_LANDING_TAB;
   const active = useMemo(
-    () => TABS.find((item) => item.id === visibleTab) ?? TABS[0],
-    [visibleTab],
+    () => navTabs.find((item) => item.id === visibleTab) ?? TABS.find((item) => item.id === visibleTab) ?? TABS[0],
+    [navTabs, visibleTab],
   );
   const activeGroup = useMemo(
-    () => navigationGroupForTab(NAV_GROUPS, visibleTab),
-    [visibleTab],
+    () => navigationGroupForTab(navGroups, visibleTab),
+    [navGroups, visibleTab],
   );
   const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() => {
     if (localStorage.getItem(SIDEBAR_LAYOUT_VERSION_KEY) !== SIDEBAR_LAYOUT_VERSION) {
@@ -398,21 +367,15 @@ function Shell({
   const ActiveIcon = active.icon;
   const SecondaryIcon = activeGroup?.icon ?? LayoutGrid;
   const secondaryItems = activeGroup?.items ?? [OVERVIEW_ITEM];
-  const tenantPanelOptions = useMemo(() => {
-    const machineScope = activeMachineScope();
-    return machineScope === "all"
-      ? tenantOptions
-      : tenantOptions.filter((tenant) => (tenant.target_id || "local") === machineScope);
-  }, [machineScopeVersion, tenantOptions]);
   const shellStyle = {
     "--primary-sidebar-width": `${primaryCollapsed ? PRIMARY_SIDEBAR_COLLAPSED_WIDTH : primarySidebarWidth}px`,
     "--secondary-sidebar-width": `${secondarySidebarWidth}px`,
   } as CSSProperties;
   const searchResults = useMemo(() => {
-    const searchableTabs = TABS
-      .filter((item) => !navigationLocked || item.id === "tenants")
+    const searchableTabs = navTabs
+      .filter(() => !navigationLocked)
       .map((item) => {
-        const group = navigationGroupForTab(NAV_GROUPS, item.id);
+        const group = navigationGroupForTab(navGroups, item.id);
         return {
           ...item,
           label: t(item.labelKey),
@@ -422,7 +385,7 @@ function Shell({
         };
       });
     return searchNavigationItems(searchableTabs, searchQuery);
-  }, [language, navigationLocked, searchQuery, t]);
+  }, [language, navGroups, navTabs, navigationLocked, searchQuery, t]);
   const showSearchResults = searchOpen && searchQuery.trim().length > 0;
 
   const positionPreferencesPanel = useCallback(() => {
@@ -449,73 +412,22 @@ function Shell({
   }, []);
 
   useEffect(() => {
-    if (tenantIdentity && !tenantIdentity.admin && activeMachineScope() !== "local") {
+    // Members reach only this hub; a remote machine selection left over from
+    // an administrator session would route their requests elsewhere.
+    if (session && role === "member" && activeMachineScope() !== "local") {
       setActiveMachineScope("local");
       window.location.reload();
     }
-  }, [tenantIdentity]);
+  }, [role, session]);
 
   useEffect(() => {
-    if (navigationLocked && tenantGate.state === "required" && tab !== "tenants") {
-      setTab("tenants");
-    }
-  }, [navigationLocked, setTab, tab, tenantGate.state]);
+    if (identity.state === "ready" && !tabAllowedForRole(tab, role)) setTab(MEMBER_LANDING_TAB);
+  }, [identity.state, role, setTab, tab]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileNavOpen(false);
   }, [visibleTab]);
-
-  useEffect(() => {
-    // Do not treat the identity-loading state as a confirmed tenant session.
-    // Clearing here loses a persisted admin preview before /tenancy/self has
-    // had a chance to prove that the Console is still running as admin.
-    if (!tenantIdentity) return;
-    if (!tenantIdentity?.admin) {
-      setTenantOptions([]);
-      setTenantOptionsLoaded(true);
-      if (selectedTenantScopeID) {
-        setActiveTenantScopeID("");
-        setSelectedTenantScopeID("");
-      }
-      return;
-    }
-    let active = true;
-    setTenantOptionsLoaded(false);
-		api.allTenants()
-      .then((tenants) => {
-        if (!active) return;
-        const nextTenants = tenants ?? [];
-        setTenantOptions(nextTenants);
-        cacheTenantOptions(nextTenants);
-        setTenantOptionsLoaded(true);
-      })
-      .catch(() => {
-        if (!active) return;
-        // Keep the last successful tenant index visible while a remote machine
-        // is temporarily slow or offline.
-        setTenantOptionsLoaded(true);
-      });
-    return () => { active = false; };
-  }, [tenantIdentity?.admin, tenantOptionsRevision]);
-
-  useEffect(() => {
-    if (!tenantOptionsLoaded || !selectedTenantScopeID || !identityIsAdmin) return;
-		const selected = activeTenantOptions.find((tenant) => {
-			const canonical = tenantScopeKey(tenant.id, tenant.target_id || "local");
-			return canonical === selectedTenantScopeID || tenant.id === selectedTenantScopeID;
-		});
-		if (selected) {
-			const canonical = tenantScopeKey(selected.id, selected.target_id || "local");
-			if (canonical !== selectedTenantScopeID) {
-				setActiveTenantScopeID(selected.id, selected.target_id || "local");
-				setSelectedTenantScopeID(canonical);
-			}
-			return;
-		}
-    setActiveTenantScopeID("");
-    setSelectedTenantScopeID("");
-  }, [activeTenantOptions, identityIsAdmin, selectedTenantScopeID, tenantOptionsLoaded]);
 
   useEffect(() => {
     localStorage.setItem(PRIMARY_SIDEBAR_STORAGE_KEY, String(primarySidebarWidth));
@@ -665,6 +577,7 @@ function Shell({
   }
 
   return (
+    <MeetingProvider enabled={adminReady}>
     <div
       className={`app-shell${secondaryCollapsed ? "" : " secondary-open"}${primaryCollapsed ? " primary-collapsed" : ""}${desktop ? " native-desktop" : ""}`}
       style={shellStyle}
@@ -695,6 +608,7 @@ function Shell({
               aria-label={t("app.settings")}
             >
               <PreferenceControls
+                admin={identityIsAdmin}
                 language={language}
                 setLanguage={setLanguage}
                 themeMode={themeMode}
@@ -736,7 +650,7 @@ function Shell({
         </div>
 
         <nav id="primary-navigation" className="nav primary-nav" aria-label={t("nav.primary")}>
-          <button
+          {identityIsAdmin && <button
             className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
             onClick={selectOverview}
             title={t(OVERVIEW_ITEM.labelKey)}
@@ -746,12 +660,11 @@ function Shell({
           >
             <LayoutGrid size={18} />
             <span>{t(OVERVIEW_ITEM.labelKey)}</span>
-          </button>
+          </button>}
 
-          {NAV_GROUPS.map((group) => {
+          {navGroups.map((group) => {
             const GroupIcon = group.icon;
             const hasActive = group.items.some((item) => item.id === visibleTab);
-            const canOpenWhileLocked = group.items.some((item) => item.id === "tenants");
             return (
               <button
                 key={group.id}
@@ -762,7 +675,7 @@ function Shell({
                 aria-label={t(group.labelKey)}
                 aria-current={hasActive ? "true" : undefined}
                 title={t(group.labelKey)}
-                disabled={navigationLocked && !canOpenWhileLocked}
+                disabled={navigationLocked}
               >
                 <GroupIcon size={18} />
                 <span>{t(group.shortLabelKey ?? group.labelKey)}</span>
@@ -772,46 +685,16 @@ function Shell({
         </nav>
 
         <MobileTabBar
-          items={MOBILE_TABS}
+          items={mobileTabs}
           active={visibleTab}
           drawerOpen={mobileNavOpen}
-          isDisabled={(id) => navigationLocked && id !== "tenants"}
+          isDisabled={() => navigationLocked}
           onSelect={setTab}
           onOpenMore={() => setMobileNavOpen((open) => !open)}
         />
 
-        <div className={`account primary-account${identityIsAdmin && activeTenantOptions.length > 0 ? " switchable" : ""}`} title={identityName}>
-          {identityIsAdmin && activeTenantOptions.length > 0 ? (
-            <>
-              <select
-                className="account-identity-select"
-                aria-label={t("app.switchIdentity")}
-                title={identityName}
-                value={selectedTenantScopeID}
-                onChange={(event) => {
-					const scopeKey = event.target.value;
-					const tenant = activeTenantOptions.find((item) =>
-						tenantScopeKey(item.id, item.target_id || "local") === scopeKey,
-					);
-					setActiveTenantScopeID(tenant?.id || "", tenant?.target_id || "local");
-					setSelectedTenantScopeID(scopeKey);
-                }}
-              >
-                <option value="">{tenantIdentity?.account ? accountLabel(tenantIdentity.account) : t("app.admin")}</option>
-                {activeTenantOptions.map((tenant) => (
-				  <option
-					key={tenantScopeKey(tenant.id, tenant.target_id || "local")}
-					value={tenantScopeKey(tenant.id, tenant.target_id || "local")}
-				  >
-					{tenant.name} · {(tenant.target_id || "local") === "local" ? t("remote.localMachine") : tenant.target_name || tenant.target_id}
-				  </option>
-                ))}
-              </select>
-              <ChevronDown size={15} aria-hidden="true" />
-            </>
-          ) : (
-            <strong>{identityName}</strong>
-          )}
+        <div className="account primary-account" title={identityName}>
+          <strong>{identityName}</strong>
         </div>
 
         {!primaryCollapsed && <SidebarResizeHandle
@@ -927,7 +810,7 @@ function Shell({
                 key={item.id}
                 className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
                 onClick={() => setTab(item.id)}
-                disabled={navigationLocked && item.id !== "tenants"}
+                disabled={navigationLocked}
               >
                 <Icon size={16} />
                 <span>{t(item.labelKey)}</span>
@@ -946,10 +829,10 @@ function Shell({
 
       <MobileDrawer
         open={mobileNavOpen}
-        overview={OVERVIEW_ITEM}
-        groups={NAV_GROUPS}
+        overview={identityIsAdmin ? OVERVIEW_ITEM : undefined}
+        groups={navGroups}
         active={visibleTab}
-        isDisabled={(id) => navigationLocked && id !== "tenants"}
+        isDisabled={() => navigationLocked}
         onSelect={(id) => {
           setMobileNavOpen(false);
           setTab(id);
@@ -957,6 +840,7 @@ function Shell({
         onClose={closeMobileNav}
       >
         <PreferenceControls
+          admin={identityIsAdmin}
           language={language}
           setLanguage={setLanguage}
           themeMode={themeMode}
@@ -986,19 +870,18 @@ function Shell({
             {visibleTab === "agents" && (
               <span className="workspace-header-description">{t("agents.subtitle")}</span>
             )}
-            <span className={`system-pill${fleetWarnings.length || tenantGate.state === "error" ? " warning" : ""}`} role="status">
+            <span className={`system-pill${fleetWarnings.length || identity.state === "error" ? " warning" : ""}`} role="status">
               <span className="status-dot" />
-              {t(tenantGate.state === "loading" ? "tenants.checking"
-                : tenantGate.state !== "ready" ? "tenants.requiredTitle"
+              {t(identity.state === "loading" ? "app.identityLoading"
+                : identity.state !== "ready" ? "app.identityUnavailable"
                 : !fleetWarnings.length ? "app.status"
                 : fleetWarnings.every(isFleetStaleNotice) ? "app.statusStale" : "app.statusWarning")}
             </span>
           </div>
 		    <div className="workspace-header-actions">
-		      {identityIsAdmin && (
+		      {adminReady && (
 			    <RemoteTargetSelector
-				  allowedTargetID={selectedTenantTargetID}
-				  onAddMachine={selectedTenant ? undefined : () => {
+				  onAddMachine={() => {
                   setRemoteAddRequest((request) => request + 1);
                   setTab("machines");
                 }}
@@ -1047,16 +930,16 @@ function Shell({
             retryLabel={t("common.retry")}
           >
             <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
-              {tenantGate.state === "loading" ? (
-                <div className="empty-state">{t("tenants.checking")}</div>
-              ) : tenantGate.state === "error" ? (
+              {identity.state === "loading" ? (
+                <div className="empty-state">{t("app.identityLoading")}</div>
+              ) : identity.state === "error" ? (
                 <section className="surface" role="alert">
                   <div className="surface-header">
                     <div>
-                      <h2>{t("tenants.requiredTitle")}</h2>
-                      <p>{t("tenants.identityError")}</p>
+                      <h2>{t("app.identityUnavailable")}</h2>
+                      <p>{t("app.identityError")}</p>
                     </div>
-                    <button className="ghost-action" onClick={() => void tenantGate.refresh()}>
+                    <button className="ghost-action" onClick={() => void identity.refresh()}>
                       <RefreshCw size={15} /> {t("common.retry")}
                     </button>
                   </div>
@@ -1074,31 +957,6 @@ function Shell({
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
                   {visibleTab === "subscriptions" && <EventSubscriptionsPanel />}
 				  {visibleTab === "machines" && <RemoteHostsPanel addRequest={remoteAddRequest} />}
-                  {visibleTab === "tenants" && tenantIdentity && (
-                    <TenantsPanel
-                      identity={tenantIdentity}
-                      initialTenants={tenantPanelOptions}
-                      onContinue={() => setTab("agents")}
-                      onTenantChanged={(change) => {
-                        if (change?.type === "delete") {
-                          const deletedKey = tenantScopeKey(change.tenant.id, change.tenant.target_id || "local");
-                          setTenantOptions((current) => {
-                            const next = current.filter((tenant) =>
-                              tenantScopeKey(tenant.id, tenant.target_id || "local") !== deletedKey,
-                            );
-                            cacheTenantOptions(next);
-                            return next;
-                          });
-                          if (selectedTenantScopeID === deletedKey || selectedTenantScopeID === change.tenant.id) {
-                            setActiveTenantScopeID("");
-                            setSelectedTenantScopeID("");
-                          }
-                        }
-                        setTenantOptionsRevision((revision) => revision + 1);
-                        void tenantGate.refresh();
-                      }}
-                    />
-                  )}
                 </>
               )}
             </Suspense>
@@ -1107,6 +965,7 @@ function Shell({
         </div>
       </div>
     </div>
+    </MeetingProvider>
   );
 }
 
@@ -1187,37 +1046,46 @@ function SidebarResizeHandle({
   );
 }
 
-function useTenancyGate(): {
-  state: TenancyGateState;
-  identity: TenancySelf | null;
+type ConsoleIdentityState = "loading" | "ready" | "error";
+
+// useConsoleIdentity reads who this Console is from /api/v1/auth/session,
+// which decides between the administrator and member navigation.
+function useConsoleIdentity(): {
+  state: ConsoleIdentityState;
+  session: AuthSession | null;
   refresh: () => Promise<void>;
 } {
-  const [state, setState] = useState<TenancyGateState>("loading");
-  const [identity, setIdentity] = useState<TenancySelf | null>(null);
+  const [state, setState] = useState<ConsoleIdentityState>("loading");
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const loaded = useRef(false);
 
   const refresh = useCallback(async () => {
-    setState("loading");
+    // Only the first check blanks the page; later ones update in place.
+    if (!loaded.current) setState("loading");
     try {
-      const resolved = await resolveTenancyGateWithRetry(
-        () => api.tenancySelf(),
+      const next = await loadSessionWithRetry(
+        () => api.authSession(),
         // First launch may download PostgreSQL before the native API is ready.
         { attempts: window.location.protocol === "wails:" ? 1200 : 30 },
       );
-      setIdentity(resolved.identity);
-      setState(resolved.state);
+      loaded.current = true;
+      setSession(next);
+      setState("ready");
     } catch {
-      // A failed identity request is not a missing tenant. Keep the retry in
-      // the shell so a successful check also unlocks navigation.
+      if (loaded.current) return;
       setState("error");
-      setIdentity(null);
+      setSession(null);
     }
   }, []);
 
   useEffect(() => {
     void refresh();
+    const onAuthChanged = () => void refresh();
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
   }, [refresh]);
 
-  return { state, identity, refresh };
+  return { state, session, refresh };
 }
 
 type PanelErrorBoundaryProps = {
@@ -1270,11 +1138,14 @@ class PanelErrorBoundary extends Component<PanelErrorBoundaryProps, PanelErrorBo
 }
 
 function PreferenceControls({
+  admin,
   language,
   setLanguage,
   themeMode,
   setThemeMode,
 }: {
+  // Machine controls such as keep-awake are for administrators only.
+  admin: boolean;
   language: Language;
   setLanguage: (language: Language) => void;
   themeMode: ThemeMode;
@@ -1359,7 +1230,7 @@ function PreferenceControls({
           />
         </label>
       )}
-      <KeepAwakeControl onError={setPreferenceError} />
+      {admin && <KeepAwakeControl onError={setPreferenceError} />}
       {preferenceError && <small className="preference-error">{preferenceError}</small>}
     </>
   );

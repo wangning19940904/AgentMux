@@ -1,7 +1,7 @@
 // Observability session handling: exchanges a loopback nonce for a SameSite
 // session (plus a bearer token inside the Wails WebView) and retries once on
 // 401 so an expired session heals transparently.
-import { apiPath, tenantScopeHeaders } from "./client";
+import { apiPath } from "./client";
 
 let observationSessionPromise: Promise<void> | null = null;
 let observationBearer = "";
@@ -11,14 +11,12 @@ async function ensureObservationSession(): Promise<void> {
   observationSessionPromise = (async () => {
     const nonceResponse = await fetch(apiPath("/api/v1/observability/session/nonce"), {
       credentials: "include",
-      headers: tenantScopeHeaders("/api/v1/observability/session/nonce"),
     });
     if (!nonceResponse.ok) throw new Error(`observability nonce: ${nonceResponse.status}`);
     const noncePayload = (await nonceResponse.json()) as { nonce?: string };
     if (!noncePayload.nonce) throw new Error("observability nonce missing");
     const sessionHeaders = new Headers({
       "Content-Type": "application/json",
-      ...tenantScopeHeaders("/api/v1/observability/session"),
     });
     if (
       window.location.hostname.toLowerCase() === "wails.localhost" ||
@@ -53,7 +51,6 @@ async function ensureObservationSession(): Promise<void> {
 export async function observationFetch(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
   await ensureObservationSession();
   const headers = new Headers(init.headers);
-  Object.entries(tenantScopeHeaders(path)).forEach(([key, value]) => headers.set(key, value));
   if (observationBearer) headers.set("Authorization", `Bearer ${observationBearer}`);
   const response = await fetch(apiPath(path), { ...init, headers, credentials: "include" });
   if (response.status === 401 && retry) {

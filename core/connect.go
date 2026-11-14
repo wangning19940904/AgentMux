@@ -448,18 +448,13 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		c.log.Warn("agent instance not found", "agent_id", agentID, "err", err)
 		return nil, "", WorkspaceInitOptions{}
 	}
-	providerDefaults := c.agentProviderRuntimeDefaults(ctx, inst)
+	// Model settings are the agent's own. Providers and routing belong to the
+	// framework (or the user's router), which also lists the models it offers.
 	runtimeDefaults := RuntimeSettings{
 		Model:           inst.DefaultModel,
 		ReasoningEffort: inst.DefaultReasoningEffort,
 		ServiceTier:     inst.DefaultServiceTier,
 		ApprovalMode:    inst.DefaultApprovalMode,
-	}
-	if runtimeDefaults.ReasoningEffort == "" {
-		runtimeDefaults.ReasoningEffort = providerDefaults.ReasoningEffort
-	}
-	if runtimeDefaults.ServiceTier == "" {
-		runtimeDefaults.ServiceTier = providerDefaults.ServiceTier
 	}
 	workspace := WorkspaceInitOptions{
 		AgentID:         inst.ID,
@@ -514,23 +509,6 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 	if modes := ApprovalModeValuesForRuntime(inst.RuntimeID); len(modes) > 0 {
 		cfg["supported_approval_modes"] = modes
 	}
-	if models := c.agentModelOptions(ctx, inst); len(models) > 0 {
-		cfg["supported_models"] = models
-	}
-	if caps := c.agentRuntimeSettingsCapabilities(ctx, inst); len(caps.ReasoningEfforts) > 0 || len(caps.ServiceTiers) > 0 {
-		values := make([]string, 0, len(caps.ReasoningEfforts))
-		for _, option := range caps.ReasoningEfforts {
-			values = append(values, option.Value)
-		}
-		cfg["supported_reasoning_efforts"] = values
-		values = values[:0]
-		for _, option := range caps.ServiceTiers {
-			values = append(values, option.Value)
-		}
-		if len(values) > 0 {
-			cfg["supported_service_tiers"] = values
-		}
-	}
 	if len(inst.Env) > 0 {
 		cfg["env"] = inst.Env
 	}
@@ -549,64 +527,6 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		return nil, "", workspace
 	}
 	return agent, inst.WorkDir, workspace
-}
-
-func (c *ConnectService) agentProviderRuntimeDefaults(ctx context.Context, inst *AgentInstance) RuntimeSettings {
-	if c.store == nil || inst == nil {
-		return RuntimeSettings{}
-	}
-	p, err := c.agentRuntimeProvider(ctx, inst)
-	if err != nil || p == nil {
-		return RuntimeSettings{}
-	}
-	return RuntimeSettings{
-		ReasoningEffort: p.Meta.DefaultReasoningEffort,
-		ServiceTier:     p.Meta.DefaultServiceTier,
-	}
-}
-
-func (c *ConnectService) agentRuntimeProvider(ctx context.Context, inst *AgentInstance) (*Provider, error) {
-	if c.store == nil || inst == nil {
-		return nil, nil
-	}
-	if inst.ProviderID != "" {
-		return c.store.GetProvider(ctx, inst.ProviderID)
-	}
-	tool := inst.ProviderTool
-	if tool == "" {
-		tool = inst.RuntimeID
-	}
-	routes, err := c.store.ActiveProviderRoutes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	want := NormalizeProviderTool(tool)
-	for _, route := range routes {
-		if route.Tool == tool {
-			return c.store.GetProvider(ctx, route.ProviderID)
-		}
-	}
-	for _, route := range routes {
-		if NormalizeProviderTool(route.Tool) == want {
-			return c.store.GetProvider(ctx, route.ProviderID)
-		}
-	}
-	return nil, nil
-}
-
-func (c *ConnectService) agentRuntimeSettingsCapabilities(ctx context.Context, inst *AgentInstance) RuntimeSettingsCapabilities {
-	if c.store == nil || inst == nil {
-		return RuntimeSettingsCapabilities{}
-	}
-	p, err := c.agentRuntimeProvider(ctx, inst)
-	if err != nil || p == nil {
-		return RuntimeSettingsCapabilities{}
-	}
-	return RuntimeSettingsCapabilities{
-		Models:           RuntimeOptions(ProviderModelOptions(p)),
-		ReasoningEfforts: RuntimeOptions(p.Meta.SupportedReasoningEfforts),
-		ServiceTiers:     RuntimeOptions(p.Meta.SupportedServiceTiers),
-	}
 }
 
 // composeAgentPrompt builds the injected system prompt for an agent instance:
@@ -646,53 +566,6 @@ func (c *ConnectService) agentCLINotes(ids []string) []CLINote {
 		return nil
 	}
 	return c.cliNotes(ids)
-}
-
-func (c *ConnectService) agentModelOptions(ctx context.Context, inst *AgentInstance) []string {
-	if c.store == nil || inst == nil {
-		return nil
-	}
-	var p *Provider
-	var err error
-	if inst.ProviderID != "" {
-		p, err = c.store.GetProvider(ctx, inst.ProviderID)
-		if err != nil {
-			c.log.Warn("load agent provider", "agent_id", inst.ID, "provider_id", inst.ProviderID, "err", err)
-			return nil
-		}
-		return ProviderModelOptions(p)
-	}
-	tool := inst.ProviderTool
-	if tool == "" {
-		tool = inst.RuntimeID
-	}
-	routes, err := c.store.ActiveProviderRoutes(ctx)
-	if err != nil {
-		c.log.Warn("load active provider routes", "agent_id", inst.ID, "err", err)
-		return nil
-	}
-	want := NormalizeProviderTool(tool)
-	for _, route := range routes {
-		if route.Tool == tool {
-			p, err = c.store.GetProvider(ctx, route.ProviderID)
-			if err != nil {
-				c.log.Warn("load active provider", "agent_id", inst.ID, "provider_id", route.ProviderID, "err", err)
-				return nil
-			}
-			return ProviderModelOptions(p)
-		}
-	}
-	for _, route := range routes {
-		if NormalizeProviderTool(route.Tool) == want {
-			p, err = c.store.GetProvider(ctx, route.ProviderID)
-			if err != nil {
-				c.log.Warn("load active provider", "agent_id", inst.ID, "provider_id", route.ProviderID, "err", err)
-				return nil
-			}
-			return ProviderModelOptions(p)
-		}
-	}
-	return nil
 }
 
 // DecorateChannelTask adds live queue position/capabilities without exposing prompts.

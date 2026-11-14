@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
-	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
 
@@ -120,12 +119,12 @@ func TestFleetSyncAgentIsAddOnlyAndOmitsEnvironment(t *testing.T) {
 	agent := core.AgentInstance{
 		ID: "agent-demo", Name: "Demo", RuntimeID: "codex", WorkDir: workDir,
 		Env: map[string]string{"API_TOKEN": "secret"}, Enabled: true, Source: "manual",
-		Visibility: core.VisibilityPrivate, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	if err := source.st.UpsertAgentInstance(context.Background(), &agent); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := source.exportFleetSyncManifest(context.Background(), false, []string{"agents"}, nil)
+	manifest, err := source.exportFleetSyncManifest(context.Background(), false, []string{"agents"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,59 +159,34 @@ func TestFleetSyncAgentIsAddOnlyAndOmitsEnvironment(t *testing.T) {
 	}
 }
 
-func TestFleetSyncProviderFilterTransfersOnlySelectedProvider(t *testing.T) {
+// AgentMux no longer manages providers, so a fleet sync never copies them or
+// their keys, in either direction.
+func TestFleetSyncNeverCopiesProviders(t *testing.T) {
 	ctx := context.Background()
 	source := newRemoteTestServer(t)
 	destination := newRemoteTestServer(t)
-	destination.provider = providerpkg.NewManager(destination.st)
-	t.Setenv("FLEET_SYNC_ALPHA_KEY", "alpha-secret")
-	t.Setenv("FLEET_SYNC_BETA_KEY", "beta-secret")
-	for _, item := range []*core.Provider{
-		{ID: "alpha", Name: "Alpha", BaseURL: "https://alpha.example/v1", APIKeyEnv: "FLEET_SYNC_ALPHA_KEY", Enabled: true},
-		{ID: "beta", Name: "Beta", BaseURL: "https://beta.example/v1", APIKeyEnv: "FLEET_SYNC_BETA_KEY", Enabled: true},
-	} {
-		if err := source.st.UpsertProvider(ctx, item); err != nil {
+	for _, categories := range [][]string{nil, {"providers"}, {"agents"}} {
+		manifest, err := source.exportFleetSyncManifest(ctx, true, categories)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := source.st.SetActiveProvider(ctx, "codex", "alpha"); err != nil {
-		t.Fatal(err)
-	}
-
-	manifest, err := source.exportFleetSyncManifest(ctx, false, []string{"providers"}, []string{"alpha"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(manifest.Providers) != 1 || manifest.Providers[0].ID != "alpha" {
-		t.Fatalf("providers = %+v", manifest.Providers)
-	}
-	if len(manifest.Routes) != 0 {
-		t.Fatalf("card-level provider sync unexpectedly included routes: %+v", manifest.Routes)
-	}
-	if len(manifest.CredentialsOmitted) != 1 || manifest.CredentialsOmitted[0] != "provider:alpha" {
-		t.Fatalf("credentials omitted = %+v", manifest.CredentialsOmitted)
+		raw, _ := json.Marshal(manifest)
+		if strings.Contains(string(raw), "alpha") {
+			t.Fatalf("categories %v exported a provider: %s", categories, raw)
+		}
 	}
 
-	preview, err := destination.inspectFleetSync(ctx, fleetSyncInspectRequest{Manifest: manifest}, false)
+	// A manifest from an older machine may still carry providers and keys.
+	var old fleetSyncManifest
+	if err := json.Unmarshal([]byte(`{"version":1,"providers":[{"id":"alpha","name":"Alpha"}],"provider_keys":{"alpha":"alpha-secret"},"routes":[{"tool":"codex","provider_id":"alpha"}]}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	result, err := destination.inspectFleetSync(ctx, fleetSyncInspectRequest{Manifest: old, PreserveActivation: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Resources) != 1 || preview.Resources[0].Type != "provider" || preview.Resources[0].Action != "add" || !preview.Resources[0].CredentialsMissing {
-		t.Fatalf("preview = %+v", preview)
-	}
-	result, err := destination.inspectFleetSync(ctx, fleetSyncInspectRequest{Manifest: manifest}, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Resources) != 1 || result.Resources[0].Action != "add" {
-		t.Fatalf("result = %+v", result)
-	}
-	saved, err := destination.st.ListProviders(ctx)
-	if err != nil || len(saved) != 1 || saved[0].ID != "alpha" || saved[0].Enabled {
-		t.Fatalf("saved = %+v, err = %v", saved, err)
-	}
-	if _, err := source.exportFleetSyncManifest(ctx, false, []string{"providers"}, []string{"missing"}); err == nil {
-		t.Fatal("missing selected provider should fail export")
+	if len(result.Resources) != 0 {
+		t.Fatalf("result = %+v", result.Resources)
 	}
 }
 

@@ -47,7 +47,7 @@ export function DeleteRemoteHostDialog({ host, busy, error, onClose, onConfirm }
         aria-describedby="remote-delete-description"
         aria-modal="true"
         aria-busy={busy}
-        className="surface meeting-dialog tenant-delete-dialog"
+        className="surface meeting-dialog confirm-delete-dialog"
         role="alertdialog"
         tabIndex={-1}
         onKeyDown={(event) => {
@@ -67,7 +67,7 @@ export function DeleteRemoteHostDialog({ host, busy, error, onClose, onConfirm }
           }
         }}
       >
-        <div className="meeting-dialog-icon tenant-delete-dialog-icon"><Trash2 size={22} /></div>
+        <div className="meeting-dialog-icon confirm-delete-dialog-icon"><Trash2 size={22} /></div>
         <div className="meeting-dialog-heading">
           <h2 id="remote-delete-title">{t("remote.deleteConfirm", { name: host.name })}</h2>
           <p id="remote-delete-description">{t(host.hub_role ? "remote.hubDeleteHint" : "remote.deleteHint")}</p>

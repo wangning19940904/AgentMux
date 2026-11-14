@@ -92,10 +92,10 @@ func TestFrameworkInstallSettingsRejectsUnsafeWrites(t *testing.T) {
 		t.Fatalf("forwarded write: code = %d body = %s", rec.Code, rec.Body.String())
 	}
 	rec = doFrameworkSettingsRequest(t, s, http.MethodPut, "/api/v1/frameworks/install-settings", valid, func(r *http.Request) *http.Request {
-		return r.WithContext(withPrincipal(r.Context(), &core.Principal{TenantID: "tenant-1"}))
+		return r.WithContext(withPrincipal(r.Context(), &core.Principal{Account: &core.AccountIdentity{ID: "acct_member", Login: "member", Role: core.AccountRoleMember}}))
 	})
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("tenant write: code = %d body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("member write: code = %d body = %s", rec.Code, rec.Body.String())
 	}
 	rec = doJSON(t, s, http.MethodPut, "/api/v1/frameworks/install-settings", framework.InstallSettings{DefaultRegistry: "ftp://mirror"})
 	if rec.Code != http.StatusBadRequest {

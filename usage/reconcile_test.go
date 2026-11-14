@@ -161,34 +161,6 @@ func TestCodexClientsAndRetriesStayDistinct(t *testing.T) {
 	}
 }
 
-func TestCodexProxyDoesNotBecomeInternalUsage(t *testing.T) {
-	ctx := context.Background()
-	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "usage.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	eng := NewEngine(&config.Config{Usage: config.UsageConfig{CacheDir: t.TempDir(), Offline: true}}, st, nil)
-	ts := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
-	if err := eng.RecordProxy(ctx, core.ProxyTrace{Tool: "codex", RequestID: "routed-request", SessionID: "cli-session", UpstreamModel: "gpt-5", Timestamp: ts, InputTokens: 10}); err != nil {
-		t.Fatal(err)
-	}
-	records, err := st.QueryUsage(ctx, time.Time{})
-	if err != nil || len(records) != 1 || records[0].RuntimeID != "codex" || records[0].Provenance != "agentmux.proxy" {
-		t.Fatalf("routing an external client is not an AgentMux internal invocation: %+v %v", records, err)
-	}
-	transcript := records[0]
-	transcript.RequestID, transcript.Provenance = "", ""
-	transcript.Timestamp = ts.Add(-time.Second)
-	if err := st.UpsertUsage(ctx, []core.UsageRecord{transcript}); err != nil {
-		t.Fatal(err)
-	}
-	report, err := eng.Report(ctx, "daily", time.Time{})
-	if err != nil || report.Totals.Records != 1 || report.Totals.InputTokens != 10 || len(report.ByRuntime) != 1 || report.ByRuntime[0].Runtime != "codex" {
-		t.Fatalf("proxy and rollout should count once as CLI: %+v %v", report, err)
-	}
-}
-
 func TestReportReconciliationMatchesAcrossDateBoundary(t *testing.T) {
 	for _, source := range []string{"codex", "cursor"} {
 		t.Run(source, func(t *testing.T) {

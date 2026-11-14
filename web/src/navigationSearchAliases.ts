@@ -21,6 +21,11 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "框架", "智能体框架", "开发框架", "运行时", "SDK",
     "kuangjia", "kuang jia", "kj", "yunxingshi", "yun xing shi", "yxs",
     "framework", "frameworks", "runtime", "agent sdk", "development kit",
+    // Models and availability: providers and routing are left to the
+    // frameworks and the user's router.
+    "模型", "模型列表", "可用性", "测试", "健康检查", "模型健康", "服务商", "路由",
+    "moxing", "mo xing", "mx", "keyongxing", "ke yong xing", "kyx",
+    "model", "models", "availability", "health check", "test", "provider", "router", "gateway", "magpie",
   ],
   skills: [
     "技能", "能力", "插件", "扩展", "技能市场", "工具市场",
@@ -64,17 +69,6 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "chufaqi", "chu fa qi", "cfq", "chufa", "chu fa", "cf", "huidiao", "hui diao", "hd",
     "trigger", "triggers", "webhook", "event callback", "callback", "automation",
   ],
-  gateway: [
-    "LLM Provider", "模型服务商", "模型供应商", "服务商", "供应商", "模型服务", "模型厂商",
-    "模型健康", "接口健康", "健康检查", "网关", "路由", "连接路由", "代理", "转发", "模型路由", "流量入口",
-    "wangguan", "wang guan", "wg", "luyou", "lu you", "ly",
-    "fuwushang", "fu wu shang", "fws", "gongyingshang", "gong ying shang", "gys",
-    "gateway", "router", "routing", "route", "proxy", "forwarder", "model router",
-    "provider", "providers", "vendor", "model provider", "provider health", "health check", "llm api",
-    "openai", "anthropic", "claude", "gemini", "google ai", "deepseek", "豆包", "doubao", "火山方舟", "ark",
-    "openrouter", "azure openai", "bedrock", "vertex ai", "qwen", "通义千问", "dashscope", "kimi", "moonshot",
-    "minimax", "groq", "ollama",
-  ],
   "machine-status": [
     "机器状态", "机器监控", "主机监控", "资源监控", "服务器状态", "负载", "磁盘", "内存", "CPU", "网速",
     "jiqizhuangtai", "ji qi zhuang tai", "jqzt", "jiqijiankong", "ji qi jian kong", "jqjk",
@@ -107,10 +101,11 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "yuanchengjiqi", "yuan cheng ji qi", "ycjq", "jiqi", "ji qi", "jq",
     "machine", "machines", "host", "server", "computer", "remote", "remote host", "ssh",
   ],
-  tenants: [
-    "租户", "组织", "企业", "工作空间", "空间", "账号范围",
-    "zuhu", "zu hu", "zh", "zuzhi", "zu zhi", "zz",
-    "tenant", "tenants", "organization", "organisation", "org", "workspace", "account scope",
+  accounts: [
+    "账号", "账户", "用户", "成员", "管理员", "密码", "登录", "我的设备", "配对设备",
+    "zhanghao", "zhang hao", "zhh", "yonghu", "yong hu", "yh", "mima", "mi ma", "mm",
+    "account", "accounts", "user", "users", "member", "members", "admin", "administrator",
+    "password", "sign in", "login", "my devices", "paired devices", "pairing",
   ],
   settings: [
     "设置", "偏好设置", "配置", "系统设置", "菜单栏", "开机启动", "保持唤醒",

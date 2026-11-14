@@ -24,14 +24,6 @@
       "omitempty": false,
       "type": "string"
     },
-    "owner_tenant_id": {
-      "omitempty": true,
-      "type": "string"
-    },
-    "owner_tenant_name": {
-      "omitempty": true,
-      "type": "string"
-    },
     "type": {
       "omitempty": false,
       "type": "string"
@@ -39,10 +31,6 @@
     "updated_at": {
       "omitempty": false,
       "type": "datetime"
-    },
-    "visibility": {
-      "omitempty": true,
-      "type": "string"
     }
   },
   "go_type": "core.Channel"

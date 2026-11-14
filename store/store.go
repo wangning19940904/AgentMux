@@ -151,27 +151,6 @@ func (s *Store) Close() error {
 }
 
 const sqliteCoreSchema = `
-CREATE TABLE IF NOT EXISTS providers (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	preset TEXT,
-	category TEXT,
-	base_url TEXT,
-	api_key_env TEXT,
-	model TEXT,
-	tools TEXT,
-	extra TEXT,
-	settings_config TEXT,
-	meta TEXT,
-	enabled INTEGER DEFAULT 0,
-	created_at TEXT,
-	updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS active_provider (
-	tool TEXT PRIMARY KEY,
-	provider_id TEXT,
-	meta TEXT
-);
 CREATE TABLE IF NOT EXISTS usage_records (
 	source TEXT,
 	session_id TEXT,
@@ -236,8 +215,6 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	worktree_base_ref TEXT,
 	session_backend TEXT,
 	system_prompt TEXT,
-	provider_tool TEXT,
-	provider_id TEXT,
 	default_model TEXT,
 	default_reasoning_effort TEXT,
 	default_service_tier TEXT,
@@ -253,44 +230,9 @@ CREATE TABLE IF NOT EXISTS agent_instances (
 	clis TEXT,
 	enabled INTEGER DEFAULT 1,
 	source TEXT,
-	owner_tenant_id TEXT,
-	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_agent_instances_owner ON agent_instances(owner_tenant_id);
-CREATE TABLE IF NOT EXISTS proxy_config (
-	tool TEXT PRIMARY KEY,
-	enabled INTEGER DEFAULT 0,
-	auto_failover INTEGER DEFAULT 0,
-	max_retries INTEGER DEFAULT 3,
-	failure_threshold INTEGER DEFAULT 4,
-	cooldown_seconds INTEGER DEFAULT 60
-);
-CREATE TABLE IF NOT EXISTS proxy_live_backup (
-	tool TEXT PRIMARY KEY,
-	original_config TEXT NOT NULL,
-	backed_up_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS proxy_traces (
-	id TEXT PRIMARY KEY,
-	timestamp TEXT NOT NULL,
-	tool TEXT,
-	provider_id TEXT,
-	provider_name TEXT,
-	client_protocol TEXT,
-	upstream_protocol TEXT,
-	client_model TEXT,
-	upstream_model TEXT,
-	status_code INTEGER,
-	success INTEGER DEFAULT 0,
-	error TEXT,
-	session_id TEXT,
-	project_dir TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_time ON proxy_traces(timestamp);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_tool_time ON proxy_traces(tool,timestamp);
-CREATE INDEX IF NOT EXISTS idx_proxy_traces_session_time ON proxy_traces(session_id,timestamp);
 CREATE TABLE IF NOT EXISTS channels (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -298,45 +240,9 @@ CREATE TABLE IF NOT EXISTS channels (
 	agent_id TEXT,
 	config TEXT,
 	enabled INTEGER DEFAULT 0,
-	owner_tenant_id TEXT,
-	visibility TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner_tenant_id);
-CREATE TABLE IF NOT EXISTS tenants (
-	id TEXT PRIMARY KEY,
-	name TEXT NOT NULL,
-	kind TEXT,
-	status TEXT NOT NULL,
-	note TEXT,
-	created_at TEXT,
-	updated_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_name ON tenants(name);
-CREATE TABLE IF NOT EXISTS tenant_tokens (
-	id TEXT PRIMARY KEY,
-	tenant_id TEXT NOT NULL,
-	name TEXT,
-	token_hash TEXT NOT NULL,
-	prefix TEXT,
-	created_at TEXT,
-	last_used_at TEXT,
-	expires_at TEXT,
-	revoked_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_tokens_hash ON tenant_tokens(token_hash);
-CREATE INDEX IF NOT EXISTS idx_tenant_tokens_tenant ON tenant_tokens(tenant_id);
-CREATE TABLE IF NOT EXISTS resource_grants (
-	tenant_id TEXT NOT NULL,
-	resource_type TEXT NOT NULL,
-	resource_id TEXT NOT NULL,
-	level TEXT NOT NULL,
-	created_at TEXT,
-	updated_at TEXT,
-	PRIMARY KEY (tenant_id, resource_type, resource_id)
-);
-CREATE INDEX IF NOT EXISTS idx_resource_grants_lookup ON resource_grants(tenant_id, resource_type);
 CREATE TABLE IF NOT EXISTS triggers (
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -355,11 +261,9 @@ CREATE TABLE IF NOT EXISTS triggers (
 	last_run TEXT,
 	last_status TEXT,
 	last_error TEXT,
-	owner_tenant_id TEXT,
 	created_at TEXT,
 	updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_triggers_owner ON triggers(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS conversations (
 	id TEXT PRIMARY KEY,
 	scope TEXT NOT NULL,
@@ -449,13 +353,11 @@ CREATE TABLE IF NOT EXISTS orchestrations (
 	status TEXT NOT NULL,
 	max_concurrency INTEGER NOT NULL,
 	error TEXT,
-	owner_tenant_id TEXT,
 	created_at TEXT NOT NULL,
 	started_at TEXT,
 	finished_at TEXT,
 	updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_orchestrations_owner ON orchestrations(owner_tenant_id);
 CREATE TABLE IF NOT EXISTS orchestration_tasks (
 	orchestration_id TEXT NOT NULL,
 	id TEXT NOT NULL,
@@ -501,22 +403,10 @@ func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(sqliteCoreSchema); err != nil {
 		return err
 	}
-	// Registration codes were removed in contract 1.2. Drop the retired table
-	// during legacy SQLite upgrades so stale secrets cannot remain usable.
-	if _, err := s.writer.Exec(`DROP TABLE IF EXISTS tenant_enrollments`); err != nil {
-		return err
-	}
-	for _, col := range []struct {
-		name string
-		def  string
-	}{
-		{"category", "TEXT"},
-		{"settings_config", "TEXT"},
-		{"meta", "TEXT"},
-		{"in_failover_queue", "INTEGER DEFAULT 0"},
-		{"sort_index", "INTEGER DEFAULT 0"},
-	} {
-		if err := s.ensureColumn("providers", col.name, col.def); err != nil {
+	// LLM provider management and local routing are retired: drop their
+	// tables from legacy SQLite stores as well.
+	for _, table := range []string{"providers", "active_provider", "proxy_config", "proxy_live_backup", "proxy_traces"} {
+		if _, err := s.writer.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
 			return err
 		}
 	}
@@ -552,26 +442,18 @@ func (s *Store) migrateSQLite() error {
 	if err := s.ensureColumn("agent_instances", "clis", "TEXT"); err != nil {
 		return err
 	}
-	// Tenancy ownership columns (see core/tenancy.go).
-	for _, owned := range []struct {
-		table   string
-		columns []string
-	}{
-		{"agent_instances", []string{"owner_tenant_id", "visibility"}},
-		{"channels", []string{"owner_tenant_id", "visibility"}},
-		{"triggers", []string{"owner_tenant_id"}},
-		{"orchestrations", []string{"owner_tenant_id"}},
-		{"devices", []string{"owner_tenant_id"}},
-		{"device_pairing_codes", []string{"owner_tenant_id"}},
-	} {
-		for _, column := range owned.columns {
-			if err := s.ensureColumn(owned.table, column, "TEXT"); err != nil {
-				return err
-			}
+	// Devices belong to the account that paired them.
+	for _, table := range []string{"devices", "device_pairing_codes"} {
+		if err := s.ensureColumn(table, "owner_account_id", "TEXT"); err != nil {
+			return err
 		}
 	}
-	if err := s.ensureColumn("active_provider", "meta", "TEXT"); err != nil {
-		return err
+	// Multi-tenancy is retired: drop its tables from legacy SQLite stores so
+	// stale tenant credentials cannot remain usable.
+	for _, table := range []string{"resource_grants", "tenant_tokens", "tenant_enrollments", "tenants"} {
+		if _, err := s.writer.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
+			return err
+		}
 	}
 	if err := s.ensureColumn("conversations", "conversation_key", "TEXT"); err != nil {
 		return err
@@ -650,32 +532,6 @@ func (s *Store) migrateSQLite() error {
 	}
 	if _, err := s.writer.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp)`); err != nil {
 		return err
-	}
-	for _, col := range []struct {
-		name string
-		def  string
-	}{
-		{"request_id", "TEXT"},
-		{"trace_id", "TEXT"},
-		{"parent_span_id", "TEXT"},
-		{"attempt", "INTEGER DEFAULT 0"},
-		{"parent_attempt_id", "TEXT"},
-		{"started_at", "TEXT"},
-		{"ttft_ms", "INTEGER DEFAULT 0"},
-		{"duration_ms", "INTEGER DEFAULT 0"},
-		{"stream_complete", "INTEGER DEFAULT 0"},
-		{"finish_reason", "TEXT"},
-		{"input_tokens", "INTEGER DEFAULT 0"},
-		{"output_tokens", "INTEGER DEFAULT 0"},
-		{"cache_read_tokens", "INTEGER DEFAULT 0"},
-		{"cache_write_tokens", "INTEGER DEFAULT 0"},
-		{"request_bytes", "INTEGER DEFAULT 0"},
-		{"response_bytes", "INTEGER DEFAULT 0"},
-		{"cost_usd", "REAL DEFAULT 0"},
-	} {
-		if err := s.ensureColumn("proxy_traces", col.name, col.def); err != nil {
-			return err
-		}
 	}
 	if err := s.migrateObservations(); err != nil {
 		return err

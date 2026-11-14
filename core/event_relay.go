@@ -24,7 +24,6 @@ type RelayEvent struct {
 
 type EventSubscription struct {
 	ID            string              `json:"id"`
-	OwnerTenantID string              `json:"owner_tenant_id,omitempty"`
 	Key           string              `json:"key"`
 	Name          string              `json:"name"`
 	Source        string              `json:"source"`

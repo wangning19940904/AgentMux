@@ -1,6 +1,6 @@
 // Web Push endpoints. They always go to the Console's own server (the hub),
-// never through a selected remote machine, and never carry a previewed
-// tenant scope: a device subscribes as the person signed in to this Console.
+// never through a selected remote machine: a device subscribes as the person
+// signed in to this Console.
 
 export type PushKind = "waiting" | "tickets" | "machines" | "messages";
 

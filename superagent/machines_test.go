@@ -282,7 +282,7 @@ func TestHostWorkerAppliesThisMachinesChecks(t *testing.T) {
 	if instance == nil || !IsManagedAgent(*instance) || isAgentRecord(*instance) || !instance.Enabled || instance.DefaultApprovalMode != core.ApprovalModeYolo {
 		t.Fatalf("instance = %+v", instance)
 	}
-	if instance.ProviderID != "" || len(instance.Env) != 0 || len(instance.MCPServers) != 0 {
+	if len(instance.Env) != 0 || len(instance.MCPServers) != 0 {
 		t.Fatalf("a hosted worker uses this machine's own settings: %+v", instance)
 	}
 

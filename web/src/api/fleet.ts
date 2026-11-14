@@ -1,4 +1,4 @@
-import { activeMachineScope, fleetAdminQuery, fleetExecute, fleetQuery } from "./client";
+import { activeMachineScope, fleetExecute, fleetQuery } from "./client";
 import type {
   FleetBatchResult,
   FleetOperation,
@@ -17,11 +17,6 @@ export function fleetMode() {
 
 export async function fleetReadArray<T>(path: string, key = "data"): Promise<Targeted<T>[]> {
   const batch = await fleetQuery<T[]>([{ key, path }]);
-	return fleetArrayFromBatch(batch, key);
-}
-
-export async function fleetAdminReadArray<T>(path: string, key = "data"): Promise<Targeted<T>[]> {
-	const batch = await fleetAdminQuery<T[]>([{ key, path }], ["all"]);
 	return fleetArrayFromBatch(batch, key);
 }
 

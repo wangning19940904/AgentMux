@@ -9,7 +9,7 @@ CAPABILITIES = {
     "ok": True,
     "product": "agentmux",
     "version": "v0.1.4",
-    "contract_version": "2.0",
+    "contract_version": "3.0",
     "features": ["invocations", "invocations.stream", "send", "console.session"],
     "modules": {"connect": {"configured": True, "runtime_active": True, "enforced": False}},
     "agents": {"count": 2, "runtimes": ["codex"]},
@@ -30,7 +30,7 @@ def test_ready_via_capabilities() -> None:
     report = make_client(handler).health()
     assert report.state is HealthState.READY
     assert report.version == "v0.1.4"
-    assert report.contract_version == "2.0"
+    assert report.contract_version == "3.0"
     assert report.capabilities is not None
     assert report.capabilities.supports("invocations.stream")
 
@@ -44,7 +44,7 @@ def test_unauthorized() -> None:
 
 
 def test_incompatible_contract_major() -> None:
-    payload = dict(CAPABILITIES, contract_version="3.0")
+    payload = dict(CAPABILITIES, contract_version="4.0")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=payload)

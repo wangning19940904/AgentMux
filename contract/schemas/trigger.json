@@ -60,10 +60,6 @@
       "omitempty": false,
       "type": "string"
     },
-    "owner_tenant_id": {
-      "omitempty": true,
-      "type": "string"
-    },
     "prompt": {
       "omitempty": true,
       "type": "string"

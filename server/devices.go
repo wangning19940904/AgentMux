@@ -198,6 +198,7 @@ func (s *Server) registerDeviceRoutes() {
 	s.mux.HandleFunc("GET /api/v1/devices", s.handleDevicesList)
 	s.mux.HandleFunc("POST /api/v1/devices", s.handleDeviceRename)
 	s.mux.HandleFunc("DELETE /api/v1/devices", s.handleDeviceDelete)
+	s.mux.HandleFunc("POST /api/v1/devices/owner", s.handleDeviceOwner)
 	s.mux.HandleFunc("POST /api/v1/devices/pairing-codes", s.handleDevicePairingCode)
 	s.mux.HandleFunc("GET /api/v1/devices/reports", s.handleDeviceReports)
 	s.mux.HandleFunc("GET /api/v1/link", s.handleLinkStatus)
@@ -221,15 +222,15 @@ type deviceView struct {
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
 }
 
-// Device ownership. A device belongs to the namespace of the account that
-// created its pairing code. Administrators see every device with its owner;
+// Device ownership. A device belongs to the account that created its pairing
+// code. Administrators see every device with its owner;
 // a signed-in member sees and manages only their own, and a device that is
 // not theirs answers as not found.
 
 // visibleDevices lists the devices a principal may see.
 func (s *Server) visibleDevices(ctx context.Context, principal *core.Principal) ([]core.Device, error) {
-	if principal.IsTenant() {
-		return s.st.ListDevicesForTenant(ctx, principal.TenantID)
+	if principal.IsMember() {
+		return s.st.ListDevicesForAccount(ctx, principal.Account.ID)
 	}
 	devices, err := s.st.ListDevices(ctx)
 	if err != nil || len(devices) == 0 {
@@ -239,12 +240,16 @@ func (s *Server) visibleDevices(ctx context.Context, principal *core.Principal) 
 	if self := s.hubPeerDeviceID(); self != "" {
 		devices = slices.DeleteFunc(devices, func(device core.Device) bool { return device.ID == self })
 	}
-	names, err := s.st.TenantNames(ctx)
+	accounts, err := s.st.ListAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
+	names := make(map[string]string, len(accounts))
+	for _, account := range accounts {
+		names[account.ID] = account.Name()
+	}
 	for index := range devices {
-		devices[index].OwnerTenantName = names[devices[index].OwnerTenantID]
+		devices[index].OwnerAccountName = names[devices[index].OwnerAccountID]
 	}
 	return devices, nil
 }
@@ -258,7 +263,7 @@ func (s *Server) authorizeDevice(w http.ResponseWriter, r *http.Request, id stri
 		return nil
 	}
 	principal := requestPrincipal(r)
-	if device == nil || (principal.IsTenant() && device.OwnerTenantID != principal.TenantID) {
+	if device == nil || (principal.IsMember() && device.OwnerAccountID != principal.Account.ID) {
 		writeNotVisible(w, "device")
 		return nil
 	}
@@ -282,7 +287,7 @@ func (s *Server) handleDeviceReports(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if principal.IsTenant() && deviceID == "" {
+	if principal.IsMember() && deviceID == "" {
 		owned, err := s.visibleDevices(r.Context(), principal)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -377,6 +382,49 @@ func (s *Server) handleDeviceRename(w http.ResponseWriter, r *http.Request) {
 	writeOK(w)
 }
 
+// handleDeviceOwner hands a device to an account, or with an empty
+// account_id back to administrators only. Members cannot reach it.
+func (s *Server) handleDeviceOwner(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if s.st == nil {
+		serviceUnavailable(w, "device pairing")
+		return
+	}
+	var req struct {
+		ID        string `json:"id"`
+		AccountID string `json:"account_id"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	req.ID, req.AccountID = strings.TrimSpace(req.ID), strings.TrimSpace(req.AccountID)
+	if device, err := s.st.GetDevice(r.Context(), req.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if device == nil {
+		writeNotVisible(w, "device")
+		return
+	}
+	if req.AccountID != "" {
+		account, err := s.st.GetAccount(r.Context(), req.AccountID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if account == nil {
+			writeErr(w, http.StatusNotFound, "account not found")
+			return
+		}
+	}
+	if err := s.st.SetDeviceOwner(r.Context(), req.ID, req.AccountID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w)
+}
+
 func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 	if s.linkHub == nil {
 		serviceUnavailable(w, "device pairing")
@@ -387,7 +435,7 @@ func (s *Server) handleDeviceDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	if requestPrincipal(r).IsTenant() && s.authorizeDevice(w, r, id) == nil {
+	if requestPrincipal(r).IsMember() && s.authorizeDevice(w, r, id) == nil {
 		return
 	}
 	if err := s.devices.Remove(r.Context(), id); err != nil {
@@ -431,7 +479,7 @@ func (s *Server) handleDevicePairingCode(w http.ResponseWriter, r *http.Request)
 	// The device will belong to whoever asked for the code: a signed-in
 	// account's namespace, or nobody (administrators only) for the bridge
 	// token and the loopback administrator.
-	code, err := s.st.CreateOwnedDevicePairingCode(r.Context(), req.Name, requestPrincipal(r).OwnerTenantID())
+	code, err := s.st.CreateOwnedDevicePairingCode(r.Context(), req.Name, requestPrincipal(r).OwnerAccountID())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

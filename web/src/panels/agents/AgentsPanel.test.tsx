@@ -28,7 +28,7 @@ it("waits for binding data before editing and preserves a late-arriving binding 
   const agent = { ...newAgent(["cursor"]), id: "ning", name: "宁宝", default_model: "grok-4.7", default_reasoning_effort: "xhigh", default_service_tier: "priority" };
   vi.spyOn(api, "agentInstances").mockResolvedValue([agent]);
   vi.spyOn(api, "agents").mockResolvedValue(["cursor"]);
-  for (const key of ["providers", "activeRoutes", "triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  for (const key of ["triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
   vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
   const channel = { id: "ning-bot", name: "宁宝渠道", type: "feishu", enabled: true, agent_id: "ning" };
   let finishChannels!: (value: typeof channel[]) => void;
@@ -62,9 +62,9 @@ it("waits for binding data before editing and preserves a late-arriving binding 
   } finally { await act(async () => root.unmount()); }
 });
 
-it("refreshes a partially failed Provider load even when the Agent list succeeded", async () => {
+it("refreshes a partially failed channel load even when the Agent list succeeded", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  for (const key of ["agentInstances", "agents", "activeRoutes", "channels", "triggers", "mcp", "skills"] as const) {
+  for (const key of ["agentInstances", "agents", "triggers", "mcp", "skills"] as const) {
     vi.spyOn(api, key).mockResolvedValue([]);
   }
   vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
@@ -87,7 +87,7 @@ it("refreshes a partially failed Provider load even when the Agent list succeede
   const root = createRoot(container);
   try {
     await act(async () => { root.render(<I18nProvider language="zh"><AgentsPanel /></I18nProvider>); });
-    expect(currentFleetWarnings()).toEqual([expect.stringContaining("aliyun-swas-sg: EOF · GET /api/v1/providers · ")]);
+    expect(currentFleetWarnings()).toEqual([expect.stringContaining("aliyun-swas-sg: EOF · GET /api/v1/channels")]);
     const refresh = container.querySelector<HTMLButtonElement>('button[title="刷新"]')!;
     expect(refresh.disabled).toBe(false);
     failing = false;
@@ -114,7 +114,7 @@ it("shows every kind of agent on one page, with its workers and activity", async
   const worker = { ...newAgent(["codex"]), id: "saw_sa_ops_codex", name: "worker", source: "super_agent" };
   vi.spyOn(api, "agentInstances").mockResolvedValue([chat, router, worker]);
   vi.spyOn(api, "agents").mockResolvedValue(["codex"]);
-  for (const key of ["providers", "activeRoutes", "channels", "triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  for (const key of ["channels", "triggers", "mcp", "skills"] as const) vi.spyOn(api, key).mockResolvedValue([]);
   vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
   vi.spyOn(api, "superAgents").mockResolvedValue([
     { id: "ning", name: "宁宝", router_agent_id: "ning", mode: "act", max_concurrency: 2, workers: [], sources: [], enabled: true },
@@ -148,7 +148,7 @@ it("shows every kind of agent on one page, with its workers and activity", async
 it("creates every new agent as a Super Agent, and keeps the old form for agents made before", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.setItem("agentmux:active-remote", "local");
-  for (const key of ["agentInstances", "providers", "activeRoutes", "channels", "triggers", "mcp", "skills", "remoteHosts"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  for (const key of ["agentInstances", "channels", "triggers", "mcp", "skills", "remoteHosts"] as const) vi.spyOn(api, key).mockResolvedValue([]);
   vi.spyOn(api, "agents").mockResolvedValue(["codex"]);
   vi.spyOn(api, "superAgents").mockResolvedValue([]);
   vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });

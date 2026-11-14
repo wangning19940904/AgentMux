@@ -489,15 +489,6 @@ func (s *Server) handleObservationIntegrations(w http.ResponseWriter, r *http.Re
 		}
 		report.Coverage["otel"] = "private_runtime"
 		report.Coverage["transcript"] = "enabled"
-		if s.st != nil {
-			tool := "claudecode"
-			if host == nativeintegration.HostCodex {
-				tool = "codex"
-			}
-			if proxyConfig, proxyErr := s.st.GetProxyToolConfig(r.Context(), tool); proxyErr == nil && proxyConfig.Enabled {
-				report.Coverage["proxy"] = "enabled"
-			}
-		}
 		reports = append(reports, report)
 	}
 	writeJSON(w, http.StatusOK, reports)

@@ -52,7 +52,6 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 	instance.Skills, instance.CLIs = []string{"skill"}, []string{"gh"}
 	instance.ChannelBindings = []core.AgentChannelBinding{{ID: "c1", Type: "feishu"}}
 	instance.SystemPrompt = "do anything"
-	instance.ProviderID = "kept-provider"
 	if err := h.store.UpsertAgentInstance(ctx, instance); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		len(instance.ChannelBindings) != 0 || instance.SystemPrompt != "" || len(instance.MCPServers) != 0 {
 		t.Fatalf("limits not restored: %+v", instance)
 	}
-	if instance.Name != "Ops router" || instance.RuntimeID != "codex" || instance.ProviderID != "kept-provider" || !instance.CreatedAt.Equal(*h.clock) {
+	if instance.Name != "Ops router" || instance.RuntimeID != "codex" || !instance.CreatedAt.Equal(*h.clock) {
 		t.Fatalf("instance = %+v", instance)
 	}
 }

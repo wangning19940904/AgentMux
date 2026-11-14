@@ -92,7 +92,7 @@ def test_event_resource_sync_and_async():
         "callback_url": "http://127.0.0.1:8000/events",
     }
     with AgentMuxClient(
-        transport=httpx.MockTransport(handler), token="tenant"
+        transport=httpx.MockTransport(handler), token="bridge"
     ) as client:
         assert client.events.sources() == []
         result = client.events.upsert(payload)

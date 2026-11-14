@@ -11,7 +11,7 @@ const entries = new Map<string, Entry<unknown>>();
 export function resourceEntry<T>(key: string): Entry<T> {
   let entry = entries.get(key);
   if (!entry) {
-    // Retain only a bounded number of inactive machine/tenant snapshots.
+    // Retain only a bounded number of inactive machine snapshots.
     if (entries.size >= 128) {
       for (const [oldKey, old] of entries) {
         if (!old.listeners.size && !old.pending) { entries.delete(oldKey); break; }

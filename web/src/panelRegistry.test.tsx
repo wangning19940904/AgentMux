@@ -17,7 +17,6 @@ vi.mock("./panels/AgentsPanel", async () => {
 vi.mock("./api", () => ({
   api: {
     agentInstances: async () => [], agents: async () => ["codex"],
-    providers: async () => [], activeRoutes: async () => [],
     channels: async () => [], triggers: async () => [],
     mcp: async () => [], skills: async () => [], tools: async () => ({ cli: [] }),
   },

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { activeMachineScope, activeTenantScopeKey } from "./api/client";
+import { activeMachineScope } from "./api/client";
 import { loadResource, resourceEntry } from "./resourceCache";
 
 export function useCachedResource<T>(name: string, loader: () => Promise<T>, staleTimeMs = 30_000) {
-  const key = JSON.stringify([activeMachineScope(), activeTenantScopeKey(), name]);
+  const key = JSON.stringify([activeMachineScope(), name]);
   const entry = resourceEntry<T>(key);
   const loaderRef = useRef(loader);
   loaderRef.current = loader;

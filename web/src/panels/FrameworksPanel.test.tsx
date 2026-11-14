@@ -12,6 +12,7 @@ vi.mock("../api", () => ({
     remoteHosts: vi.fn(),
     checkFrameworkUpdate: vi.fn(),
     frameworkAuth: vi.fn(),
+    frameworkHealth: vi.fn(),
     installFramework: vi.fn(),
     frameworkInstallSettings: vi.fn(),
     saveFrameworkInstallSettings: vi.fn(),
@@ -70,6 +71,7 @@ beforeEach(async () => {
   vi.mocked(activeRemoteID).mockReturnValue("");
   vi.mocked(api.frameworks).mockResolvedValue(frameworksResponse(false));
   vi.mocked(api.remoteHosts).mockResolvedValue([]);
+  vi.mocked(api.frameworkHealth).mockResolvedValue([]);
   vi.mocked(api.checkFrameworkUpdate).mockResolvedValue({ kind: "dsh", installed: true, update_available: false });
   vi.mocked(api.frameworkAuth).mockResolvedValue({ kind: "dsh", state: "unknown" } as Awaited<ReturnType<typeof api.frameworkAuth>>);
   container = document.createElement("div");

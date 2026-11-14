@@ -1,169 +1,4 @@
 // Shared response/request types for the console REST layer.
-export interface Provider {
-  id: string;
-  name: string;
-  preset?: string;
-  category?: string;
-  base_url: string;
-  api_key_env?: string;
-  api_key?: string;
-  api_key_available?: boolean;
-  api_key_issue?: string;
-  model?: string;
-  extra?: Record<string, string>;
-  settings_config?: Record<string, unknown>;
-  meta?: Record<string, unknown>;
-  enabled: boolean;
-  in_failover_queue?: boolean;
-  sort_index?: number;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface ProxyToolConfig {
-  tool: string;
-  enabled: boolean;
-  auto_failover: boolean;
-  max_retries: number;
-  failure_threshold: number;
-  cooldown_seconds: number;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface ProxyStatus {
-  running: boolean;
-  base_url: string;
-  tools: ProxyToolConfig[];
-  warnings?: string[];
-}
-
-export interface ProxyTrace {
-  id: string;
-  timestamp: string;
-  tool: string;
-  provider_id: string;
-  provider_name?: string;
-  client_protocol: string;
-  upstream_protocol: string;
-  client_model?: string;
-  upstream_model?: string;
-  status_code?: number;
-  success: boolean;
-  error?: string;
-  session_id?: string;
-  project_dir?: string;
-}
-
-export interface ProviderRoute {
-  tool: string;
-  provider_id: string;
-  provider_name?: string;
-  base_url?: string;
-  api_key_env?: string;
-  api_key_available?: boolean;
-  api_key_issue?: string;
-  model?: string;
-  api_format?: string;
-  meta?: Record<string, unknown>;
-  configured: boolean;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface ProviderProbeResult {
-  ok: boolean;
-  url?: string;
-  models: string[];
-  count: number;
-  message: string;
-  api_format?: string;
-  formats?: ProviderProbeCheck[];
-  protocols?: ProviderProbeCheck[];
-}
-
-export interface ProviderProbeCheck {
-  kind: string;
-  name: string;
-  ok: boolean;
-  url?: string;
-  status?: number;
-  models?: string[];
-  message?: string;
-}
-
-export interface ProviderMonitorConfig {
-  enabled: boolean;
-  interval_minutes: number;
-  probe_models: boolean;
-  max_models_per_provider: number;
-}
-
-export interface ProviderModelHealth {
-  model: string;
-  state: string;
-  status_code?: number;
-  message?: string;
-  checked_at: string;
-}
-
-export interface ProviderMonitorProviderStatus {
-  provider_id: string;
-  provider_name: string;
-  state: string;
-  catalog_count: number;
-  checked_models: number;
-  healthy_models: number;
-  unhealthy_models: number;
-  added_models?: string[];
-  removed_models?: string[];
-  models?: ProviderModelHealth[];
-  message?: string;
-  last_checked_at: string;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface ProviderMonitorAlert {
-  id: string;
-  type: string;
-  severity: string;
-  provider_id: string;
-  provider_name: string;
-  model?: string;
-  models?: string[];
-  message?: string;
-  created_at: string;
-  last_seen_at: string;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface ProviderMonitorSnapshot {
-  config: ProviderMonitorConfig;
-  running: boolean;
-  last_run_at?: string;
-  next_run_at?: string;
-  providers: ProviderMonitorProviderStatus[];
-  alerts: ProviderMonitorAlert[];
-  warnings?: string[];
-}
-
-export interface Claude3PStatus {
-  enabled: boolean;
-  configured: boolean;
-  config_dir: string;
-  profile_path?: string;
-  active_profile_id?: string;
-  active_profile_name?: string;
-  base_url?: string;
-  auth_scheme?: string;
-  model_count: number;
-  provider_id?: string;
-  provider_name?: string;
-  backup_path?: string;
-  message?: string;
-}
 
 export interface UsageTotals {
   input_tokens: number;
@@ -592,9 +427,6 @@ export interface AgentInstance {
   worktree_base_ref?: string;
   session_backend?: "structured" | "tmux";
   system_prompt?: string;
-  provider_tool?: string;
-  provider_id?: string;
-  provider_name?: string;
   default_model?: string;
   default_reasoning_effort?: string;
   default_service_tier?: string;
@@ -610,9 +442,6 @@ export interface AgentInstance {
   clis?: string[];
   enabled: boolean;
   source?: string;
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
-  visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
   target_id?: string;
@@ -652,69 +481,10 @@ export interface Channel {
     interactions: boolean;
     deep_link: boolean;
   };
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
-  visibility?: ResourceVisibility;
   created_at?: string;
   updated_at?: string;
   target_id?: string;
   target_name?: string;
-}
-
-// Tenancy: one AgentMux instance is shared by several host applications. See
-// contract/CONTRACT.md "多租户".
-export type ResourceVisibility = "private" | "public";
-export type GrantLevel = "read" | "use" | "manage";
-export type TenantKind = "app" | "web" | "service" | "account";
-export type GrantableResourceType = "agent" | "channel" | "trigger" | "provider" | "event_source";
-
-export interface Tenant {
-  id: string;
-  name: string;
-  kind?: TenantKind;
-  status: "active" | "disabled";
-  note?: string;
-  resource_count?: number;
-  created_at?: string;
-  updated_at?: string;
-  target_id?: string;
-  target_name?: string;
-}
-
-export interface TenantToken {
-  id: string;
-  tenant_id: string;
-  name?: string;
-  prefix: string;
-  created_at?: string;
-  last_used_at?: string;
-  expires_at?: string;
-  revoked_at?: string;
-  // Present only on the create response; the plaintext is never recoverable.
-  secret?: string;
-}
-
-export interface ResourceGrant {
-  tenant_id: string;
-  resource_type: GrantableResourceType;
-  resource_id: string;
-  level: GrantLevel;
-  created_at?: string;
-  updated_at?: string;
-  target_id?: string;
-  target_name?: string;
-}
-
-// TenancySelf tells the Console whether it is running with administrator
-// rights or confined to a single tenant, which drives what it renders.
-export interface TenancySelf {
-  admin: boolean;
-  tenant_id?: string;
-  tenant?: string;
-  kind?: string;
-  status?: string;
-  // The person signed in, for an account session.
-  account?: AccountIdentity;
 }
 
 export type AccountRole = "admin" | "member";
@@ -725,7 +495,6 @@ export interface AccountIdentity {
   login: string;
   display_name?: string;
   role: AccountRole;
-  tenant_id: string;
 }
 
 // Account is one person who signs in to the Console.
@@ -745,13 +514,12 @@ export interface AuthSession {
   authenticated: boolean;
   admin: boolean;
   account?: AccountIdentity;
-  tenant_id?: string;
-  tenant?: string;
   sign_in_methods: string[];
 }
 
 // PairedDevice is a machine paired with this hub, as /api/v1/devices lists
-// it. Administrators see every device with its owner; a member their own.
+// it. Administrators see every device with the account that owns it; a
+// member sees their own. A device without an owner belongs to administrators.
 export interface PairedDevice {
   id: string;
   name: string;
@@ -761,8 +529,8 @@ export interface PairedDevice {
   version?: string;
   created_at: string;
   last_seen_at?: string;
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
+  owner_account_id?: string;
+  owner_account_name?: string;
   online: boolean;
   reported_at?: string;
 }
@@ -1027,8 +795,6 @@ export interface Trigger {
   last_run?: string;
   last_status?: string;
   last_error?: string;
-  owner_tenant_id?: string;
-  owner_tenant_name?: string;
   created_at?: string;
   updated_at?: string;
   target_id?: string;
@@ -1184,6 +950,38 @@ export interface FrameworkRuntimeSettings {
   kind: string;
   defaults: RuntimeSettings;
   capabilities: RuntimeSettingsCapabilities;
+}
+
+export type FrameworkSmokeErrorKind =
+  | "not_installed"
+  | "unauthenticated"
+  | "model_not_found"
+  | "rate_limited"
+  | "network"
+  | "timeout"
+  | "unexpected_reply"
+  | "unknown";
+
+// FrameworkSmokeResult is one "reply ok" test of a framework with a model.
+export interface FrameworkSmokeResult {
+  kind: string;
+  model?: string;
+  resolved_model?: string;
+  ok: boolean;
+  latency_ms: number;
+  reply?: string;
+  error_kind?: FrameworkSmokeErrorKind;
+  error_detail?: string;
+  checked_at: string;
+}
+
+export interface FrameworkTestRequest {
+  kind?: string;
+  model?: string;
+  reasoning_effort?: string;
+  service_tier?: string;
+  agent_id?: string;
+  timeout_seconds?: number;
 }
 
 export interface FrameworkAuthStatus extends TargetMetadata {
@@ -2161,7 +1959,6 @@ export interface RelayEvent {
 }
 export interface EventSubscriptionInput {
   id?: string;
-  owner_tenant_id?: string;
   key: string;
   name: string;
   source: "agentmux" | "feishu" | "lark";
@@ -2174,7 +1971,6 @@ export interface EventSubscriptionInput {
 export interface EventSubscription extends EventSubscriptionInput {
   id: string;
   paused: boolean;
-  owner_tenant_id?: string;
   created_at: string;
   updated_at: string;
   deleted?: boolean;

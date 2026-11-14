@@ -67,11 +67,8 @@ var DefaultReports = []Report{
 	{"skills", "/api/v1/skills"},
 	{"mcp", "/api/v1/mcp"},
 	{"guard_policies", "/api/v1/guard/policies"},
-	{"providers", "/api/v1/providers"},
-	{"provider_routes", "/api/v1/providers/active"},
 	{"platforms", "/api/v1/platforms"},
 	{"runtimes", "/api/v1/agents"},
-	{"tenants", "/api/v1/tenancy/tenants"},
 	// Agents waiting for a person; the hub notifies from its copy.
 	{"interactions_pending", "/api/v1/channel-interactions?pending=true"},
 }

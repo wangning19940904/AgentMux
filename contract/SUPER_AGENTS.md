@@ -453,7 +453,7 @@ remains for API clients:
 
 ## API
 
-These routes are for Console administrators and are closed to tenant credentials.
+These routes are for Console administrators and are closed to member accounts.
 
 | Method and path | Purpose |
 | --- | --- |

@@ -26,30 +26,11 @@ func postgresMigrations() []postgresMigration {
 			version: 1,
 			name:    "postgres_base_schema",
 			sql: postgresBaseSchema() + `
-ALTER TABLE providers ADD COLUMN IF NOT EXISTS in_failover_queue BIGINT DEFAULT 0;
-ALTER TABLE providers ADD COLUMN IF NOT EXISTS sort_index BIGINT DEFAULT 0;
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS conversation_id TEXT;
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS trace_id TEXT;
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS turn_id TEXT;
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS request_id TEXT;
 ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS runtime_id TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS request_id TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS trace_id TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS parent_span_id TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS attempt BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS parent_attempt_id TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS started_at TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS ttft_ms BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS duration_ms BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS stream_complete BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS finish_reason TEXT;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS input_tokens BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS output_tokens BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS request_bytes BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS response_bytes BIGINT DEFAULT 0;
-ALTER TABLE proxy_traces ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_request
 	ON usage_records(source,request_id,host) WHERE request_id IS NOT NULL AND request_id<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_active
@@ -382,6 +363,12 @@ CREATE TABLE IF NOT EXISTS feishu_user_grants (channel_id TEXT PRIMARY KEY,data 
 		{version: 26, name: "mailbox", sql: mailboxSchema},
 		// Hub replication: the change log a standby hub follows; see hubsync.go.
 		{version: 27, name: "hub_replication", sql: hubTriggerSQL()},
+		// LLM provider management and local routing are retired: providers
+		// and routing belong to each framework or the user's router.
+		{version: 28, name: "retire_provider_routing", sql: retireProviderRoutingSQL},
+		// Multi-tenancy is retired: an administrator manages everything, and
+		// a member account owns only its devices and direct messages.
+		{version: 29, name: "retire_tenancy", sql: retireTenancySQL},
 	}
 }
 
@@ -417,6 +404,13 @@ func (s *Store) migratePostgres(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// Every hub runs the same migrations itself, so a migration's writes
+		// to hub tables are neither replicated from the primary nor refused
+		// on a standby.
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('agentmux.hub_apply', 'on', true)`); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("prepare postgres migration %d: %w", migration.version, err)
+		}
 		if _, err := tx.ExecContext(ctx, migration.sql); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply postgres migration %d (%s): %w", migration.version, migration.name, err)
@@ -439,3 +433,73 @@ func (s *Store) migratePostgres(ctx context.Context) error {
 	}
 	return s.migrateAgentBindings()
 }
+
+const retireProviderRoutingSQL = `
+DROP TABLE IF EXISTS proxy_traces;
+DROP TABLE IF EXISTS proxy_live_backup;
+DROP TABLE IF EXISTS proxy_config;
+DROP TABLE IF EXISTS active_provider;
+DROP TABLE IF EXISTS providers;
+ALTER TABLE agent_instances DROP COLUMN IF EXISTS provider_tool;
+ALTER TABLE agent_instances DROP COLUMN IF EXISTS provider_id;
+DELETE FROM resource_grants WHERE resource_type='provider';
+DELETE FROM settings WHERE key IN (
+	'provider_monitor_config_v1', 'provider_monitor_state_v1', 'claude_desktop_gateway_token',
+	'provider_handoff_v1', 'observation:legacy_proxy_rowid'
+);
+`
+
+// retireTenancySQL moves what members own from their tenant namespace to
+// their account, then drops tenants, tenant tokens, grants and the
+// ownership and visibility columns. The guarded block also runs on a fresh
+// database whose older migrations no longer create the tenant columns.
+const retireTenancySQL = `
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS owner_account_id TEXT;
+ALTER TABLE device_pairing_codes ADD COLUMN IF NOT EXISTS owner_account_id TEXT;
+DO $$
+DECLARE
+	has_account_tenant BOOLEAN := EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='accounts' AND column_name='tenant_id');
+BEGIN
+	IF has_account_tenant AND EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='devices' AND column_name='owner_tenant_id') THEN
+		UPDATE devices d SET owner_account_id=a.id FROM accounts a
+			WHERE d.owner_tenant_id IS NOT NULL AND d.owner_tenant_id<>'' AND a.tenant_id=d.owner_tenant_id;
+	END IF;
+	IF has_account_tenant AND EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='device_pairing_codes' AND column_name='owner_tenant_id') THEN
+		UPDATE device_pairing_codes c SET owner_account_id=a.id FROM accounts a
+			WHERE c.owner_tenant_id IS NOT NULL AND c.owner_tenant_id<>'' AND a.tenant_id=c.owner_tenant_id;
+	END IF;
+	IF has_account_tenant THEN
+		UPDATE push_subscriptions p SET subscriber='account:' || a.id FROM accounts a
+			WHERE p.subscriber='tenant:' || a.tenant_id;
+	END IF;
+	-- Subscriptions were unique per owner; keep tenant-owned keys distinct
+	-- once the owner column is gone.
+	IF EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='event_subscriptions' AND column_name='owner_tenant_id') THEN
+		UPDATE event_subscriptions SET subscription_key=subscription_key || '@' || owner_tenant_id
+			WHERE owner_tenant_id<>'';
+	END IF;
+END $$;
+DELETE FROM push_subscriptions WHERE subscriber LIKE 'tenant:%';
+DROP INDEX IF EXISTS idx_devices_owner;
+ALTER TABLE devices DROP COLUMN IF EXISTS owner_tenant_id;
+ALTER TABLE device_pairing_codes DROP COLUMN IF EXISTS owner_tenant_id;
+CREATE INDEX IF NOT EXISTS idx_devices_owner_account ON devices(owner_account_id);
+ALTER TABLE event_subscriptions DROP COLUMN IF EXISTS owner_tenant_id;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_subscriptions_key ON event_subscriptions(subscription_key);
+ALTER TABLE agent_instances DROP COLUMN IF EXISTS owner_tenant_id, DROP COLUMN IF EXISTS visibility;
+ALTER TABLE channels DROP COLUMN IF EXISTS owner_tenant_id, DROP COLUMN IF EXISTS visibility;
+ALTER TABLE triggers DROP COLUMN IF EXISTS owner_tenant_id;
+ALTER TABLE orchestrations DROP COLUMN IF EXISTS owner_tenant_id;
+DROP INDEX IF EXISTS idx_accounts_tenant;
+ALTER TABLE accounts DROP COLUMN IF EXISTS tenant_id;
+DROP TABLE IF EXISTS resource_grants;
+DROP TABLE IF EXISTS tenant_tokens;
+DROP TABLE IF EXISTS tenants;
+-- A hub keeps devices' reports of these lists; the endpoints are gone.
+DELETE FROM device_resources WHERE collection IN ('tenants','providers','provider_routes');
+DELETE FROM device_collections WHERE collection IN ('tenants','providers','provider_routes');
+`

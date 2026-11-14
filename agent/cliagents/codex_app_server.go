@@ -49,18 +49,21 @@ type codexAgent struct {
 	supportedApprovalModes    []string
 	env                       map[string]string
 	singleAgent               bool
-	desktopMode               bool
-	desktopThreadID           string
-	clientMu                  sync.Mutex
-	client                    *codexAppClient
-	capabilityState           string
-	capabilityError           string
+	// healthCheck starts throwaway threads that Codex does not save.
+	healthCheck     bool
+	desktopMode     bool
+	desktopThreadID string
+	clientMu        sync.Mutex
+	client          *codexAppClient
+	capabilityState string
+	capabilityError string
 }
 
 func newCodexAgent(cfg map[string]any) *codexAgent {
 	a := &codexAgent{capabilityState: "not_probed"}
 	a.desktopMode, _ = cfg["desktop_mode"].(bool)
 	a.singleAgent, _ = cfg["single_agent"].(bool)
+	a.healthCheck, _ = cfg[core.AgentConfigHealthCheck].(bool)
 	if value, ok := cfg["desktop_thread_id"].(string); ok {
 		a.desktopThreadID = strings.TrimSpace(value)
 	}
@@ -593,6 +596,9 @@ func (s *codexSession) startShared(ctx context.Context, resumeID string) error {
 		}
 		if model := s.DefaultModel(); model != "" {
 			params["model"] = model
+		}
+		if s.agent.healthCheck {
+			params["ephemeral"] = true
 		}
 		result, err = s.call(ctx, "thread/start", params)
 		if err != nil {

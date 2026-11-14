@@ -10,10 +10,8 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// Accounts are the people who sign in. Each account owns a tenant namespace
-// created with it, so ownership and grants reuse the tenancy tables. Session
-// tokens are stored as SHA-256 hashes, like tenant tokens; passwords as
-// argon2id hashes (see passwords.go).
+// Accounts are the people who sign in. Session tokens are stored as SHA-256
+// hashes (see secrets.go); passwords as argon2id hashes (see passwords.go).
 
 const accountSchema = `
 CREATE TABLE IF NOT EXISTS accounts (
@@ -22,7 +20,6 @@ CREATE TABLE IF NOT EXISTS accounts (
 	display_name TEXT,
 	role TEXT NOT NULL,
 	status TEXT NOT NULL,
-	tenant_id TEXT NOT NULL,
 	password_hash TEXT,
 	password_changed_at TEXT,
 	created_at TEXT NOT NULL,
@@ -30,7 +27,6 @@ CREATE TABLE IF NOT EXISTS accounts (
 	last_sign_in_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_login ON accounts(login);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_tenant ON accounts(tenant_id);
 CREATE TABLE IF NOT EXISTS account_sessions (
 	id TEXT PRIMARY KEY,
 	account_id TEXT NOT NULL,
@@ -58,14 +54,13 @@ const (
 	// AccountSessionTokenPrefix marks a session cookie that belongs to an
 	// account, as opposed to a one-time-link Console session held in memory.
 	AccountSessionTokenPrefix = "amxs_"
-	accountColumns            = `id,login,display_name,role,status,tenant_id,password_hash,created_at,updated_at,last_sign_in_at`
+	accountColumns            = `id,login,display_name,role,status,password_hash,created_at,updated_at,last_sign_in_at`
 	accountSessionSeenWindow  = 5 * time.Minute
 )
 
 var (
-	// ErrLoginTaken is returned when a login, or the tenant name it would
-	// give the account's namespace, is already in use.
-	ErrLoginTaken = errors.New("that login name is already in use by an account or tenant")
+	// ErrLoginTaken is returned when a login is already in use.
+	ErrLoginTaken = errors.New("that login name is already in use")
 	// ErrAccountsExist is returned when the first administrator was already
 	// created.
 	ErrAccountsExist = errors.New("accounts already exist; an administrator must create new ones")
@@ -99,7 +94,7 @@ func (s *Store) CountAccounts(ctx context.Context) (int, error) {
 	return count, err
 }
 
-// CreateAccount creates an account together with its tenant namespace.
+// CreateAccount creates an account.
 func (s *Store) CreateAccount(ctx context.Context, input NewAccount) (*core.Account, error) {
 	return s.createAccount(ctx, input, false)
 }
@@ -129,9 +124,9 @@ func (s *Store) createAccount(ctx context.Context, input NewAccount, first bool)
 	}
 	now := time.Now().UTC()
 	account := &core.Account{
-		ID: newTenancyID("acct"), Login: login, DisplayName: strings.TrimSpace(input.DisplayName),
+		ID: newRecordID("acct"), Login: login, DisplayName: strings.TrimSpace(input.DisplayName),
 		Role: core.NormalizeAccountRole(input.Role), Status: core.AccountStatusActive,
-		TenantID: newTenancyID("ten"), HasPassword: passwordHash != "", CreatedAt: now, UpdatedAt: now,
+		HasPassword: passwordHash != "", CreatedAt: now, UpdatedAt: now,
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -154,25 +149,20 @@ func (s *Store) createAccount(ctx context.Context, input NewAccount, first bool)
 		}
 	}
 	var taken int
-	if err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM accounts WHERE login=?)+(SELECT COUNT(*) FROM tenants WHERE name=?)`,
-		login, login).Scan(&taken); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE login=?`, login).Scan(&taken); err != nil {
 		return nil, err
 	}
 	if taken > 0 {
 		return nil, ErrLoginTaken
 	}
 	stamp := now.Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tenants (id,name,kind,status,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`,
-		account.TenantID, login, core.TenantKindAccount, core.TenantStatusActive, "Namespace of account "+login, stamp, stamp); err != nil {
-		return nil, err
-	}
 	var passwordValue, passwordChanged any
 	if passwordHash != "" {
 		passwordValue, passwordChanged = passwordHash, stamp
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts (id,login,display_name,role,status,tenant_id,password_hash,password_changed_at,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		account.ID, account.Login, account.DisplayName, account.Role, account.Status, account.TenantID,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts (id,login,display_name,role,status,password_hash,password_changed_at,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		account.ID, account.Login, account.DisplayName, account.Role, account.Status,
 		passwordValue, passwordChanged, stamp, stamp); err != nil {
 		return nil, err
 	}
@@ -273,15 +263,6 @@ func (s *Store) UpdateAccount(ctx context.Context, id string, update AccountUpda
 		next.DisplayName, next.Role, next.Status, stamp, id); err != nil {
 		return nil, err
 	}
-	if next.Status != account.Status {
-		tenantStatus := core.TenantStatusActive
-		if next.Status == core.AccountStatusDisabled {
-			tenantStatus = core.TenantStatusDisabled
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE tenants SET status=?,updated_at=? WHERE id=?`, tenantStatus, stamp, account.TenantID); err != nil {
-			return nil, err
-		}
-	}
 	if next.Status == core.AccountStatusDisabled {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM account_sessions WHERE account_id=?`, id); err != nil {
 			return nil, err
@@ -367,7 +348,7 @@ func (s *Store) CreateAccountSession(ctx context.Context, accountID, method, use
 		return "", nil, err
 	}
 	token := generateSecret(AccountSessionTokenPrefix)
-	session := &AccountSession{ID: newTenancyID("sess"), AccountID: accountID, Method: method, CreatedAt: now, ExpiresAt: now.Add(ttl)}
+	session := &AccountSession{ID: newRecordID("sess"), AccountID: accountID, Method: method, CreatedAt: now, ExpiresAt: now.Add(ttl)}
 	if len(userAgent) > 256 {
 		userAgent = userAgent[:256]
 	}
@@ -431,16 +412,10 @@ func (s *Store) DeleteAccountSessions(ctx context.Context, accountID string) err
 	return err
 }
 
-// AccountForTenant returns the account whose namespace a tenant is, or
-// (nil, nil) for a tenant that is a host application.
-func (s *Store) AccountForTenant(ctx context.Context, tenantID string) (*core.Account, error) {
-	return s.getAccount(ctx, `tenant_id=?`, tenantID)
-}
-
 func scanAccount(sc scanner) (core.Account, string, error) {
 	var account core.Account
 	var displayName, hash, created, updated, lastSignIn sql.NullString
-	if err := sc.Scan(&account.ID, &account.Login, &displayName, &account.Role, &account.Status, &account.TenantID,
+	if err := sc.Scan(&account.ID, &account.Login, &displayName, &account.Role, &account.Status,
 		&hash, &created, &updated, &lastSignIn); err != nil {
 		return core.Account{}, "", err
 	}

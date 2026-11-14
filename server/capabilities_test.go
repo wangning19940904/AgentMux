@@ -59,13 +59,12 @@ func TestCapabilitiesHandshake(t *testing.T) {
 	if enabled, _ := body.Auth["bridge_enabled"].(bool); enabled {
 		t.Fatalf("bridge should default to disabled: %v", body.Auth)
 	}
-	// An unauthenticated local probe is the admin scope, and tenancy is
-	// advertised whenever a store is attached.
+	// An unauthenticated local probe is the admin scope. Tenancy is retired.
 	if body.Auth["scope"] != "admin" {
 		t.Fatalf("auth scope = %v", body.Auth["scope"])
 	}
-	if !features["tenancy"] || !features["console.session"] {
-		t.Fatalf("tenancy should be advertised with a store: %v", body.Features)
+	if features["tenancy"] || !features["console.session"] {
+		t.Fatalf("features = %v", body.Features)
 	}
 	if _, ok := body.Agents["count"]; !ok {
 		t.Fatalf("agents summary = %v", body.Agents)

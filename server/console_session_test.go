@@ -29,7 +29,7 @@ func TestNativeConsoleLoginResolvesBrowserIdentity(t *testing.T) {
 	jar.SetCookies(base, []*http.Cookie{{Name: consoleSessionCookie, Value: "expired", Path: "/"}})
 	checkIdentity := func(wantStatus int) {
 		t.Helper()
-		request, _ := http.NewRequest(http.MethodGet, host.URL+"/api/v1/tenancy/self", nil)
+		request, _ := http.NewRequest(http.MethodGet, host.URL+"/api/v1/capabilities", nil)
 		request.Header.Set(consoleCSRFHeader, "1")
 		response, err := client.Do(request)
 		if err != nil {
@@ -41,9 +41,9 @@ func TestNativeConsoleLoginResolvesBrowserIdentity(t *testing.T) {
 		}
 		if wantStatus == http.StatusOK {
 			var identity struct {
-				Admin bool `json:"admin"`
+				Auth map[string]any `json:"auth"`
 			}
-			if err := json.NewDecoder(response.Body).Decode(&identity); err != nil || !identity.Admin {
+			if err := json.NewDecoder(response.Body).Decode(&identity); err != nil || identity.Auth["scope"] != "admin" {
 				t.Fatalf("browser identity = %+v, %v", identity, err)
 			}
 		}
@@ -74,7 +74,7 @@ func TestConsoleSessionFlow(t *testing.T) {
 		t.Fatalf("unauthenticated mint code = %d", denied.Code)
 	}
 
-	mint := httptest.NewRequest(http.MethodPost, consoleSessionEndpoint+"?landing=tenants", nil)
+	mint := httptest.NewRequest(http.MethodPost, consoleSessionEndpoint+"?landing=accounts", nil)
 	mint.Header.Set("Authorization", "Bearer bridge-secret")
 	mint.Host = "127.0.0.1:8766"
 	minted := httptest.NewRecorder()
@@ -93,8 +93,8 @@ func TestConsoleSessionFlow(t *testing.T) {
 	if !strings.HasPrefix(session.EnterURL, "http://127.0.0.1:8766"+consoleEnterPath+"?nonce=") {
 		t.Fatalf("enter_url = %q", session.EnterURL)
 	}
-	if !strings.Contains(session.EnterURL, "&landing=tenants") {
-		t.Fatalf("tenant landing missing from enter_url = %q", session.EnterURL)
+	if !strings.Contains(session.EnterURL, "&landing=accounts") {
+		t.Fatalf("landing missing from enter_url = %q", session.EnterURL)
 	}
 	if session.SessionTTLSeconds <= 0 || session.ExpiresAt == "" {
 		t.Fatalf("session metadata = %+v", session)
@@ -110,7 +110,7 @@ func TestConsoleSessionFlow(t *testing.T) {
 	if entered.Code != http.StatusFound {
 		t.Fatalf("enter code = %d body = %s", entered.Code, entered.Body.String())
 	}
-	if location := entered.Header().Get("Location"); location != "/#tenants" {
+	if location := entered.Header().Get("Location"); location != "/#accounts" {
 		t.Fatalf("enter redirect = %q", location)
 	}
 	cookies := entered.Result().Cookies()

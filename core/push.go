@@ -27,8 +27,8 @@ func PushKinds() []string {
 type PushSubscription struct {
 	ID string `json:"id"`
 	// Subscriber is who the subscription belongs to: "admin" for the
-	// administrator, "tenant:<id>" for a tenant. Notifications are addressed
-	// to subscribers, so a later user identity only needs a new form here.
+	// administrators, "account:<id>" for a member account. Notifications are
+	// addressed to subscribers.
 	Subscriber string   `json:"subscriber"`
 	Endpoint   string   `json:"-"`
 	P256dh     string   `json:"-"`

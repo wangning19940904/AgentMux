@@ -20,4 +20,10 @@ package contract
 // 2.2 adds tenant-scoped durable event subscriptions and loopback callbacks.
 // 2.3 adds the optional account field to GET /api/v1/tenancy/self for people
 // signed in to the Console.
-const Version = "2.3"
+// 3.0 removes LLM provider management (agent instances no longer carry
+// provider_tool, provider_id or provider_name; the provider, route and proxy
+// endpoints are gone) and multi-tenancy (the /api/v1/tenancy/* endpoints,
+// tenant tokens, grants, ownership and visibility fields, and the "tenancy"
+// feature). Third parties use the bridge token; members of a signed-in
+// Console reach only their own devices and messages.
+const Version = "3.0"

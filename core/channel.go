@@ -11,17 +11,14 @@ import (
 // are attached to the Engine at runtime — the console-managed counterpart of
 // config.toml's [[projects.platforms]].
 type Channel struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Type            string            `json:"type"`
-	AgentID         string            `json:"agent_id,omitempty"`
-	Config          map[string]string `json:"config,omitempty"`
-	Enabled         bool              `json:"enabled"`
-	OwnerTenantID   string            `json:"owner_tenant_id,omitempty"`
-	OwnerTenantName string            `json:"owner_tenant_name,omitempty"`
-	Visibility      string            `json:"visibility,omitempty"` // private, public
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Type      string            `json:"type"`
+	AgentID   string            `json:"agent_id,omitempty"`
+	Config    map[string]string `json:"config,omitempty"`
+	Enabled   bool              `json:"enabled"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // ChannelStatus reports the live state of a channel attached to the Engine.
@@ -146,26 +143,25 @@ const (
 //     ActionType/ActionTarget (shell command or HTTP POST callback),
 //     optionally filtered to one ChannelID.
 type Trigger struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Kind          string    `json:"kind"`
-	AgentID       string    `json:"agent_id,omitempty"`
-	ChannelID     string    `json:"channel_id,omitempty"`
-	ChatID        string    `json:"chat_id,omitempty"`
-	CronExpr      string    `json:"cron_expr,omitempty"`
-	Prompt        string    `json:"prompt,omitempty"`
-	Event         string    `json:"event,omitempty"`
-	ActionType    string    `json:"action_type,omitempty"`
-	ActionTarget  string    `json:"action_target,omitempty"`
-	Token         string    `json:"token,omitempty"`
-	SessionMode   string    `json:"session_mode,omitempty"`
-	Enabled       bool      `json:"enabled"`
-	LastRun       time.Time `json:"last_run,omitempty"`
-	LastStatus    string    `json:"last_status,omitempty"` // running, ok, error
-	LastError     string    `json:"last_error,omitempty"`
-	OwnerTenantID string    `json:"owner_tenant_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Kind         string    `json:"kind"`
+	AgentID      string    `json:"agent_id,omitempty"`
+	ChannelID    string    `json:"channel_id,omitempty"`
+	ChatID       string    `json:"chat_id,omitempty"`
+	CronExpr     string    `json:"cron_expr,omitempty"`
+	Prompt       string    `json:"prompt,omitempty"`
+	Event        string    `json:"event,omitempty"`
+	ActionType   string    `json:"action_type,omitempty"`
+	ActionTarget string    `json:"action_target,omitempty"`
+	Token        string    `json:"token,omitempty"`
+	SessionMode  string    `json:"session_mode,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	LastRun      time.Time `json:"last_run,omitempty"`
+	LastStatus   string    `json:"last_status,omitempty"` // running, ok, error
+	LastError    string    `json:"last_error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ConnectStore is the persistence surface the connect runtime (channels +
@@ -179,6 +175,4 @@ type ConnectStore interface {
 	UpdateTriggerRun(ctx context.Context, id string, lastRun time.Time, status, errMsg string) error
 	GetAgentInstance(ctx context.Context, id string) (*AgentInstance, error)
 	UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error
-	GetProvider(ctx context.Context, id string) (*Provider, error)
-	ActiveProviderRoutes(ctx context.Context) ([]ProviderRoute, error)
 }

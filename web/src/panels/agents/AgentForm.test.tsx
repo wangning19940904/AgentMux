@@ -15,8 +15,8 @@ const listing = { path: "/home/test", parent_path: "/home", entries: [{ name: "p
 function Form({ draft, canSave = false }: { draft: AgentInstance; canSave?: boolean }) {
   const { t } = useI18n();
   return <AgentForm draft={draft} drawerMode="create" t={t} onUpdate={onUpdate}
-    busy="" canSave={canSave} readOnly={false} activeRoutes={[]} channelOptions={[]} cliOptions={[]}
-    compatibleProviders={[]} mcpOptions={[]} runtimeOptions={[]} selectedChannelIDs={[]} selectedTriggerIDs={[]}
+    busy="" canSave={canSave} readOnly={false} channelOptions={[]} cliOptions={[]}
+    mcpOptions={[]} runtimeOptions={[]} selectedChannelIDs={[]} selectedTriggerIDs={[]}
     skillOptions={[]} triggerOptions={[]} onDelete={vi.fn()} onInstallCLI={vi.fn()} onSave={vi.fn()}
     onToggleChannel={vi.fn()} onToggleTrigger={vi.fn()} />;
 }
@@ -212,7 +212,8 @@ it("preserves configured values on discovery failure and lets the user retry", a
   const draft = { ...newAgent(["cursor"]), default_model: "grok-4.7", default_reasoning_effort: "xhigh" };
   await renderSettings(draft);
   expect(container.textContent).toContain("catalog unavailable");
-  expect(setting("默认模型").value).toBe("grok-4.7");
+  // Without a model list the configured model stays as a typed ID.
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="模型 ID，例如 group/opus-anywhere"]')!.value).toBe("grok-4.7");
   expect(onUpdate).not.toHaveBeenCalledWith("default_model", "");
   expect(button("创建 Agent").disabled).toBe(true);
   await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="刷新模型与运行设置"]')!.click(); });
@@ -229,6 +230,29 @@ it("ignores an old host's catalog response after changing the target", async () 
   await renderSettings(draft);
   await renderSettings({ ...draft, target_id: "new-host" });
   await act(async () => { finishOld({ kind: "cursor", defaults: {}, capabilities: { models: options("stale-model") } }); });
-  expect(selectableValues(setting("默认模型"))).toEqual(["", "auto", "grok-4.7", "other-model"]);
+  expect(selectableValues(setting("默认模型"))).toEqual(["", "auto", "grok-4.7", "other-model", "__typed__"]);
   expect(selectableValues(setting("默认思考强度"))).not.toContain("max");
+});
+
+it("accepts a model ID the framework does not list and offers its effort options", async () => {
+  mockCatalog();
+  const draft = { ...newAgent(["cursor"]), default_model: "group/opus-anywhere", default_reasoning_effort: "max" };
+  await renderSettings(draft);
+  expect(setting("默认模型").value).toBe("__typed__");
+  expect(container.querySelector<HTMLInputElement>('input[aria-label="模型 ID，例如 group/opus-anywhere"]')!.value).toBe("group/opus-anywhere");
+  // Nothing is known about a typed model, so it may use any effort the framework offers.
+  expect(selectableValues(setting("默认思考强度"))).toEqual(["", "low", "medium", "high", "xhigh", "max"]);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(button("创建 Agent").disabled).toBe(false);
+});
+
+it("tests the selected model through the framework", async () => {
+  mockCatalog();
+  const run = vi.spyOn(api, "frameworkTest").mockResolvedValue({
+    kind: "cursor", model: "grok-4.7", ok: true, latency_ms: 1234, checked_at: "2026-11-14T03:00:00Z",
+  });
+  await renderSettings({ ...newAgent(["cursor"]), default_model: "grok-4.7", default_reasoning_effort: "high" });
+  await act(async () => { button("测试").click(); });
+  expect(run).toHaveBeenCalledWith({ kind: "cursor", model: "grok-4.7", reasoning_effort: "high", service_tier: "" }, undefined);
+  await vi.waitFor(() => expect(container.textContent).toContain("可用 · 1.2 s"));
 });

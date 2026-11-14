@@ -4,7 +4,7 @@ AgentMux 维护飞书/Lark 长连接，将原始平台事件和 `HookEvent` 生�
 
 ## 注册
 
-每个服务使用自己的租户 Token。管理员通过现有 `/api/v1/tenancy/grants` 为共享资源授予 `resource_type=event_source`、`resource_id=channel:<id>`、`level=use`。拥有资源的租户自动拥有其事件读取权。普通渠道授权和 public 可见性不开放事件。`system` 只对管理员开放。
+使用 bridge token 调用。`source_refs` 中的每个来源（`channel:<id>`、`agent:<id>`、`trigger:<id>` 或 `system`）都必须存在；来源被删除后，未完成的投递会被阻止。
 
 ```json
 {
@@ -19,7 +19,7 @@ AgentMux 维护飞书/Lark 长连接，将原始平台事件和 `HookEvent` 生�
 }
 ```
 
-向 `POST /api/v1/event-subscriptions` 发送此配置。`key` 在租户内唯一，重复提交更新同一订阅。返回 `{subscription, signing_secret?}`；密钥仅创建时返回。ID、归属和 key 创建后不能更改；删除后 key 保留，需要新 key 才能创建新订阅。
+向 `POST /api/v1/event-subscriptions` 发送此配置。`key` 全局唯一，重复提交更新同一订阅。返回 `{subscription, signing_secret?}`；密钥仅创建时返回。ID 和 key 创建后不能更改；删除后 key 保留，需要新 key 才能创建新订阅。
 
 生命周期事件的唯一授权来源依次取渠道、触发器、Agent，无法确定时归入管理员专属 `system`；绑定渠道的 Agent 事件应订阅渠道来源。
 

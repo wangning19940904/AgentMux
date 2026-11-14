@@ -28,14 +28,6 @@ func (s *Server) eventStoreAvailable(w http.ResponseWriter) bool {
 	}
 	return true
 }
-func eventOwner(r *http.Request) *string {
-	p := requestPrincipal(r)
-	if p.IsTenant() {
-		v := p.TenantID
-		return &v
-	}
-	return nil
-}
 func (s *Server) ownedEventSubscription(w http.ResponseWriter, r *http.Request, id string) (*core.EventSubscription, bool) {
 	if !s.eventStoreAvailable(w) {
 		return nil, false
@@ -45,7 +37,7 @@ func (s *Server) ownedEventSubscription(w http.ResponseWriter, r *http.Request, 
 		writeErr(w, 500, err.Error())
 		return nil, false
 	}
-	if sub == nil || (requestPrincipal(r).IsTenant() && sub.OwnerTenantID != requestPrincipal(r).TenantID) {
+	if sub == nil {
 		writeErr(w, 404, "subscription not found")
 		return nil, false
 	}
@@ -53,12 +45,12 @@ func (s *Server) ownedEventSubscription(w http.ResponseWriter, r *http.Request, 
 }
 func (s *Server) validateEventAccess(r *http.Request, sub core.EventSubscription) error {
 	for _, ref := range sub.SourceRefs {
-		ok, err := s.st.EventSourceAllowed(r.Context(), sub.OwnerTenantID, ref)
+		ok, err := s.st.EventSourceExists(r.Context(), ref)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return fmt.Errorf("event source permission required for %s", ref)
+			return fmt.Errorf("unknown event source %s", ref)
 		}
 		if sub.Source != "agentmux" {
 			ch, err := s.st.GetChannel(r.Context(), strings.TrimPrefix(ref, "channel:"))
@@ -76,7 +68,7 @@ func (s *Server) handleEventSubscriptions(w http.ResponseWriter, r *http.Request
 	if !s.eventStoreAvailable(w) {
 		return
 	}
-	subs, err := s.st.ListEventSubscriptions(r.Context(), eventOwner(r))
+	subs, err := s.st.ListEventSubscriptions(r.Context())
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -96,9 +88,6 @@ func (s *Server) handleEventSubscriptionSave(w http.ResponseWriter, r *http.Requ
 	sub, ok := decodeJSON[core.EventSubscription](w, r)
 	if !ok {
 		return
-	}
-	if requestPrincipal(r).IsTenant() {
-		sub.OwnerTenantID = requestPrincipal(r).TenantID
 	}
 	if err := eventrelay.ValidateSubscription(&sub); err != nil {
 		writeErr(w, 400, err.Error())
@@ -223,17 +212,7 @@ func (s *Server) ownedEventDelivery(w http.ResponseWriter, r *http.Request, id s
 		writeErr(w, 404, "delivery not found")
 		return nil, false
 	}
-	sub, ok := s.ownedEventSubscription(w, r, d.SubscriptionID)
-	if !ok {
-		return nil, false
-	}
-	tenant := ""
-	if requestPrincipal(r).IsTenant() {
-		tenant = sub.OwnerTenantID
-	}
-	allowed, err := s.st.EventSourceAllowed(r.Context(), tenant, d.Event.SourceRef)
-	if err != nil || !allowed {
-		writeErr(w, 403, "event source permission unavailable")
+	if _, ok := s.ownedEventSubscription(w, r, d.SubscriptionID); !ok {
 		return nil, false
 	}
 	return d, true
@@ -270,7 +249,7 @@ func (s *Server) handleEventDeliveries(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid delivery status")
 		return
 	}
-	items, err := s.st.ListEventDeliveries(r.Context(), eventOwner(r), r.URL.Query().Get("subscription_id"), status, limit+1, offset)
+	items, err := s.st.ListEventDeliveries(r.Context(), r.URL.Query().Get("subscription_id"), status, limit+1, offset)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -278,13 +257,6 @@ func (s *Server) handleEventDeliveries(w http.ResponseWriter, r *http.Request) {
 	more := len(items) > limit
 	if more {
 		items = items[:limit]
-	}
-	// Status remains visible after revocation, but its payload does not.
-	for i := range items {
-		allowed, err := s.st.EventSourceAllowed(r.Context(), requestPrincipal(r).TenantID, items[i].Event.SourceRef)
-		if err != nil || !allowed {
-			items[i].Event = nil
-		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "limit": limit, "offset": offset, "has_more": more})
 }
@@ -307,9 +279,9 @@ func (s *Server) handleEventDeliveryRetry(w http.ResponseWriter, r *http.Request
 		writeErr(w, 409, "subscription is deleted")
 		return
 	}
-	allowed, err := s.st.EventSourceAllowed(r.Context(), sub.OwnerTenantID, d.Event.SourceRef)
+	allowed, err := s.st.EventSourceExists(r.Context(), d.Event.SourceRef)
 	if err != nil || !allowed {
-		writeErr(w, 403, "subscription owner no longer has event permission")
+		writeErr(w, 409, "the event source no longer exists")
 		return
 	}
 	if err := s.st.RetryEventDelivery(r.Context(), d.ID); err != nil {
@@ -323,9 +295,8 @@ func (s *Server) handleEventSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []core.EventSource{}
-	tenant := requestPrincipal(r).TenantID
 	add := func(ref, name string, sources, types []string, connected bool, state string) error {
-		ok, err := s.st.EventSourceAllowed(r.Context(), tenant, ref)
+		ok, err := s.st.EventSourceExists(r.Context(), ref)
 		if err != nil {
 			return err
 		}

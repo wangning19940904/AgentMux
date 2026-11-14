@@ -1,4 +1,4 @@
-import { api, type AgentInstance, type Channel, type CLIManagedTool, type Provider, type ProviderRoute, type RuntimeOption, type SuperAgent, type Trigger } from "../../api";
+import { api, type AgentInstance, type Channel, type CLIManagedTool, type RuntimeOption, type SuperAgent, type Trigger } from "../../api";
 
 export type DrawerMode = "create" | "edit";
 
@@ -12,8 +12,6 @@ export const EMPTY_AGENT: AgentInstance = {
   worktree_base_ref: "",
   session_backend: "structured",
   system_prompt: "",
-  provider_tool: "",
-  provider_id: "",
   default_model: "",
   default_reasoning_effort: "",
   default_service_tier: "",
@@ -117,15 +115,9 @@ export function newAgent(runtimeOptions: string[]): AgentInstance {
   return copyAgent({
     ...EMPTY_AGENT,
     runtime_id: runtime,
-    provider_tool: routeToolForRuntime(runtime),
     memory_scope: "agent:new",
     source: "manual",
   });
-}
-
-export function routeToolForRuntime(runtime: string): string {
-  if (runtime.trim() === "codex-app") return "codex-app";
-  return normalizeTool(runtime);
 }
 
 export function runtimeLabel(runtime: string, t?: (key: string) => string): string {
@@ -168,63 +160,8 @@ export function runtimeLabel(runtime: string, t?: (key: string) => string): stri
   }
 }
 
-export function activeRouteForTool(routes: ProviderRoute[], tool: string): ProviderRoute | undefined {
-  const normalized = normalizeTool(tool);
-  return routes.find((route) => route.tool === tool) ?? routes.find((route) => normalizeTool(route.tool) === normalized);
-}
-
 export function resourceTargetID(resource: { target_id?: string }): string {
   return resource.target_id?.trim() || "local";
-}
-
-export function activeRouteForAgent(agent: AgentInstance, routes: ProviderRoute[]): ProviderRoute | undefined {
-  const targetID = resourceTargetID(agent);
-  return activeRouteForTool(
-    routes.filter((route) => resourceTargetID(route) === targetID),
-    agent.provider_tool || agent.runtime_id,
-  );
-}
-
-export type EffectiveAgentProvider = {
-  id: string;
-  provider?: Provider;
-  route?: ProviderRoute;
-};
-
-export function effectiveAgentProvider(
-  agent: AgentInstance,
-  routes: ProviderRoute[],
-  providers: Provider[],
-): EffectiveAgentProvider | null {
-  const targetID = resourceTargetID(agent);
-  const explicitID = agent.provider_id?.trim();
-  if (explicitID) {
-    return {
-      id: explicitID,
-      provider: providers.find((provider) => resourceTargetID(provider) === targetID && provider.id === explicitID),
-    };
-  }
-
-  const route = activeRouteForAgent(agent, routes);
-  const routeProviderID = route?.configured ? route.provider_id?.trim() : "";
-  if (!routeProviderID) return null;
-  return {
-    id: routeProviderID,
-    provider: providers.find((provider) => resourceTargetID(provider) === targetID && provider.id === routeProviderID),
-    route,
-  };
-}
-
-export function agentRouteModel(
-  agent: AgentInstance,
-  routes: ProviderRoute[],
-  providers: Provider[],
-): { mode: "provider" | "login"; model: string } {
-  const binding = effectiveAgentProvider(agent, routes, providers);
-  return {
-    mode: binding ? "provider" : "login",
-    model: agent.default_model?.trim() || binding?.route?.model?.trim() || binding?.provider?.model?.trim() || "",
-  };
 }
 
 export function boundChannelsForAgent(agent: AgentInstance, channels: Channel[]): Channel[] {
@@ -236,21 +173,11 @@ export function boundChannelsForAgent(agent: AgentInstance, channels: Channel[])
 
 export function agentRegistryMetrics(
   agents: AgentInstance[],
-  routes: ProviderRoute[],
-  providers: Provider[],
   channels: Channel[],
-): { agentCount: number; providerCount: number; machineCount: number; channelCount: number } {
+): { agentCount: number; machineCount: number; channelCount: number } {
   const agentKeys = new Set(agents.map((agent) => `${resourceTargetID(agent)}::${agent.id}`));
-  const providerKeys = new Set<string>();
-  const machineIDs = new Set<string>();
+  const machineIDs = new Set(agents.map((agent) => resourceTargetID(agent)));
   const channelKeys = new Set<string>();
-
-  agents.forEach((agent) => {
-    const targetID = resourceTargetID(agent);
-    machineIDs.add(targetID);
-    const binding = effectiveAgentProvider(agent, routes, providers);
-    if (binding) providerKeys.add(`${targetID}::${binding.id}`);
-  });
   channels.forEach((channel) => {
     if (!channel.agent_id) return;
     const targetID = resourceTargetID(channel);
@@ -259,63 +186,9 @@ export function agentRegistryMetrics(
 
   return {
     agentCount: agents.length,
-    providerCount: providerKeys.size,
     machineCount: machineIDs.size,
     channelCount: channelKeys.size,
   };
-}
-
-export function agentProviderSummary(agent: AgentInstance, activeRoutes: ProviderRoute[], t: (key: string) => string): string {
-  if (agent.provider_name || agent.provider_id) return `${t("agents.providerOverrideShort")}: ${agent.provider_name || agent.provider_id}`;
-  const route = activeRouteForTool(activeRoutes, agent.provider_tool || agent.runtime_id);
-  const provider = route?.configured ? route.provider_name || route.provider_id : "";
-  return provider ? `${t("agents.followRouteShort")}: ${provider}` : t("agents.followRouteShort");
-}
-
-export function normalizeTool(tool: string): string {
-  switch (tool.trim()) {
-    case "claude":
-    case "claudecode":
-    case "claudecode-cli":
-    case "claude-code":
-    case "claude-code-cli":
-      return "claudecode";
-    case "claude-desktop":
-    case "claudecode-desktop":
-    case "claude-code-desktop":
-      return "claude-desktop";
-    case "codex":
-    case "codex-cli":
-    case "codex-app":
-    case "codex-desktop":
-    case "codex-app-server":
-      return "codex";
-    default:
-      return tool.trim();
-  }
-}
-
-export function providerModelOptions(provider: Provider | undefined): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const add = (model: unknown) => {
-    if (typeof model !== "string") return;
-    const trimmed = model.trim();
-    if (!trimmed || seen.has(trimmed)) return;
-    seen.add(trimmed);
-    out.push(trimmed);
-  };
-  add(provider?.model);
-  const supported = provider?.meta?.supported_models;
-  if (Array.isArray(supported)) supported.forEach(add);
-  const blocked = provider?.meta?.blocked_models;
-  return Array.isArray(blocked) ? out.filter((model) => !blocked.includes(model)) : out;
-}
-
-export function runtimeProviderOptions(provider: Provider | undefined, key: "supported_reasoning_efforts" | "supported_service_tiers"): string[] {
-	const values = provider?.meta?.[key];
-	if (!Array.isArray(values)) return [];
-	return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
 }
 
 export function runtimeOptionValues(options: RuntimeOption[] | undefined): string[] {
@@ -414,31 +287,6 @@ export function agentSourceClass(agent: AgentInstance): string {
   if (isReadOnlyAgent(agent)) return "config";
   if (agent.source === "manual") return "manual";
   return "console";
-}
-
-// Ownership label for the admin Console. A tenant-scoped session only ever
-// sees its own resources, so there is nothing to distinguish and the badge is
-// omitted by returning null.
-export function ownerBadge(resource: {
-  owner_tenant_name?: string;
-  owner_tenant_id?: string;
-  visibility?: string;
-}): { labelKey: string; params?: Record<string, string>; className: string } | null {
-  if (resource.visibility === "public") {
-    return { labelKey: "tenants.badgePublic", className: "public" };
-  }
-  const name = resource.owner_tenant_name?.trim();
-  if (name) {
-    return { labelKey: "tenants.badgeOwner", params: { tenant: name }, className: "owned" };
-  }
-  if (resource.owner_tenant_id?.trim()) {
-    return {
-      labelKey: "tenants.badgeOwner",
-      params: { tenant: resource.owner_tenant_id },
-      className: "owned",
-    };
-  }
-  return { labelKey: "tenants.badgeUnassigned", className: "unassigned" };
 }
 
 export function copyAgent(agent: AgentInstance): AgentInstance {

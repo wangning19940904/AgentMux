@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -130,43 +129,6 @@ func (e *Engine) Record(ctx context.Context, record core.UsageRecord) (float64, 
 		return record.CostUSD, err
 	}
 	return record.CostUSD, nil
-}
-
-// ProxyCost applies the same pricing table to one local-routing attempt.
-func (e *Engine) ProxyCost(trace core.ProxyTrace) float64 {
-	return e.pricer.Cost(trace.UpstreamModel,
-		trace.InputTokens, trace.OutputTokens,
-		trace.CacheReadTokens, trace.CacheWriteTokens)
-}
-
-// RecordProxy materializes one failover attempt for the compatibility Usage
-// API. Attempt is part of the request key so retries are counted separately.
-func (e *Engine) RecordProxy(ctx context.Context, trace core.ProxyTrace) error {
-	requestID := trace.RequestID
-	if requestID != "" && trace.Attempt > 0 {
-		requestID += ":attempt:" + strconv.Itoa(trace.Attempt)
-	}
-	_, err := e.Record(ctx, core.UsageRecord{
-		Source: proxyUsageSource(trace.Tool), SessionID: trace.SessionID,
-		TraceID: trace.TraceID, RequestID: requestID, RuntimeID: trace.Tool,
-		Project: trace.ProjectDir, Model: trace.UpstreamModel, Timestamp: trace.Timestamp,
-		InputTokens: trace.InputTokens, OutputTokens: trace.OutputTokens,
-		CacheReadTokens: trace.CacheReadTokens, CacheWriteTokens: trace.CacheWriteTokens,
-		Provenance: "agentmux.proxy", ProvenanceRank: 100,
-	})
-	return err
-}
-
-func proxyUsageSource(tool string) string {
-	value := strings.ToLower(strings.TrimSpace(tool))
-	switch {
-	case strings.Contains(value, "claude"):
-		return "claude"
-	case strings.Contains(value, "codex"):
-		return "codex"
-	default:
-		return value
-	}
 }
 
 // usageCollectCheckpointKey persists the timestamp of the last completed

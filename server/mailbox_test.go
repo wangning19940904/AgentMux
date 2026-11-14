@@ -43,10 +43,10 @@ func withAgents(t *testing.T, s *Server, st *store.Store) *mailRecords {
 	return records
 }
 
-func (r *mailRecords) addAgent(t *testing.T, id, name, ownerTenantID string) {
+func (r *mailRecords) addAgent(t *testing.T, id, name string) {
 	t.Helper()
 	ctx := context.Background()
-	if err := r.UpsertAgentInstance(ctx, &core.AgentInstance{ID: id, Name: name, RuntimeID: "claudecode", Enabled: true, OwnerTenantID: ownerTenantID}); err != nil {
+	if err := r.UpsertAgentInstance(ctx, &core.AgentInstance{ID: id, Name: name, RuntimeID: "claudecode", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.UpsertSuperAgent(ctx, core.SuperAgent{ID: id, Name: name, RouterAgentID: id, Mode: core.SuperAgentModeAct, Enabled: true}); err != nil {
@@ -67,7 +67,7 @@ func (r *mailRecords) events(agentID string) []core.SuperAgentTrigger {
 	return out
 }
 
-func TestPeopleWriteToTheirAgentsAndContactsJoinOwners(t *testing.T) {
+func TestMembersReachAgentsThroughAcceptedContacts(t *testing.T) {
 	host := newAccountHost(t, true)
 	records := withAgents(t, host.srv, host.st)
 	ctx := context.Background()
@@ -84,60 +84,21 @@ func TestPeopleWriteToTheirAgentsAndContactsJoinOwners(t *testing.T) {
 	if bob.signIn("bob", "bob-password-1") != http.StatusOK || carol.signIn("carol", "carol-password-1") != http.StatusOK {
 		t.Fatal("member sign-in failed")
 	}
-	bobAccount, err := host.st.GetAccountByLogin(ctx, "bob")
-	if err != nil || bobAccount == nil {
-		t.Fatalf("bob = %+v, %v", bobAccount, err)
-	}
-	records.addAgent(t, "helper", "Helper", bobAccount.TenantID)
-	records.addAgent(t, "ops", "Ops", "")
+	// Agents on this machine belong to its administrators.
+	records.addAgent(t, "ops", "Ops")
 
 	var overview mailOverview
 	bob.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
-	if overview.Me.Address != "person:bob" || overview.Admin || strings.Join(overview.Controlled, " ") != "agent:helper person:bob" {
+	if overview.Me.Address != "person:bob" || overview.Admin || strings.Join(overview.Controlled, " ") != "person:bob" {
 		t.Fatalf("overview = %+v", overview)
 	}
 
-	// Bob writes to his own agent; it is handed the message.
-	var sent core.MailMessage
-	bob.mustOK(http.MethodPost, "/api/v1/mailbox/messages", map[string]string{"to": "agent:helper", "text": "status?"}, &sent)
-	if sent.DeliveredAt == nil || sent.From != "person:bob" || sent.ToName != "Helper" {
-		t.Fatalf("sent = %+v", sent)
-	}
-	events := records.events("helper")
-	if len(events) != 1 || events[0].Actor != "person:bob" || events[0].ThreadKey != "mail:person:bob" || events[0].Text != "status?" {
-		t.Fatalf("events = %+v", events)
-	}
-
-	// He cannot write to the administrators' agent, or read what is not his.
+	// Bob cannot write to the administrators' agent until a contact joins them.
 	if code := bob.do(http.MethodPost, "/api/v1/mailbox/messages", map[string]string{"to": "agent:ops", "text": "hi"}, nil); code != http.StatusUnprocessableEntity {
 		t.Fatalf("a stranger's agent = %d", code)
 	}
-	if code := carol.do(http.MethodGet, "/api/v1/mailbox/messages?with=agent:helper&and=person:bob", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("carol reading bob's messages = %d", code)
-	}
-	// What the hub passes down a link is not a member's to send.
-	if code := bob.do(http.MethodPost, mailDeliverPath, core.MailMessage{ID: "x", From: "agent:a@hub", To: "agent:helper", Text: "x"}, nil); code != http.StatusForbidden {
-		t.Fatalf("member deliver = %d", code)
-	}
-
-	// The agent answers; Bob has one unread message until he opens it.
-	if _, err := host.srv.mail.Send(ctx, "agent:helper", "person:bob", "All green."); err != nil {
-		t.Fatal(err)
-	}
-	bob.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
-	if overview.Unread != 1 || len(overview.Conversations) != 1 || overview.Conversations[0].Peer.Name != "Helper" {
-		t.Fatalf("overview = %+v", overview)
-	}
-	var messages []core.MailMessage
-	bob.mustOK(http.MethodGet, "/api/v1/mailbox/messages?with=agent:helper", nil, &messages)
-	bob.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
-	if len(messages) != 2 || messages[1].Text != "All green." || overview.Unread != 0 {
-		t.Fatalf("messages = %+v unread = %d", messages, overview.Unread)
-	}
-
-	// Bob asks for a contact between his agent and Ops; an administrator accepts.
 	var contact core.MailContact
-	bob.mustOK(http.MethodPost, "/api/v1/mailbox/contacts", map[string]string{"a": "agent:helper", "b": "agent:ops"}, &contact)
+	bob.mustOK(http.MethodPost, "/api/v1/mailbox/contacts", map[string]string{"a": "person:bob", "b": "agent:ops"}, &contact)
 	if contact.Status != core.MailContactPending || contact.WaitingFor != "agent:ops" || contact.RequestedBy != "person:bob" {
 		t.Fatalf("contact = %+v", contact)
 	}
@@ -153,27 +114,50 @@ func TestPeopleWriteToTheirAgentsAndContactsJoinOwners(t *testing.T) {
 	if contact.Status != core.MailContactAccepted {
 		t.Fatalf("contact = %+v", contact)
 	}
-	if _, err := host.srv.mail.Send(ctx, "agent:helper", "agent:ops", "Can you restart staging?"); err != nil {
+
+	// Now Bob writes to Ops; it is handed the message.
+	var sent core.MailMessage
+	bob.mustOK(http.MethodPost, "/api/v1/mailbox/messages", map[string]string{"to": "agent:ops", "text": "status?"}, &sent)
+	if sent.DeliveredAt == nil || sent.From != "person:bob" || sent.ToName != "Ops" {
+		t.Fatalf("sent = %+v", sent)
+	}
+	events := records.events("ops")
+	if len(events) != 1 || events[0].Actor != "person:bob" || events[0].ThreadKey != "mail:person:bob" || events[0].Text != "status?" {
+		t.Fatalf("events = %+v", events)
+	}
+	// Carol cannot read Bob's messages, and the link delivery path is not hers.
+	if code := carol.do(http.MethodGet, "/api/v1/mailbox/messages?with=agent:ops&and=person:bob", nil, nil); code != http.StatusForbidden {
+		t.Fatalf("carol reading bob's messages = %d", code)
+	}
+	if code := bob.do(http.MethodPost, mailDeliverPath, core.MailMessage{ID: "x", From: "agent:a@hub", To: "agent:ops", Text: "x"}, nil); code != http.StatusForbidden {
+		t.Fatalf("member deliver = %d", code)
+	}
+
+	// The agent answers; Bob has one unread message until he opens it.
+	if _, err := host.srv.mail.Send(ctx, "agent:ops", "person:bob", "All green."); err != nil {
 		t.Fatal(err)
 	}
-	if events := records.events("ops"); len(events) != 1 || events[0].ActorName != "Helper" {
-		t.Fatalf("ops events = %+v", events)
-	}
-	// Bob watches his agent's conversation with Ops; Carol sees nothing.
 	bob.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
-	if len(overview.AgentConversations) != 1 || overview.AgentConversations[0].Self.Address != "agent:helper" {
-		t.Fatalf("agent conversations = %+v", overview.AgentConversations)
+	if overview.Unread != 1 || len(overview.Conversations) != 1 || overview.Conversations[0].Peer.Name != "Ops" {
+		t.Fatalf("overview = %+v", overview)
+	}
+	var messages []core.MailMessage
+	bob.mustOK(http.MethodGet, "/api/v1/mailbox/messages?with=agent:ops", nil, &messages)
+	bob.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
+	if len(messages) != 2 || messages[1].Text != "All green." || overview.Unread != 0 {
+		t.Fatalf("messages = %+v unread = %d", messages, overview.Unread)
 	}
 	carol.mustOK(http.MethodGet, "/api/v1/mailbox", nil, &overview)
 	if len(overview.Conversations) != 0 || len(overview.AgentConversations) != 0 {
 		t.Fatalf("carol's overview = %+v", overview)
 	}
+
 	var directory struct {
 		Parties   []core.MailParty `json:"parties"`
 		Reachable []string         `json:"reachable"`
 	}
 	bob.mustOK(http.MethodGet, "/api/v1/mailbox/directory", nil, &directory)
-	if len(directory.Parties) != 4 || strings.Join(directory.Reachable, " ") != "agent:helper" {
+	if !strings.Contains(strings.Join(directory.Reachable, " "), "agent:ops") {
 		t.Fatalf("directory = %+v", directory)
 	}
 	bob.mustOK(http.MethodDelete, "/api/v1/mailbox/contacts?id="+url.QueryEscape(contact.ID), nil, nil)
@@ -194,8 +178,8 @@ func TestMailTravelsBetweenAHubAndItsNode(t *testing.T) {
 	})
 	node.node.reportInterval = 25 * time.Millisecond
 	onHub, onNodeRecords := withAgents(t, hub.Server, hub.st), withAgents(t, node.Server, node.st)
-	onHub.addAgent(t, "planner", "Planner", "")
-	onNodeRecords.addAgent(t, "writer", "Writer", "")
+	onHub.addAgent(t, "planner", "Planner")
+	onNodeRecords.addAgent(t, "writer", "Writer")
 	ctx := context.Background()
 	device := joinNode(t, hub, node, nodeToken)
 	onNode := "agent:writer@" + device

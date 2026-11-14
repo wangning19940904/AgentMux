@@ -16,11 +16,11 @@ import (
 // Millisecond integers avoid dialect-dependent timestamp comparison semantics.
 const eventRelaySchema = `
 CREATE TABLE IF NOT EXISTS event_subscriptions (
- id TEXT PRIMARY KEY, owner_tenant_id TEXT NOT NULL DEFAULT '', subscription_key TEXT NOT NULL,
+ id TEXT PRIMARY KEY, subscription_key TEXT NOT NULL,
  config TEXT NOT NULL, secret TEXT NOT NULL, paused BIGINT NOT NULL DEFAULT 0,
  deleted BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
  lease_token TEXT NOT NULL DEFAULT '', lease_until BIGINT NOT NULL DEFAULT 0,
- UNIQUE(owner_tenant_id,subscription_key)
+ UNIQUE(subscription_key)
 );
 CREATE TABLE IF NOT EXISTS relay_events (
  id TEXT PRIMARY KEY, dedupe_key TEXT NOT NULL UNIQUE, source_ref TEXT NOT NULL,
@@ -44,12 +44,12 @@ CREATE TABLE IF NOT EXISTS event_delivery_attempts (
 CREATE INDEX IF NOT EXISTS idx_event_attempts_delivery ON event_delivery_attempts(delivery_id,started_at);
 `
 
-const eventSubscriptionColumns = `id,owner_tenant_id,subscription_key,config,secret,paused,deleted,created_at,updated_at`
+const eventSubscriptionColumns = `id,subscription_key,config,secret,paused,deleted,created_at,updated_at`
 
 func scanEventSubscription(row scanner) (*core.EventSubscription, error) {
-	var id, owner, key, cfg, secret string
+	var id, key, cfg, secret string
 	var paused, deleted, created, updated int64
-	if err := row.Scan(&id, &owner, &key, &cfg, &secret, &paused, &deleted, &created, &updated); err != nil {
+	if err := row.Scan(&id, &key, &cfg, &secret, &paused, &deleted, &created, &updated); err != nil {
 		return nil, err
 	}
 	var sub core.EventSubscription
@@ -57,7 +57,6 @@ func scanEventSubscription(row scanner) (*core.EventSubscription, error) {
 		return nil, err
 	}
 	sub.ID = id
-	sub.OwnerTenantID = owner
 	sub.Key = key
 	sub.Secret = secret
 	sub.Paused = paused != 0
@@ -67,16 +66,9 @@ func scanEventSubscription(row scanner) (*core.EventSubscription, error) {
 	return &sub, nil
 }
 
-// ListEventSubscriptions uses nil for the administrator's all-tenants view.
-func (s *Store) ListEventSubscriptions(ctx context.Context, owner *string) ([]core.EventSubscription, error) {
-	q := `SELECT ` + eventSubscriptionColumns + ` FROM event_subscriptions WHERE deleted=0`
-	args := []any{}
-	if owner != nil {
-		q += ` AND owner_tenant_id=?`
-		args = append(args, *owner)
-	}
-	q += ` ORDER BY created_at,id`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+// ListEventSubscriptions returns every subscription that was not deleted.
+func (s *Store) ListEventSubscriptions(ctx context.Context) ([]core.EventSubscription, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+eventSubscriptionColumns+` FROM event_subscriptions WHERE deleted=0 ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +102,7 @@ func (s *Store) SaveEventSubscription(ctx context.Context, sub *core.EventSubscr
 		if err != nil {
 			return false, err
 		}
-		if existing == nil || existing.Deleted || existing.OwnerTenantID != sub.OwnerTenantID || existing.Key != sub.Key {
+		if existing == nil || existing.Deleted || existing.Key != sub.Key {
 			return false, fmt.Errorf("subscription identity cannot be changed")
 		}
 	}
@@ -125,10 +117,10 @@ func (s *Store) SaveEventSubscription(ctx context.Context, sub *core.EventSubscr
 	var id, secret string
 	var created int64
 	err = s.writer.QueryRowContext(ctx, `INSERT INTO event_subscriptions
- (id,owner_tenant_id,subscription_key,config,secret,paused,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)
- ON CONFLICT(owner_tenant_id,subscription_key) DO UPDATE SET config=excluded.config,paused=excluded.paused,updated_at=excluded.updated_at
+ (id,subscription_key,config,secret,paused,created_at,updated_at) VALUES (?,?,?,?,?,?,?)
+ ON CONFLICT(subscription_key) DO UPDATE SET config=excluded.config,paused=excluded.paused,updated_at=excluded.updated_at
  WHERE event_subscriptions.deleted=0
- RETURNING id,secret,created_at`, proposed, sub.OwnerTenantID, sub.Key, string(cfg), sub.Secret, paused, now, now).Scan(&id, &secret, &created)
+ RETURNING id,secret,created_at`, proposed, sub.Key, string(cfg), sub.Secret, paused, now, now).Scan(&id, &secret, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("subscription key belongs to a deleted subscription; use a new key")
 	}
@@ -177,64 +169,31 @@ type eventQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func eventSourceOwner(ctx context.Context, q eventQueryer, ref string) (string, error) {
+// eventSourceExists reports whether an event source reference names an
+// existing channel, agent or trigger ("system" always exists).
+func eventSourceExists(ctx context.Context, q eventQueryer, ref string) (bool, error) {
 	if ref == "system" {
-		return "", nil
+		return true, nil
 	}
 	kind, id, ok := strings.Cut(ref, ":")
 	if !ok || id == "" {
-		return "", fmt.Errorf("invalid event source")
+		return false, fmt.Errorf("invalid event source")
 	}
 	table := map[string]string{"channel": "channels", "agent": "agent_instances", "trigger": "triggers"}[kind]
 	if table == "" {
-		return "", fmt.Errorf("invalid event source")
+		return false, fmt.Errorf("invalid event source")
 	}
-	var owner sql.NullString
-	err := q.QueryRowContext(ctx, `SELECT owner_tenant_id FROM `+table+` WHERE id=?`, id).Scan(&owner)
-	return owner.String, err
+	var found int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM `+table+` WHERE id=?`, id).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
-func eventSourceAllowed(ctx context.Context, q eventQueryer, tenant, ref string) (bool, error) {
-	owner, err := eventSourceOwner(ctx, q, ref)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if tenant == "" {
-		return true, nil
-	}
-	if ref == "system" {
-		return false, nil
-	}
-	var status string
-	err = q.QueryRowContext(ctx, `SELECT status FROM tenants WHERE id=?`, tenant).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if status != core.TenantStatusActive {
-		return false, nil
-	}
-	if owner == tenant {
-		return true, nil
-	}
-	var level string
-	err = q.QueryRowContext(ctx, `SELECT level FROM resource_grants WHERE tenant_id=? AND resource_type=? AND resource_id=?`, tenant, core.ResourceTypeEventSource, ref).Scan(&level)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return core.GrantSatisfies(level, core.GrantLevelUse), nil
-}
-
-func (s *Store) EventSourceAllowed(ctx context.Context, tenant, ref string) (bool, error) {
-	return eventSourceAllowed(ctx, s.db, tenant, ref)
+// EventSourceExists reports whether a subscription may filter on a source.
+func (s *Store) EventSourceExists(ctx context.Context, ref string) (bool, error) {
+	return eventSourceExists(ctx, s.db, ref)
 }
 
 // IngestRelayEvent atomically snapshots matching subscriptions and creates their
@@ -271,7 +230,7 @@ func (s *Store) IngestRelayEvent(ctx context.Context, event core.RelayEvent, tar
 	}
 	allowed := matches[:0]
 	for _, sub := range matches {
-		ok, e := eventSourceAllowed(ctx, tx, sub.OwnerTenantID, event.SourceRef)
+		ok, e := eventSourceExists(ctx, tx, event.SourceRef)
 		if e != nil {
 			return e
 		}
@@ -368,13 +327,9 @@ func (s *Store) GetEventDelivery(ctx context.Context, id string) (*core.EventDel
 	return d, rows.Err()
 }
 
-func (s *Store) ListEventDeliveries(ctx context.Context, owner *string, subID, status string, limit, offset int) ([]core.EventDelivery, error) {
+func (s *Store) ListEventDeliveries(ctx context.Context, subID, status string, limit, offset int) ([]core.EventDelivery, error) {
 	q := `SELECT ` + eventDeliveryColumns + ` FROM event_deliveries d JOIN relay_events e ON e.id=d.event_id JOIN event_subscriptions s ON s.id=d.subscription_id WHERE 1=1`
 	args := []any{}
-	if owner != nil {
-		q += ` AND s.owner_tenant_id=?`
-		args = append(args, *owner)
-	}
 	if subID != "" {
 		q += ` AND d.subscription_id=?`
 		args = append(args, subID)
