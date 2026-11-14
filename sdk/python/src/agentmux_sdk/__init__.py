@@ -33,7 +33,6 @@ from .models import (
     Capabilities,
     Channel,
     ConsoleSession,
-    TenantRegistration,
     HealthReport,
     HealthState,
     InvocationEvent,
@@ -43,8 +42,6 @@ from .models import (
     ModuleState,
     Orchestration,
     OrchestrationTask,
-    TenancySelf,
-    Tenant,
     Trigger,
     TurnUsage,
     version_key,
@@ -58,7 +55,7 @@ from .release import (
     latest_release,
 )
 
-# 0.1.5-dev supports the Contract 2.x surface, including 2.2 event subscriptions.
+# 0.1.5-dev supports the Contract 3.x surface (no tenancy; bridge token only).
 __version__ = "0.1.5.dev0"
 
 __all__ = [
@@ -80,7 +77,6 @@ __all__ = [
     "Capabilities",
     "Channel",
     "ConsoleSession",
-    "TenantRegistration",
     "HealthReport",
     "HealthState",
     "InvocationEvent",
@@ -91,8 +87,6 @@ __all__ = [
     "Orchestration",
     "OrchestrationTask",
     "Release",
-    "TenancySelf",
-    "Tenant",
     "Trigger",
     "TurnUsage",
     "fetch_checksums",

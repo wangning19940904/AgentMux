@@ -32,18 +32,13 @@ declare global {
 }
 
 const ACTIVE_REMOTE_KEY = "agentmux:active-remote";
-const ACTIVE_TENANT_SCOPE_KEY = "agentmux:active-tenant-scope";
-const TENANT_SCOPE_SEPARATOR = "::";
 export const REMOTE_HOSTS_CHANGED_EVENT = "agentmux:remote-hosts-changed";
-export const TENANT_SCOPE_CHANGED_EVENT = "agentmux:tenant-scope-changed";
 
 export function resolveMachineScope(stored: string | null | undefined): MachineScope {
   return stored && stored.trim() ? stored : "all";
 }
 
 export function activeMachineScope(): MachineScope {
-	const tenantTarget = activeTenantTargetID();
-	if (tenantTarget) return tenantTarget;
   return resolveMachineScope(localStorage.getItem(ACTIVE_REMOTE_KEY));
 }
 
@@ -74,62 +69,9 @@ export function notifyRemoteHostsChanged(hosts?: RemoteHost[]) {
   }));
 }
 
-export function tenantScopeKey(tenantID: string, targetID = "local"): string {
-	const tenant = tenantID.trim();
-	if (!tenant) return "";
-	return `${targetID.trim() || "local"}${TENANT_SCOPE_SEPARATOR}${tenant}`;
-}
-
-export function resolveTenantScope(value: string | null | undefined): { tenantID: string; targetID: string } {
-	const stored = value?.trim() ?? "";
-	if (!stored) return { tenantID: "", targetID: "" };
-	const separator = stored.indexOf(TENANT_SCOPE_SEPARATOR);
-	if (separator < 0) return { tenantID: stored, targetID: "" };
-	return {
-		targetID: stored.slice(0, separator).trim() || "local",
-		tenantID: stored.slice(separator + TENANT_SCOPE_SEPARATOR.length).trim(),
-	};
-}
-
-export function activeTenantScopeKey(): string {
-	return localStorage.getItem(ACTIVE_TENANT_SCOPE_KEY) ?? "";
-}
-
-export function activeTenantScopeID(): string {
-	return resolveTenantScope(activeTenantScopeKey()).tenantID;
-}
-
-export function activeTenantTargetID(): string {
-	return resolveTenantScope(activeTenantScopeKey()).targetID;
-}
-
-export function setActiveTenantScopeID(id: string, targetID = "local") {
-	if (id) localStorage.setItem(ACTIVE_TENANT_SCOPE_KEY, tenantScopeKey(id, targetID));
-  else localStorage.removeItem(ACTIVE_TENANT_SCOPE_KEY);
-  resetFleetWarnings();
-  window.dispatchEvent(new CustomEvent<string>(TENANT_SCOPE_CHANGED_EVENT, { detail: id }));
-	window.dispatchEvent(new CustomEvent("agentmux:machine-scope-changed", { detail: activeMachineScope() }));
-}
-
 // Marks same-origin Console requests so console-session cookie auth can
 // reject cross-site requests (CSRF defense in depth alongside SameSite=Lax).
 const CONSOLE_HEADER = { "X-AgentMux-Console": "1" } as const;
-
-export function tenantScopeHeaders(path: string): Record<string, string> {
-  const tenantID = activeTenantScopeID();
-  // Identity, sign-in and account management belong to the signed-in
-  // person, not to the tenant an administrator is previewing.
-  const scopeable =
-    (path.startsWith("/api/v1/") || path.startsWith("/v1/")) &&
-    !path.startsWith("/api/v1/tenancy/") &&
-    !path.startsWith("/api/v1/auth/") &&
-    !path.startsWith("/api/v1/accounts");
-  return tenantID && scopeable ? { "X-AgentMux-Tenant-Scope": tenantID } : {};
-}
-
-function consoleHeaders(path: string) {
-  return { ...CONSOLE_HEADER, ...tenantScopeHeaders(path) };
-}
 
 export function apiPath(path: string) {
   // All clients use same-origin API requests. Vite proxies them in development,
@@ -153,19 +95,18 @@ async function fleetBatch<T>(
 	endpoint: "query" | "execute",
 	requests: FleetOperation[],
 	targetIDs = activeFleetTargetIDs(),
-	tenantScoped = true,
 	recordWarnings = true,
 ) {
   const path = `/api/v1/remote/fleet/${endpoint}`;
   const updateWarnings = recordWarnings ? beginFleetWarningUpdate(JSON.stringify([
-    endpoint, tenantScoped, [...targetIDs].sort(),
+    endpoint, [...targetIDs].sort(),
     requests.map((request) => [request.method || "GET", fleetWarningResourceKey(request.path)]),
   ])) : () => {};
   try {
     const res = await fetch(path, {
       method: "POST",
       cache: "no-store",
-      headers: { "Content-Type": "application/json", ...(tenantScoped ? consoleHeaders(path) : CONSOLE_HEADER) },
+      headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
       body: JSON.stringify({ target_ids: targetIDs, requests }),
     });
     if (endpoint === "execute") invalidateResourceCache();
@@ -200,21 +141,14 @@ export function fleetQuery<T>(requests: FleetOperation[], targetIDs?: string[]) 
   return fleetBatch<T>("query", requests, targetIDs);
 }
 
-// Identity controls stay in the administrator's controller scope even while
-// previewing a tenant. Resource reads continue through fleetQuery and carry
-// the selected tenant header.
-export function fleetAdminQuery<T>(requests: FleetOperation[], targetIDs: string[] = ["all"]) {
-	return fleetBatch<T>("query", requests, targetIDs, false);
-}
-
 export function fleetExecute<T>(requests: FleetOperation[], targetIDs?: string[]) {
   return fleetBatch<T>("execute", requests, targetIDs);
 }
 
 // Monitoring reads show unreachable machines in place, so their failures are
-// data rather than a page-level warning. Host metrics are not tenant data.
+// data rather than a page-level warning.
 export function fleetMonitorQuery<T>(requests: FleetOperation[], targetIDs?: string[]) {
-  return fleetBatch<T>("query", requests, targetIDs, false, false);
+  return fleetBatch<T>("query", requests, targetIDs, false);
 }
 
 // With one machine selected, reads go through that machine. When it is a
@@ -229,7 +163,7 @@ function noteReportedAt(path: string, res: Response) {
 }
 
 export async function get<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
+  const res = await fetch(apiPath(path), { cache: "no-store", headers: CONSOLE_HEADER });
   noteReportedAt(path, res);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;
@@ -262,7 +196,7 @@ function checkedError(path: string, status: number, payload: Record<string, unkn
 }
 
 export async function getChecked<T>(path: string, options: { local?: boolean } = {}): Promise<T> {
-  const res = await fetch(options.local ? path : apiPath(path), { cache: "no-store", headers: consoleHeaders(path) });
+  const res = await fetch(options.local ? path : apiPath(path), { cache: "no-store", headers: CONSOLE_HEADER });
   if (!options.local) noteReportedAt(path, res);
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
@@ -274,7 +208,7 @@ export async function getChecked<T>(path: string, options: { local?: boolean } =
 export async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   invalidateResourceCache();
@@ -285,7 +219,7 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
 export async function put<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   invalidateResourceCache();
@@ -296,7 +230,7 @@ export async function put<T>(path: string, body: unknown): Promise<T> {
 export async function putLocal<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   invalidateResourceCache();
@@ -307,7 +241,7 @@ export async function putLocal<T>(path: string, body: unknown): Promise<T> {
 export async function putChecked<T>(path: string, body: unknown, options: { local?: boolean } = {}): Promise<T> {
   const res = await fetch(options.local ? path : apiPath(path), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -321,7 +255,7 @@ export async function putChecked<T>(path: string, body: unknown, options: { loca
 export async function postChecked<T>(path: string, body: unknown, options: { local?: boolean } = {}): Promise<T> {
   const res = await fetch(options.local ? path : apiPath(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...consoleHeaders(path) },
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
     body: JSON.stringify(body),
   });
   const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -393,7 +327,7 @@ export async function streamMeetingEvents(
   const path = `/api/v1/remote/meetings/events?target_id=${encodeURIComponent(activeMachineScope())}`;
   const res = await fetch(apiPath(path), {
     cache: "no-store",
-    headers: { Accept: "text/event-stream", ...consoleHeaders(path) },
+    headers: { Accept: "text/event-stream", ...CONSOLE_HEADER },
     signal,
   });
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -426,7 +360,7 @@ export async function streamMeetingEvents(
 }
 
 export async function del<T>(path: string): Promise<T> {
-  const res = await fetch(apiPath(path), { method: "DELETE", headers: consoleHeaders(path) });
+  const res = await fetch(apiPath(path), { method: "DELETE", headers: CONSOLE_HEADER });
   invalidateResourceCache();
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json() as Promise<T>;

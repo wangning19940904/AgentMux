@@ -53,9 +53,9 @@ func Build(cfg *config.Config, now time.Time) (store.ResourceImportSet, error) {
 			ID: agentID, Name: name, RuntimeID: strings.TrimSpace(project.Agent),
 			WorkDir: project.WorkDir, WorkspaceMode: workspaceMode,
 			WorktreeBaseRef: project.WorktreeBaseRef, SessionBackend: sessionBackend,
-			SystemPrompt: project.SystemPrompt, ProviderTool: strings.TrimSpace(project.Agent),
+			SystemPrompt: project.SystemPrompt,
 			DefaultModel: project.DefaultModel, MemoryScope: "agent:" + agentID,
-			Env: env, Enabled: true, Source: "config-import", Visibility: core.VisibilityPrivate,
+			Env: env, Enabled: true, Source: "config-import",
 			CreatedAt: now, UpdatedAt: now,
 		})
 		for index, raw := range project.Platforms {
@@ -78,7 +78,7 @@ func Build(cfg *config.Config, now time.Time) (store.ResourceImportSet, error) {
 			}
 			resources.Channels = append(resources.Channels, core.Channel{
 				ID: channelID, Name: channelName, Type: typ, AgentID: agentID,
-				Config: channelConfig, Enabled: true, Visibility: core.VisibilityPrivate,
+				Config: channelConfig, Enabled: true,
 				CreatedAt: now, UpdatedAt: now,
 			})
 		}

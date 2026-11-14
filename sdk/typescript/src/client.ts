@@ -20,7 +20,6 @@ import {
   type Capabilities,
   type Channel,
   type ConsoleSession,
-  type TenantRegistration,
   type HealthReport,
   type InvocationEvent,
   type InvocationRequest,
@@ -28,8 +27,6 @@ import {
   type IntegrationSnapshot,
   type Orchestration,
 	type OrchestrationTaskInput,
-  type TenancySelf,
-  type Tenant,
   type Trigger, type EventSubscription, type EventSubscriptionInput, type EventSubscriptionResult, type EventSource, type EventDelivery, type EventDeliveryPage,
 } from "./types.js";
 
@@ -103,7 +100,6 @@ export class AgentMuxClient {
   readonly orchestrations: OrchestrationsResource;
   readonly integration: IntegrationResource;
   readonly console: ConsoleResource;
-  readonly tenancy: TenancyResource;
 
   constructor(options: AgentMuxClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -118,7 +114,6 @@ export class AgentMuxClient {
     this.orchestrations = new OrchestrationsResource(this);
     this.integration = new IntegrationResource(this);
     this.console = new ConsoleResource(this);
-    this.tenancy = new TenancyResource(this);
   }
 
   /** @internal */
@@ -453,12 +448,11 @@ class OrchestrationsResource {
 class IntegrationResource {
   constructor(private readonly client: AgentMuxClient) {}
 
-  /** Compose the tenant-scoped capability surface used by a host BFF. */
+  /** Compose the capability surface used by a host BFF. */
   async snapshot(options: { orchestrationLimit?: number } = {}): Promise<IntegrationSnapshot> {
-    const [capabilities, identity, runtimes, platforms, agents, channels, triggers, orchestrations] =
+    const [capabilities, runtimes, platforms, agents, channels, triggers, orchestrations] =
       await Promise.all([
         this.client.capabilities(),
-        this.client.tenancy.self(),
         this.client.runtimes(),
         this.client.platforms(),
         this.client.agents.list(),
@@ -466,7 +460,7 @@ class IntegrationResource {
         this.client.triggers.list(),
         this.client.orchestrations.list({ limit: options.orchestrationLimit ?? 8 }),
       ]);
-    return { capabilities, identity, runtimes, platforms, agents, channels, triggers, orchestrations };
+    return { capabilities, runtimes, platforms, agents, channels, triggers, orchestrations };
   }
 }
 
@@ -474,10 +468,8 @@ class ConsoleResource {
   constructor(private readonly client: AgentMuxClient) {}
 
   /**
-   * Mint a one-time Console entry URL (requires a bearer token; backend only).
-   *
-   * The session inherits this client's scope: a tenant token yields a Console
-   * that shows only that application's resources.
+   * Mint a one-time Console entry URL (requires the bridge token; backend
+   * only). The resulting Console session has administrator scope.
    */
   async createSession(options: { landing?: string } = {}): Promise<ConsoleSession> {
     const query = options.landing ? { landing: options.landing } : undefined;
@@ -486,24 +478,6 @@ class ConsoleResource {
       query,
     });
     return (await response.json()) as ConsoleSession;
-  }
-}
-
-class TenancyResource {
-  constructor(private readonly client: AgentMuxClient) {}
-
-  /** Read back this credential's identity and scope. */
-  async self(): Promise<TenancySelf> {
-    const response = await this.client.request("/api/v1/tenancy/self");
-    return (await response.json()) as TenancySelf;
-  }
-
-  async register(name: string, kind: Tenant["kind"] = "app"): Promise<TenantRegistration> {
-    const response = await this.client.request("/api/v1/tenancy/register", {
-      method: "POST",
-      body: { name, kind },
-    });
-    return (await response.json()) as TenantRegistration;
   }
 }
 

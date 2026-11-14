@@ -21,8 +21,7 @@ import (
 // role takes effect at once.
 //
 // With no accounts, nothing here changes how AgentMux behaves. The bridge
-// token stays the administrator and tenant tokens keep their scope whether or
-// not accounts exist.
+// token stays the administrator whether or not accounts exist.
 //
 //	GET  /api/v1/auth/session   — who is calling and whether sign-in is needed (open)
 //	POST /api/v1/auth/sign-in   — password sign-in (open, rate-limited)
@@ -64,15 +63,13 @@ type authSessionResponse struct {
 	// administrator who may create the first one.
 	SetupAvailable bool `json:"setup_available"`
 	// SignInRequired is true when accounts exist and the caller has no
-	// credential of its own: no account session, bridge token, tenant token or
-	// entry-link session.
+	// credential of its own: no account session, bridge token or entry-link
+	// session.
 	SignInRequired bool `json:"sign_in_required"`
 	Authenticated  bool `json:"authenticated"`
 	Admin          bool `json:"admin"`
 	// Account is the signed-in person, if there is one.
-	Account  *core.AccountIdentity `json:"account,omitempty"`
-	TenantID string                `json:"tenant_id,omitempty"`
-	Tenant   string                `json:"tenant,omitempty"`
+	Account *core.AccountIdentity `json:"account,omitempty"`
 	// SignInMethods lists the ways a person can sign in here.
 	SignInMethods []string `json:"sign_in_methods"`
 }
@@ -107,7 +104,6 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		response.Authenticated = true
 		response.Admin = principal.Admin
 		response.Account = principal.Account
-		response.TenantID, response.Tenant = principal.TenantID, principal.TenantName
 	}
 	response.SetupAvailable = s.st != nil && !response.AccountsEnabled && principal != nil && principal.Admin
 	response.SignInRequired = response.AccountsEnabled && (principal == nil || anonymous)

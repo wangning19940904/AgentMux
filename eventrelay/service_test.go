@@ -104,7 +104,7 @@ func TestDeliveryFanoutRetryAndRevocation(t *testing.T) {
 		}
 		svc.deliver(ctx, d)
 	}
-	items, _ := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	items, _ := st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if len(items) != 2 || items[0].Status != "retry" || items[1].Status != "retry" {
 		t.Fatalf("outbox %+v", items)
 	}
@@ -127,7 +127,7 @@ func TestDeliveryFanoutRetryAndRevocation(t *testing.T) {
 	}
 	// Unacknowledged upstream retries do not re-fanout.
 	svc.Publish(ctx, e)
-	items, _ = st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	items, _ = st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if len(items) != 2 {
 		t.Fatal("duplicate fanout")
 	}
@@ -148,7 +148,7 @@ func TestLifecyclePersistenceFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestDeliveryRechecksRevocationAndDeadLetterWindow(t *testing.T) {
+func TestDeliveryRechecksSourceAndDeadLetterWindow(t *testing.T) {
 	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -158,17 +158,14 @@ func TestDeliveryRechecksRevocationAndDeadLetterWindow(t *testing.T) {
 	now := time.Now().UTC()
 	svc := New(st, nil, nil)
 	defer svc.Stop()
-	if err := st.UpsertChannel(ctx, &core.Channel{ID: "ch", Name: "ch", Type: "feishu", CreatedAt: now, UpdatedAt: now}); err != nil {
+	channel := &core.Channel{ID: "ch", Name: "ch", Type: "feishu", CreatedAt: now, UpdatedAt: now}
+	if err := st.UpsertChannel(ctx, channel); err != nil {
 		t.Fatal(err)
 	}
-	tenant := &core.Tenant{ID: "t", Name: "t", Status: core.TenantStatusActive, CreatedAt: now, UpdatedAt: now}
-	st.UpsertTenant(ctx, tenant)
-	grant := &core.ResourceGrant{TenantID: "t", ResourceType: core.ResourceTypeEventSource, ResourceID: "channel:ch", Level: core.GrantLevelUse}
-	st.UpsertResourceGrant(ctx, grant)
 	var calls atomic.Int32
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(503) }))
 	defer receiver.Close()
-	sub := core.EventSubscription{OwnerTenantID: "t", Key: "a", Name: "a", Source: "feishu", SourceRefs: []string{"channel:ch"}, EventTypes: []string{"changed"}, CallbackURL: receiver.URL, Secret: "secret"}
+	sub := core.EventSubscription{Key: "a", Name: "a", Source: "feishu", SourceRefs: []string{"channel:ch"}, EventTypes: []string{"changed"}, CallbackURL: receiver.URL, Secret: "secret"}
 	st.SaveEventSubscription(ctx, &sub)
 	if err := svc.Publish(ctx, core.RelayEvent{Source: "feishu", Type: "changed", SourceRef: "channel:ch", Attributes: map[string]string{}, Data: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
@@ -177,22 +174,21 @@ func TestDeliveryRechecksRevocationAndDeadLetterWindow(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatal("claim", err)
 	}
-	st.DeleteResourceGrant(ctx, "t", core.ResourceTypeEventSource, "channel:ch")
+	// A source deleted before delivery blocks it.
+	if err := st.DeleteChannel(ctx, channel.ID); err != nil {
+		t.Fatal(err)
+	}
 	svc.deliver(ctx, d)
 	blocked, _ := st.GetEventDelivery(ctx, d.ID)
 	if calls.Load() != 0 || blocked.Status != "blocked" || blocked.FirstAttemptAt != nil {
-		t.Fatalf("revoked delivery %+v calls=%d", blocked, calls.Load())
+		t.Fatalf("delivery for a deleted source %+v calls=%d", blocked, calls.Load())
 	}
-	st.UpsertResourceGrant(ctx, grant)
-	tenant.Status = core.TenantStatusDisabled
-	st.UpsertTenant(ctx, tenant)
-	d, _ = st.ClaimEventDelivery(ctx, time.Now().Add(time.Minute))
-	svc.deliver(ctx, d)
-	if calls.Load() != 0 {
-		t.Fatal("disabled tenant received event")
+	if err := st.UpsertChannel(ctx, channel); err != nil {
+		t.Fatal(err)
 	}
-	tenant.Status = core.TenantStatusActive
-	st.UpsertTenant(ctx, tenant)
+	if err := st.RetryEventDelivery(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
 	d, _ = st.ClaimEventDelivery(ctx, time.Now().Add(time.Minute))
 	old := time.Now().Add(-25 * time.Hour)
 	attempt, err := st.BeginEventAttempt(ctx, d, old)

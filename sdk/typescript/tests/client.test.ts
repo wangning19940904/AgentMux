@@ -10,7 +10,7 @@ const CAPABILITIES = {
   ok: true,
   product: "agentmux",
   version: "v0.1.4",
-  contract_version: "2.0",
+  contract_version: "3.0",
   features: ["invocations", "invocations.stream", "send"],
   auth: { bridge_enabled: true },
 };
@@ -53,7 +53,7 @@ describe("health", () => {
 
   it("reports incompatible on foreign contract major", async () => {
     const client = clientWith(() =>
-      Response.json({ ...CAPABILITIES, contract_version: "3.0" }),
+      Response.json({ ...CAPABILITIES, contract_version: "4.0" }),
     );
     expect((await client.health()).state).toBe("incompatible");
   });
@@ -159,7 +159,7 @@ describe("errors and resources", () => {
         return Response.json([{ id: "a1", name: "A", runtime_id: "codex", enabled: true }]);
       }
       if (pathname === "/api/v1/console/sessions" && method === "POST") {
-        expect(url.searchParams.get("landing")).toBe("tenants");
+        expect(url.searchParams.get("landing")).toBe("agents");
         return Response.json({
           enter_url: "http://127.0.0.1:8765/console/enter?nonce=n",
           expires_at: "2026-01-01T00:00:00Z",
@@ -181,22 +181,19 @@ describe("errors and resources", () => {
       throw new Error(`unexpected ${method} ${pathname}`);
     });
     expect((await client.agents.list())[0]?.runtime_id).toBe("codex");
-    expect((await client.console.createSession({ landing: "tenants" })).session_ttl_seconds).toBe(28800);
+    expect((await client.console.createSession({ landing: "agents" })).session_ttl_seconds).toBe(28800);
 		expect((await client.orchestrations.create([{ id: "t1", agent_id: "a1", input: "do it" }])).id).toBe("orch-1");
     expect(await client.usage()).toEqual({ days: [] });
   });
 
-  it("composes a tenant-scoped integration snapshot", async () => {
+  it("composes an integration snapshot", async () => {
     const client = clientWith((url) => {
       switch (url.pathname) {
         case "/api/v1/capabilities":
           return Response.json({
             ...CAPABILITIES,
-            contract_version: "1.1",
-            auth: { bridge_enabled: true, scope: "tenant", tenant: "host" },
+            auth: { bridge_enabled: true, scope: "admin" },
           });
-        case "/api/v1/tenancy/self":
-          return Response.json({ admin: false, tenant: "host", tenant_id: "ten_host" });
         case "/api/v1/agents":
           return Response.json(["codex", "claude"]);
         case "/api/v1/platforms":
@@ -215,7 +212,8 @@ describe("errors and resources", () => {
       }
     });
     const snapshot = await client.integration.snapshot({ orchestrationLimit: 3 });
-    expect(snapshot.identity.tenant).toBe("host");
+    expect(snapshot.capabilities.contract_version).toBe("3.0");
+    expect(snapshot.capabilities.auth?.scope).toBe("admin");
     expect(snapshot.runtimes).toEqual(["codex", "claude"]);
     expect(snapshot.platforms).toEqual(["feishu", "webhook"]);
     expect(snapshot.agents[0]?.id).toBe("a");

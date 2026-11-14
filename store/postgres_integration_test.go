@@ -52,10 +52,6 @@ func openPostgresIntegrationStore(t *testing.T) *Store {
 	return st
 }
 
-func TestPostgresGatewayTokenCreationIsAtomic(t *testing.T) {
-	checkConcurrentGatewayTokens(t, []*Store{openPostgresIntegrationStore(t)})
-}
-
 func TestPostgresObservationBatchDeduplicatesConcurrently(t *testing.T) {
 	st := openPostgresIntegrationStore(t)
 	recorder, err := NewObservationRecorder(st, ObservationRecorderOptions{CaptureContent: false})
@@ -127,12 +123,12 @@ func TestPostgresResourceImportIsAtomicAndIdempotent(t *testing.T) {
 		Agents: []core.AgentInstance{{
 			ID: "agent-import", Name: "Imported", RuntimeID: "codex", Enabled: true,
 			WorkspaceMode: "shared", SessionBackend: "structured", Source: "config-import",
-			MemoryScope: "agent:agent-import", Visibility: core.VisibilityPrivate,
-			CreatedAt: now, UpdatedAt: now,
+			MemoryScope: "agent:agent-import",
+			CreatedAt:   now, UpdatedAt: now,
 		}},
 		Channels: []core.Channel{{
 			ID: "channel-import", Name: "Imported Channel", Type: "slack", AgentID: "agent-import",
-			Config: map[string]string{"token": "secret"}, Enabled: true, Visibility: core.VisibilityPrivate,
+			Config: map[string]string{"token": "secret"}, Enabled: true,
 			CreatedAt: now, UpdatedAt: now,
 		}},
 	}

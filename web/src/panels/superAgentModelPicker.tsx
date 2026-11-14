@@ -1,9 +1,9 @@
 import { Check, ChevronDown, Zap } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { FrameworkRuntimeSettings, Provider, RuntimeOption } from "../api";
+import type { FrameworkRuntimeSettings, RuntimeOption } from "../api";
 import { useI18n } from "../i18n";
-import { activeRouteForTool, providerModelOptions, routeToolForRuntime, runtimeOptionValues, runtimeProviderOptions } from "./agents/agentUtils";
+import { runtimeOptionValues } from "./agents/agentUtils";
 
 // ModelChoice is what a router agent runs with. Empty values are the
 // framework's own defaults.
@@ -24,7 +24,6 @@ export function effortLabel(t: (key: string) => string, effort: string) {
 
 type CatalogState = {
   runtime: string;
-  provider?: Provider;
   settings?: FrameworkRuntimeSettings;
   error: string;
 };
@@ -37,16 +36,14 @@ export type ModelCatalog = {
   defaults: ModelChoice;
   efforts: (model: string) => string[];
   tiers: (model: string) => string[];
-  // The provider a configured route uses; empty for the framework's own login.
-  providerName: string;
 };
 
-const isLocal = (item: { target_id?: string }) => !item.target_id || item.target_id === "local";
 const labels = (options?: RuntimeOption[]) => new Map((options ?? []).filter((item) => item.label).map((item) => [item.value, item.label!]));
 
-// useModelCatalog reads what a router on this framework can run with, the way
-// the Agents form does: the provider of the framework's active route, or else
-// the framework's own login catalog. Routers run on this machine.
+// useModelCatalog reads the models a framework offers with its current
+// configuration, by asking the framework itself. Whatever configures it (its
+// own sign-in, a gateway or a router) is reflected without AgentMux knowing.
+// Routers run on this machine.
 export function useModelCatalog(runtime: string): ModelCatalog {
   const [state, setState] = useState<CatalogState | null>(null);
   useEffect(() => {
@@ -55,11 +52,8 @@ export function useModelCatalog(runtime: string): ModelCatalog {
     setState(null);
     void (async () => {
       try {
-        const [providers, routes] = await Promise.all([api.providers().catch(() => null), api.activeRoutes().catch(() => null)]);
-        const route = activeRouteForTool((routes ?? []).filter(isLocal), routeToolForRuntime(runtime));
-        const provider = route?.configured ? (providers ?? []).filter(isLocal).find((item) => item.id === route.provider_id) : undefined;
-        const settings = provider ? undefined : await api.frameworkRuntimeSettings(runtime, "", "local");
-        if (active) setState({ runtime, provider, settings, error: "" });
+        const settings = await api.frameworkRuntimeSettings(runtime, "", "local");
+        if (active) setState({ runtime, settings, error: "" });
       } catch (error) {
         if (active) setState({ runtime, error: error instanceof Error ? error.message : String(error) });
       }
@@ -69,7 +63,6 @@ export function useModelCatalog(runtime: string): ModelCatalog {
 
   return useMemo(() => {
     const ready = state?.runtime === runtime ? state : null;
-    const provider = ready?.provider;
     const capabilities = ready?.settings?.capabilities;
     const modelLabels = labels(capabilities?.models);
     // With per-model capabilities, a model only offers what it lists. The
@@ -78,18 +71,11 @@ export function useModelCatalog(runtime: string): ModelCatalog {
     return {
       loading: Boolean(runtime) && !ready,
       error: ready?.error ?? "",
-      models: provider ? providerModelOptions(provider) : runtimeOptionValues(capabilities?.models),
+      models: runtimeOptionValues(capabilities?.models),
       modelLabel: (model: string) => modelLabels.get(model) ?? model,
-      defaults: provider
-        ? { model: provider.model ?? "", reasoning_effort: "", service_tier: "" }
-        : { model: ready?.settings?.defaults.model ?? "", reasoning_effort: ready?.settings?.defaults.reasoning_effort ?? "", service_tier: ready?.settings?.defaults.service_tier ?? "" },
-      efforts: (model: string) => provider
-        ? runtimeProviderOptions(provider, "supported_reasoning_efforts")
-        : runtimeOptionValues(modelCapabilities(model)?.reasoning_efforts),
-      tiers: (model: string) => provider
-        ? runtimeProviderOptions(provider, "supported_service_tiers")
-        : runtimeOptionValues(modelCapabilities(model)?.service_tiers),
-      providerName: provider?.name ?? "",
+      defaults: { model: ready?.settings?.defaults.model ?? "", reasoning_effort: ready?.settings?.defaults.reasoning_effort ?? "", service_tier: ready?.settings?.defaults.service_tier ?? "" },
+      efforts: (model: string) => runtimeOptionValues(modelCapabilities(model)?.reasoning_efforts),
+      tiers: (model: string) => runtimeOptionValues(modelCapabilities(model)?.service_tiers),
     };
   }, [runtime, state]);
 }
@@ -253,6 +239,9 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
               {unknownModel && <ModelOption selected label={value.model} onSelect={() => undefined} />}
             </div>
           )}
+          {!catalog.loading && catalog.models.length > 0 && (
+            <TypedModelInput value={unknownModel ? value.model : ""} onSubmit={(model) => chooseModel(model)} />
+          )}
           {efforts.length > 0 && (
             <div className="model-picker-section" role="radiogroup" aria-label={t("superAgents.reasoningEffort")}>
               <small>{t("superAgents.reasoningEffort")}</small>
@@ -276,10 +265,33 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
             </label>
           )}
           {!catalog.loading && catalog.models.length > 0 && (
-            <small className="muted">{catalog.providerName ? t("superAgents.modelFromProvider", { provider: catalog.providerName }) : t("superAgents.modelFromLogin")}</small>
+            <small className="muted">{t("superAgents.modelFromFramework")}</small>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// TypedModelInput takes a model ID the framework does not list, such as a
+// router's routing group. The framework test checks that it works.
+function TypedModelInput({ value, onSubmit }: { value: string; onSubmit: (model: string) => void }) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const submit = () => {
+    const model = draft.trim();
+    if (model) onSubmit(model);
+  };
+  return (
+    <div className="model-picker-section model-picker-typed">
+      <small>{t("superAgents.modelTyped")}</small>
+      <div className="model-picker-typed-row">
+        <input aria-label={t("superAgents.modelTyped")} placeholder={t("superAgents.modelTypedPlaceholder")} value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} />
+        <button type="button" className="ghost-action" disabled={!draft.trim() || draft.trim() === value} onClick={submit}>{t("superAgents.modelTypedUse")}</button>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Channel, ProviderMonitorSnapshot } from "../api";
-import { summarizeChannelHealth, summarizeModelHealth } from "./overviewHealth";
+import type { Channel } from "../api";
+import { summarizeChannelHealth, summarizeFrameworkHealth } from "./overviewHealth";
 
 describe("overview health summaries", () => {
   it("separates connected, unhealthy, and disabled channels", () => {
@@ -26,37 +26,19 @@ describe("overview health summaries", () => {
     ] satisfies Channel[];
     expect(summarizeChannelHealth(channels).issues).toBe(1);
   });
+});
 
-  it("summarizes provider monitor states and unchecked providers", () => {
-    const monitor = {
-      config: { enabled: true, interval_minutes: 60, probe_models: true, max_models_per_provider: 10 },
-      running: false,
-      providers: [
-        { provider_id: "ok", provider_name: "OpenAI", state: "healthy", catalog_count: 2, checked_models: 2, healthy_models: 2, unhealthy_models: 0, last_checked_at: "2026-08-30T00:00:00Z" },
-        { provider_id: "bad", provider_name: "Relay", state: "warning", catalog_count: 2, checked_models: 2, healthy_models: 1, unhealthy_models: 1, last_checked_at: "2026-08-30T00:00:00Z", target_name: "remote" },
-      ],
-      alerts: [],
-    } satisfies ProviderMonitorSnapshot;
-
-    expect(summarizeModelHealth(monitor, 3)).toMatchObject({
-      total: 3,
-      healthy: 1,
-      issues: 1,
-      pending: 1,
-      issueLabels: ["Relay · remote"],
-      level: "warning",
-    });
-  });
-
-  it("reports a fully healthy model service summary", () => {
-    const monitor = {
-      config: { enabled: true, interval_minutes: 60, probe_models: true, max_models_per_provider: 10 },
-      running: false,
-      providers: [
-        { provider_id: "ok", provider_name: "OpenAI", state: "healthy", catalog_count: 1, checked_models: 1, healthy_models: 1, unhealthy_models: 0, last_checked_at: "2026-08-30T00:00:00Z" },
-      ],
-      alerts: [],
-    } satisfies ProviderMonitorSnapshot;
-    expect(summarizeModelHealth(monitor, 1).level).toBe("healthy");
+describe("summarizeFrameworkHealth", () => {
+  it("counts each framework on each machine by its most recent test", () => {
+    const at = (minute: number) => `2026-11-14T03:${String(minute).padStart(2, "0")}:00Z`;
+    const summary = summarizeFrameworkHealth([
+      { kind: "codex", model: "gpt-6", ok: false, latency_ms: 0, checked_at: at(1), error_kind: "model_not_found" },
+      { kind: "codex", model: "", ok: true, latency_ms: 900, checked_at: at(2) },
+      { kind: "claudecode", ok: false, latency_ms: 0, checked_at: at(3), error_kind: "unauthenticated" },
+      { kind: "codex", ok: false, latency_ms: 0, checked_at: at(4), target_id: "h1", target_name: "build box" },
+    ]);
+    expect(summary).toMatchObject({ total: 3, healthy: 1, issues: 2, level: "warning" });
+    expect(summary.issueLabels).toEqual(["claudecode", "codex · build box"]);
+    expect(summarizeFrameworkHealth([]).level).toBe("empty");
   });
 });

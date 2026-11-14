@@ -80,10 +80,10 @@ func mailViewer(r *http.Request) mailbox.Viewer {
 	account := principal.Account
 	viewer := mailbox.Viewer{
 		Address: personAddress(account.Login), Name: firstNonEmptyString(account.DisplayName, account.Login),
-		Admin: !principal.IsTenant(),
+		Admin: !principal.IsMember(),
 	}
 	if !viewer.Admin {
-		viewer.Owner = account.TenantID
+		viewer.Owner = account.ID
 	}
 	return viewer
 }
@@ -333,7 +333,7 @@ func (s *Server) notifyMail(ctx context.Context, login string, message core.Mail
 	}
 	subscriber := pushpkg.SubscriberAdmin
 	if account, err := s.st.GetAccountByLogin(ctx, login); err == nil && account != nil && !account.IsAdmin() {
-		subscriber = "tenant:" + account.TenantID
+		subscriber = "account:" + account.ID
 	}
 	s.push.Notify(subscriber, pushpkg.MessageEvent(message.ID, message.From, message.FromName, time.Now().UTC()))
 }
@@ -348,19 +348,19 @@ func (d mailDirectory) Parties(ctx context.Context) ([]core.MailParty, error) {
 		return nil, err
 	}
 	// Administrators are one owner: what any of them owns, all of them own.
-	adminTenants, ownerNames := map[string]bool{}, map[string]string{}
+	adminAccounts, ownerNames := map[string]bool{}, map[string]string{}
 	for _, account := range accounts {
 		if account.IsAdmin() {
-			adminTenants[account.TenantID] = true
+			adminAccounts[account.ID] = true
 		} else {
-			ownerNames[account.TenantID] = firstNonEmptyString(account.DisplayName, account.Login)
+			ownerNames[account.ID] = firstNonEmptyString(account.DisplayName, account.Login)
 		}
 	}
-	owner := func(tenantID string) (string, string) {
-		if tenantID == "" || adminTenants[tenantID] {
+	owner := func(accountID string) (string, string) {
+		if accountID == "" || adminAccounts[accountID] {
 			return "", ""
 		}
-		return tenantID, ownerNames[tenantID]
+		return accountID, ownerNames[accountID]
 	}
 	parties := []core.MailParty{}
 
@@ -370,14 +370,6 @@ func (d mailDirectory) Parties(ctx context.Context) ([]core.MailParty, error) {
 			return nil, err
 		}
 	}
-	instances, err := s.st.ListAgentInstances(ctx)
-	if err != nil {
-		return nil, err
-	}
-	brainOwner := map[string]string{}
-	for _, instance := range instances {
-		brainOwner[instance.ID] = instance.OwnerTenantID
-	}
 	for _, agent := range agents {
 		if !agent.Enabled {
 			continue
@@ -386,7 +378,7 @@ func (d mailDirectory) Parties(ctx context.Context) ([]core.MailParty, error) {
 			Address: core.MailPartyAgent + ":" + agent.ID, Kind: core.MailPartyAgent,
 			Name: firstNonEmptyString(agent.Name, agent.ID), Description: agent.Description, Online: true,
 		}
-		party.Owner, party.OwnerName = owner(brainOwner[agent.RouterAgentID])
+		// Agents on this machine belong to its administrators.
 		parties = append(parties, party)
 	}
 
@@ -401,7 +393,7 @@ func (d mailDirectory) Parties(ctx context.Context) ([]core.MailParty, error) {
 			Name: firstNonEmptyString(account.DisplayName, account.Login), Admin: account.IsAdmin(), Online: true,
 		}
 		if !party.Admin {
-			party.Owner, party.OwnerName = account.TenantID, party.Name
+			party.Owner, party.OwnerName = account.ID, party.Name
 		}
 		hasAdminLogin = hasAdminLogin || account.Login == mailAdminLogin
 		parties = append(parties, party)
@@ -447,7 +439,7 @@ func (d mailDirectory) Parties(ctx context.Context) ([]core.MailParty, error) {
 				Kind:    core.MailPartyAgent, Name: firstNonEmptyString(agent.Name, agent.ID), Description: agent.Description,
 				Machine: firstNonEmptyString(device.Name, device.ID), Online: online,
 			}
-			party.Owner, party.OwnerName = owner(device.OwnerTenantID)
+			party.Owner, party.OwnerName = owner(device.OwnerAccountID)
 			parties = append(parties, party)
 		}
 	}
@@ -463,11 +455,11 @@ func (d mailDirectory) Device(ctx context.Context, deviceID string) (string, str
 	if err != nil || device == nil {
 		return "", "", false
 	}
-	owner := device.OwnerTenantID
+	owner := device.OwnerAccountID
 	if owner != "" {
 		if accounts, err := s.st.ListAccounts(ctx); err == nil {
 			for _, account := range accounts {
-				if account.TenantID == owner && account.IsAdmin() {
+				if account.ID == owner && account.IsAdmin() {
 					owner = ""
 				}
 			}

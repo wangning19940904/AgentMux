@@ -23,7 +23,6 @@ import (
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	"github.com/wangning19940904/AgentMux/mailbox"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
-	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	sessionstore "github.com/wangning19940904/AgentMux/sessions"
@@ -40,8 +39,6 @@ type Server struct {
 	version            string
 	log                *slog.Logger
 	st                 *store.Store
-	provider           core.ProviderManager
-	proxySvc           *providerpkg.Service
 	usageFn            UsageReporter
 	usageSources       UsageSourceManager
 	sender             core.ChannelDeliverySender
@@ -49,7 +46,6 @@ type Server struct {
 	openAIResponses    *openAIResponseRegistry
 	openAIFiles        *openAIFileRegistry
 	connect            *core.ConnectService
-	presets            any
 	memory             core.MemoryStore
 	skills             core.SkillManager
 	mcp                core.MCPRegistry
@@ -58,7 +54,6 @@ type Server struct {
 	workspace          core.WorkspaceInitializer
 	sessions           *sessionstore.Service
 	obs                *observabilityRuntime
-	providerMonitor    *providerMonitor
 	remote             *remotepkg.Manager
 	remoteStatusChecks singleflight.Group
 	linkHub            *linkpkg.Hub
@@ -104,14 +99,11 @@ type Dependencies struct {
 	Version        string
 	Log            *slog.Logger
 	Store          *store.Store
-	Provider       core.ProviderManager
-	ProviderSvc    *providerpkg.Service
 	Usage          UsageReporter
 	UsageSources   UsageSourceManager
 	Sender         core.ChannelDeliverySender
 	Invoker        core.Invoker
 	Connect        *core.ConnectService
-	Presets        any
 	Memory         core.MemoryStore
 	Skills         core.SkillManager
 	MCP            core.MCPRegistry
@@ -140,14 +132,11 @@ func New(deps Dependencies) *Server {
 		version:           "0.1.0",
 		log:               log,
 		st:                st,
-		provider:          deps.Provider,
-		proxySvc:          deps.ProviderSvc,
 		usageFn:           deps.Usage,
 		usageSources:      deps.UsageSources,
 		sender:            deps.Sender,
 		invoker:           deps.Invoker,
 		connect:           deps.Connect,
-		presets:           deps.Presets,
 		memory:            deps.Memory,
 		skills:            deps.Skills,
 		mcp:               deps.MCP,
@@ -171,14 +160,8 @@ func New(deps Dependencies) *Server {
 	if strings.TrimSpace(deps.Version) != "" {
 		s.version = strings.TrimSpace(deps.Version)
 	}
-	if deps.ProviderSvc != nil {
-		s.provider = deps.ProviderSvc
-	}
 	if s.orchestrations == nil && st != nil && deps.Invoker != nil {
 		s.orchestrations = orchestrationpkg.New(st, deps.Invoker)
-	}
-	if st != nil {
-		s.providerMonitor = newProviderMonitor(log, st, s.provider)
 	}
 	remoteManager, err := remotepkg.NewManager(
 		cfg.Remote.HostsFile,
@@ -279,9 +262,9 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		Handler: s.withAuth(s.mux),
 	}
 	s.httpSrv = httpSrv
-	if s.providerMonitor != nil {
-		go s.providerMonitor.Run(ctx)
-	}
+	// The provider monitor no longer runs: AgentMux does not manage providers,
+	// and frameworks are checked on demand by their own "reply ok" test. Its
+	// last snapshot stays readable until the provider module is removed.
 	stopped := make(chan struct{})
 	defer close(stopped)
 	if err := s.startHubListener(ctx); err != nil {
@@ -313,8 +296,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 // withAuth enforces credentials on management and OpenAI-compatible API
 // routes when the bridge is on. When the bridge is off, legacy unauthenticated
 // local access remains available, but an explicitly supplied credential is
-// still resolved and scoped. This lets a self-registered tenant use the SDK
-// and an embedded Console without silently inheriting administrator access.
+// still resolved, so a signed-in member keeps member scope instead of
+// silently inheriting administrator access.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isObservabilityPath(r.URL.Path) {
@@ -324,16 +307,10 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				return
 			}
 			// Observability carries agent transcripts and runs on its own
-			// credential model. It is Console-only, so a tenant credential is
+			// credential model. It is administrator-only, so a member is
 			// rejected outright rather than falling through to that model.
-			principal := s.resolvePrincipal(r)
-			principal, scopeErr := s.applyAdminTenantScope(r, principal)
-			if scopeErr != nil {
-				writeErr(w, http.StatusForbidden, scopeErr.Error())
-				return
-			}
-			if principal.IsTenant() {
-				denyTenantRoute(w, r, principal)
+			if principal := s.resolvePrincipal(r); principal.IsMember() {
+				denyMemberRoute(w, r, principal)
 				return
 			}
 			if !s.authorizeObservabilityRequest(w, r) {
@@ -345,7 +322,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		if isBridgeAPIPath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Console, X-AgentMux-Tenant-Scope, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, OpenAI-Organization, OpenAI-Project, X-AgentMux-Agent-ID, X-AgentMux-Console, X-Stainless-Lang, X-Stainless-Package-Version, X-Stainless-OS, X-Stainless-Arch, X-Stainless-Runtime, X-Stainless-Runtime-Version, X-Stainless-Async")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -362,33 +339,16 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				}
 				return
 			}
-			// A remote tenant id belongs to the destination database. Keep the
-			// controller principal as admin and let the proxy forward the scope
-			// header so the destination validates and applies it exactly once.
-			if !isRemoteProxyPath(r.URL.Path) {
-				scopedPrincipal, err := s.applyAdminTenantScope(r, principal)
-				if err != nil {
-					writeErr(w, http.StatusForbidden, err.Error())
-					return
-				}
-				principal = scopedPrincipal
-			}
-			// Tenants reach only the endpoints AgentMux publishes to third
-			// parties; the Console-only management surface stays admin-owned.
-			// A signed-in member additionally reaches their own devices and
-			// account.
-			if principal.IsTenant() && !principalRouteAllowed(principal, r.Method, r.URL.Path) {
-				denyTenantRoute(w, r, principal)
+			// A member reaches only their own devices, messages and account;
+			// everything else is reserved for administrators.
+			if !principal.Admin && !(principal.IsMember() && memberRouteAllowed(r.Method, r.URL.Path)) {
+				denyMemberRoute(w, r, principal)
 				return
 			}
 			r = r.WithContext(withPrincipal(r.Context(), principal))
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func isRemoteProxyPath(path string) bool {
-	return strings.HasPrefix(path, "/api/v1/remote/proxy/")
 }
 
 // hasExplicitCredential distinguishes the bridge-disabled legacy mode from a
@@ -407,15 +367,11 @@ func isBridgeAPIPath(path string) bool {
 	return strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/v1/")
 }
 
-// isSelfAuthenticatingPath lists endpoints that create their own credential
-// and therefore cannot require a bearer token. A newly registered tenant
-// starts with an empty private namespace; an administrator grants access
-// separately, so open registration does not expose existing resources.
-//
-// The open account paths report whether sign-in is needed and perform it;
-// they resolve the caller's credential themselves.
+// isSelfAuthenticatingPath lists endpoints that cannot require a credential:
+// the open account paths report whether sign-in is needed and perform it, and
+// resolve the caller's credential themselves.
 func isSelfAuthenticatingPath(path string) bool {
-	return path == "/api/v1/tenancy/register" || authOpenPaths[path]
+	return authOpenPaths[path]
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -432,155 +388,6 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, availableAgentRuntimes())
-}
-
-func (s *Server) handleProvidersList(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	principal := requestPrincipal(r)
-	var ps []*core.Provider
-	var err error
-	if principal.IsTenant() && s.st != nil {
-		ps, err = s.st.ListProvidersForTenant(r.Context(), principal.TenantID)
-	} else {
-		ps, err = s.provider.List(r.Context())
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	for _, p := range ps {
-		annotateProviderAPIKey(p)
-	}
-	writeJSON(w, http.StatusOK, ps)
-}
-
-func (s *Server) handleProviderUpsert(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
-		return
-	}
-	p, ok := decodeJSON[core.Provider](w, r)
-	if !ok {
-		return
-	}
-	if err := normalizeProviderAPIKeyForSave(&p); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.provider.Upsert(r.Context(), &p); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	annotateProviderAPIKey(&p)
-	writeJSON(w, http.StatusOK, &p)
-}
-
-func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
-	id, ok := requireQuery(w, r, "id")
-	if !ok {
-		return
-	}
-	if s.provider == nil {
-		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
-		return
-	}
-	if err := s.provider.Delete(r.Context(), id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeOK(w)
-}
-
-func (s *Server) handleProviderActiveRoutes(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeJSON(w, http.StatusOK, []any{})
-		return
-	}
-	routes, err := s.provider.ActiveRoutes(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	principal := requestPrincipal(r)
-	if principal.IsTenant() && s.st != nil {
-		providers, listErr := s.st.ListProvidersForTenant(r.Context(), principal.TenantID)
-		if listErr != nil {
-			writeErr(w, http.StatusInternalServerError, listErr.Error())
-			return
-		}
-		visible := make(map[string]bool, len(providers))
-		for _, provider := range providers {
-			visible[provider.ID] = true
-		}
-		filtered := routes[:0]
-		for _, route := range routes {
-			if visible[route.ProviderID] {
-				filtered = append(filtered, route)
-			}
-		}
-		routes = filtered
-	}
-	for i := range routes {
-		annotateProviderRouteAPIKey(&routes[i])
-	}
-	writeJSON(w, http.StatusOK, routes)
-}
-
-func (s *Server) handleProviderClearRoute(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
-		return
-	}
-	tool, ok := requireQuery(w, r, "tool")
-	if !ok {
-		return
-	}
-	if err := s.provider.Clear(r.Context(), tool); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeOK(w)
-}
-
-func (s *Server) handleProviderPresets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.presets)
-}
-
-func (s *Server) handleProviderSwitch(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeErr(w, http.StatusServiceUnavailable, "provider manager unavailable")
-		return
-	}
-	var req struct {
-		ID            string            `json:"id"`
-		Tool          string            `json:"tool"`
-		Meta          core.ProviderMeta `json:"meta"`
-		LocalTakeover *bool             `json:"local_takeover,omitempty"`
-	}
-	if !decodeJSONInto(w, r, &req) {
-		return
-	}
-	route := core.ProviderRoute{
-		Tool:       req.Tool,
-		ProviderID: req.ID,
-		Meta:       req.Meta,
-	}
-	var err error
-	if req.LocalTakeover != nil && s.proxySvc != nil {
-		err = s.proxySvc.SwitchRouteWithLocalTakeover(r.Context(), route, *req.LocalTakeover)
-	} else if req.LocalTakeover != nil && *req.LocalTakeover {
-		err = fmt.Errorf("local routing unavailable")
-	} else {
-		err = s.provider.SwitchRoute(r.Context(), route)
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeOK(w)
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -607,7 +414,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.st != nil {
-		if _, authorized := s.authorizeChannel(w, r, req.ChannelID, core.GrantLevelUse); !authorized {
+		if _, authorized := s.lookupChannel(w, r, req.ChannelID); !authorized {
 			return
 		}
 	}
@@ -697,11 +504,6 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rep, err := s.usageFn(r.Context(), period, since, until, location)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	rep, err = s.scopeUsageReport(r, rep)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

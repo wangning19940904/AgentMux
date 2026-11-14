@@ -25,7 +25,7 @@ import { runtimeLabel } from "./agents/agentUtils";
 import { buildModelTrendSeries } from "./overviewModelTrend";
 import {
   summarizeChannelHealth,
-  summarizeModelHealth,
+  summarizeFrameworkHealth,
   type OverviewHealthSummary,
 } from "./overviewHealth";
 
@@ -49,26 +49,25 @@ export function OverviewPanel() {
   );
   const usage = { ...usageSnapshot, data: usageSnapshot.data?.report ?? null };
   const currencyPreferences = useAsync(() => api.menubarSettings(), []);
-  const providers = useAsync(() => api.providers(), []);
   const channels = useAsync(() => api.channelHealth(), []);
-  const providerMonitor = useAsync(() => api.providerMonitor(), []);
+  // Model availability is the frameworks' own "reply ok" tests.
+  const frameworkHealth = useAsync(() => api.frameworkHealthOverview(), []);
 
   const cnyRate = validCNYRate(currencyPreferences.data?.cny_rate ?? 7);
-  const providerRows = providers.data ?? [];
   const channelHealth = useMemo(
     () => summarizeChannelHealth(channels.data ?? []),
     [channels.data],
   );
   const modelHealth = useMemo(
-    () => summarizeModelHealth(providerMonitor.data, providerRows.filter((provider) => provider.enabled).length),
-    [providerMonitor.data, providerRows],
+    () => summarizeFrameworkHealth(frameworkHealth.data ?? []),
+    [frameworkHealth.data],
   );
   const healthAttentionCount = channelHealth.issues
     + modelHealth.issues
     + modelHealth.pending
     + Number(Boolean(channels.error))
-    + Number(Boolean(providerMonitor.error));
-  const healthLoading = channels.loading || providerMonitor.loading || providers.loading;
+    + Number(Boolean(frameworkHealth.error));
+  const healthLoading = channels.loading || frameworkHealth.loading;
   const healthConfiguredCount = channelHealth.total + modelHealth.total;
   const totals = usage.data?.totals;
   const totalTokens = totals
@@ -98,7 +97,7 @@ export function OverviewPanel() {
   usePolling(refreshUsage, 30_000);
   usePolling(currencyPreferences.reload, 30_000);
   usePolling(channels.reload, 30_000);
-  usePolling(providerMonitor.reload, 30_000);
+  usePolling(frameworkHealth.reload, 30_000);
 
   const updatedAt = usageSnapshot.data?.updatedAt.toLocaleTimeString() ?? "—";
 
@@ -271,15 +270,15 @@ export function OverviewPanel() {
             />
             <HealthSummaryRow
               icon={<DatabaseZap size={19} />}
-              title={t("overview.modelServices")}
+              title={t("overview.frameworkAvailability")}
               summary={modelHealth}
-              loading={providerMonitor.loading || providers.loading}
-              error={providerMonitor.error || providers.error}
+              loading={frameworkHealth.loading}
+              error={frameworkHealth.error}
               summaryText={modelHealth.total > 0
-                ? t("overview.modelHealthSummary", { healthy: modelHealth.healthy, total: modelHealth.total })
-                : t("overview.noModelsConfigured")}
-              pendingLabel={modelHealth.pending > 0 ? t("overview.healthPendingHint") : ""}
-              onResolve={() => { window.location.hash = "#gateway"; }}
+                ? t("overview.frameworkHealthSummary", { healthy: modelHealth.healthy, total: modelHealth.total })
+                : t("overview.noFrameworkTests")}
+              pendingLabel=""
+              onResolve={() => { window.location.hash = "#frameworks"; }}
               t={t}
             />
           </div>

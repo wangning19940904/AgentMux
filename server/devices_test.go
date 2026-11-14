@@ -230,11 +230,11 @@ func TestNodeJoinsHubAndIsReachedLikeASSHHost(t *testing.T) {
 	}
 }
 
-func TestDeviceRoutesAreClosedToTenantsAndPairingIsOpenToDevices(t *testing.T) {
-	for _, path := range []string{"/api/v1/devices", "/api/v1/devices/pairing-codes", "/api/v1/link", "/api/v1/link/join", "/api/v1/link/leave"} {
+func TestLinkRoutesAreClosedToMembersAndPairingIsOpenToDevices(t *testing.T) {
+	for _, path := range []string{"/api/v1/devices/owner", "/api/v1/link", "/api/v1/link/join", "/api/v1/link/leave"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
-			if tenantRouteAllowed(method, path) {
-				t.Fatalf("a tenant may %s %s", method, path)
+			if memberRouteAllowed(method, path) {
+				t.Fatalf("a member may %s %s", method, path)
 			}
 		}
 	}
@@ -435,20 +435,9 @@ func TestHubKeepsWhatANodeReportsAndAnswersWhileItIsOffline(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get(reportedAtHeader) == "" || names(body) != reported() {
 		t.Fatalf("offline proxy = %d %q %s", response.StatusCode, response.Header.Get(reportedAtHeader), body)
 	}
-	// A write is never answered from the copy, and neither is a tenant
-	// preview, whose view of the node the hub does not hold.
+	// A write is never answered from the copy.
 	if code := hub.call(t, http.MethodPost, "/api/v1/remote/proxy/"+deviceID+"/agent-instances", "", map[string]any{}, nil); code != http.StatusBadGateway {
 		t.Fatalf("offline write = %d", code)
-	}
-	request, _ = http.NewRequest(http.MethodGet, hub.url+"/api/v1/remote/proxy/"+deviceID+"/agent-instances", nil)
-	request.Header.Set(tenantScopeHeader, "tenant-1")
-	response, err = http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusBadGateway || response.Header.Get(reportedAtHeader) != "" {
-		t.Fatalf("tenant-scoped offline read = %d", response.StatusCode)
 	}
 
 	// Back online, the node answers for itself again and the hub catches up.

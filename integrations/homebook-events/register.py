@@ -5,10 +5,10 @@ from agentmux_sdk import AgentMuxClient
 
 with AgentMuxClient(
     base_url=os.environ.get("AGENTMUX_BASE_URL", "http://127.0.0.1:8765"),
-    token=os.environ["AGENTMUX_TENANT_TOKEN"],
+    token=os.environ["AGENTMUX_BRIDGE_TOKEN"],
 ) as client:
     if not client.capabilities().supports("event_subscriptions"):
-        raise SystemExit("AgentMux requires contract 2.2 event_subscriptions")
+        raise SystemExit("AgentMux requires the event_subscriptions feature")
     result = client.events.upsert(
         {
             "key": "homebook-bitable",

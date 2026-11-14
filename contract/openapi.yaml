@@ -7,8 +7,8 @@ info:
     described here. The OpenAI-compatible surface (/v1/responses, /v1/files)
     follows the upstream OpenAI Responses specification and is intentionally
     not duplicated in this document.
-  version: "2.3"
-  x-contract-version: "2.3"
+  version: "3.0"
+  x-contract-version: "3.0"
 servers:
   - url: http://127.0.0.1:8765
     description: Local AgentMux daemon (default listen address)
@@ -18,7 +18,7 @@ security:
 
 tags:
   - name: events
-    description: Durable tenant-scoped event subscriptions (beta)
+    description: Durable event subscriptions (beta)
   - name: discovery
     description: Handshake, health and capability discovery (stable)
   - name: invocations
@@ -31,8 +31,6 @@ tags:
     description: Outbound messaging without running an Agent (stable)
   - name: console
     description: Console session embedding (stable)
-  - name: tenancy
-    description: Open tenant registration and caller identity (stable)
   - name: orchestrations
     description: Multi-agent DAG orchestration (beta)
   - name: triggers
@@ -92,7 +90,7 @@ paths:
     post:
       tags: [events]
       operationId: upsertEventSubscription
-      summary: Idempotent upsert by tenant and key; signing secret returned only on creation
+      summary: Idempotent upsert by key; signing secret returned only on creation
       x-stability: beta
       requestBody: {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventSubscriptionInput"}}}}
       responses:
@@ -277,60 +275,6 @@ paths:
                     type: string
                   contract_version:
                     type: string
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/tenancy/register:
-    post:
-      tags: [tenancy]
-      operationId: registerTenant
-      summary: Create a tenant and its first token in one call
-      description: >
-        Self-service creation with no approval step and no existing credential.
-        Tenant names are unique: registering an existing name returns 409
-        rather than rotating that tenant's credentials, so this path can only
-        mint fresh identities. A new tenant starts with no accessible private
-        resources; the administrator can grant or assign Agents, channels,
-        triggers and Providers later.
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name]
-              properties:
-                name:
-                  type: string
-                  description: Tenant name to register. Must be unused.
-                kind:
-                  type: string
-                  enum: [app, web, service]
-      responses:
-        "200":
-          description: The tenant and its first token
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TenantRegistration"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "409":
-          description: A tenant with this name already exists
-
-  /api/v1/tenancy/self:
-    get:
-      tags: [tenancy]
-      operationId: getTenancySelf
-      summary: Read back the calling credential's identity and scope
-      responses:
-        "200":
-          description: Caller identity
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TenantSelf"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -574,12 +518,10 @@ paths:
       operationId: createConsoleSession
       summary: Mint a one-time Console entry URL
       description: >
-        Server-to-server endpoint. The host application backend (holding a
-        bridge or tenant token) calls this to obtain a single-use nonce URL.
-        Redirecting a browser to enter_url exchanges the nonce for a short-lived
-        HttpOnly session cookie that authorizes the embedded Console and
-        inherits the caller's scope. Tenant sessions remain available when
-        global bridge authentication is disabled.
+        Server-to-server endpoint. The host application backend (holding the
+        bridge token) calls this to obtain a single-use nonce URL. Redirecting
+        a browser to enter_url exchanges the nonce for a short-lived HttpOnly
+        session cookie that authorizes the embedded administrator Console.
       responses:
         "200":
           description: One-time entry URL
@@ -817,11 +759,11 @@ components:
       type: http
       scheme: bearer
       description: >
-        An AgentMux bridge or tenant token. When bridge.enabled is true,
-        /api/* and /v1/* require a credential. When it is false, anonymous
-        loopback calls retain legacy administrator access, while any explicit
-        bearer or agentmux_console cookie is still validated and scoped. A
-        Console cookie is accepted only for same-origin browser requests.
+        The AgentMux bridge token. When bridge.enabled is true, /api/* and
+        /v1/* require a credential. When it is false, anonymous loopback calls
+        retain legacy administrator access, while any explicit bearer or
+        agentmux_console cookie is still validated. A Console cookie is
+        accepted only for same-origin browser requests.
 
   responses:
     OK:
@@ -874,7 +816,7 @@ components:
           description: >
             Feature flags, e.g. invocations, invocations.stream,
             openai.responses, orchestrations, triggers, usage, send,
-            console.session, tenancy. SDKs must feature-detect instead of
+            console.session. SDKs must feature-detect instead of
             guessing from version numbers.
         modules:
           type: object
@@ -901,12 +843,12 @@ components:
             bridge_enabled: { type: boolean }
             scope:
               type: string
-              enum: [admin, tenant]
+              enum: [admin, member]
               description: >
-                Whether the credential sees the whole instance or one tenant.
-                The agents and channels counts follow this scope.
-            tenant: { type: string }
-            tenant_id: { type: string }
+                admin for the bridge token and administrator accounts; member
+                for a signed-in member account, which reaches only its own
+                devices and messages. The agents and channels counts are zero
+                for members.
 
     InvocationRequest:
       type: object
@@ -1024,9 +966,6 @@ components:
         worktree_base_ref: { type: string }
         session_backend: { type: string }
         system_prompt: { type: string }
-        provider_tool: { type: string }
-        provider_id: { type: string }
-        provider_name: { type: string }
         default_model: { type: string }
         default_reasoning_effort: { type: string }
         default_service_tier: { type: string }
@@ -1064,20 +1003,6 @@ components:
           items: { type: string }
         enabled: { type: boolean }
         source: { type: string }
-        owner_tenant_id:
-          type: string
-          description: >
-            Owning tenant, empty when the resource is unassigned. A tenant
-            credential cannot set this: it is always stamped with the caller.
-        owner_tenant_name:
-          type: string
-          description: Owner display name, filled on admin reads only.
-        visibility:
-          type: string
-          enum: [private, public]
-          description: >
-            public makes the resource readable and runnable by every tenant;
-            only its owner or the administrator may modify it.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -1093,70 +1018,8 @@ components:
           type: object
           additionalProperties: { type: string }
         enabled: { type: boolean }
-        owner_tenant_id: { type: string }
-        owner_tenant_name: { type: string }
-        visibility:
-          type: string
-          enum: [private, public]
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-
-    Tenant:
-      type: object
-      required: [id, name, status]
-      properties:
-        id: { type: string }
-        name: { type: string }
-        kind:
-          type: string
-          enum: [app, web, service]
-        status:
-          type: string
-          enum: [active, disabled]
-        note: { type: string }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-
-    TenantRegistration:
-      type: object
-      required: [tenant, token]
-      properties:
-        tenant: { $ref: '#/components/schemas/Tenant' }
-        token:
-          type: string
-          description: >
-            The tenant's long-lived bearer token. Returned exactly once; it is
-            stored only as a hash and cannot be recovered later.
-        prefix:
-          type: string
-          description: Displayed truncation of the token, for later reference.
-
-    TenantSelf:
-      type: object
-      required: [admin]
-      properties:
-        admin:
-          type: boolean
-          description: True when the caller holds administrator credentials.
-        tenant_id: { type: string }
-        tenant: { type: string }
-        kind: { type: string }
-        status: { type: string }
-        account:
-          type: object
-          description: >
-            The person signed in to the Console, present only for an account
-            session. Bearer tokens never carry an account. A member's tenant_id
-            is the namespace that account owns.
-          required: [id, login, role, tenant_id]
-          properties:
-            id: { type: string }
-            login: { type: string }
-            display_name: { type: string }
-            role:
-              type: string
-              enum: [admin, member]
-            tenant_id: { type: string }
 
     Trigger:
       type: object
@@ -1274,7 +1137,6 @@ components:
         last_error: {"type": "string"}
         last_success_at: {"type": "string", "format": "date-time"}
         name: {"type": "string"}
-        owner_tenant_id: {"type": "string"}
         paused: {"type": "boolean"}
         pending: {"type": "integer"}
         source: {"type": "string"}
@@ -1344,7 +1206,6 @@ components:
         paused: {"type": "boolean"}
         source: {"type": "string", "enum": ["feishu", "lark", "agentmux"]}
         source_refs: {"type": "array", "items": {"type": "string"}}
-        owner_tenant_id: {"type": "string", "description": "Administrator only; tenant credentials always stamp their own tenant."}
 
     EventSubscriptionResult:
       type: "object"

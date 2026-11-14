@@ -7,7 +7,7 @@ import { useCachedResource } from "./useCachedResource";
 
 afterEach(() => { clearResourceCache(); localStorage.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-it("reuses fresh data, keeps stale data during refresh/failure, and isolates machine and tenant caches", async () => {
+it("reuses fresh data, keeps stale data during refresh/failure, and isolates machine caches", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-22T00:00:00Z"));
@@ -45,13 +45,7 @@ it("reuses fresh data, keeps stale data during refresh/failure, and isolates mac
     await mount();
     expect(container.querySelector("output")!.textContent).toBe("empty");
     await act(async () => { finish("other-machine"); });
-    await unmount();
-    localStorage.setItem("agentmux:active-tenant-scope", "another-machine::tenant-1");
-    loader.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    await mount();
-    expect(container.querySelector("output")!.textContent).toBe("empty");
-    await act(async () => { finish("tenant-data"); });
-    expect(loader).toHaveBeenCalledTimes(6);
+    expect(loader).toHaveBeenCalledTimes(5);
   } finally { await act(async () => root.unmount()); }
 });
 

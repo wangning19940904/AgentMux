@@ -128,7 +128,7 @@ func TestRelayFastAPIEndToEnd(t *testing.T) {
 	}
 	await := func(sent, retry int) {
 		for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); {
-			items, err := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+			items, err := st.ListEventDeliveries(ctx, "", "", 100, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,7 +146,7 @@ func TestRelayFastAPIEndToEnd(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		items, _ := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+		items, _ := st.ListEventDeliveries(ctx, "", "", 100, 0)
 		t.Fatalf("expected sent=%d retry=%d; deliveries=%+v", sent, retry, items)
 	}
 	emit("first")
@@ -157,7 +157,7 @@ func TestRelayFastAPIEndToEnd(t *testing.T) {
 	start(0)
 	await(4, 0)
 	emit("second")
-	items, _ := st.ListEventDeliveries(ctx, nil, "", "", 100, 0)
+	items, _ := st.ListEventDeliveries(ctx, "", "", 100, 0)
 	if len(items) != 4 {
 		t.Fatal("duplicate upstream event was fanned out again")
 	}

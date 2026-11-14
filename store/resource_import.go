@@ -127,28 +127,28 @@ func sameImportedAgent(left, right core.AgentInstance) bool {
 func agentImportValue(item core.AgentInstance) any {
 	return struct {
 		ID, Name, RuntimeID, WorkDir, WorkspaceMode, WorktreeBaseRef, SessionBackend string
-		SystemPrompt, ProviderTool, DefaultModel, MemoryScope, Source, Visibility    string
+		SystemPrompt, DefaultModel, MemoryScope, Source                              string
 		Env                                                                          map[string]string
 		Enabled                                                                      bool
 	}{
 		item.ID, item.Name, item.RuntimeID, item.WorkDir, item.WorkspaceMode, item.WorktreeBaseRef,
-		item.SessionBackend, item.SystemPrompt, item.ProviderTool, item.DefaultModel, item.MemoryScope,
-		item.Source, item.Visibility, item.Env, item.Enabled,
+		item.SessionBackend, item.SystemPrompt, item.DefaultModel, item.MemoryScope,
+		item.Source, item.Env, item.Enabled,
 	}
 }
 
 func sameImportedChannel(left, right core.Channel) bool {
 	return sameImportJSON(
 		struct {
-			ID, Name, Type, AgentID, Visibility string
-			Config                              map[string]string
-			Enabled                             bool
-		}{left.ID, left.Name, left.Type, left.AgentID, left.Visibility, left.Config, left.Enabled},
+			ID, Name, Type, AgentID string
+			Config                  map[string]string
+			Enabled                 bool
+		}{left.ID, left.Name, left.Type, left.AgentID, left.Config, left.Enabled},
 		struct {
-			ID, Name, Type, AgentID, Visibility string
-			Config                              map[string]string
-			Enabled                             bool
-		}{right.ID, right.Name, right.Type, right.AgentID, right.Visibility, right.Config, right.Enabled},
+			ID, Name, Type, AgentID string
+			Config                  map[string]string
+			Enabled                 bool
+		}{right.ID, right.Name, right.Type, right.AgentID, right.Config, right.Enabled},
 	)
 }
 

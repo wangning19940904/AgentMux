@@ -63,12 +63,12 @@ than making Console navigation the primary experience:
 
 ```python
 snapshot = client.integration.snapshot(orchestration_limit=8)
-print(snapshot.identity.tenant)
+print(snapshot.capabilities.contract_version)
 for agent in snapshot.agents:
     print(agent.id, agent.enabled)
 ```
 
-The aggregate uses only public SDK resources and remains tenant-scoped. Follow
+The aggregate uses only public SDK resources. Follow
 [`contract/HOST_INTEGRATION.md`](../../contract/HOST_INTEGRATION.md) for the
 required token boundary, SSE semantics, degradation rules and acceptance list.
 
@@ -80,39 +80,18 @@ session = client.console.create_session()
 # (valid ~60s, single use). It sets an HttpOnly cookie and loads the Console.
 ```
 
-The session inherits this client's scope: with a tenant token the embedded
-Console shows only that application's agents and channels.
+Minting a Console session requires the bridge token and yields an
+administrator Console.
 
-## Register as a tenant
+## Authentication
 
-One AgentMux instance can be shared by several applications. Each is a
-*tenant* and sees only the resources it owns, the ones marked public, and the
-ones an administrator granted it.
-
-Your backend self-registers once and stores the returned token. A new tenant
-starts with an empty private namespace; an administrator grants resources
-later:
-
-```python
-client = AgentMuxClient(base_url="http://127.0.0.1:8765")
-result = client.tenancy.register("homebook", kind="web")
-save_secret("AGENTMUX_TENANT_TOKEN", result.token)   # shown once, never again
-```
-
-From then on the token is used like any bridge token. To check what a
-credential can see:
-
-```python
-report = client.health()
-if report.capabilities and report.capabilities.tenant_scoped:
-    print("scoped to", report.capabilities.tenant)
-
-identity = client.tenancy.self()   # admin flag, tenant name, status
-```
-
-Agents and channels carry `owner_tenant_id`, `owner_tenant_name` and
-`visibility`. Ownership is assigned by the server from the calling credential,
-so writes never need to set it.
+Third-party integrations authenticate with the AgentMux bridge token
+(`[bridge].token` in `config.toml`), sent as `Authorization: Bearer <token>`.
+It grants administrator access to every route and resource, so keep it on your
+backend/BFF and never ship it to a browser. Contract 3.0 removed multi-tenancy:
+there are no tenant tokens, registration endpoints, ownership or visibility
+fields. `report.capabilities.scope` is `"admin"` for the bridge token
+(`"member"` only appears for signed-in Console member accounts).
 
 ## Install / upgrade AgentMux (bootstrap)
 
@@ -127,10 +106,14 @@ checks.
 
 ## Contract
 
-This SDK speaks contract major `2` as defined in
+This SDK speaks contract major `3` as defined in
 [`contract/CONTRACT.md`](https://github.com/wangning19940904/AgentMux/blob/main/contract/CONTRACT.md).
-Feature-detect tenancy with
-`report.capabilities.supports("tenancy")`.
+Servers reporting another major are reported as `incompatible`. Contract 3.0
+is breaking: the `client.tenancy` resource, the `Tenant`, `TenantRegistration`
+and `TenancySelf` models, `IntegrationSnapshot.identity`,
+`Capabilities.tenant`/`tenant_id`/`tenant_scoped`, and the `owner_tenant_id`,
+`owner_tenant_name` and `visibility` fields were removed. Feature-detect
+optional surfaces with `report.capabilities.supports(...)`.
 
 ## Local event subscriptions (contract 2.2)
 
@@ -143,6 +126,5 @@ Use `verify_event_signature` on the raw HTTP body before parsing JSON, then
 persist the event ID in a durable inbox before returning a successful response.
 
 See [the event contract](../../contract/EVENT_SUBSCRIPTIONS.md) and the
-[FastAPI example](../../integrations/homebook-events/README.md). Ordinary channel
-access does not grant event access; shared sources require an explicit
-`event_source/use` grant.
+[FastAPI example](../../integrations/homebook-events/README.md). Subscription
+keys are unique per AgentMux instance.

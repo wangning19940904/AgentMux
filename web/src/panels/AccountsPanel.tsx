@@ -1,15 +1,15 @@
 import { Copy, KeyRound, Laptop, LogOut, Plus, RefreshCw, Trash2, UserRound, UserPlus } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { api, type Account, type AccountRole, type AuthSession, type DevicePairingCode } from "../api";
+import { api, type Account, type AccountRole, type AuthSession, type DevicePairingCode, type PairedDevice } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged } from "../tenancyGate";
+import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged } from "../signIn";
 import { confirmAction } from "../components/ConfirmDialog";
 
-// Accounts are the people who sign in to this AgentMux. This panel sits at
-// the top of the Tenants page: everyone signed in sees who they are and can
-// sign out; administrators manage accounts; members see the devices they
-// paired.
+// Accounts are the people who sign in to this AgentMux. Everyone signed in
+// sees who they are, can change their password and sign out; administrators
+// manage accounts and decide which account owns each paired device; members
+// see and pair their own devices.
 
 const fieldStyle = { display: "grid", gap: 4 } as const;
 
@@ -17,8 +17,7 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-// onAccountsChanged runs after an account is created, enabled or disabled,
-// since each account has a tenant namespace the Tenants list shows.
+// onAccountsChanged runs after an account is created, enabled or disabled.
 export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () => void } = {}) {
   const session = useAsync(() => api.authSession(), []);
   const state = session.data;
@@ -32,7 +31,7 @@ export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () =>
           onAccountsChanged?.();
         }} />
       )}
-      {state.account && !state.admin && <MyDevices />}
+      {(state.admin || state.account) && <Devices session={state} />}
     </>
   );
 }
@@ -136,9 +135,9 @@ function OneTimeSecret({ label, value, onClose }: { label: string; value: string
     <div className="surface-body">
       <p className="muted">{label}</p>
       <div className="control-row">
-        <code className="tenant-secret">{value}</code>
+        <code className="account-secret">{value}</code>
         <button className="ghost-action" onClick={() => void navigator.clipboard?.writeText(value)}>
-          <Copy size={14} /> {t("tenants.copy")}
+          <Copy size={14} /> {t("accounts.copy")}
         </button>
         <button className="ghost-action" onClick={onClose}>{t("common.close")}</button>
       </div>
@@ -302,7 +301,7 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
               <div className="agent-list-meta">
                 <span className={`status-badge ${account.status === "active" ? "success" : "warning"}`}>
                   <span className="status-dot" />
-                  {t(account.status === "active" ? "tenants.active" : "tenants.disabled")}
+                  {t(account.status === "active" ? "accounts.active" : "accounts.disabled")}
                 </span>
                 <span className="source-badge manual">
                   {t(account.role === "admin" ? "auth.roleAdmin" : "auth.roleMember")}
@@ -325,7 +324,7 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
                 <button className="ghost-action" disabled={busy || account.id === self} onClick={() => void run(() => api.saveAccount({
                   id: account.id, status: account.status === "active" ? "disabled" : "active",
                 }))}>
-                  {t(account.status === "active" ? "tenants.disable" : "tenants.enable")}
+                  {t(account.status === "active" ? "accounts.disable" : "accounts.enable")}
                 </button>
               </div>
             </article>
@@ -336,11 +335,19 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
   );
 }
 
-// MyDevices lists the machines a member paired with this hub and lets them
-// pair another. A pairing code created here makes the device theirs.
-function MyDevices() {
+// Devices lists the machines paired with this hub and lets the caller pair
+// another. A member sees the devices they own, and a pairing code they create
+// makes the new device theirs. An administrator sees every device with the
+// account that owns it and can hand a device to another account; a device
+// without an owner is reachable by administrators only.
+function Devices({ session }: { session: AuthSession }) {
   const { t } = useI18n();
+  const admin = session.admin;
   const devices = useAsync(() => api.pairedDevices(), []);
+  const accounts = useAsync(
+    () => admin && session.accounts_enabled ? api.accounts() : Promise.resolve([] as Account[]),
+    [admin, session.accounts_enabled],
+  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [pairing, setPairing] = useState<DevicePairingCode | null>(null);
@@ -359,12 +366,18 @@ function MyDevices() {
   }
 
   const items = devices.data ?? [];
+  const accountOptions = accounts.data ?? [];
+  const ownerName = (device: PairedDevice) => {
+    if (!device.owner_account_id) return t("accounts.ownerAdmins");
+    const owner = accountOptions.find((account) => account.id === device.owner_account_id);
+    return owner ? accountLabel(owner) : device.owner_account_name || device.owner_account_id;
+  };
   return (
     <section className="surface">
       <div className="surface-header">
         <div>
-          <h3>{t("accounts.devicesTitle")}</h3>
-          <p>{t("accounts.devicesSubtitle")}</p>
+          <h3>{t(admin ? "accounts.allDevicesTitle" : "accounts.devicesTitle")}</h3>
+          <p>{t(admin ? "accounts.allDevicesSubtitle" : "accounts.devicesSubtitle")}</p>
         </div>
         <div className="table-actions">
           <button className="ghost-action" onClick={() => void devices.reload()}>
@@ -379,7 +392,11 @@ function MyDevices() {
       </div>
       {notice && <div className="surface-body error">{notice}</div>}
       {pairing && (
-        <OneTimeSecret label={t("accounts.pairHint")} value={pairing.command} onClose={() => setPairing(null)} />
+        <OneTimeSecret
+          label={t(admin ? "accounts.pairHintAdmin" : "accounts.pairHint")}
+          value={pairing.command}
+          onClose={() => setPairing(null)}
+        />
       )}
       {devices.loading && items.length === 0 ? (
         <div className="empty-state">{t("common.loading")}</div>
@@ -400,8 +417,35 @@ function MyDevices() {
                 <span className={`status-badge ${device.online ? "success" : "warning"}`}>
                   <span className="status-dot" /> {t(device.online ? "accounts.online" : "accounts.offline")}
                 </span>
+                {admin && (
+                  <span className="source-badge manual" title={t("accounts.deviceOwner")}>
+                    {ownerName(device)}
+                  </span>
+                )}
               </div>
               <div className="table-actions">
+                {admin && accountOptions.length > 0 && (
+                  <select
+                    aria-label={t("accounts.assignDevice", { name: device.name })}
+                    title={t("accounts.deviceOwner")}
+                    value={device.owner_account_id ?? ""}
+                    disabled={busy}
+                    onChange={(event) => {
+                      const accountID = event.target.value;
+                      void run(() => api.assignDeviceOwner(device.id, accountID));
+                    }}
+                  >
+                    <option value="">{t("accounts.ownerAdmins")}</option>
+                    {device.owner_account_id && !accountOptions.some((account) => account.id === device.owner_account_id) && (
+                      <option value={device.owner_account_id}>{ownerName(device)}</option>
+                    )}
+                    {accountOptions.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {accountLabel(account)}{account.status === "disabled" ? ` (${t("accounts.disabled")})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button className="ghost-action danger-action" disabled={busy}
                   onClick={async () => {
                     if (await confirmAction(t("accounts.removeDeviceConfirm", { name: device.name }), { danger: true })) {

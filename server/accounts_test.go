@@ -121,7 +121,7 @@ func (b *browser) mustOK(method, path string, body, out any) {
 	}
 }
 
-func TestAccountsFromFirstRunToScopedMember(t *testing.T) {
+func TestAccountsFromFirstRunToMember(t *testing.T) {
 	host := newAccountHost(t, true)
 	ctx := context.Background()
 	admin := host.browser(t)
@@ -164,12 +164,6 @@ func TestAccountsFromFirstRunToScopedMember(t *testing.T) {
 	if state.SignInRequired || !state.Admin || state.Account == nil || state.Account.Login != "root" || state.Account.Role != core.AccountRoleAdmin {
 		t.Fatalf("signed-in admin state = %+v", state)
 	}
-	var self map[string]any
-	admin.mustOK(http.MethodGet, "/api/v1/tenancy/self", nil, &self)
-	if self["admin"] != true || self["account"] == nil {
-		t.Fatalf("tenancy self = %+v", self)
-	}
-
 	// The administrator creates a member; without a password one is made.
 	var created struct {
 		Account  core.Account `json:"account"`
@@ -184,28 +178,13 @@ func TestAccountsFromFirstRunToScopedMember(t *testing.T) {
 	if len(accounts) != 2 {
 		t.Fatalf("accounts = %+v", accounts)
 	}
-	bobTenant := created.Account.TenantID
 
-	// Resources: Bob owns one agent, is granted another, can see a public
-	// one, and must not see an app tenant's or an unassigned private one.
 	now := time.Now().UTC()
-	if err := host.st.UpsertTenant(ctx, &core.Tenant{ID: "ten_app", Name: "webapp", Kind: core.TenantKindWeb, Status: core.TenantStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	for _, agent := range []core.AgentInstance{
-		{ID: "agent-bob", Name: "bob's", OwnerTenantID: bobTenant},
-		{ID: "agent-granted", Name: "granted", OwnerTenantID: "ten_app"},
-		{ID: "agent-public", Name: "public", OwnerTenantID: "ten_app", Visibility: core.VisibilityPublic},
-		{ID: "agent-app", Name: "app private", OwnerTenantID: "ten_app"},
-		{ID: "agent-host", Name: "unassigned"},
-	} {
+	for _, agent := range []core.AgentInstance{{ID: "agent-one", Name: "one"}, {ID: "agent-two", Name: "two"}} {
 		agent.RuntimeID, agent.Enabled, agent.CreatedAt, agent.UpdatedAt = "codex", true, now, now
 		if err := host.st.UpsertAgentInstance(ctx, &agent); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := host.st.UpsertResourceGrant(ctx, &core.ResourceGrant{TenantID: bobTenant, ResourceType: core.ResourceTypeAgent, ResourceID: "agent-granted", Level: core.GrantLevelUse}); err != nil {
-		t.Fatal(err)
 	}
 
 	member := host.browser(t)
@@ -213,62 +192,42 @@ func TestAccountsFromFirstRunToScopedMember(t *testing.T) {
 		t.Fatalf("member sign-in = %d", code)
 	}
 	state = member.session()
-	if state.Admin || state.Account == nil || state.Account.Role != core.AccountRoleMember || state.TenantID != bobTenant {
+	if state.Admin || state.Account == nil || state.Account.Role != core.AccountRoleMember {
 		t.Fatalf("member state = %+v", state)
 	}
-	var agents []core.AgentInstance
-	member.mustOK(http.MethodGet, "/api/v1/agent-instances", nil, &agents)
-	seen := map[string]bool{}
-	for _, agent := range agents {
-		seen[agent.ID] = true
+	// A member reaches discovery and their own things only.
+	var capabilities struct {
+		Auth   map[string]any `json:"auth"`
+		Agents map[string]any `json:"agents"`
 	}
-	if !seen["agent-bob"] || !seen["agent-granted"] || !seen["agent-public"] || seen["agent-app"] || seen["agent-host"] || len(agents) != 3 {
-		t.Fatalf("member sees %v", seen)
+	member.mustOK(http.MethodGet, "/api/v1/capabilities", nil, &capabilities)
+	if capabilities.Auth["scope"] != "member" || capabilities.Agents["count"] != float64(0) {
+		t.Fatalf("member capabilities = %+v", capabilities)
 	}
-	if code := member.do(http.MethodDelete, "/api/v1/agent-instances?id=agent-granted", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("member deleting a use-granted agent = %d", code)
-	}
-	if code := member.do(http.MethodDelete, "/api/v1/agent-instances?id=agent-app", nil, nil); code != http.StatusNotFound {
-		t.Fatalf("member deleting an invisible agent = %d", code)
-	}
-	// A member's new agent is stamped with their namespace.
-	member.mustOK(http.MethodPost, "/api/v1/agent-instances", map[string]any{"id": "agent-new", "name": "new", "runtime_id": "codex", "owner_tenant_id": "ten_app", "visibility": "public"}, nil)
-	if stored, _ := host.st.GetAgentInstance(ctx, "agent-new"); stored == nil || stored.OwnerTenantID != bobTenant || stored.Visibility != core.VisibilityPrivate {
-		t.Fatalf("member-created agent = %+v", stored)
-	}
-	// The administrator still sees everything, with owners.
-	var all []core.AgentInstance
-	admin.mustOK(http.MethodGet, "/api/v1/agent-instances", nil, &all)
-	owners := map[string]string{}
-	for _, agent := range all {
-		owners[agent.ID] = agent.OwnerTenantName
-	}
-	if len(all) != 6 || owners["agent-bob"] != "bob" || owners["agent-app"] != "webapp" {
-		t.Fatalf("admin sees %v", owners)
-	}
-
-	// Administrator-only surfaces stay closed to members.
-	for _, path := range []string{"/api/v1/accounts", "/api/v1/tenancy/tenants", "/api/v1/remote/hosts", "/api/v1/link"} {
+	member.mustOK(http.MethodGet, "/api/v1/status", nil, nil)
+	// Everything else is reserved for administrators.
+	for _, path := range []string{"/api/v1/agent-instances", "/api/v1/channels", "/api/v1/triggers", "/api/v1/accounts", "/api/v1/remote/hosts", "/api/v1/link", "/api/v1/usage"} {
 		if code := member.do(http.MethodGet, path, nil, nil); code != http.StatusForbidden {
 			t.Fatalf("member GET %s = %d", path, code)
 		}
 	}
+	if code := member.do(http.MethodPost, "/api/v1/agent-instances", map[string]any{"name": "new", "runtime_id": "codex"}, nil); code != http.StatusForbidden {
+		t.Fatalf("member creating an agent = %d", code)
+	}
 	if code := member.do(http.MethodPost, "/api/v1/accounts", map[string]any{"login": "eve", "role": "admin"}, nil); code != http.StatusForbidden {
 		t.Fatalf("member creating an account = %d", code)
 	}
-
-	// Account namespaces are managed through the account.
-	if code := admin.do(http.MethodDelete, "/api/v1/tenancy/tenants?id="+bobTenant, nil, nil); code != http.StatusConflict {
-		t.Fatalf("deleting an account namespace = %d", code)
-	}
-	if code := admin.do(http.MethodPost, "/api/v1/tenancy/tokens", map[string]any{"tenant_id": bobTenant}, nil); code != http.StatusBadRequest {
-		t.Fatalf("token for an account namespace = %d", code)
+	// The administrator sees everything.
+	var all []core.AgentInstance
+	admin.mustOK(http.MethodGet, "/api/v1/agent-instances", nil, &all)
+	if len(all) != 2 {
+		t.Fatalf("admin sees %d agents", len(all))
 	}
 
 	// The bridge token stays the administrator with accounts present.
 	var bridgeAgents []core.AgentInstance
 	bridge.mustOK(http.MethodGet, "/api/v1/agent-instances", nil, &bridgeAgents)
-	if len(bridgeAgents) != 6 {
+	if len(bridgeAgents) != 2 {
 		t.Fatalf("bridge sees %d agents", len(bridgeAgents))
 	}
 
@@ -369,7 +328,7 @@ func TestMemberSeesOnlyOwnDevices(t *testing.T) {
 		b.mustOK(http.MethodGet, "/api/v1/devices", nil, &response)
 		out := map[string]string{}
 		for _, device := range response.Devices {
-			out[device.ID] = device.OwnerTenantName
+			out[device.ID] = device.OwnerAccountName
 		}
 		return out
 	}
@@ -407,27 +366,26 @@ func TestMemberSeesOnlyOwnDevices(t *testing.T) {
 		t.Fatal("bob's device was not removed")
 	}
 
-	// An administrator can hand a device to a member.
-	carolTenant := ""
-	if account, _ := host.st.GetAccountByLogin(ctx, "carol"); account != nil {
-		carolTenant = account.TenantID
-	}
-	admin.mustOK(http.MethodPost, "/api/v1/tenancy/ownership", map[string]string{"resource_type": "device", "resource_id": bridgeBox, "tenant_id": carolTenant}, nil)
+	// An administrator can hand a device to a member, and take it back.
+	carolAccount, _ := host.st.GetAccountByLogin(ctx, "carol")
+	admin.mustOK(http.MethodPost, "/api/v1/devices/owner", map[string]string{"id": bridgeBox, "account_id": carolAccount.ID}, nil)
 	if got := list(carol); len(got) != 2 {
 		t.Fatalf("carol after hand-over sees %v", got)
 	}
+	if code := carol.do(http.MethodPost, "/api/v1/devices/owner", map[string]string{"id": bridgeBox, "account_id": ""}, nil); code != http.StatusForbidden {
+		t.Fatalf("member changing a device owner = %d", code)
+	}
+	if code := admin.do(http.MethodPost, "/api/v1/devices/owner", map[string]string{"id": bridgeBox, "account_id": "acct_missing"}, nil); code != http.StatusNotFound {
+		t.Fatalf("hand-over to an unknown account = %d", code)
+	}
+	admin.mustOK(http.MethodPost, "/api/v1/devices/owner", map[string]string{"id": bridgeBox, "account_id": ""}, nil)
+	if got := list(carol); len(got) != 1 {
+		t.Fatalf("carol after release sees %v", got)
+	}
 
-	// Tenant tokens never reach devices, account or not.
-	now := time.Now().UTC()
-	if err := host.st.UpsertTenant(ctx, &core.Tenant{ID: "ten_app", Name: "webapp", Kind: core.TenantKindWeb, Status: core.TenantStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	token, err := host.st.CreateTenantToken(ctx, "ten_app", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := host.bearer(t, token.Secret).do(http.MethodGet, "/api/v1/devices", nil, nil); code != http.StatusForbidden {
-		t.Fatalf("tenant token listing devices = %d", code)
+	// Only the bridge token and accounts authenticate.
+	if code := host.bearer(t, "amxt_retired-tenant-token").do(http.MethodGet, "/api/v1/devices", nil, nil); code != http.StatusUnauthorized {
+		t.Fatalf("an unknown bearer token listing devices = %d", code)
 	}
 }
 
@@ -439,11 +397,6 @@ func TestBridgelessMachineKeepsLoopbackAdministrator(t *testing.T) {
 	state := anonymous.session()
 	if state.AccountsEnabled || state.SignInRequired || !state.Admin || !state.SetupAvailable {
 		t.Fatalf("bridgeless fresh state = %+v", state)
-	}
-	var self map[string]any
-	anonymous.mustOK(http.MethodGet, "/api/v1/tenancy/self", nil, &self)
-	if self["admin"] != true || self["account"] != nil {
-		t.Fatalf("tenancy self = %+v", self)
 	}
 
 	// The local Console creates the first administrator and is signed in.

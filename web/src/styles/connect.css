@@ -172,9 +172,7 @@
   .content-grid,
   .two-column,
   .sessions-layout,
-  .agent-workspace,
-  .gateway-grid,
-  .claude3p-grid {
+  .agent-workspace {
     grid-template-columns: 1fr;
   }
 
@@ -197,10 +195,6 @@
     max-height: 55vh;
   }
 
-  .claude3p-state {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .agent-metrics,
   .agent-picker-grid {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
@@ -212,12 +206,6 @@
 
   .agent-registry-row .agent-list-meta {
     grid-column: 1 / -1;
-  }
-
-  .route-control-grid,
-  .route-detail-grid,
-  .route-mode-options {
-    grid-template-columns: 1fr;
   }
 
   .session-list {
@@ -542,93 +530,10 @@
     grid-template-columns: 1fr;
   }
 
-  .provider-monitor-settings {
-    grid-template-columns: 1fr;
-  }
-
-  .provider-monitor-actions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .provider-monitor-actions .table-actions {
-    width: 100%;
-  }
-
-  .provider-health-strip {
-    grid-template-areas:
-      "copy"
-      "time"
-      "actions";
-    grid-template-columns: 1fr;
-    align-items: flex-start;
-  }
-
-  .provider-health-strip-time {
-    white-space: normal;
-  }
-
-  .provider-health-strip-actions {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    min-width: 0;
-  }
-
-  .provider-card-badges {
-    justify-content: flex-start;
-  }
-
-  .model-mapping-head {
-    display: none;
-  }
-
-  .desktop-mode-explainer {
-    grid-template-columns: 1fr;
-  }
-
-  .model-mapping-row {
-    grid-template-columns: minmax(0, 1fr) 38px;
-  }
-
-  .model-mapping-row input:first-child {
-    grid-column: 1 / -1;
-  }
-
-  .claude-code-model-map .model-mapping-row {
-    grid-template-columns: 1fr;
-  }
-
-  .claude-code-model-map .model-mapping-row input:first-child {
-    grid-column: auto;
-  }
-
-  .route-trace-item {
-    grid-template-columns: 1fr;
-  }
-
-  .claude3p-state {
-    grid-template-columns: 1fr;
-  }
-
   .advanced-grid {
     grid-template-columns: 1fr;
   }
 
-  .router-table select {
-    min-width: 160px;
-  }
-
-  .connection-subtabs {
-    width: 100%;
-  }
-
-  .connection-subtabs button {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  .provider-facts,
-  .provider-transfer-grid,
   .agent-metrics,
   .agent-picker-grid {
     grid-template-columns: 1fr;
@@ -651,40 +556,18 @@
     white-space: normal;
   }
 
-  .provider-card header,
   .route-card header,
   .provider-builder-head {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .route-local-controls {
-    align-items: flex-start;
-    grid-template-columns: 1fr;
-  }
-
-  .provider-card-actions,
-  .route-local-actions,
-  .form-actions,
   .table-actions {
     justify-content: flex-start;
   }
 
-  .route-local-actions {
-    width: 100%;
-  }
-
   .provider-drawer {
     width: 100vw;
-  }
-
-  .provider-transfer-result {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .provider-transfer-result > small {
-    text-align: left;
   }
 
   .agent-drawer-actions {
@@ -738,9 +621,6 @@
     width: 100%;
   }
 
-  .provider-drawer .preset-strip {
-    grid-template-columns: 1fr;
-  }
 }
 
 .framework-prereqs {
@@ -2220,3 +2100,46 @@
 .event-subscription-card { margin-top: 16px; overflow-wrap: anywhere; }
 .event-subscription-card .table-actions { flex-wrap: wrap; }
 @media (max-width: 700px) { .event-subscription-form .form-grid { grid-template-columns: 1fr; } }
+
+/* Framework availability: the outcome of a "reply ok" test. */
+.framework-health-cell { display: grid; gap: 6px; justify-items: start; min-width: 0; }
+.framework-health-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+.framework-health-state.success { color: var(--green); }
+.framework-health-state.warning { color: var(--amber, #a16207); }
+.framework-health-label { white-space: nowrap; }
+.framework-health-result { display: grid; gap: 2px; min-width: 0; max-width: 100%; }
+.framework-health-model { max-width: 100%; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.framework-health-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.framework-models-dialog { width: min(640px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 48px)); display: flex; flex-direction: column; gap: 12px; }
+.framework-models-list { display: grid; gap: 2px; overflow-y: auto; min-height: 0; }
+.framework-models-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.framework-models-row:last-child { border-bottom: 0; }
+.framework-models-name { display: grid; gap: 2px; min-width: 0; }
+.framework-models-name > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.framework-models-name > small { color: var(--muted); font-size: 11px; }
+.framework-models-row > .framework-health-result, .framework-models-row > .framework-health-state { grid-column: 1 / -1; }
+.framework-models-typed { display: flex; gap: 8px; }
+.framework-models-typed > input { flex: 1 1 auto; min-width: 0; }
+.agent-model-test { display: grid; gap: 4px; justify-items: start; }

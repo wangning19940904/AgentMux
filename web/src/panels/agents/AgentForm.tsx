@@ -1,4 +1,4 @@
-import { Bot, Cable, CheckCircle2, ExternalLink, Eye, FolderOpen, Link2, LogIn, Pencil, RefreshCw, Save, Trash2, Workflow, Zap } from "lucide-react";
+import { Bot, Cable, CheckCircle2, ExternalLink, Eye, FolderOpen, Link2, LogIn, Pencil, Play, RefreshCw, Save, Trash2, Workflow, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   activeMachineScope,
@@ -11,22 +11,17 @@ import {
   type FrameworkAuthStatus,
   type FrameworkLoginResult,
   type FrameworkRuntimeSettings,
-  type Provider,
-  type ProviderRoute,
+  type FrameworkSmokeResult,
   type Trigger,
 } from "../../api";
 import { ChannelAvatar } from "../../ChannelAvatar";
 
 import {
   type DrawerMode,
-  activeRouteForTool,
   approvalModeLabelKey,
   approvalModesForRuntime,
   composeInjectedPrompt,
-  providerModelOptions,
-  routeToolForRuntime,
   runtimeLabel,
-  runtimeProviderOptions,
   runtimeOptionValues,
   serviceTierLabel,
   workDirErrorMessage,
@@ -36,16 +31,18 @@ import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { AgentConversationOptions } from "./AgentConversationOptions";
 import { ChannelLogo } from "./ChannelLogo";
 import { RuntimeSelect } from "./RuntimeSelect";
+import { FrameworkSmokeResultView } from "../frameworks/FrameworkSmokeResult";
+
+// TYPED_MODEL is the model select's "enter another model ID" choice.
+const TYPED_MODEL = "__typed__";
 
 export type CLIOption = { id: string; name: string; note?: string; installed: boolean };
 
 export function AgentForm({
   busy,
   canSave,
-  activeRoutes,
   channelOptions,
   cliOptions,
-  compatibleProviders,
   draft,
   drawerMode,
   mcpOptions,
@@ -65,10 +62,8 @@ export function AgentForm({
 }: {
   busy: string;
   canSave: boolean;
-  activeRoutes: ProviderRoute[];
   channelOptions: Channel[];
   cliOptions: CLIOption[];
-  compatibleProviders: Provider[];
   draft: AgentInstance;
   drawerMode: DrawerMode | null;
   mcpOptions: string[];
@@ -104,6 +99,8 @@ export function AgentForm({
   const [desktopThreads, setDesktopThreads] = useState<AgentSession[]>([]);
   const [desktopThreadsBusy, setDesktopThreadsBusy] = useState(false);
   const [desktopThreadsError, setDesktopThreadsError] = useState("");
+  const [typingModel, setTypingModel] = useState(false);
+  const [modelTest, setModelTest] = useState<{ key: string; busy: boolean; result?: FrameworkSmokeResult }>({ key: "", busy: false });
   const injectedPrompt = useMemo(() => {
     const logPaths = selectedChannelIDs.map((id) => `~/.agentmux/logs/channels/${id}.jsonl`);
     const channelPrompts = selectedChannelIDs
@@ -125,82 +122,78 @@ export function AgentForm({
       t("agents.channelDefaultPrompt"),
     );
   }, [draft.system_prompt, draft.clis, selectedChannelIDs, channelOptions, cliOptions, t]);
-  const selectedRouteTool = draft.provider_tool || routeToolForRuntime(draft.runtime_id);
   const desktopRuntime = draft.runtime_id === "codex-app";
   const frameworkRuntimeID = desktopRuntime ? "codex" : draft.runtime_id;
   const authTargetID = draft.target_id || authStatus?.target_id;
   const authenticated = authStatus?.state === "authenticated";
-  const activeRoute = activeRouteForTool(activeRoutes, selectedRouteTool);
-  const activeRouteProvider = activeRoute?.configured ? activeRoute.provider_name || activeRoute.provider_id || "" : "";
-	const usingLocalLogin = !draft.provider_id && !activeRouteProvider;
-  const overrideProvider = compatibleProviders.find((provider) => provider.id === draft.provider_id);
-  const routeProvider = activeRoute?.configured
-    ? compatibleProviders.find((provider) => provider.id === activeRoute.provider_id)
-    : undefined;
-  const modelProvider = overrideProvider ?? routeProvider;
-  const runtimeSettingsSource = JSON.stringify([draft.runtime_id, draft.work_dir ?? "", authTargetID, usingLocalLogin, catalogReload]);
+  // Models come from the framework itself, for whatever configures it: its
+  // own sign-in, a gateway or a router. AgentMux does not manage providers.
+  const runtimeSettingsSource = JSON.stringify([draft.runtime_id, draft.work_dir ?? "", authTargetID, catalogReload]);
   const localSettings = localRuntimeSettingsSource === runtimeSettingsSource ? localRuntimeSettings : null;
   const localCapabilities = localSettings?.capabilities;
-  const selectedModel = draft.default_model || modelProvider?.model || localSettings?.defaults.model || "";
+  const modelOptions = runtimeOptionValues(localCapabilities?.models);
+  const modelLabels = new Map((localCapabilities?.models ?? []).filter((option) => option.label && option.label !== option.value).map((option) => [option.value, option.label!]));
+  // A typed model is one the framework does not list, such as a router's
+  // routing group. It is allowed; the test below checks that it works.
+  const typedModel = Boolean(draft.default_model) && Boolean(localCapabilities) && !modelOptions.includes(draft.default_model!);
+  const showTypedModel = typingModel || typedModel || (!localRuntimeSettingsBusy && modelOptions.length === 0);
+  const selectedModel = draft.default_model || localSettings?.defaults.model || "";
   const selectedModelCapabilities = localCapabilities?.model_capabilities?.[selectedModel];
-  const localModelCapabilities = localCapabilities?.model_capabilities ? selectedModelCapabilities : localCapabilities;
-	const modelOptions = modelProvider
-		? providerModelOptions(modelProvider)
-		: usingLocalLogin
-			? runtimeOptionValues(localCapabilities?.models)
-			: [];
-	const reasoningOptions = modelProvider
-		? runtimeProviderOptions(modelProvider, "supported_reasoning_efforts")
-		: usingLocalLogin
-			? runtimeOptionValues(localModelCapabilities?.reasoning_efforts)
-			: [];
-	const serviceTierOptions = modelProvider
-		? runtimeProviderOptions(modelProvider, "supported_service_tiers")
-		: usingLocalLogin
-			? runtimeOptionValues(localModelCapabilities?.service_tiers)
-			: [];
-  const variants = selectedModelCapabilities?.variants;
+  // Nothing is known about a typed model, so it may use anything the framework offers.
+  const localModelCapabilities = localCapabilities?.model_capabilities && !typedModel ? selectedModelCapabilities : localCapabilities;
+  const reasoningOptions = runtimeOptionValues(localModelCapabilities?.reasoning_efforts);
+  const serviceTierOptions = runtimeOptionValues(localModelCapabilities?.service_tiers);
+  const variants = typedModel ? undefined : selectedModelCapabilities?.variants;
   const availableServiceTiers = variants?.length
     ? serviceTierOptions.filter((tier) => variants.some((variant) => (!draft.default_reasoning_effort || variant.reasoning_effort === draft.default_reasoning_effort) && variant.service_tier === tier))
     : serviceTierOptions;
-  const approvalOptions = usingLocalLogin && localCapabilities
+  const approvalOptions = localCapabilities
     ? runtimeOptionValues(localCapabilities.approval_modes)
     : approvalModesForRuntime(draft.runtime_id);
-  const settingsReady = usingLocalLogin ? Boolean(localCapabilities) : Boolean(modelProvider);
-  const invalidModel = settingsReady && Boolean(draft.default_model) && !modelOptions.includes(draft.default_model!);
+  const settingsReady = Boolean(localCapabilities);
   const invalidEffort = settingsReady && Boolean(draft.default_reasoning_effort) && !reasoningOptions.includes(draft.default_reasoning_effort!);
   const invalidTier = settingsReady && Boolean(draft.default_service_tier) && !availableServiceTiers.includes(draft.default_service_tier!);
   const invalidApproval = Boolean(draft.default_approval_mode) && !approvalOptions.includes(draft.default_approval_mode!);
-  const invalidSettings = invalidModel || invalidEffort || invalidTier || invalidApproval;
-  const unverifiedSettings = usingLocalLogin && !settingsReady && Boolean(draft.default_model || draft.default_reasoning_effort || draft.default_service_tier);
+  const invalidSettings = invalidEffort || invalidTier || invalidApproval;
+  // Effort and speed can only be checked against a model list. A model on
+  // its own is accepted even when the list cannot be read.
+  const unverifiedSettings = !settingsReady && Boolean(draft.default_reasoning_effort || draft.default_service_tier);
   const runtimeDefaults = localSettings?.defaults;
-  const modelPlaceholder = t(usingLocalLogin ? "agents.defaultModelRuntimePlaceholder" : "agents.defaultModelPlaceholder") +
-    (usingLocalLogin && runtimeDefaults?.model ? `（${runtimeDefaults.model}）` : "");
-  const providerStatus = draft.provider_id
-    ? `${t("agents.providerOverrideActive")} ${overrideProvider?.name || draft.provider_id}`
-    : activeRouteProvider
-      ? `${t("agents.activeRouteProvider")} ${runtimeLabel(selectedRouteTool)} -> ${activeRouteProvider}`
-      : `${t("agents.noActiveRouteProvider")} ${runtimeLabel(selectedRouteTool)}. ${t("agents.localLoginActive")}`;
-  const defaultModelStatus =
-	localRuntimeSettingsBusy && usingLocalLogin
-		? t("agents.defaultModelLoading")
-		: localRuntimeSettingsError && usingLocalLogin
-			? localRuntimeSettingsError
-			: modelOptions.length > 0
-				? usingLocalLogin ? t("agents.defaultModelLocalLogin") : t("agents.defaultModelHelp")
-      : modelProvider
-        ? t("agents.defaultModelUnavailable")
-        : usingLocalLogin
-					? authStatus?.state === "authenticated"
-						? t("agents.defaultModelRuntimeUnavailable")
-						: t("agents.defaultModelLoginRequired")
-          : t("agents.defaultModelNoProvider");
+  const modelPlaceholder = t("agents.defaultModelRuntimePlaceholder") + (runtimeDefaults?.model ? `（${runtimeDefaults.model}）` : "");
+  const defaultModelStatus = localRuntimeSettingsBusy
+    ? t("agents.defaultModelLoading")
+    : localRuntimeSettingsError
+      ? localRuntimeSettingsError
+      : showTypedModel && modelOptions.length > 0
+        ? t("agents.defaultModelTypedHelp")
+        : modelOptions.length > 0
+          ? t("agents.defaultModelLocalLogin")
+          : authenticated
+            ? t("agents.defaultModelRuntimeUnavailable")
+            : t("agents.defaultModelLoginRequired");
+  const modelTestKey = JSON.stringify([draft.runtime_id, authTargetID, draft.default_model ?? "", draft.default_reasoning_effort ?? "", draft.default_service_tier ?? ""]);
+  const currentModelTest = modelTest.key === modelTestKey ? modelTest : null;
 
-  useEffect(() => {
-    if (readOnly || !draft.runtime_id) return;
-    const nextRouteTool = routeToolForRuntime(draft.runtime_id);
-    if (draft.provider_tool !== nextRouteTool) onUpdate("provider_tool", nextRouteTool);
-  }, [draft.provider_tool, draft.runtime_id, onUpdate, readOnly]);
+  async function testModel() {
+    const key = modelTestKey;
+    setModelTest({ key, busy: true });
+    try {
+      const result = await api.frameworkTest({
+        kind: draft.runtime_id,
+        ...(draft.id ? { agent_id: draft.id } : {}),
+        model: draft.default_model ?? "",
+        reasoning_effort: draft.default_reasoning_effort ?? "",
+        service_tier: draft.default_service_tier ?? "",
+      }, authTargetID);
+      setModelTest((current) => current.key === key ? { key, busy: false, result } : current);
+    } catch (err) {
+      const result: FrameworkSmokeResult = {
+        kind: draft.runtime_id, model: draft.default_model ?? "", ok: false, latency_ms: 0, error_kind: "unknown",
+        error_detail: err instanceof Error ? err.message : String(err), checked_at: new Date().toISOString(),
+      };
+      setModelTest((current) => current.key === key ? { key, busy: false, result } : current);
+    }
+  }
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -234,7 +227,7 @@ export function AgentForm({
     setAuthNotice("");
     setLoginResult(null);
     setLoginCode("");
-    if (!usingLocalLogin || !frameworkRuntimeID) {
+    if (!frameworkRuntimeID) {
       setAuthBusy(false);
       return () => {
         active = false;
@@ -255,13 +248,13 @@ export function AgentForm({
     return () => {
       active = false;
     };
-  }, [draft.target_id, frameworkRuntimeID, usingLocalLogin]);
+  }, [draft.target_id, frameworkRuntimeID]);
 
 	useEffect(() => {
 		let active = true;
 		setLocalRuntimeSettings(null);
 		setLocalRuntimeSettingsError("");
-		if (!usingLocalLogin || !draft.runtime_id) {
+		if (!draft.runtime_id) {
 			setLocalRuntimeSettingsBusy(false);
 			return () => {
 				active = false;
@@ -285,10 +278,10 @@ export function AgentForm({
 		return () => {
 			active = false;
 		};
-	}, [authenticated, authTargetID, draft.runtime_id, draft.work_dir, usingLocalLogin, runtimeSettingsSource]);
+	}, [authenticated, authTargetID, draft.runtime_id, draft.work_dir, runtimeSettingsSource]);
 
   useEffect(() => {
-    if (!loginResult || !usingLocalLogin || !frameworkRuntimeID) return;
+    if (!loginResult || !frameworkRuntimeID) return;
     let active = true;
     const interval = window.setInterval(() => {
       void Promise.resolve()
@@ -307,7 +300,7 @@ export function AgentForm({
       active = false;
       window.clearInterval(interval);
     };
-  }, [authTargetID, frameworkRuntimeID, loginResult?.session_id, usingLocalLogin, t]);
+  }, [authTargetID, frameworkRuntimeID, loginResult?.session_id, t]);
 
   async function refreshFrameworkAuth() {
     if (!frameworkRuntimeID) return;
@@ -598,19 +591,7 @@ export function AgentForm({
           <h3>{t("agents.routing")}</h3>
         </header>
         <div className="field-grid">
-          <label className="field">
-            <span>{t("agents.providerOverride")}</span>
-            <select disabled={readOnly} value={draft.provider_id ?? ""} onChange={(event) => onUpdate("provider_id", event.target.value)}>
-              <option value="">{activeRouteProvider ? t("agents.followActiveRoute") : t("agents.useLocalLogin")}</option>
-              {compatibleProviders.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
-            <small>{providerStatus}</small>
-          </label>
-          {usingLocalLogin && (
+          {frameworkRuntimeID && (
             <div className={`agent-route-notice${authStatus?.state === "authenticated" ? " success" : ""}`}>
               <strong className="agent-route-notice-title">
                 {authBusy ? (
@@ -643,9 +624,6 @@ export function AgentForm({
                       {loginBusy === "start" ? t("agents.loginStarting") : t("agents.loginFramework")}
                     </button>
                   )}
-                  <button className="ghost-action" onClick={() => { window.location.hash = "#gateway"; }} type="button">
-                    {t("agents.configureProvider")}
-                  </button>
                   <button className="ghost-action" disabled={authBusy} onClick={refreshFrameworkAuth} type="button">
                     <RefreshCw className={authBusy ? "spin" : ""} size={14} />
                     {t("agents.refreshLoginStatus")}
@@ -695,34 +673,55 @@ export function AgentForm({
             <span>{t("agents.defaultModel")}</span>
             <div className="directory-input-row">
             <select
-				disabled={readOnly || localRuntimeSettingsBusy || (modelOptions.length === 0 && !draft.default_model)}
-              aria-invalid={invalidModel}
-              value={draft.default_model ?? ""}
-              onChange={(event) => onUpdate("default_model", event.target.value)}
+              aria-label={t("agents.defaultModel")}
+              disabled={readOnly || localRuntimeSettingsBusy}
+              value={showTypedModel ? TYPED_MODEL : draft.default_model ?? ""}
+              onChange={(event) => {
+                if (event.target.value === TYPED_MODEL) {
+                  setTypingModel(true);
+                  return;
+                }
+                setTypingModel(false);
+                onUpdate("default_model", event.target.value);
+              }}
             >
-				<option value="">{modelPlaceholder}</option>
-              {draft.default_model && !modelOptions.includes(draft.default_model) && (
-                <option value={draft.default_model} disabled>{draft.default_model}{invalidModel ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
-              )}
+              <option value="">{modelPlaceholder}</option>
               {modelOptions.map((model) => (
                 <option key={model} value={model}>
-                  {model}
+                  {modelLabels.has(model) ? `${model} · ${modelLabels.get(model)}` : model}
                 </option>
               ))}
+              <option value={TYPED_MODEL}>{t("agents.defaultModelTyped")}</option>
             </select>
-            {usingLocalLogin && (
-              <button type="button" className="ghost-action icon-action" disabled={localRuntimeSettingsBusy}
-                aria-label={t("agents.refreshRuntimeSettings")} title={t("agents.refreshRuntimeSettings")}
-                onClick={() => setCatalogReload((value) => value + 1)}>
-                <RefreshCw size={15} className={localRuntimeSettingsBusy ? "spin" : ""} />
-              </button>
-            )}
+            <button type="button" className="ghost-action icon-action" disabled={localRuntimeSettingsBusy}
+              aria-label={t("agents.refreshRuntimeSettings")} title={t("agents.refreshRuntimeSettings")}
+              onClick={() => setCatalogReload((value) => value + 1)}>
+              <RefreshCw size={15} className={localRuntimeSettingsBusy ? "spin" : ""} />
+            </button>
             </div>
+            {showTypedModel && (
+              <input
+                aria-label={t("agents.defaultModelTypedPlaceholder")}
+                disabled={readOnly}
+                placeholder={t("agents.defaultModelTypedPlaceholder")}
+                value={draft.default_model ?? ""}
+                onChange={(event) => onUpdate("default_model", event.target.value.trim())}
+              />
+            )}
             <small>{defaultModelStatus}</small>
+            {draft.runtime_id && (
+              <div className="agent-model-test">
+                <button type="button" className="ghost-action" disabled={currentModelTest?.busy}
+                  title={t("frameworks.health.testHint")} onClick={() => void testModel()}>
+                  <Play size={14} />{t("agents.testModel")}
+                </button>
+                {currentModelTest && <FrameworkSmokeResultView result={currentModelTest.result} busy={currentModelTest.busy} />}
+              </div>
+            )}
           </label>
           <label className="field">
             <span>{t("agents.defaultReasoningEffort")}</span>
-            <select disabled={readOnly || (usingLocalLogin && !settingsReady) || (reasoningOptions.length === 0 && !draft.default_reasoning_effort)} aria-invalid={invalidEffort} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
+            <select disabled={readOnly || !settingsReady || (reasoningOptions.length === 0 && !draft.default_reasoning_effort)} aria-invalid={invalidEffort} value={draft.default_reasoning_effort ?? ""} onChange={(event) => onUpdate("default_reasoning_effort", event.target.value)}>
               <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
               {draft.default_reasoning_effort && !reasoningOptions.includes(draft.default_reasoning_effort) && (
                 <option value={draft.default_reasoning_effort} disabled>{draft.default_reasoning_effort}{invalidEffort ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
@@ -733,7 +732,7 @@ export function AgentForm({
           </label>
           <label className="field">
             <span>{t("agents.defaultServiceTier")}</span>
-            <select disabled={readOnly || (usingLocalLogin && !settingsReady) || (availableServiceTiers.length === 0 && !draft.default_service_tier)} aria-invalid={invalidTier} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
+            <select disabled={readOnly || !settingsReady || (availableServiceTiers.length === 0 && !draft.default_service_tier)} aria-invalid={invalidTier} value={draft.default_service_tier ?? ""} onChange={(event) => onUpdate("default_service_tier", event.target.value)}>
               <option value="">{t("agents.defaultRuntimeSettingPlaceholder")}</option>
               {draft.default_service_tier && !availableServiceTiers.includes(draft.default_service_tier) && (
                 <option value={draft.default_service_tier} disabled>{serviceTierLabel(draft.default_service_tier)}{invalidTier ? ` · ${t("agents.runtimeSettingUnsupported")}` : ""}</option>
@@ -874,7 +873,7 @@ export function AgentForm({
           <Trash2 size={15} />
           {t("common.delete")}
         </button>
-        <button className="action" disabled={!canSave || busy === "save" || invalidSettings || unverifiedSettings || (usingLocalLogin && localRuntimeSettingsBusy)} onClick={onSave}>
+        <button className="action" disabled={!canSave || busy === "save" || invalidSettings || unverifiedSettings || localRuntimeSettingsBusy} onClick={onSave}>
           <Save size={15} />
           {drawerMode === "create" ? t("agents.create") : t("common.save")}
         </button>

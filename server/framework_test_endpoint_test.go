@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -93,10 +94,37 @@ func TestFrameworkTestEndpoint(t *testing.T) {
 	if cfg["model"] != "deepseek/deepseek-v4-pro" || cfg["reasoning_effort"] != "high" || env["ANTHROPIC_BASE_URL"] == "" {
 		t.Fatalf("agent cfg = %+v", cfg)
 	}
-	if rec := doJSON(t, s, http.MethodPost, "/api/v1/frameworks/test", frameworkTestRequest{AgentID: "agent-smoke", Kind: "codex"}); rec.Code != http.StatusBadRequest {
-		t.Fatalf("mismatched kind: code=%d body=%s", rec.Code, rec.Body.String())
+	// With a kind, the request's settings are tested as given (an empty model
+	// is the framework default) in the Agent's environment.
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/frameworks/test", frameworkTestRequest{AgentID: "agent-smoke", Kind: "endpoint-smoke"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("explicit test: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	endpointSmokeMu.Lock()
+	cfg = endpointSmokeLast
+	endpointSmokeMu.Unlock()
+	if _, hasModel := cfg["model"]; hasModel || cfg["env"] == nil {
+		t.Fatalf("explicit cfg = %+v", cfg)
 	}
 	if rec := doJSON(t, s, http.MethodPost, "/api/v1/frameworks/test", frameworkTestRequest{AgentID: "missing"}); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing agent: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// The latest result per framework and model is kept for display.
+	doJSON(t, s, http.MethodPost, "/api/v1/frameworks/test", frameworkTestRequest{Kind: "endpoint-smoke", Model: "group/fast"})
+	rec = doJSON(t, s, http.MethodGet, "/api/v1/frameworks/health?kind=endpoint-smoke", nil)
+	var health struct {
+		Results []framework.SmokeResult `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatal(err)
+	}
+	// Newest first, one per model: group/fast (retested), default, deepseek.
+	if len(health.Results) != 3 || health.Results[0].Model != "group/fast" || health.Results[1].Model != "" || health.Results[2].Model != "deepseek/deepseek-v4-pro" {
+		t.Fatalf("health = %+v", health.Results)
+	}
+	rec = doJSON(t, s, http.MethodGet, "/api/v1/frameworks/health?kind=other", nil)
+	if !strings.Contains(rec.Body.String(), `"results":[]`) {
+		t.Fatalf("filtered health = %s", rec.Body.String())
 	}
 }

@@ -60,27 +60,7 @@
       "omitempty": false,
       "type": "string"
     },
-    "owner_tenant_id": {
-      "omitempty": true,
-      "type": "string"
-    },
-    "owner_tenant_name": {
-      "omitempty": true,
-      "type": "string"
-    },
     "private_chat_mode": {
-      "omitempty": true,
-      "type": "string"
-    },
-    "provider_id": {
-      "omitempty": true,
-      "type": "string"
-    },
-    "provider_name": {
-      "omitempty": true,
-      "type": "string"
-    },
-    "provider_tool": {
       "omitempty": true,
       "type": "string"
     },
@@ -111,10 +91,6 @@
     "updated_at": {
       "omitempty": false,
       "type": "datetime"
-    },
-    "visibility": {
-      "omitempty": true,
-      "type": "string"
     },
     "work_dir": {
       "omitempty": true,

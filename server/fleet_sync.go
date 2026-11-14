@@ -21,9 +21,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
-	providerpkg "github.com/wangning19940904/AgentMux/provider"
 	skillpkg "github.com/wangning19940904/AgentMux/skills"
-	"github.com/wangning19940904/AgentMux/store"
 )
 
 const (
@@ -44,17 +42,12 @@ type fleetSyncManifest struct {
 	Version            int                  `json:"version"`
 	SourceHome         string               `json:"source_home,omitempty"`
 	Agents             []core.AgentInstance `json:"agents"`
-	Providers          []*core.Provider     `json:"providers"`
-	ProviderKeys       map[string]string    `json:"provider_keys,omitempty"`
-	Routes             []core.ProviderRoute `json:"routes"`
 	Channels           []core.Channel       `json:"channels"`
 	Triggers           []core.Trigger       `json:"triggers"`
 	MCPServers         []core.MCPServer     `json:"mcp_servers"`
 	Skills             []fleetSyncSkill     `json:"skills"`
 	GuardPolicies      []core.GuardPolicy   `json:"guard_policies"`
 	Memory             []*core.MemoryEntry  `json:"memory"`
-	TenantNames        map[string]string    `json:"tenant_names,omitempty"`
-	Grants             []core.ResourceGrant `json:"grants,omitempty"`
 	CredentialsOmitted []string             `json:"credentials_omitted,omitempty"`
 }
 
@@ -88,7 +81,6 @@ type fleetSyncPreviewRequest struct {
 	SourceTargetID     string                            `json:"source_target_id"`
 	DestinationIDs     []string                          `json:"destination_target_ids"`
 	Categories         []string                          `json:"categories,omitempty"`
-	ProviderIDs        []string                          `json:"provider_ids,omitempty"`
 	IncludeCredentials bool                              `json:"include_credentials,omitempty"`
 	PreserveActivation bool                              `json:"preserve_activation,omitempty"`
 	PathMappings       map[string][]fleetSyncPathMapping `json:"path_mappings,omitempty"`
@@ -114,7 +106,6 @@ type fleetSyncPlan struct {
 	Source             machineTarget
 	Destinations       []machineTarget
 	Categories         []string
-	ProviderIDs        []string
 	IncludeCredentials bool
 	PreserveActivation bool
 	Mappings           map[string][]fleetSyncPathMapping
@@ -159,12 +150,11 @@ func (s *Server) handleFleetSyncExport(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		IncludeCredentials bool     `json:"include_credentials"`
 		Categories         []string `json:"categories,omitempty"`
-		ProviderIDs        []string `json:"provider_ids,omitempty"`
 	}
 	if !decodeJSONInto(w, r, &request) {
 		return
 	}
-	manifest, err := s.exportFleetSyncManifest(r.Context(), request.IncludeCredentials, request.Categories, request.ProviderIDs)
+	manifest, err := s.exportFleetSyncManifest(r.Context(), request.IncludeCredentials, request.Categories)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -238,15 +228,14 @@ func (s *Server) handleFleetSyncPreview(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	request.ProviderIDs = normalizeFleetSyncIDs(request.ProviderIDs)
-	redactedManifest, err := s.exportManifestFromTarget(r.Context(), sourceTargets[0], false, request.Categories, request.ProviderIDs)
+	redactedManifest, err := s.exportManifestFromTarget(r.Context(), sourceTargets[0], false, request.Categories)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	manifest := redactedManifest
 	if request.IncludeCredentials {
-		manifest, err = s.exportManifestFromTarget(r.Context(), sourceTargets[0], true, request.Categories, request.ProviderIDs)
+		manifest, err = s.exportManifestFromTarget(r.Context(), sourceTargets[0], true, request.Categories)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
@@ -289,7 +278,6 @@ func (s *Server) handleFleetSyncPreview(w http.ResponseWriter, r *http.Request) 
 	plan := &fleetSyncPlan{
 		ID: planID, ExpiresAt: expiresAt, Source: sourceTargets[0], Destinations: destinations,
 		Categories: append([]string(nil), request.Categories...), IncludeCredentials: request.IncludeCredentials,
-		ProviderIDs:        append([]string(nil), request.ProviderIDs...),
 		PreserveActivation: request.PreserveActivation, Mappings: resolvedMappings,
 		SourceDigest: semanticFingerprint(redactedManifest),
 	}
@@ -322,7 +310,7 @@ func (s *Server) handleFleetSyncApply(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "sync plan is missing or expired; preview again")
 		return
 	}
-	currentManifest, err := s.exportManifestFromTarget(r.Context(), plan.Source, false, plan.Categories, plan.ProviderIDs)
+	currentManifest, err := s.exportManifestFromTarget(r.Context(), plan.Source, false, plan.Categories)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -333,7 +321,7 @@ func (s *Server) handleFleetSyncApply(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest := currentManifest
 	if plan.IncludeCredentials {
-		manifest, err = s.exportManifestFromTarget(r.Context(), plan.Source, true, plan.Categories, plan.ProviderIDs)
+		manifest, err = s.exportManifestFromTarget(r.Context(), plan.Source, true, plan.Categories)
 		if err != nil {
 			writeErr(w, http.StatusBadGateway, err.Error())
 			return
@@ -404,20 +392,15 @@ func writeFleetSyncEvent(w http.ResponseWriter, flusher http.Flusher, event stri
 	flusher.Flush()
 }
 
-func (s *Server) exportManifestFromTarget(ctx context.Context, target machineTarget, includeCredentials bool, categories, providerIDs []string) (fleetSyncManifest, error) {
+func (s *Server) exportManifestFromTarget(ctx context.Context, target machineTarget, includeCredentials bool, categories []string) (fleetSyncManifest, error) {
 	if target.ID == fleetLocalTargetID {
-		return s.exportFleetSyncManifest(ctx, includeCredentials, categories, providerIDs)
+		return s.exportFleetSyncManifest(ctx, includeCredentials, categories)
 	}
 	var manifest fleetSyncManifest
 	err := s.syncPeerJSON(ctx, target, fleetOperation{
 		Key: "export", Method: http.MethodPost, Path: "/api/v1/fleet-sync/export",
-		Body: mustJSON(map[string]any{"include_credentials": includeCredentials, "categories": categories, "provider_ids": providerIDs}),
+		Body: mustJSON(map[string]any{"include_credentials": includeCredentials, "categories": categories}),
 	}, &manifest)
-	if err == nil {
-		// Older peers ignore provider_ids. Filter again on the controller so a
-		// single-provider transfer can never widen into an all-provider export.
-		err = filterFleetSyncProviders(&manifest, providerIDs)
-	}
 	return manifest, err
 }
 
@@ -464,13 +447,13 @@ func (s *Server) syncPeerJSON(ctx context.Context, target machineTarget, operati
 	return nil
 }
 
-func (s *Server) exportFleetSyncManifest(ctx context.Context, includeCredentials bool, categories, providerIDs []string) (fleetSyncManifest, error) {
+func (s *Server) exportFleetSyncManifest(ctx context.Context, includeCredentials bool, categories []string) (fleetSyncManifest, error) {
 	if s.st == nil {
 		return fleetSyncManifest{}, errors.New("store unavailable")
 	}
 	selected := syncCategorySet(categories)
 	home, _ := os.UserHomeDir()
-	manifest := fleetSyncManifest{Version: 1, SourceHome: home, ProviderKeys: map[string]string{}, TenantNames: map[string]string{}}
+	manifest := fleetSyncManifest{Version: 1, SourceHome: home}
 	var err error
 	if selected("agents") {
 		manifest.Agents, err = s.st.ListAgentInstances(ctx)
@@ -478,27 +461,6 @@ func (s *Server) exportFleetSyncManifest(ctx context.Context, includeCredentials
 			return manifest, err
 		}
 		manifest.Agents = filterSyncAgents(manifest.Agents, includeCredentials, &manifest.CredentialsOmitted)
-	}
-	if selected("providers") {
-		manifest.Providers, err = s.st.ListProviders(ctx)
-		if err != nil {
-			return manifest, err
-		}
-		manifest.Routes, _ = s.st.ActiveProviderRoutes(ctx)
-		for _, item := range manifest.Providers {
-			item.APIKey = ""
-			if item.APIKeyEnv == "" {
-				continue
-			}
-			key, keyErr := providerpkg.LoadProviderAPIKey(item.APIKeyEnv)
-			if keyErr == nil && key != "" {
-				if includeCredentials {
-					manifest.ProviderKeys[item.ID] = key
-				} else {
-					manifest.CredentialsOmitted = append(manifest.CredentialsOmitted, "provider:"+item.ID)
-				}
-			}
-		}
 	}
 	if selected("channels") {
 		manifest.Channels, err = s.st.ListChannels(ctx)
@@ -555,101 +517,27 @@ func (s *Server) exportFleetSyncManifest(ctx context.Context, includeCredentials
 			return manifest, err
 		}
 	}
-	if tenants, tenantErr := s.st.ListTenants(ctx); tenantErr == nil {
-		for _, tenant := range tenants {
-			manifest.TenantNames[tenant.ID] = tenant.Name
-		}
-	}
-	manifest.Grants, _ = s.st.ListResourceGrants(ctx, "")
-	if err := filterFleetSyncProviders(&manifest, providerIDs); err != nil {
-		return manifest, err
-	}
 	sort.Strings(manifest.CredentialsOmitted)
 	return manifest, nil
 }
 
-func normalizeFleetSyncIDs(values []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func filterFleetSyncProviders(manifest *fleetSyncManifest, providerIDs []string) error {
-	providerIDs = normalizeFleetSyncIDs(providerIDs)
-	if len(providerIDs) == 0 {
-		return nil
-	}
-	wanted := map[string]bool{}
-	for _, id := range providerIDs {
-		wanted[id] = true
-	}
-	selected := make([]*core.Provider, 0, len(providerIDs))
-	found := map[string]bool{}
-	for _, item := range manifest.Providers {
-		if item != nil && wanted[item.ID] {
-			selected = append(selected, item)
-			found[item.ID] = true
-		}
-	}
-	missing := make([]string, 0)
-	for _, id := range providerIDs {
-		if !found[id] {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("providers not found on source machine: %s", strings.Join(missing, ", "))
-	}
-	manifest.Providers = selected
-	// A card-level transfer moves only the selected Provider configuration.
-	// Active routes are machine-local policy and remain untouched.
-	manifest.Routes = nil
-	keys := map[string]string{}
-	for id, key := range manifest.ProviderKeys {
-		if wanted[id] {
-			keys[id] = key
-		}
-	}
-	manifest.ProviderKeys = keys
-	omitted := make([]string, 0, len(manifest.CredentialsOmitted))
-	for _, value := range manifest.CredentialsOmitted {
-		if !strings.HasPrefix(value, "provider:") || wanted[strings.TrimPrefix(value, "provider:")] {
-			omitted = append(omitted, value)
-		}
-	}
-	manifest.CredentialsOmitted = omitted
-	grants := make([]core.ResourceGrant, 0, len(manifest.Grants))
-	for _, grant := range manifest.Grants {
-		if grant.ResourceType == core.ResourceTypeProvider && wanted[grant.ResourceID] {
-			grants = append(grants, grant)
-		}
-	}
-	manifest.Grants = grants
-	return nil
-}
-
+// syncCategorySet selects what a fleet sync copies. Providers and their keys
+// are never copied: AgentMux no longer manages them, and each machine's
+// framework or router owns its own providers.
 func syncCategorySet(categories []string) func(string) bool {
 	if len(categories) == 0 {
-		return func(string) bool { return true }
+		return func(category string) bool { return category != "providers" }
 	}
 	set := map[string]bool{}
 	for _, category := range categories {
 		set[strings.ToLower(strings.TrimSpace(category))] = true
 	}
 	if set["agents"] {
-		for _, dependency := range []string{"providers", "channels", "triggers", "mcp", "skills", "memory"} {
+		for _, dependency := range []string{"channels", "triggers", "mcp", "skills", "memory"} {
 			set[dependency] = true
 		}
 	}
+	delete(set, "providers")
 	return func(category string) bool { return set[category] }
 }
 
@@ -747,86 +635,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 	omitted := map[string]bool{}
 	for _, key := range request.Manifest.CredentialsOmitted {
 		omitted[key] = true
-	}
-
-	destinationTenants, _ := s.st.ListTenants(ctx)
-	tenantByName := map[string]string{}
-	for _, tenant := range destinationTenants {
-		tenantByName[strings.ToLower(tenant.Name)] = tenant.ID
-	}
-
-	providers, _ := s.st.ListProviders(ctx)
-	providerIDs, providerNames := providerIndexes(providers)
-	for _, source := range request.Manifest.Providers {
-		item := *source
-		if !request.PreserveActivation {
-			item.Enabled = false
-			item.InFailoverQueue = false
-		}
-		action := syncActionFor(item.ID, item.Name, providerIDs, providerNames, semanticFingerprint(&item))
-		action.Type = "provider"
-		action.CredentialsMissing = omitted["provider:"+item.ID]
-		if apply && action.Action == "add" {
-			if s.provider == nil {
-				action.Action = "blocked"
-				action.Reason = "provider manager unavailable"
-			}
-			if key := request.Manifest.ProviderKeys[item.ID]; key != "" {
-				if err := providerpkg.SaveProviderAPIKey(item.APIKeyEnv, key); err != nil {
-					action.Action = "blocked"
-					action.Reason = err.Error()
-				}
-			}
-			if action.Action == "add" {
-				item.APIKey = ""
-				if err := s.provider.Upsert(ctx, &item); err != nil {
-					action.Action = "blocked"
-					action.Reason = err.Error()
-				} else {
-					providerIDs[item.ID] = semanticFingerprint(&item)
-					providerNames[strings.ToLower(item.Name)] = item.ID
-				}
-			}
-		}
-		if !apply && action.Action == "add" {
-			providerIDs[item.ID] = semanticFingerprint(&item)
-			providerNames[strings.ToLower(item.Name)] = item.ID
-		}
-		result.Resources = append(result.Resources, action)
-	}
-	destinationRoutes, _ := s.st.ActiveProviderRoutes(ctx)
-	routesByTool := map[string]core.ProviderRoute{}
-	for _, route := range destinationRoutes {
-		routesByTool[route.Tool] = route
-	}
-	for _, route := range request.Manifest.Routes {
-		action := fleetSyncResourceResult{Type: "route", Key: route.Tool, Name: route.Tool, Action: "add"}
-		if !request.PreserveActivation {
-			action.Action = "blocked"
-			action.Reason = "active routes remain disabled by the sync plan"
-		} else if existing, ok := routesByTool[route.Tool]; ok {
-			if semanticFingerprint(existing) == semanticFingerprint(route) {
-				action.Action = "exists"
-			} else {
-				action.Action = "conflict"
-				action.Reason = "destination tool already has a different active route"
-			}
-		} else if providerIDs[route.ProviderID] == "" {
-			action.Action = "blocked"
-			action.Reason = "referenced provider is missing or conflicted"
-		}
-		if apply && action.Action == "add" {
-			if s.provider == nil {
-				action.Action = "blocked"
-				action.Reason = "provider manager unavailable"
-			} else if err := s.provider.SwitchRoute(ctx, route); err != nil {
-				action.Action = "blocked"
-				action.Reason = err.Error()
-			} else {
-				routesByTool[route.Tool] = route
-			}
-		}
-		result.Resources = append(result.Resources, action)
 	}
 
 	mcpItems, _ := s.st.ListMCPServers(ctx)
@@ -927,7 +735,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 	}
 	for _, source := range request.Manifest.Agents {
 		item := source
-		mapSyncOwner(&item.OwnerTenantID, &item.Visibility, request.Manifest.TenantNames, tenantByName, &result.Warnings, "agent "+item.Name)
 		blocked := rewriteAndValidateAgentPath(&item, request.PathMappings)
 		action := syncActionFor(item.ID, item.Name, agentIDs, agentNames, semanticFingerprint(item))
 		action.Type = "agent"
@@ -939,10 +746,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 		if item.RuntimeID == "codex-app" && item.DesktopThreadID != "" {
 			action.Action = "blocked"
 			action.Reason = "Codex Desktop agents require a destination thread selection"
-		}
-		if item.ProviderID != "" && providerIDs[item.ProviderID] == "" {
-			action.Action = "blocked"
-			action.Reason = "referenced provider is missing or conflicted"
 		}
 		for _, name := range item.MCPServers {
 			if mcpByName[strings.ToLower(name)] == "" {
@@ -982,7 +785,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 			result.Warnings = append(result.Warnings, "channel "+item.Name+": imported disabled; claim it from the Channel page to move the exclusive connection safely")
 		}
 		item.Enabled = false
-		mapSyncOwner(&item.OwnerTenantID, &item.Visibility, request.Manifest.TenantNames, tenantByName, &result.Warnings, "channel "+item.Name)
 		action := syncActionFor(item.ID, item.Name, channelIDs, channelNames, semanticFingerprint(item))
 		action.Type = "channel"
 		action.CredentialsMissing = omitted["channel:"+item.ID]
@@ -1013,8 +815,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 		if !request.PreserveActivation {
 			item.Enabled = false
 		}
-		visibility := core.VisibilityPrivate
-		mapSyncOwner(&item.OwnerTenantID, &visibility, request.Manifest.TenantNames, tenantByName, &result.Warnings, "trigger "+item.Name)
 		action := syncActionFor(item.ID, item.Name, triggerIDs, triggerNames, semanticFingerprint(item))
 		action.Type = "trigger"
 		action.CredentialsMissing = omitted["trigger:"+item.ID]
@@ -1068,7 +868,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 	if apply {
 		s.reloadChannels(ctx)
 		s.reloadTriggers(ctx)
-		applySyncGrants(ctx, s.st, request.Manifest, tenantByName, &result)
 	}
 	sort.SliceStable(result.Resources, func(i, j int) bool {
 		if result.Resources[i].Type == result.Resources[j].Type {
@@ -1079,14 +878,6 @@ func (s *Server) inspectFleetSync(ctx context.Context, request fleetSyncInspectR
 	return result, nil
 }
 
-func providerIndexes(items []*core.Provider) (map[string]string, map[string]string) {
-	ids, names := map[string]string{}, map[string]string{}
-	for _, item := range items {
-		ids[item.ID] = semanticFingerprint(item)
-		names[strings.ToLower(item.Name)] = item.ID
-	}
-	return ids, names
-}
 func agentIndexes(items []core.AgentInstance) (map[string]string, map[string]string) {
 	ids, names := map[string]string{}, map[string]string{}
 	for _, item := range items {
@@ -1140,19 +931,7 @@ func syncActionFor(id, name string, ids, names map[string]string, fingerprint st
 
 func semanticFingerprint(value any) string {
 	switch item := value.(type) {
-	case *core.Provider:
-		copy := *item
-		copy.APIKey = ""
-		copy.APIKeyAvailable = false
-		copy.APIKeyIssue = ""
-		copy.Enabled = false
-		copy.InFailoverQueue = false
-		copy.CreatedAt = time.Time{}
-		copy.UpdatedAt = time.Time{}
-		value = copy
 	case core.AgentInstance:
-		item.ProviderName = ""
-		item.OwnerTenantName = ""
 		item.CreatedAt = time.Time{}
 		item.UpdatedAt = time.Time{}
 		value = item
@@ -1218,46 +997,6 @@ func applySyncPath(value string, mappings []fleetSyncPathMapping) string {
 		}
 	}
 	return value
-}
-
-func mapSyncOwner(owner *string, visibility *string, sourceNames map[string]string, destinationByName map[string]string, warnings *[]string, label string) {
-	if owner == nil || *owner == "" {
-		return
-	}
-	name := sourceNames[*owner]
-	if destination := destinationByName[strings.ToLower(name)]; destination != "" {
-		*owner = destination
-		return
-	}
-	*owner = ""
-	if visibility != nil {
-		*visibility = core.VisibilityPrivate
-	}
-	*warnings = append(*warnings, label+": owner tenant "+name+" is unavailable; imported as private and unassigned")
-}
-
-func applySyncGrants(ctx context.Context, st *store.Store, manifest fleetSyncManifest, tenantByName map[string]string, result *fleetSyncInspection) {
-	existing, _ := st.ListResourceGrants(ctx, "")
-	keys := map[string]bool{}
-	for _, grant := range existing {
-		keys[grant.TenantID+"\x00"+grant.ResourceType+"\x00"+grant.ResourceID] = true
-	}
-	for _, grant := range manifest.Grants {
-		name := manifest.TenantNames[grant.TenantID]
-		grant.TenantID = tenantByName[strings.ToLower(name)]
-		if grant.TenantID == "" {
-			continue
-		}
-		key := grant.TenantID + "\x00" + grant.ResourceType + "\x00" + grant.ResourceID
-		if keys[key] {
-			continue
-		}
-		if err := st.UpsertResourceGrant(ctx, &grant); err != nil {
-			result.Warnings = append(result.Warnings, "grant "+name+": "+err.Error())
-		} else {
-			keys[key] = true
-		}
-	}
 }
 
 func applyFleetSyncSkill(item fleetSyncSkill) error {

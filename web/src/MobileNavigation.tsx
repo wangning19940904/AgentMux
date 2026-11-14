@@ -101,7 +101,8 @@ export function MobileDrawer<T extends string>({
   children,
 }: {
   open: boolean;
-  overview: MobileNavItem<T>;
+  // Omitted where the overview is not available, such as for a member.
+  overview?: MobileNavItem<T>;
   groups: MobileNavGroup<T>[];
   active: T;
   badges?: MobileNavBadges;
@@ -172,7 +173,7 @@ export function MobileDrawer<T extends string>({
         </header>
         <div className="mobile-drawer-body">
           <nav aria-label={t("nav.primary")}>
-            <div className="mobile-drawer-group">{renderItem(overview)}</div>
+            {overview && <div className="mobile-drawer-group">{renderItem(overview)}</div>}
             {groups.map((group) => (
               <section key={group.id} className="mobile-drawer-group" aria-label={t(group.labelKey)}>
                 <h2>{t(group.labelKey)}</h2>

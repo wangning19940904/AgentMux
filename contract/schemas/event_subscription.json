@@ -44,10 +44,6 @@
       "omitempty": false,
       "type": "string"
     },
-    "owner_tenant_id": {
-      "omitempty": true,
-      "type": "string"
-    },
     "paused": {
       "omitempty": false,
       "type": "boolean"

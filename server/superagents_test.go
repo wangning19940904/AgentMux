@@ -56,7 +56,7 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 	}
 }
 
-func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
+func TestSuperAgentRoutesAreNotOpenToMembers(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents"},
@@ -67,7 +67,7 @@ func TestSuperAgentRoutesAreNotOpenToTenants(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/github/login"},
 		{http.MethodPost, "/api/v1/super-agents/github/invite"},
 	} {
-		if tenantRouteAllowed(route.method, route.path) {
+		if memberRouteAllowed(route.method, route.path) {
 			t.Errorf("%s %s must stay Console-only: Super Agents hold credentials and control every worker", route.method, route.path)
 		}
 	}

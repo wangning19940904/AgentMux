@@ -197,7 +197,7 @@ func TestDesktopDatabaseSetupFailureIsActionableAndNotRetriedAsStartup(t *testin
 	app.setAPITarget("127.0.0.1:1")
 	app.databaseSetupError.Store("Homebrew installation needs administrator access")
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/tenancy/self", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://wails.localhost/api/v1/auth/session", nil)
 	app.assetServerMiddleware(http.NotFoundHandler()).ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "administrator access") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())

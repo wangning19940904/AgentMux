@@ -7,7 +7,6 @@ import { TargetBadge, targetKey } from "../../components/TargetBadge";
 import {
   EMPTY_AGENT,
   agentRegistryMetrics,
-  agentRouteModel,
   agentSourceClass,
   agentSourceDetailKey,
   agentSourceLabelKey,
@@ -19,8 +18,6 @@ import {
   isReadOnlyAgent,
   readOnlyNoticeKey,
   newAgent,
-  ownerBadge,
-  routeToolForRuntime,
   syncAgentConnectBindings,
   toggleID,
   unifiedAgentFor,
@@ -45,20 +42,18 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const { t } = useI18n();
   const agents = useCachedResource("agentInstances", () => api.agentInstances());
   const runtimes = useCachedResource("agents", () => api.agents());
-  const providers = useCachedResource("providers", () => api.providers());
-  const activeRoutes = useCachedResource("activeRoutes", () => api.activeRoutes());
   const channels = useCachedResource("channels", () => api.channels());
   const triggers = useCachedResource("triggers", () => api.triggers());
   const mcpServers = useCachedResource("mcp", () => api.mcp());
   const skills = useCachedResource("skills", () => api.skills());
   const tools = useCachedResource("tools", () => api.tools());
-  // Workers and triggers are this machine's and the Console administrator's;
-  // a tenant, who cannot read them, sees each agent's own settings only.
+  // Workers and triggers may be unavailable on an older daemon; each agent's
+  // own settings still show.
   const unified = useCachedResource("unifiedAgents", () => api.superAgents().then((items) => Array.isArray(items) ? items : []).catch(() => [] as SuperAgent[]));
-  const refreshing = [agents, runtimes, providers, activeRoutes, channels, triggers, mcpServers, skills, tools, unified]
+  const refreshing = [agents, runtimes, channels, triggers, mcpServers, skills, tools, unified]
     .some((resource) => resource.loading);
   const refreshAll = () => Promise.all([
-    agents.reload(), runtimes.reload(), providers.reload(), activeRoutes.reload(), channels.reload(),
+    agents.reload(), runtimes.reload(), channels.reload(),
     triggers.reload(), mcpServers.reload(), skills.reload(), tools.reload(), unified.reload(),
   ]);
   const [workAgentID, setWorkAgentID] = useState("");
@@ -80,8 +75,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const unifiedItems = unified.data ?? [];
   const routedAgents = useMemo(() => agentsWithoutRow(unifiedItems, allInstances), [unifiedItems, allInstances]);
   const runtimeOptions = runtimes.data ?? [];
-  const providerOptions = providers.data ?? [];
-  const activeRouteItems = activeRoutes.data ?? [];
   const channelItems = channels.data ?? [];
   const triggerItems = triggers.data ?? [];
   const bindingsReady = channels.hasValue && triggers.hasValue &&
@@ -103,18 +96,13 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
       return {
         ...current,
         runtime_id: runtime,
-        provider_tool: current.provider_tool || runtime,
         memory_scope: current.memory_scope || "agent:auto",
       };
     });
   }, [runtimeOptions]);
 
-  // The unified translation layer lets any provider back any tool, so every
-  // provider is a compatible choice regardless of the selected runtime.
   const draftTargetID = draft.target_id;
   const sameTarget = <T extends { target_id?: string }>(item: T) => !draftTargetID || item.target_id === draftTargetID;
-  const compatibleProviders = providerOptions.filter(sameTarget);
-  const draftRoutes = activeRouteItems.filter(sameTarget);
   const draftChannels = channelItems.filter(sameTarget);
   const draftTriggers = triggerItems.filter(sameTarget);
   const draftMCPOptions = mcpOptions.filter(sameTarget);
@@ -122,14 +110,14 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const draftCLICatalog = cliCatalogForAgent(cliCatalog, draftTargetID);
 
   const registryMetrics = useMemo(
-    () => agentRegistryMetrics(items, activeRouteItems, providerOptions, channelItems),
-    [items, activeRouteItems, providerOptions, channelItems],
+    () => agentRegistryMetrics(items, channelItems),
+    [items, channelItems],
   );
   const visibleItems = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
     if (!query) return items;
     return items.filter((item) =>
-      [item.name, item.id, item.runtime_id, item.provider_id]
+      [item.name, item.id, item.runtime_id]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase().includes(query)),
     );
@@ -189,20 +177,17 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   function update<K extends keyof AgentInstance>(key: K, value: AgentInstance[K]) {
     setDrawerDraft((current) => {
       if (!current) return current;
-      const routeChanged = key === "runtime_id" || key === "provider_tool" || key === "provider_id";
-      const nextRuntimeRouteTool = key === "runtime_id" ? routeToolForRuntime(String(value)) : current.provider_tool;
+      const runtimeChanged = key === "runtime_id";
       const desktopRuntime = key === "runtime_id" ? String(value) === "codex-app" : current.runtime_id === "codex-app";
       return {
         ...current,
-        provider_tool: nextRuntimeRouteTool,
-        provider_id: key === "runtime_id" ? "" : current.provider_id,
         desktop_thread_id: key === "runtime_id" ? "" : current.desktop_thread_id,
         workspace_mode: desktopRuntime ? "shared" : current.workspace_mode,
         worktree_base_ref: desktopRuntime ? "" : current.worktree_base_ref,
         session_backend: desktopRuntime ? "structured" : current.session_backend,
-        default_model: routeChanged ? "" : current.default_model,
-        default_reasoning_effort: routeChanged ? "" : current.default_reasoning_effort,
-        default_service_tier: routeChanged ? "" : current.default_service_tier,
+        default_model: runtimeChanged ? "" : current.default_model,
+        default_reasoning_effort: runtimeChanged ? "" : current.default_reasoning_effort,
+        default_service_tier: runtimeChanged ? "" : current.default_service_tier,
         default_approval_mode: key === "runtime_id" ? "" : current.default_approval_mode,
         [key]: value,
       };
@@ -224,13 +209,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           ? (drawerDraft.clis ?? []).filter((id) => installedCLIIDs.has(id))
           : drawerDraft.clis,
         source: drawerDraft.source || (drawerMode === "create" ? "manual" : "console"),
-        provider_tool: drawerDraft.provider_tool || drawerDraft.runtime_id,
         memory_scope: drawerDraft.memory_scope || `agent:${drawerDraft.id || "new"}`,
       });
       await syncAgentConnectBindings(saved.id, selectedChannelIDs, selectedTriggerIDs, channelItems.filter((item) => item.target_id === saved.target_id), triggerItems.filter((item) => item.target_id === saved.target_id));
       await agents.reload();
       void unified.reload();
-      await activeRoutes.reload();
       await channels.reload();
       await triggers.reload();
       setDrawerMode(null);
@@ -367,7 +350,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
               {readOnly && <div className="session-notice">{t(readOnlyNoticeKey(draft))}</div>}
               <AgentForm
                 canSave={canSave}
-                activeRoutes={draftRoutes}
                 channelOptions={draftChannels}
                 cliOptions={draftCLICatalog.map((tool) => ({
                   id: tool.spec.id,
@@ -375,7 +357,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   note: tool.spec.note,
                   installed: tool.installed,
                 }))}
-                compatibleProviders={compatibleProviders}
                 draft={draft}
                 mcpOptions={draftMCPOptions.map((server) => server.name)}
                 readOnly={readOnly}
@@ -453,7 +434,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           </label>
           <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
             <span className="agent-filter-chip active">{t("agents.metricAgents", { count: registryMetrics.agentCount + routedAgents.length })}</span>
-            <span className="agent-filter-chip">{t("agents.metricProviders", { count: registryMetrics.providerCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
           </div>
@@ -474,12 +454,9 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           {!agents.loading && !agents.error && visibleItems.length === 0 && visibleRouted.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
           {visibleItems.map((item) => {
             const itemChannels = boundChannelsForAgent(item, channelItems);
-            const routeModel = agentRouteModel(item, activeRouteItems, providerOptions);
-            const model = routeModel.model || t("agents.defaultModelShort");
-            const routeModelLabel = t(
-              routeModel.mode === "provider" ? "agents.customRouteModel" : "agents.accountLoginModel",
-              { model },
-            );
+            // Providers and routing belong to the framework, so an agent
+            // shows only the model it asks its framework for.
+            const routeModelLabel = t("agents.frameworkModel", { model: item.default_model?.trim() || t("agents.defaultModelShort") });
             const itemReadOnly = isReadOnlyAgent(item);
             const itemUnified = unifiedAgentFor(item, unifiedItems);
             const policy = workPolicy(itemUnified);
@@ -519,7 +496,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 </div>
                 <div className="agent-list-meta">
                   <TargetBadge target_id={item.target_id} target_name={item.target_name} />
-                  <OwnerBadge resource={item} />
                   <span className="pill agent-route-model-pill">{routeModelLabel}
                     {item.default_reasoning_effort?.trim() && ` · ${item.default_reasoning_effort.trim()}`}
                     {item.default_service_tier?.trim() && ` · ${["priority", "fast"].includes(item.default_service_tier.trim())
@@ -627,10 +603,10 @@ function DeleteAgentDialog({
       <section
         aria-labelledby="agent-delete-title"
         aria-modal="true"
-        className="surface meeting-dialog tenant-delete-dialog"
+        className="surface meeting-dialog confirm-delete-dialog"
         role="alertdialog"
       >
-        <div className="meeting-dialog-icon tenant-delete-dialog-icon">
+        <div className="meeting-dialog-icon confirm-delete-dialog-icon">
           <Trash2 size={22} />
         </div>
         <div className="meeting-dialog-heading">
@@ -655,17 +631,4 @@ function DeleteAgentDialog({
       </section>
     </div>
   );
-}
-
-// OwnerBadge is rendered only when ownership is meaningful: a tenant-scoped
-// Console sees just its own resources, so labelling every row would be noise.
-export function OwnerBadge({
-  resource,
-}: {
-  resource: { owner_tenant_name?: string; owner_tenant_id?: string; visibility?: string };
-}) {
-  const { t } = useI18n();
-  const badge = ownerBadge(resource);
-  if (!badge || badge.className === "unassigned") return null;
-  return <span className={`owner-badge ${badge.className}`}>{t(badge.labelKey, badge.params)}</span>;
 }

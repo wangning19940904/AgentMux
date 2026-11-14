@@ -120,6 +120,11 @@ exit 1
 		{"grok-4.7", "high", "priority", false},
 		{"gpt-5.6-sol", "max", "default", true},
 		{"composer-2", "high", "", false},
+		// Typed IDs the framework does not list, such as a router's group.
+		{"group/opus-anywhere", "", "", true},
+		{"group/opus-anywhere", "xhigh", "priority", true},
+		{"group/opus-anywhere", "ultra", "", false},
+		{"group/opus-anywhere", "", "turbo", false},
 	} {
 		a := core.AgentInstance{RuntimeID: "cursor", WorkDir: workDir, DefaultModel: tc.model, DefaultReasoningEffort: tc.effort, DefaultServiceTier: tc.tier}
 		err := s.validateAgentDefaultRuntimeSettings(request.Context(), &a)
@@ -215,7 +220,7 @@ func TestCodexDesktopAgentBindsVerifiedDesktopThread(t *testing.T) {
 	// Agents created before Codex Desktop was retired still save and bind.
 	for _, id := range []string{"agent-desktop", "agent-desktop-2"} {
 		if err := st.UpsertAgentInstance(context.Background(), &core.AgentInstance{
-			ID: id, Name: id, RuntimeID: "codex-app", ProviderTool: "codex-app", Enabled: true,
+			ID: id, Name: id, RuntimeID: "codex-app", Enabled: true,
 		}); err != nil {
 			t.Fatal(err)
 		}

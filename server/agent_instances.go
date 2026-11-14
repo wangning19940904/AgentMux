@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) handleAgentInstancesList(w http.ResponseWriter, r *http.Request) {
-	items, err := s.scopedAgentInstances(r.Context(), requestPrincipal(r))
+	items, err := s.agentInstances(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -36,33 +36,10 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	principal := requestPrincipal(r)
-	if providerID := strings.TrimSpace(a.ProviderID); principal.IsTenant() && providerID != "" {
-		if _, authorized := s.authorizeProvider(w, r, providerID, core.GrantLevelUse); !authorized {
-			return
-		}
-	}
-	// Editing an existing agent requires manage access on it. An unknown ID is
-	// a create with a caller-chosen ID, which needs no prior authorization.
-	var existing *core.AgentInstance
-	if id := strings.TrimSpace(a.ID); id != "" {
-		found, err := s.st.GetAgentInstance(r.Context(), id)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if found != nil {
-			if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
-				return
-			}
-			existing = found
-		}
-	}
 	if err := s.normalizeAgentInstance(r.Context(), &a); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.stampAgentOwnership(r.Context(), principal, &a, existing)
 	if err := s.st.UpsertAgentInstance(r.Context(), &a); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -75,22 +52,15 @@ func (s *Server) handleAgentInstanceUpsert(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if !principal.IsTenant() && a.ProviderID != "" && a.ProviderTool != "" && s.provider != nil {
-		if err := s.provider.Switch(r.Context(), a.ProviderID, a.ProviderTool); err != nil {
-			writeErr(w, http.StatusInternalServerError, "agent saved, but provider route failed: "+err.Error())
-			return
-		}
-	}
+	// Saving an agent never rewrites a framework's global configuration:
+	// providers and routing belong to the framework or the user's router.
 	if s.connect != nil {
 		if err := s.connect.RestartChannelsForAgent(r.Context(), a.ID); err != nil {
 			writeErr(w, http.StatusInternalServerError, "agent saved, but bound channels failed to restart: "+err.Error())
 			return
 		}
 	}
-	items := []core.AgentInstance{a}
-	s.enrichAgentProviders(r.Context(), items, principal)
-	s.labelAgentOwners(r.Context(), items)
-	writeJSON(w, http.StatusOK, &items[0])
+	writeJSON(w, http.StatusOK, &a)
 }
 
 func (s *Server) handleAgentInstanceInitialize(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +125,7 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if _, authorized := s.authorizeAgent(w, r, id, core.GrantLevelManage); !authorized {
+	if _, authorized := s.lookupAgent(w, r, id); !authorized {
 		return
 	}
 	// The agent made with this instance goes with it: its Tickets stop and
@@ -186,29 +156,16 @@ func (s *Server) handleAgentInstanceDelete(w http.ResponseWriter, r *http.Reques
 	writeOK(w)
 }
 
+// agentInstances lists the PostgreSQL-backed Agent instances, enabled first.
 func (s *Server) agentInstances(ctx context.Context) ([]core.AgentInstance, error) {
-	return s.scopedAgentInstances(ctx, core.AdminPrincipal())
-}
-
-// scopedAgentInstances lists the PostgreSQL-backed Agent instances a principal
-// may see.
-func (s *Server) scopedAgentInstances(ctx context.Context, principal *core.Principal) ([]core.AgentInstance, error) {
 	items := make([]core.AgentInstance, 0)
 	if s.st != nil {
-		var stored []core.AgentInstance
-		var err error
-		if principal.IsTenant() {
-			stored, err = s.st.ListAgentInstancesForTenant(ctx, principal.TenantID)
-		} else {
-			stored, err = s.st.ListAgentInstances(ctx)
-		}
+		stored, err := s.st.ListAgentInstances(ctx)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, stored...)
 	}
-	s.enrichAgentProviders(ctx, items, principal)
-	s.labelAgentOwners(ctx, items)
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Enabled != items[j].Enabled {
 			return items[i].Enabled
@@ -239,8 +196,6 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 	a.WorkspaceMode = strings.ToLower(strings.TrimSpace(a.WorkspaceMode))
 	a.WorktreeBaseRef = strings.TrimSpace(a.WorktreeBaseRef)
 	a.SessionBackend = strings.ToLower(strings.TrimSpace(a.SessionBackend))
-	a.ProviderTool = strings.TrimSpace(a.ProviderTool)
-	a.ProviderID = strings.TrimSpace(a.ProviderID)
 	a.DefaultModel = strings.TrimSpace(a.DefaultModel)
 	a.DefaultReasoningEffort = strings.TrimSpace(a.DefaultReasoningEffort)
 	a.DefaultServiceTier = strings.TrimSpace(a.DefaultServiceTier)
@@ -338,9 +293,6 @@ func (s *Server) normalizeAgentInstance(ctx context.Context, a *core.AgentInstan
 		a.CreatedAt = now
 	}
 	a.UpdatedAt = now
-	if a.ProviderTool == "" {
-		a.ProviderTool = a.RuntimeID
-	}
 	if err := s.validateAgentDefaultRuntimeSettings(ctx, a); err != nil {
 		return err
 	}
@@ -446,123 +398,68 @@ func (s *Server) normalizeCodexDesktopAgent(ctx context.Context, a *core.AgentIn
 	return nil
 }
 
+// validateAgentDefaultRuntimeSettings checks an Agent's default model settings
+// against the model list its framework reports with its current configuration.
+// AgentMux does not manage providers or routing, so the framework is the only
+// source of truth. A model ID the framework does not list (for example a
+// router's routing group) is accepted as typed; the framework smoke test, not
+// this check, verifies that it works.
 func (s *Server) validateAgentDefaultRuntimeSettings(ctx context.Context, a *core.AgentInstance) error {
-	if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" && a.DefaultApprovalMode == "" {
+	if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" {
+		// Approval is already checked against the transport's policy catalog.
 		return nil
 	}
-	p, err := s.agentProvider(ctx, a)
+	agent, err := core.CreateAgent(a.RuntimeID, map[string]any{"env": a.Env})
 	if err != nil {
 		return err
 	}
-	if p == nil {
-		// Approval is already checked against the transport's policy catalog.
-		// Explicit model controls must also be checked before persisting them.
-		if a.DefaultModel == "" && a.DefaultReasoningEffort == "" && a.DefaultServiceTier == "" {
-			return nil
-		}
-		agent, err := core.CreateAgent(a.RuntimeID, map[string]any{"env": a.Env})
-		if err != nil {
-			return err
-		}
-		defer func() { _ = agent.Stop(ctx) }()
-		cataloger, ok := agent.(core.RuntimeSettingsCataloger)
-		if !ok {
+	defer func() { _ = agent.Stop(ctx) }()
+	cataloger, ok := agent.(core.RuntimeSettingsCataloger)
+	if !ok {
+		if a.DefaultReasoningEffort != "" || a.DefaultServiceTier != "" {
 			return fmt.Errorf("%s cannot verify model settings", a.RuntimeID)
 		}
-		defaults, capabilities, err := cataloger.RuntimeSettingsCatalog(ctx, a.WorkDir)
-		if err != nil {
-			return fmt.Errorf("verify %s model settings: %w", a.RuntimeID, err)
-		}
-		selected := core.RuntimeSettings{Model: a.DefaultModel, ReasoningEffort: a.DefaultReasoningEffort, ServiceTier: a.DefaultServiceTier}
-		if selected.Model == "" {
-			selected.Model = defaults.Model
-		}
-		if err := core.ValidateRuntimeSettings(capabilities, selected); err != nil {
-			return fmt.Errorf("invalid defaults for %s model %q: %w", a.RuntimeID, selected.Model, err)
-		}
-		return nil
+		return nil // a typed model for a framework without a model list
 	}
-	if a.DefaultModel != "" {
-		models := core.ProviderModelOptions(p)
-		if len(models) == 0 {
-			return fmt.Errorf("provider %q has no selectable models", p.ID)
-		}
-		if !containsRuntimeValue(models, a.DefaultModel) {
-			return fmt.Errorf("default model %q is not supported by provider %q", a.DefaultModel, p.ID)
-		}
+	defaults, capabilities, err := cataloger.RuntimeSettingsCatalog(ctx, a.WorkDir)
+	if err != nil {
+		return fmt.Errorf("verify %s model settings: %w", a.RuntimeID, err)
 	}
-	if a.DefaultReasoningEffort != "" && len(p.Meta.SupportedReasoningEfforts) > 0 &&
-		!containsRuntimeValue(p.Meta.SupportedReasoningEfforts, a.DefaultReasoningEffort) {
-		return fmt.Errorf("default reasoning effort %q is not supported by provider %q", a.DefaultReasoningEffort, p.ID)
+	selected := core.RuntimeSettings{Model: a.DefaultModel, ReasoningEffort: a.DefaultReasoningEffort, ServiceTier: a.DefaultServiceTier}
+	if selected.Model == "" {
+		selected.Model = defaults.Model
 	}
-	if a.DefaultServiceTier != "" && len(p.Meta.SupportedServiceTiers) > 0 &&
-		!containsRuntimeValue(p.Meta.SupportedServiceTiers, a.DefaultServiceTier) {
-		return fmt.Errorf("default service tier %q is not supported by provider %q", a.DefaultServiceTier, p.ID)
+	if selected.Model != "" && !runtimeOptionListed(capabilities.Models, selected.Model) {
+		return validateTypedModelSettings(capabilities, selected)
+	}
+	if err := core.ValidateRuntimeSettings(capabilities, selected); err != nil {
+		return fmt.Errorf("invalid defaults for %s model %q: %w", a.RuntimeID, selected.Model, err)
 	}
 	return nil
 }
 
-func containsRuntimeValue(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
+// validateTypedModelSettings checks effort and speed for a model the
+// framework does not list. Nothing is known about that model, so the values
+// only have to be ones the framework offers for some model.
+func validateTypedModelSettings(capabilities core.RuntimeSettingsCapabilities, selected core.RuntimeSettings) error {
+	if selected.ReasoningEffort != "" && len(capabilities.ReasoningEfforts) > 0 &&
+		!runtimeOptionListed(capabilities.ReasoningEfforts, selected.ReasoningEffort) {
+		return fmt.Errorf("reasoning effort %q is not offered by this framework", selected.ReasoningEffort)
+	}
+	if selected.ServiceTier != "" && len(capabilities.ServiceTiers) > 0 &&
+		!runtimeOptionListed(capabilities.ServiceTiers, selected.ServiceTier) {
+		return fmt.Errorf("service tier %q is not offered by this framework", selected.ServiceTier)
+	}
+	return nil
+}
+
+func runtimeOptionListed(options []core.RuntimeOption, value string) bool {
+	for _, option := range options {
+		if option.Value == value {
 			return true
 		}
 	}
 	return false
-}
-
-func (s *Server) agentProvider(ctx context.Context, a *core.AgentInstance) (*core.Provider, error) {
-	if s.provider == nil {
-		return nil, nil
-	}
-	if a.ProviderID != "" {
-		return s.provider.Get(ctx, a.ProviderID)
-	}
-	tool := a.ProviderTool
-	if tool == "" {
-		tool = a.RuntimeID
-	}
-	routes, err := s.provider.ActiveRoutes(ctx)
-	if err != nil {
-		return nil, err
-	}
-	want := core.NormalizeProviderTool(tool)
-	for _, route := range routes {
-		if route.Tool == tool {
-			return s.provider.Get(ctx, route.ProviderID)
-		}
-	}
-	for _, route := range routes {
-		if core.NormalizeProviderTool(route.Tool) == want {
-			return s.provider.Get(ctx, route.ProviderID)
-		}
-	}
-	return nil, nil
-}
-
-func (s *Server) enrichAgentProviders(ctx context.Context, items []core.AgentInstance, principal *core.Principal) {
-	if s.provider == nil {
-		return
-	}
-	var providers []*core.Provider
-	var err error
-	if principal.IsTenant() && s.st != nil {
-		providers, err = s.st.ListProvidersForTenant(ctx, principal.TenantID)
-	} else {
-		providers, err = s.provider.List(ctx)
-	}
-	if err != nil {
-		return
-	}
-	names := map[string]string{}
-	for _, p := range providers {
-		names[p.ID] = p.Name
-	}
-	for i := range items {
-		if items[i].ProviderID != "" {
-			items[i].ProviderName = names[items[i].ProviderID]
-		}
-	}
 }
 
 func knownAgentRuntime(id string) bool {

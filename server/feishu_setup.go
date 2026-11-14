@@ -20,7 +20,7 @@ func (s *Server) handleFeishuSetupBegin(w http.ResponseWriter, r *http.Request) 
 
 	initResp, err := feishuRegistrationCall(client, feishuAccountsBaseURL, "init", nil)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "feishu init: " + err.Error())
+		writeErr(w, http.StatusBadGateway, "feishu init: "+err.Error())
 		return
 	}
 	if errMsg, _ := initResp["error"].(string); errMsg != "" {
@@ -35,7 +35,7 @@ func (s *Server) handleFeishuSetupBegin(w http.ResponseWriter, r *http.Request) 
 		"request_user_info": "open_id",
 	})
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "feishu begin: " + err.Error())
+		writeErr(w, http.StatusBadGateway, "feishu begin: "+err.Error())
 		return
 	}
 	if errMsg, _ := beginResp["error"].(string); errMsg != "" {
@@ -87,7 +87,7 @@ func (s *Server) handleFeishuSetupPoll(w http.ResponseWriter, r *http.Request) {
 			"device_code": req.DeviceCode,
 		})
 		if err != nil {
-			writeErr(w, http.StatusBadGateway, "feishu poll: " + err.Error())
+			writeErr(w, http.StatusBadGateway, "feishu poll: "+err.Error())
 			return
 		}
 

@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any
 
 # Contract range this SDK speaks; servers outside it report `incompatible`.
-SUPPORTED_CONTRACT_MAJOR = 2
+SUPPORTED_CONTRACT_MAJOR = 3
 
 
 class HealthState(StrEnum):
@@ -72,12 +72,9 @@ class Capabilities:
     agents: dict[str, Any]
     channels: dict[str, Any]
     bridge_enabled: bool
-    # Tenancy (contract 1.1): "admin" when the credential sees the whole
-    # instance, "tenant" when it is confined to one application. Older servers
-    # omit it, in which case there is no tenancy and the scope is admin.
+    # "admin" for the bridge token and administrator accounts, "member" for a
+    # signed-in member account. Servers that omit it are admin-only.
     scope: str = "admin"
-    tenant: str | None = None
-    tenant_id: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
     @classmethod
@@ -98,18 +95,11 @@ class Capabilities:
             channels=dict(data.get("channels") or {}),
             bridge_enabled=bool(auth.get("bridge_enabled")),
             scope=str(auth.get("scope") or "admin"),
-            tenant=auth.get("tenant"),
-            tenant_id=auth.get("tenant_id"),
             raw=data,
         )
 
     def supports(self, feature: str) -> bool:
         return feature in self.features
-
-    @property
-    def tenant_scoped(self) -> bool:
-        """True when this credential only sees one application's resources."""
-        return self.scope == "tenant"
 
 
 @dataclass(frozen=True)
@@ -300,9 +290,6 @@ class AgentInstance:
     worktree_base_ref: str | None = None
     session_backend: str | None = None
     system_prompt: str | None = None
-    provider_tool: str | None = None
-    provider_id: str | None = None
-    provider_name: str | None = None
     default_model: str | None = None
     default_reasoning_effort: str | None = None
     default_service_tier: str | None = None
@@ -317,9 +304,6 @@ class AgentInstance:
     skills: tuple[str, ...] = ()
     clis: tuple[str, ...] = ()
     source: str | None = None
-    owner_tenant_id: str | None = None
-    owner_tenant_name: str | None = None
-    visibility: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
@@ -337,9 +321,6 @@ class AgentInstance:
             worktree_base_ref=data.get("worktree_base_ref"),
             session_backend=data.get("session_backend"),
             system_prompt=data.get("system_prompt"),
-            provider_tool=data.get("provider_tool"),
-            provider_id=data.get("provider_id"),
-            provider_name=data.get("provider_name"),
             default_model=data.get("default_model"),
             default_reasoning_effort=data.get("default_reasoning_effort"),
             default_service_tier=data.get("default_service_tier"),
@@ -354,9 +335,6 @@ class AgentInstance:
             skills=tuple(data.get("skills") or ()),
             clis=tuple(data.get("clis") or ()),
             source=data.get("source"),
-            owner_tenant_id=data.get("owner_tenant_id"),
-            owner_tenant_name=data.get("owner_tenant_name"),
-            visibility=data.get("visibility"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             raw=data,
@@ -379,8 +357,6 @@ class AgentInstance:
             ("worktree_base_ref", self.worktree_base_ref),
             ("session_backend", self.session_backend),
             ("system_prompt", self.system_prompt),
-            ("provider_tool", self.provider_tool),
-            ("provider_id", self.provider_id),
             ("default_model", self.default_model),
             ("default_reasoning_effort", self.default_reasoning_effort),
             ("default_service_tier", self.default_service_tier),
@@ -402,10 +378,6 @@ class AgentInstance:
         ):
             if value:
                 payload[key] = value
-        # Ownership is assigned by the server from the calling credential, so
-        # it is deliberately not echoed back on writes.
-        payload.pop("owner_tenant_id", None)
-        payload.pop("owner_tenant_name", None)
         return payload
 
 
@@ -419,9 +391,6 @@ class Channel:
     enabled: bool
     agent_id: str | None = None
     config: dict[str, str] = field(default_factory=dict)
-    owner_tenant_id: str | None = None
-    owner_tenant_name: str | None = None
-    visibility: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
@@ -435,9 +404,6 @@ class Channel:
             enabled=bool(data.get("enabled")),
             agent_id=data.get("agent_id"),
             config=dict(data.get("config") or {}),
-            owner_tenant_id=data.get("owner_tenant_id"),
-            owner_tenant_name=data.get("owner_tenant_name"),
-            visibility=data.get("visibility"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             raw=data,
@@ -452,8 +418,6 @@ class Channel:
             payload["agent_id"] = self.agent_id
         if self.config:
             payload["config"] = self.config
-        payload.pop("owner_tenant_id", None)
-        payload.pop("owner_tenant_name", None)
         return payload
 
 
@@ -478,7 +442,6 @@ class Trigger:
     last_run: str | None = None
     last_status: str | None = None
     last_error: str | None = None
-    owner_tenant_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
@@ -503,7 +466,6 @@ class Trigger:
             last_run=data.get("last_run"),
             last_status=data.get("last_status"),
             last_error=data.get("last_error"),
-            owner_tenant_id=data.get("owner_tenant_id"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             raw=data,
@@ -590,7 +552,6 @@ class Orchestration:
     name: str | None = None
     error: str | None = None
     tasks: tuple[OrchestrationTask, ...] = ()
-    owner_tenant_id: str | None = None
     created_at: str | None = None
     started_at: str | None = None
     finished_at: str | None = None
@@ -610,7 +571,6 @@ class Orchestration:
                 for task in data.get("tasks") or ()
                 if isinstance(task, dict)
             ),
-            owner_tenant_id=data.get("owner_tenant_id"),
             created_at=data.get("created_at"),
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
@@ -625,15 +585,13 @@ class Orchestration:
 
 @dataclass(frozen=True)
 class IntegrationSnapshot:
-    """Tenant-scoped host application view composed by the SDK.
+    """Host application view composed by the SDK.
 
     This is intentionally an SDK aggregate rather than a new server endpoint:
-    every item still comes from the public, versioned AgentMux contract and is
-    filtered by the caller's tenant credential on the server.
+    every item still comes from the public, versioned AgentMux contract.
     """
 
     capabilities: Capabilities
-    identity: "TenancySelf"
     runtimes: tuple[str, ...] = ()
     platforms: tuple[str, ...] = ()
     agents: tuple[AgentInstance, ...] = ()
@@ -657,83 +615,5 @@ class ConsoleSession:
             enter_url=str(data.get("enter_url") or ""),
             expires_at=str(data.get("expires_at") or ""),
             session_ttl_seconds=int(data.get("session_ttl_seconds") or 0),
-            raw=data,
-        )
-
-
-@dataclass(frozen=True)
-class Tenant:
-    """A registered host application (contract/schemas/tenant.json)."""
-
-    id: str
-    name: str
-    status: str
-    kind: str | None = None
-    note: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
-    raw: dict[str, Any] = field(repr=False, default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Tenant":
-        return cls(
-            id=str(data.get("id") or ""),
-            name=str(data.get("name") or ""),
-            status=str(data.get("status") or ""),
-            kind=data.get("kind"),
-            note=data.get("note"),
-            created_at=data.get("created_at"),
-            updated_at=data.get("updated_at"),
-            raw=data,
-        )
-
-    @property
-    def active(self) -> bool:
-        return self.status == "active"
-
-
-@dataclass(frozen=True)
-class TenantRegistration:
-    """Result of self-registering a tenant (POST /api/v1/tenancy/register).
-
-    ``token`` is the application's long-lived credential. It is returned once
-    and cannot be recovered, so persist it before discarding this object.
-    """
-
-    tenant: Tenant
-    token: str
-    prefix: str | None = None
-    raw: dict[str, Any] = field(repr=False, default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TenantRegistration":
-        tenant = data.get("tenant")
-        return cls(
-            tenant=Tenant.from_dict(tenant if isinstance(tenant, dict) else {}),
-            token=str(data.get("token") or ""),
-            prefix=data.get("prefix"),
-            raw=data,
-        )
-
-
-@dataclass(frozen=True)
-class TenancySelf:
-    """Response of GET /api/v1/tenancy/self."""
-
-    admin: bool
-    tenant: str | None = None
-    tenant_id: str | None = None
-    kind: str | None = None
-    status: str | None = None
-    raw: dict[str, Any] = field(repr=False, default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TenancySelf":
-        return cls(
-            admin=bool(data.get("admin")),
-            tenant=data.get("tenant"),
-            tenant_id=data.get("tenant_id"),
-            kind=data.get("kind"),
-            status=data.get("status"),
             raw=data,
         )

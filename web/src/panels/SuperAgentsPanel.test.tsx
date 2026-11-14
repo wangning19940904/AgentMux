@@ -134,8 +134,6 @@ beforeEach(() => {
     { id: "elsewhere", name: "Elsewhere", runtime_id: "dsh", enabled: true, target_id: "h1" } as never,
   ]);
   vi.spyOn(api, "superAgentRouters").mockResolvedValue(routerList);
-  vi.spyOn(api, "providers").mockResolvedValue([]);
-  vi.spyOn(api, "activeRoutes").mockResolvedValue([]);
   vi.spyOn(api, "frameworkRuntimeSettings").mockResolvedValue(codexSettings as never);
   vi.spyOn(api, "saveSuperAgentRouter").mockImplementation(async (router) => ({ ...router, id: router.id || "sar_new", used_by: [] }));
   vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, frameworks: [
@@ -744,7 +742,7 @@ describe("SuperAgentsPanel", () => {
     expect(api.frameworkRuntimeSettings).toHaveBeenCalledWith("codex", "", "local");
     expect(models()).toEqual(["Default (GPT-6 Astra)", "GPT-6 Astra", "gpt-6-mini"]);
     expect(efforts_()).toEqual(["Default (Medium)", "Low", "Medium", "High", "Extra high"]);
-    expect(hasText("Models from the framework's own sign-in.")).toBe(true);
+    expect(hasText("The framework lists these models for its current setup (its own sign-in, a gateway or a router).")).toBe(true);
     click(button(/^Extra high$/));
     click(fastSwitch()!);
     expect(picker().textContent).toBe("Default model · Extra high · Fast");
@@ -784,23 +782,19 @@ describe("SuperAgentsPanel", () => {
     expect(fastSwitch()).not.toBeNull();
   });
 
-  it("takes the router's models from the framework's active provider route", async () => {
+  it("lets the router use a model ID the framework does not list, such as a router's group", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
-    vi.spyOn(api, "activeRoutes").mockResolvedValue([{ tool: "codex", provider_id: "p1", configured: true }]);
-    vi.spyOn(api, "providers").mockResolvedValue([{
-      id: "p1", name: "Acme", base_url: "", enabled: true, model: "acme-large",
-      meta: { supported_models: ["acme-large", "acme-small"], supported_reasoning_efforts: ["low", "high"], supported_service_tiers: ["default", "fast"] },
-    }]);
     renderPanel({ createRequested: true });
     await until(() => control(/^Router agent/).value === "__new_router__");
     click(picker());
     await until(() => models().length > 0);
-    expect(models()).toEqual(["Default (acme-large)", "acme-large", "acme-small"]);
-    expect(efforts_()).toEqual(["Default", "Low", "High"]);
-    expect(hasText("Models from Acme, the framework's active provider.")).toBe(true);
-    expect(api.frameworkRuntimeSettings).not.toHaveBeenCalled();
-    click(fastSwitch()!);
-    expect(picker().textContent).toBe("Default model · Fast");
+    // Models always come from the framework, never from AgentMux providers.
+    expect(api.frameworkRuntimeSettings).toHaveBeenCalledWith("codex", "", "local");
+    const input = container.querySelector<HTMLInputElement>(".model-picker-typed input")!;
+    setValue(input, "group/opus-anywhere");
+    click(button(/^Use$/));
+    expect(picker().textContent).toBe("group/opus-anywhere");
+    expect(models()).toContain("group/opus-anywhere");
   });
 
   it("lets the router's model be typed when the framework's models cannot be read", async () => {

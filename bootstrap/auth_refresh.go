@@ -43,7 +43,7 @@ func refreshAgentAuth(ctx context.Context, st authAgentStore, log *slog.Logger, 
 		if ctx.Err() != nil {
 			return
 		}
-		if !agent.Enabled || agent.RuntimeID != "traecli" || agent.ProviderID != "" {
+		if !agent.Enabled || agent.RuntimeID != "traecli" {
 			continue
 		}
 		active[agent.ID] = true

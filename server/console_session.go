@@ -14,8 +14,8 @@ import (
 	"github.com/wangning19940904/AgentMux/store"
 )
 
-// Console session embedding lets a host application (holding a bridge or
-// tenant token) hand its users an authenticated browser session for the embedded
+// Console session embedding lets a host application (holding the bridge
+// token) hand its users an authenticated browser session for the embedded
 // Console without ever exposing the bearer token to the browser:
 //
 //  1. Host backend: POST /api/v1/console/sessions (Bearer) -> enter_url
@@ -33,9 +33,8 @@ const (
 )
 
 // consoleGrant is a nonce or session together with the principal that minted
-// it. Binding the principal is what makes an embedded Console inherit its host
-// application's scope: a session minted with a tenant token can only ever see
-// that tenant's resources, no matter what the browser asks for.
+// it. Binding the principal is what makes an embedded Console inherit the
+// minting caller's scope, no matter what the browser asks for.
 type consoleGrant struct {
 	expiry    time.Time
 	principal *core.Principal
@@ -139,28 +138,19 @@ func randomToken() string {
 
 // handleConsoleSessionCreate mints a one-time entry URL. It deliberately
 // requires a Bearer token (not a console cookie) so a browser session can
-// never mint or extend further sessions. The resulting session inherits the
-// caller's scope: an admin token yields the full Console, a tenant token
-// yields a Console confined to that tenant.
+// never mint or extend further sessions. Only the bridge token can mint one,
+// and the session is an administrator Console.
 func (s *Server) handleConsoleSessionCreate(w http.ResponseWriter, r *http.Request) {
 	token, ok := bearerToken(strings.TrimSpace(r.Header.Get("Authorization")))
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "console sessions require a bearer token")
 		return
 	}
-	principal := core.AdminPrincipal()
 	if s.cfg.Bridge.Token == "" || token != s.cfg.Bridge.Token {
-		if s.st == nil {
-			writeErr(w, http.StatusUnauthorized, "console sessions require the bridge or a tenant bearer token")
-			return
-		}
-		tenant, err := s.st.AuthenticateTenantToken(r.Context(), token)
-		if err != nil || tenant == nil {
-			writeErr(w, http.StatusUnauthorized, "console sessions require the bridge or a tenant bearer token")
-			return
-		}
-		principal = &core.Principal{TenantID: tenant.ID, TenantName: tenant.Name}
+		writeErr(w, http.StatusUnauthorized, "console sessions require the bridge bearer token")
+		return
 	}
+	principal := core.AdminPrincipal()
 	landing, ok := normalizeConsoleLanding(r.URL.Query().Get("landing"))
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid console landing page")

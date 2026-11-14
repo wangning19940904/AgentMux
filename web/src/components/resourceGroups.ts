@@ -1,5 +1,3 @@
-import type { Provider } from "../api";
-
 export interface ResourceGroup<T> {
   key: string;
   members: T[];
@@ -15,11 +13,6 @@ export function groupResources<T>(items: T[], identity: (item: T) => string, ins
     else groups.set(key, { key, members: [item] });
   }
   return [...groups.values()];
-}
-
-export function providerGroupKey(provider: Provider) {
-  // An identical ID at a different endpoint is a different provider.
-  return JSON.stringify([provider.id, provider.base_url.trim().replace(/\/+$/, "")]);
 }
 
 export function selectedGroupMember<T>(group: ResourceGroup<T>, selected: string | undefined, instance: (item: T) => string): T {

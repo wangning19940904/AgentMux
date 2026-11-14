@@ -131,3 +131,24 @@ func TestHealthCheckArgsDisableToolsAndTranscript(t *testing.T) {
 		t.Fatal("normal sessions must keep their tools")
 	}
 }
+
+func TestSessionsOfferTheFrameworkModelList(t *testing.T) {
+	fakeClaude(t, `"subtype":"success","response":{"models":[{"value":"default"},{"value":"group/fast"}]}`)
+	agent, err := core.CreateAgent("claudecode", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := agent.StartSession(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := started.(*session).SupportedModels(); !slices.Equal(got, []string{"default", "group/fast"}) {
+		t.Fatalf("in-chat models = %v", got)
+	}
+	// A configured list wins and needs no discovery.
+	configured, _ := core.CreateAgent("claudecode", map[string]any{"supported_models": []string{"sonnet"}})
+	started, _ = configured.StartSession(context.Background(), t.TempDir())
+	if got := started.(*session).SupportedModels(); !slices.Equal(got, []string{"sonnet"}) {
+		t.Fatalf("configured models = %v", got)
+	}
+}

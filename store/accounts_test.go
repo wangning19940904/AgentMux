@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +36,8 @@ func TestPasswordHashRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFirstAdminAndAccountNamespace(t *testing.T) {
-	st := newTenancyStore(t)
+func TestFirstAdminAndUniqueLogins(t *testing.T) {
+	st := newAccountStore(t)
 	ctx := context.Background()
 
 	if count, err := st.CountAccounts(ctx); err != nil || count != 0 {
@@ -46,33 +47,16 @@ func TestFirstAdminAndAccountNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if admin.Login != "alice" || admin.Role != core.AccountRoleAdmin || !admin.HasPassword || admin.TenantID == "" {
+	if admin.Login != "alice" || admin.Role != core.AccountRoleAdmin || !admin.HasPassword {
 		t.Fatalf("first admin = %+v", admin)
 	}
 	if _, err := st.CreateFirstAdmin(ctx, NewAccount{Login: "mallory", Password: "mallory-password"}); !errors.Is(err, ErrAccountsExist) {
 		t.Fatalf("second first-admin err = %v", err)
 	}
 
-	// The account owns a tenant namespace named after its login.
-	tenant, err := st.GetTenant(ctx, admin.TenantID)
-	if err != nil || tenant == nil || tenant.Name != "alice" || tenant.Kind != core.TenantKindAccount || !tenant.Active() {
-		t.Fatalf("namespace = %+v, %v", tenant, err)
-	}
-	owner, err := st.AccountForTenant(ctx, tenant.ID)
-	if err != nil || owner == nil || owner.ID != admin.ID {
-		t.Fatalf("account for tenant = %+v, %v", owner, err)
-	}
-
-	// Logins are unique across accounts and tenant names.
+	// Logins are unique.
 	if _, err := st.CreateAccount(ctx, NewAccount{Login: "ALICE", Password: "another-password"}); !errors.Is(err, ErrLoginTaken) {
 		t.Fatalf("duplicate login err = %v", err)
-	}
-	now := time.Now().UTC()
-	if err := st.UpsertTenant(ctx, &core.Tenant{ID: "ten_app", Name: "webapp", Kind: core.TenantKindWeb, Status: core.TenantStatusActive, CreatedAt: now, UpdatedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateAccount(ctx, NewAccount{Login: "webapp", Password: "another-password"}); !errors.Is(err, ErrLoginTaken) {
-		t.Fatalf("login colliding with a tenant err = %v", err)
 	}
 	for _, bad := range []NewAccount{{Login: "x", Password: "long-enough-pw"}, {Login: "has space", Password: "long-enough-pw"}, {Login: "bob", Password: "short"}} {
 		if _, err := st.CreateAccount(ctx, bad); err == nil {
@@ -82,7 +66,7 @@ func TestFirstAdminAndAccountNamespace(t *testing.T) {
 }
 
 func TestAccountPasswordsAndSessions(t *testing.T) {
-	st := newTenancyStore(t)
+	st := newAccountStore(t)
 	ctx := context.Background()
 	if _, err := st.CreateFirstAdmin(ctx, NewAccount{Login: "root", Password: "root-password-1"}); err != nil {
 		t.Fatal(err)
@@ -157,7 +141,7 @@ func TestAccountPasswordsAndSessions(t *testing.T) {
 }
 
 func TestDisablingAccountsAndLastAdmin(t *testing.T) {
-	st := newTenancyStore(t)
+	st := newAccountStore(t)
 	ctx := context.Background()
 	admin, err := st.CreateFirstAdmin(ctx, NewAccount{Login: "root", Password: "root-password-1"})
 	if err != nil {
@@ -177,15 +161,9 @@ func TestDisablingAccountsAndLastAdmin(t *testing.T) {
 	if account, _ := st.VerifyAccountPassword(ctx, "bob", "bob-password-1"); account != nil {
 		t.Fatal("a disabled account signed in")
 	}
-	if tenant, _ := st.GetTenant(ctx, member.TenantID); tenant.Active() {
-		t.Fatal("a disabled account's namespace stayed active")
-	}
 	active := core.AccountStatusActive
 	if _, err := st.UpdateAccount(ctx, member.ID, AccountUpdate{Status: &active}); err != nil {
 		t.Fatal(err)
-	}
-	if tenant, _ := st.GetTenant(ctx, member.TenantID); !tenant.Active() {
-		t.Fatal("re-enabling the account left its namespace disabled")
 	}
 
 	memberRole := core.AccountRoleMember
@@ -208,13 +186,13 @@ func TestDisablingAccountsAndLastAdmin(t *testing.T) {
 }
 
 func TestDeviceOwnership(t *testing.T) {
-	st := newTenancyStore(t)
+	st := newAccountStore(t)
 	ctx := context.Background()
 	member, err := st.CreateAccount(ctx, NewAccount{Login: "bob", Password: "bob-password-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, err := st.CreateOwnedDevicePairingCode(ctx, "bob's laptop", member.TenantID)
+	owned, err := st.CreateOwnedDevicePairingCode(ctx, "bob's laptop", member.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,27 +201,27 @@ func TestDeviceOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	bobDevice, _, err := st.RedeemDevicePairingCode(ctx, owned.Code, core.DeviceInfo{Hostname: "laptop"})
-	if err != nil || bobDevice == nil || bobDevice.OwnerTenantID != member.TenantID {
+	if err != nil || bobDevice == nil || bobDevice.OwnerAccountID != member.ID {
 		t.Fatalf("owned device = %+v, %v", bobDevice, err)
 	}
 	if _, _, err := st.RedeemDevicePairingCode(ctx, unowned.Code, core.DeviceInfo{Hostname: "server"}); err != nil {
 		t.Fatal(err)
 	}
 	all, _ := st.ListDevices(ctx)
-	mine, _ := st.ListDevicesForTenant(ctx, member.TenantID)
-	if len(all) != 2 || len(mine) != 1 || mine[0].ID != bobDevice.ID || mine[0].OwnerTenantID != member.TenantID {
+	mine, _ := st.ListDevicesForAccount(ctx, member.ID)
+	if len(all) != 2 || len(mine) != 1 || mine[0].ID != bobDevice.ID || mine[0].OwnerAccountID != member.ID {
 		t.Fatalf("all = %+v, mine = %+v", all, mine)
 	}
-	if got, _ := st.GetDevice(ctx, bobDevice.ID); got.OwnerTenantID != member.TenantID {
-		t.Fatalf("device owner = %q", got.OwnerTenantID)
+	if got, _ := st.GetDevice(ctx, bobDevice.ID); got.OwnerAccountID != member.ID {
+		t.Fatalf("device owner = %q", got.OwnerAccountID)
 	}
 
-	// Deleting the namespace leaves the device to administrators.
-	if err := st.DeleteTenant(ctx, member.TenantID); err != nil {
+	// Handing the device back leaves it to administrators.
+	if err := st.SetDeviceOwner(ctx, bobDevice.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := st.GetDevice(ctx, bobDevice.ID); got.OwnerTenantID != "" {
-		t.Fatalf("device owner after namespace delete = %q", got.OwnerTenantID)
+	if got, _ := st.GetDevice(ctx, bobDevice.ID); got.OwnerAccountID != "" {
+		t.Fatalf("device owner after release = %q", got.OwnerAccountID)
 	}
 }
 
@@ -296,7 +274,7 @@ func TestAccountsOnPostgres(t *testing.T) {
 		t.Fatal("disabled account session resolved")
 	}
 
-	code, err := st.CreateOwnedDevicePairingCode(ctx, "laptop", member.TenantID)
+	code, err := st.CreateOwnedDevicePairingCode(ctx, "laptop", member.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,8 +282,18 @@ func TestAccountsOnPostgres(t *testing.T) {
 	if err != nil || device == nil {
 		t.Fatalf("redeem = %+v, %v", device, err)
 	}
-	mine, err := st.ListDevicesForTenant(ctx, member.TenantID)
-	if err != nil || len(mine) != 1 || mine[0].OwnerTenantID != member.TenantID {
+	mine, err := st.ListDevicesForAccount(ctx, member.ID)
+	if err != nil || len(mine) != 1 || mine[0].OwnerAccountID != member.ID {
 		t.Fatalf("owned devices = %+v, %v", mine, err)
 	}
+}
+
+func newAccountStore(t *testing.T) *Store {
+	t.Helper()
+	st, err := OpenLegacySQLite(filepath.Join(t.TempDir(), "accounts.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
 }

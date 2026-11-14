@@ -5,73 +5,74 @@ import {
   accountLabel,
   resolveSignInGate,
   signInErrorKey,
-  resolveTenancyGate,
-  resolveTenancyGateWithRetry,
-  tenancyNavigationLocked,
-} from "./tenancyGate";
+  consoleRole,
+  loadSessionWithRetry,
+} from "./signIn";
 
-describe("resolveTenancyGate", () => {
-  it("resolves loading, administrator, active tenant, and blocked tenant scopes", () => {
-    const cases = [
-      { identity: null, state: "loading" },
-      { identity: { admin: true }, state: "ready" },
-      { identity: { admin: false, tenant_id: "ten_rookie", tenant: "rookie-trade", status: "active" }, state: "ready" },
-      { identity: { admin: false }, state: "required" },
-      { identity: { admin: false, tenant_id: "ten_disabled", tenant: "old", status: "disabled" }, state: "required" },
-    ] as const;
-    for (const item of cases) {
-      expect(resolveTenancyGate(item.identity)).toBe(item.state);
-    }
+const sessionFor = (overrides: Partial<AuthSession>): AuthSession => ({
+  accounts_enabled: true,
+  setup_available: false,
+  sign_in_required: false,
+  authenticated: true,
+  admin: true,
+  sign_in_methods: ["password"],
+  ...overrides,
+});
+
+describe("console identity", () => {
+  it("treats administrators, open machines and the desktop shell as admin", () => {
+    expect(consoleRole(sessionFor({}))).toBe("admin");
+    expect(consoleRole(sessionFor({ accounts_enabled: false, authenticated: false }))).toBe("admin");
+    expect(consoleRole(null, true)).toBe("admin");
   });
 
-  it("retries a transient Desktop startup failure and resolves the administrator", async () => {
-    let identityAttempts = 0;
-    const result = await resolveTenancyGateWithRetry(
+  it("treats a signed-in account without administrator rights as a member", () => {
+    const member = sessionFor({ admin: false, account: { id: "acct_1", login: "bob", role: "member" } });
+    expect(consoleRole(member)).toBe("member");
+    expect(consoleRole(member, true)).toBe("member");
+  });
+
+  it("retries a transient Desktop startup failure and resolves the session", async () => {
+    let attempts = 0;
+    const result = await loadSessionWithRetry(
       async () => {
-        identityAttempts += 1;
-        if (identityAttempts === 1) throw new Error("/api/v1/tenancy/self: 503");
-        return { admin: true };
+        attempts += 1;
+        if (attempts === 1) throw new Error("/api/v1/auth/session: 503");
+        return sessionFor({});
       },
       { attempts: 2, delayMs: 0, wait: async () => undefined },
     );
-    expect(identityAttempts).toBe(2);
-    expect(result).toEqual({ identity: { admin: true }, state: "ready" });
+    expect(attempts).toBe(2);
+    expect(result.admin).toBe(true);
   });
 
-  it("does not retry invalid credentials", async () => {
-    let identityAttempts = 0;
-    await expect(resolveTenancyGateWithRetry(
+  it("does not retry refused requests", async () => {
+    let attempts = 0;
+    await expect(loadSessionWithRetry(
       async () => {
-        identityAttempts += 1;
-        throw new Error("/api/v1/tenancy/self: 401");
+        attempts += 1;
+        throw new Error("/api/v1/auth/session: 401");
       },
       { attempts: 3, delayMs: 0, wait: async () => undefined },
     )).rejects.toThrow("401");
-    expect(identityAttempts).toBe(1);
+    expect(attempts).toBe(1);
   });
 
   it("allows a longer first-launch install and stops on a setup failure", async () => {
     let attempts = 0;
-    const result = await resolveTenancyGateWithRetry(async () => {
-      if (++attempts <= 35) throw new Error("/api/v1/tenancy/self: 503");
-      return { admin: true };
+    const result = await loadSessionWithRetry(async () => {
+      if (++attempts <= 35) throw new Error("/api/v1/auth/session: 503");
+      return sessionFor({});
     }, { attempts: 1200, delayMs: 0, wait: async () => undefined });
-    expect(result.state).toBe("ready");
+    expect(result.admin).toBe(true);
     expect(attempts).toBe(36);
 
     attempts = 0;
-    await expect(resolveTenancyGateWithRetry(async () => {
+    await expect(loadSessionWithRetry(async () => {
       attempts++;
-      throw new Error("/api/v1/tenancy/self: 500 PostgreSQL setup failed");
+      throw new Error("/api/v1/auth/session: 500 PostgreSQL setup failed");
     }, { attempts: 1200, delayMs: 0, wait: async () => undefined })).rejects.toThrow("setup failed");
     expect(attempts).toBe(1);
-  });
-
-  it("does not lock the packaged desktop navigation during backend startup", () => {
-    expect(tenancyNavigationLocked("loading", true)).toBe(false);
-    expect(tenancyNavigationLocked("required", true)).toBe(false);
-    expect(tenancyNavigationLocked("required", false)).toBe(true);
-    expect(tenancyNavigationLocked("ready", false)).toBe(false);
   });
 });
 

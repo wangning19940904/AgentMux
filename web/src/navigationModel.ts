@@ -111,3 +111,25 @@ export function primaryGroupDestination<T extends string>(
     ? null
     : group.items[0]?.id ?? null;
 }
+
+// A member account reaches only its direct messages and its own account page
+// (password and paired devices); the server refuses everything else. The
+// first entry is where a member lands.
+export const MEMBER_TABS = ["messages", "accounts"] as const;
+export const MEMBER_LANDING_TAB = MEMBER_TABS[0];
+
+export function tabAllowedForRole(tab: string, role: "admin" | "member"): boolean {
+  return role === "admin" || (MEMBER_TABS as ReadonlyArray<string>).includes(tab);
+}
+
+// navigationForRole keeps the groups and items a role may open, dropping
+// groups left empty.
+export function navigationForRole<G extends NavigationGroupLike>(
+  groups: ReadonlyArray<G>,
+  role: "admin" | "member",
+): G[] {
+  if (role === "admin") return [...groups];
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter((item) => tabAllowedForRole(item.id, role)) }))
+    .filter((group) => group.items.length > 0);
+}

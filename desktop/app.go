@@ -14,7 +14,6 @@ import (
 	"github.com/wangning19940904/AgentMux/bootstrap"
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/internal/postgressetup"
-	"github.com/wangning19940904/AgentMux/provider"
 	"github.com/wangning19940904/AgentMux/store"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -117,21 +116,6 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.cancel != nil {
 		a.cancel()
 	}
-}
-
-// SwitchProvider is bound to the frontend/tray for quick switching.
-func (a *App) SwitchProvider(id, tool string) error {
-	cfg, _, cfgErr := config.LoadResolved("")
-	if cfgErr != nil {
-		cfg = config.Default()
-	}
-	st, err := openDesktopStore(a.ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	return provider.NewService(log, st, "").Switch(a.ctx, id, tool)
 }
 
 func openDesktopStore(ctx context.Context, cfg *config.Config) (*store.Store, error) {

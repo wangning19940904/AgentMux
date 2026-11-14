@@ -17,7 +17,6 @@ import (
 	"github.com/wangning19940904/AgentMux/guard"
 	"github.com/wangning19940904/AgentMux/mcp"
 	"github.com/wangning19940904/AgentMux/memory"
-	"github.com/wangning19940904/AgentMux/provider"
 	"github.com/wangning19940904/AgentMux/server"
 	"github.com/wangning19940904/AgentMux/skills"
 	"github.com/wangning19940904/AgentMux/store"
@@ -41,7 +40,6 @@ type Runtime struct {
 	cancel      context.CancelFunc
 	log         *slog.Logger
 	Server      *server.Server
-	Provider    *provider.Service
 	Usage       *usage.Engine
 	Engine      *core.Engine
 	Connect     *core.ConnectService
@@ -107,7 +105,6 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	guardGate := guard.New(st, core.GuardAsk)
 	engine.SetMemoryStore(memoryStore)
 	engine.SetGuard(guardGate)
-	providerService := provider.NewService(log, st, cfg.Provider.ProxyAddr)
 	usageEngine := usage.NewEngine(cfg, st, log)
 	backfill := time.Duration(cfg.Observability.BackfillDays) * 24 * time.Hour
 	go usageEngine.Start(ctx, backfill)
@@ -123,9 +120,8 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 	srv := server.New(server.Dependencies{
 		Config: cfg, Version: version, Log: log, Store: st, EventRelay: relay,
-		Provider: providerService, ProviderSvc: providerService,
 		Usage: reporter, UsageSources: usageEngine, Sender: engine, Invoker: connect, Connect: connect,
-		Presets: provider.Presets(), Memory: memoryStore, Skills: skillManager, MCP: mcpRegistry,
+		Memory: memoryStore, Skills: skillManager, MCP: mcpRegistry,
 		Guard: guardGate, Workspace: initializer,
 		ModuleRuntime: map[string]server.ModuleRuntimeState{
 			"memory": {RuntimeActive: true},
@@ -163,7 +159,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	relay.SetLocalConsumer(superAgents)
 	srv.SetSuperAgents(superAgents, feishuAPI)
 	if cfg.Observability.Enabled {
-		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, providerService, usageEngine); obsErr != nil {
+		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, usageEngine); obsErr != nil {
 			if strictObservability {
 				cancel()
 				return nil, obsErr
@@ -173,7 +169,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	}
 	initialized = true
 	return &Runtime{
-		ctx: ctx, cancel: cancel, log: log, Server: srv, Provider: providerService, EventRelay: relay, SuperAgents: superAgents,
+		ctx: ctx, cancel: cancel, log: log, Server: srv, EventRelay: relay, SuperAgents: superAgents,
 		Usage: usageEngine, Engine: engine, Connect: connect, listener: listener,
 		authRefresh: func(ctx context.Context) { maintainFrameworkAuth(ctx, st, log) },
 	}, nil
@@ -213,7 +209,6 @@ func (r *Runtime) Start() error {
 		r.cancel()
 		return fmt.Errorf("start super agents: %w", err)
 	}
-	r.startProxyRestore(daemonRetryInterval)
 	go func() { r.errCh <- runtimeResult{name: "http", err: r.Server.Serve(r.ctx, r.listener)} }()
 	go func() { r.errCh <- runtimeResult{name: "engine", err: r.Engine.Start(r.ctx)} }()
 	if err := r.Connect.Start(r.ctx); err != nil {
@@ -221,39 +216,6 @@ func (r *Runtime) Start() error {
 		return fmt.Errorf("start connect runtime: %w", err)
 	}
 	return nil
-}
-
-// A transient proxy bind failure must not leave enabled tools disconnected for
-// the lifetime of the daemon. Each retry reads current takeover settings so a
-// tool disabled while waiting stays disabled.
-func (r *Runtime) startProxyRestore(retryInterval time.Duration) {
-	if err := r.Provider.RestoreProxyState(r.ctx); err == nil {
-		return
-	} else {
-		r.log.Warn("local routing restore failed; will retry", "err", err, "retry_in", retryInterval)
-	}
-	r.proxyWG.Add(1)
-	go func() {
-		defer r.proxyWG.Done()
-		ticker := time.NewTicker(retryInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-r.ctx.Done():
-				return
-			case <-ticker.C:
-				if r.ctx.Err() != nil {
-					return
-				}
-				if err := r.Provider.RestoreProxyState(r.ctx); err != nil {
-					r.log.Warn("local routing restore failed; will retry", "err", err, "retry_in", retryInterval)
-					continue
-				}
-				r.log.Info("local routing state restored")
-				return
-			}
-		}
-	}()
 }
 
 // Wait blocks until cancellation or one long-running component exits, then
@@ -313,9 +275,6 @@ func (r *Runtime) Stop() {
 		}
 		if r.Connect != nil {
 			r.Connect.Stop()
-		}
-		if r.Provider != nil && r.Provider.Proxy() != nil {
-			_ = r.Provider.Proxy().Stop()
 		}
 		if r.listener != nil {
 			_ = r.listener.Close()

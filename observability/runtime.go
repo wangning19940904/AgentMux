@@ -138,13 +138,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r.Store != nil {
 		if result, err := r.Store.ImportLegacyObservations(ctx); err != nil {
 			r.Log.Warn("legacy observation import failed", "err", err)
-		} else if imported := result.UsageImported + result.ProxyImported; imported > 0 {
+		} else if imported := result.UsageImported; imported > 0 {
 			r.Log.Info("legacy observations imported", "events", imported)
-		}
-		if secured, err := r.Store.SecureLegacyProxyErrors(ctx, r.Recorder.Observe); err != nil {
-			r.Log.Warn("legacy proxy error encryption failed", "err", err)
-		} else if secured > 0 {
-			r.Log.Info("legacy proxy errors encrypted", "errors", secured)
 		}
 	}
 	if r.Store != nil {

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activeMachineScope, fleetQuery, resolveMachineScope, resolveTenantScope, tenantScopeHeaders, tenantScopeKey } from "./client";
+import { fleetQuery, resolveMachineScope } from "./client";
 import { beginFleetWarningUpdate, currentFleetWarnings, currentOfflineTargets, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import { api, mergeFleetObservationOverview, mergeFleetUsage } from "./index";
-import { fleetAdminReadArray, fleetCall, fleetReadArray, interactiveFleetGet } from "./fleet";
+import { fleetCall, fleetReadArray, interactiveFleetGet } from "./fleet";
 import type { FleetBatchResult, ObservationOverview, UsageReport } from "./types";
 
 function target<T>(id: string, name: string, key: string, data?: T, error?: string) {
@@ -20,17 +20,6 @@ describe("machine scope", () => {
     expect(resolveMachineScope("ssh-1")).toBe("ssh-1");
   });
 
-	it("binds a tenant preview to its owning machine", () => {
-		const values = new Map([
-			["agentmux:active-remote", "all"],
-			["agentmux:active-tenant-scope", tenantScopeKey("ten_remote", "ssh-1")],
-		]);
-		vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null });
-		expect(resolveTenantScope(values.get("agentmux:active-tenant-scope"))).toEqual({ tenantID: "ten_remote", targetID: "ssh-1" });
-		expect(activeMachineScope()).toBe("ssh-1");
-		expect(tenantScopeHeaders("/api/v1/agent-instances")).toEqual({ "X-AgentMux-Tenant-Scope": "ten_remote" });
-		expect(tenantScopeHeaders("/api/v1/tenancy/tenants")).toEqual({});
-	});
 });
 
 afterEach(() => {
@@ -39,23 +28,33 @@ afterEach(() => {
 });
 
 describe("Console login identity", () => {
-  it.each([
-    ["all", ""],
-    ["local", ""],
-    ["offline-ssh", ""],
-    ["all", tenantScopeKey("ten_remote", "offline-ssh")],
-  ])("checks the current session with machine %s and preview %s", async (machine, preview) => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? preview : machine });
-    const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => path === "/api/v1/tenancy/self"
-      ? new Response(JSON.stringify({ admin: false, tenant_id: "ten_current", status: "active" }))
+  it.each(["all", "local", "offline-ssh"])("checks the current session on this Console's own server with machine %s", async (machine) => {
+    vi.stubGlobal("localStorage", { getItem: () => machine });
+    const session = { accounts_enabled: true, setup_available: false, sign_in_required: false, authenticated: true, admin: true, sign_in_methods: ["password"] };
+    const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => path === "/api/v1/auth/session"
+      ? new Response(JSON.stringify(session))
       : new Response("remote unavailable", { status: 502 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.tenancySelf()).resolves.toEqual({ admin: false, tenant_id: "ten_current", status: "active" });
+    await expect(api.authSession()).resolves.toEqual(session);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("X-AgentMux-Console")).toBe("1");
-    expect(headers.has("X-AgentMux-Tenant-Scope")).toBe(false);
+  });
+});
+
+describe("device ownership", () => {
+  it("hands a device to an account, or back to administrators, on this Console's server", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "ssh-1" });
+    const fetchMock = vi.fn(async (_path: string, _init?: RequestInit) => new Response(JSON.stringify({ ok: true })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.assignDeviceOwner("dev_1", "acct_1")).resolves.toEqual({ ok: true });
+    await api.assignDeviceOwner("dev_1", "");
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(["/api/v1/devices/owner", "/api/v1/devices/owner"]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ id: "dev_1", account_id: "acct_1" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ id: "dev_1", account_id: "" });
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
   });
 });
 
@@ -132,21 +131,6 @@ describe("fleet array responses", () => {
     await expect(fleetReadArray<{ id: string }>("/api/v1/guard/policies")).resolves.toEqual([]);
   });
 
-	it("loads the administrator tenant index across machines without applying the preview scope", async () => {
-		vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? tenantScopeKey("ten_remote", "ssh-1") : "all" });
-		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
-			targets: [{
-				target: { id: "ssh-1", name: "Remote", kind: "ssh", trusted: true, online: true },
-				responses: [{ key: "data", status: 200, ok: true, data: [{ id: "ten_remote", name: "Rookie" }], duration_ms: 1 }],
-			}],
-		}), { status: 200, headers: { "Content-Type": "application/json" } }));
-		vi.stubGlobal("fetch", fetchMock);
-		await expect(fleetAdminReadArray<{ id: string; name: string }>("/api/v1/tenancy/tenants")).resolves.toEqual([
-			{ id: "ten_remote", name: "Rookie", target_id: "ssh-1", target_name: "Remote" },
-		]);
-		const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-		expect(headers.has("X-AgentMux-Tenant-Scope")).toBe(false);
-	});
 });
 
 describe("interactive fleet reads", () => {
@@ -242,34 +226,6 @@ describe("fleet actions", () => {
 	});
 });
 
-describe("tenant administration details", () => {
-	it("loads every grant editor collection in one target-scoped request", async () => {
-		vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });
-		const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
-			targets: [{
-				target: { id: "ssh-1", name: "Remote", kind: "ssh", trusted: true, online: true },
-				responses: [
-					{ key: "grants", status: 200, ok: true, data: [], duration_ms: 1 },
-					{ key: "agents", status: 200, ok: true, data: [{ id: "agent-1", name: "Agent" }], duration_ms: 1 },
-					{ key: "channels", status: 200, ok: true, data: [], duration_ms: 1 },
-					{ key: "triggers", status: 200, ok: true, data: [], duration_ms: 1 },
-					{ key: "providers", status: 200, ok: true, data: [], duration_ms: 1 },
-				],
-			}],
-		}), { status: 200, headers: { "Content-Type": "application/json" } }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		const details = await api.tenantAdminDetails("ten_rookie", "ssh-1");
-		expect(details.agents).toEqual([
-			{ id: "agent-1", name: "Agent", target_id: "ssh-1", target_name: "Remote" },
-		]);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-		expect(body.target_ids).toEqual(["ssh-1"]);
-		expect(body.requests).toHaveLength(5);
-	});
-});
-
 describe("fleet mergers", () => {
   it("sums usage and preserves partial failure warnings", () => {
     const report = (tokens: number, estimated: number): UsageReport => ({
@@ -317,7 +273,7 @@ describe("data an offline linked machine last reported", () => {
   const reportedAt = "2026-11-12T12:00:00Z";
 
   it("is shown with its age instead of as a failed load", async () => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "all" });
+    vi.stubGlobal("localStorage", { getItem: () => "all" });
     const stale = target("dev_1", "home-box", "data", [{ id: "a" }]);
     stale.target.kind = "link" as never;
     stale.target.online = false;
@@ -343,7 +299,7 @@ describe("data an offline linked machine last reported", () => {
   });
 
   it("remembers which machines failed because they were offline", async () => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "all" });
+    vi.stubGlobal("localStorage", { getItem: () => "all" });
     const failed = (id: string, name: string, error: string) => ({
       target: { id, name, kind: "link", trusted: true, online: false },
       responses: [{ key: "tools", status: 502, ok: false, error }],
@@ -359,7 +315,7 @@ describe("data an offline linked machine last reported", () => {
   });
 
   it("is noticed when that one machine is selected", async () => {
-    vi.stubGlobal("localStorage", { getItem: (key: string) => key.includes("tenant-scope") ? "" : "dev_1" });
+    vi.stubGlobal("localStorage", { getItem: () => "dev_1" });
     const fetchMock = vi.fn(async (_path: string) => new Response("[]", { headers: { "X-AgentMux-Reported-At": reportedAt } }));
     vi.stubGlobal("fetch", fetchMock);
     await api.superAgents();

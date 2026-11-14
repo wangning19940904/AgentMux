@@ -110,7 +110,7 @@ def test_resources_roundtrip() -> None:
                 200, json=[{"id": "c1", "name": "C", "type": "feishu", "enabled": True}]
             )
         if path == "/api/v1/console/sessions" and method == "POST":
-            assert request.url.params["landing"] == "tenants"
+            assert request.url.params["landing"] == "agents"
             return httpx.Response(
                 200,
                 json={
@@ -136,7 +136,7 @@ def test_resources_roundtrip() -> None:
     assert agents[0].runtime_id == "codex"
     channels = client.channels.list()
     assert channels[0].type == "feishu"
-    session = client.console.create_session(landing="tenants")
+    session = client.console.create_session(landing="agents")
     assert session.enter_url.endswith("nonce=n")
     assert session.session_ttl_seconds == 28800
     orchestration = client.orchestrations.create([OrchestrationTask(id="t1", agent_id="a1", input="do it")])
@@ -145,7 +145,7 @@ def test_resources_roundtrip() -> None:
     assert client.usage() == {"days": []}
 
 
-def test_integration_snapshot_composes_tenant_scoped_resources() -> None:
+def test_integration_snapshot_composes_resources() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/api/v1/capabilities":
@@ -155,13 +155,11 @@ def test_integration_snapshot_composes_tenant_scoped_resources() -> None:
                     "ok": True,
                     "product": "agentmux",
                     "version": "v0.1.5",
-                    "contract_version": "1.1",
-                    "features": ["tenancy", "invocations.stream"],
-                    "auth": {"bridge_enabled": True, "scope": "tenant", "tenant": "host"},
+                    "contract_version": "3.0",
+                    "features": ["invocations", "invocations.stream"],
+                    "auth": {"bridge_enabled": True, "scope": "admin"},
                 },
             )
-        if path == "/api/v1/tenancy/self":
-            return httpx.Response(200, json={"admin": False, "tenant": "host", "tenant_id": "ten_host"})
         if path == "/api/v1/agents":
             return httpx.Response(200, json=["codex", "claude"])
         if path == "/api/v1/platforms":
@@ -178,8 +176,8 @@ def test_integration_snapshot_composes_tenant_scoped_resources() -> None:
         raise AssertionError(path)
 
     snapshot = make_client(handler).integration.snapshot(orchestration_limit=3)
-    assert snapshot.identity.tenant == "host"
-    assert snapshot.capabilities.contract_version == "1.1"
+    assert snapshot.capabilities.contract_version == "3.0"
+    assert snapshot.capabilities.scope == "admin"
     assert snapshot.runtimes == ("codex", "claude")
     assert snapshot.platforms == ("feishu", "webhook")
     assert snapshot.agents[0].id == "a"

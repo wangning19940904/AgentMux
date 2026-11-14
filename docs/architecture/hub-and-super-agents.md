@@ -29,7 +29,7 @@ migration reuses AgentMux's existing seams so that each phase ships on its own
 | --- | --- | --- |
 | Agent model | Two parallel models. `AgentInstance` ([core/agent_instance.go](../../core/agent_instance.go)) is bound to channels, schedules and invocations. `SuperAgent` ([core/superagent.go](../../core/superagent.go)) has its own router, workers, sources and Tickets. Router agents (`sar_*`) and auto workers (`saw_*`) are hidden, read-only AgentInstances. | Users must learn two kinds of agent. Super Agent Sources overlap with Channels and Triggers: Feishu message claims ([superagent/claims.go](../../superagent/claims.go)) and GitHub webhooks are both separate from `/hook/{id}`. Orchestrations are a DAG ([core/orchestration.go](../../core/orchestration.go)), and Ticket `depends_on` is a second DAG. |
 | Multi-machine | A controller dials each machine over SSH ([remote/](../../remote/)). It imports `~/.ssh/config`, follows ProxyJump chains, pins host keys and uploads the binary. It reads the remote bridge token by running a script against launchd plists or `/proc/<pid>/environ` ([remote/token.go](../../remote/token.go)), then tunnels HTTP. The fleet query, execute and sync features fan out over those tunnels ([server/fleet.go](../../server/fleet.go), [server/fleet_sync.go](../../server/fleet_sync.go)). | The controller must reach every machine by SSH, so a NAT'd laptop, a phone or a teammate's machine cannot join. Each controller is its own island. The token it extracts is the *full admin* credential of the remote machine. "One daemon owns a Super Agent's Tickets" ([contract/SUPER_AGENTS.md:332](../../contract/SUPER_AGENTS.md)). |
-| Identity | Tenants are host *applications* such as the Web UI, the desktop app or a service ([core/tenancy.go](../../core/tenancy.go)). The admin is "whoever holds the bridge token". | There is no concept of a *person*, so agents of different users cannot be told apart, contacts are impossible and so is per-user consent. |
+| Identity | (When written) tenants were host *applications* such as the Web UI, the desktop app or a service. The admin is "whoever holds the bridge token". Tenancy has since been removed (contract 3.0): there are only admins and member accounts ([core/principal.go](../../core/principal.go)). | There is no concept of a *person*, so agents of different users cannot be told apart, contacts are impossible and so is per-user consent. |
 | Clients | The Console binds to `127.0.0.1:8765`, plus the desktop app, the menu bar app and the CLI. | No mobile client and no push notifications. The Console reaches another machine only over its SSH tunnel. |
 | Layering | `server/` is about 17k lines and holds business logic: fleet sync (1,300 lines), Feishu Open Platform automation (700 lines) and OpenAI Responses (840 lines). `core/` is about 13.5k lines and mixes the channel runtime, meetings, invocation and guard. | The README calls `server/` a thin transport, but it is not. The hub needs the same services without the HTTP layer. |
 
@@ -37,8 +37,8 @@ migration reuses AgentMux's existing seams so that each phase ships on its own
 PostgreSQL as the single source of truth; adapter registries; the Super Agent
 safety model (host-enforced allowed senders, roster-checked actions, observe
 mode, untrusted-text charter); durable channel tasks; encrypted observability;
-Guard; and tenancy grant levels (`read`/`use`/`manage`), which map directly onto
-sharing agents.
+Guard. (Tenancy grant levels `read`/`use`/`manage` were listed here; they were
+removed with tenancy in contract 3.0, and agent sharing will need its own model.)
 
 **The seam that makes the migration cheap:** Super Agent remote workers already
 go through `superagent.HostDialer` ([superagent/workers.go:58](../../superagent/workers.go)),
@@ -136,8 +136,7 @@ network. The code is in [store/hubsync.go](../../store/hubsync.go),
 
 **One PostgreSQL instance per machine.** Every machine, hub or not, runs exactly
 one PostgreSQL instance holding its own data. Hub data is a fixed list of
-ordinary tables in that same database (`store.HubTables`): tenants and their
-tokens, accounts and their sessions, devices, pairing codes, what devices
+ordinary tables in that same database (`store.HubTables`): accounts and their sessions, devices, pairing codes, what devices
 report, and Web Push keys and subscriptions. Every other table is the machine's
 own and is never copied. Hub data does not get its own instance or schema,
 because on a hub the Console already reads these tables where they are.
@@ -235,7 +234,7 @@ the relay.
   (`hub-peer.json` in the hub state directory). Moving the primary back is
   manual, on the relay's local control port (`POST /relay/v1/switch?to=<name>`).
 - **While a machine is the standby,** hub data on it is read-only. Its Console
-  cannot pair devices, change accounts or tenants, or sign in with an account
+  cannot pair devices, change accounts, or sign in with an account
   (sign-in writes a session); use the primary for those.
 
 Live frames still come from one hub process at a time. Running several active
@@ -267,7 +266,7 @@ amux hub join … --via-ssh my-server           # bootstrap: install AgentMux ov
 
 - Enrollment uses the device flow (RFC 8628). The person who approves the code
   **owns** the node. The hub issues a node token, stores only its SHA-256 hash
-  (as `tenant_tokens` does today), and returns its own TLS fingerprint for pinning.
+  (as device tokens do today), and returns its own TLS fingerprint for pinning.
 - The node keeps its token in the OS keychain where one is available, otherwise
   in a 0600 file. Revoking the node in the Console closes the link with code 4401
   and the node stops reconnecting (imbo's `CLOSE_UNAUTHORIZED`). A second link
@@ -287,7 +286,7 @@ already a dependency) carries a **yamux** session:
   and the fleet dialer, so `/api/v1/invocations/stream`, fleet query and execute,
   directory listing and terminal snapshots all work unchanged over the hub.
   **The node checks every tunnelled request against a node RPC route policy**,
-  just as `tenantRoutePolicy` does today. The hub reaches only what node policy
+  just as `memberRoutePolicy` ([server/auth_policy.go](../../server/auth_policy.go)) does today for member accounts. The hub reaches only what node policy
   allows (§4.5), never the full Console API.
 - **Streams opened by the node towards the hub** carry uploads such as
   artifacts, ticket result files and usage batches.
@@ -334,7 +333,7 @@ any report.
 ### 4.5 Identity, ownership and permissions
 
 ```
-Principal = Account (person) | Node (device token) | Agent (acting for its owner) | App (today's Tenant)
+Principal = Account (person) | Node (device token) | Agent (acting for its owner) | App (an API client)
 ```
 
 - **Account:** a person. The hub signs accounts in with an email code or OIDC.
@@ -342,11 +341,12 @@ Principal = Account (person) | Node (device token) | Agent (acting for its owner
   exists. Today's bridge-token admin becomes the hub's first account.
 - **Node:** owned by the account that approved it. Only the owner can manage it.
   A hub admin can only unpair it (as in OpenAgents).
-- **Agent:** owned by an account and private by default. Sharing reuses the
-  existing grant levels:
+- **Agent:** owned by an account and private by default. Sharing would use
+  grant levels (the earlier tenancy grants were removed in contract 3.0):
   `read` (see the agent and its Tickets) · `use` (message it and open Tickets) ·
   `manage` (edit it).
-- **App:** the existing tenants stay, as API clients that act for an account.
+- **App:** an API client that acts for an account. Tenants, which used to fill
+  this role, were removed in contract 3.0; integrations use the bridge token.
 - **Node policy** decides what the hub may ask a node to do. Each item is a
   separate opt-in: `accept_owner_work` (on by default), `accept_shared_agent_work`
   (off by default; teammates' agents cannot run on your machine unless you opt in),

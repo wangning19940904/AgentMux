@@ -1,4 +1,4 @@
-import type { Channel, ProviderMonitorSnapshot } from "../api";
+import type { Channel, FrameworkSmokeResult, TargetMetadata } from "../api";
 
 export type OverviewHealthLevel = "healthy" | "warning" | "empty";
 
@@ -50,37 +50,28 @@ export function summarizeChannelHealth(channels: Channel[]): OverviewHealthSumma
   };
 }
 
-export function summarizeModelHealth(
-  monitor: ProviderMonitorSnapshot | null | undefined,
-  configuredProviders: number,
-): OverviewHealthSummary {
-  const statuses = monitor?.providers ?? [];
-  let healthy = 0;
-  let issues = 0;
-  let pending = 0;
-  const issueLabels: string[] = [];
-
-  for (const provider of statuses) {
-    const state = provider.state.trim().toLowerCase();
-    if (state === "healthy" && provider.unhealthy_models === 0) {
-      healthy += 1;
-    } else if (state === "checking") {
-      pending += 1;
-    } else {
-      issues += 1;
-      issueLabels.push(healthLabel(provider.provider_name, provider.target_name));
-    }
+// summarizeFrameworkHealth counts each framework by its most recent test, on
+// each machine: whatever model it was tested with.
+export function summarizeFrameworkHealth(results: (FrameworkSmokeResult & TargetMetadata)[], displayName: (kind: string) => string = (kind) => kind): OverviewHealthSummary {
+  const latest = new Map<string, FrameworkSmokeResult & TargetMetadata>();
+  for (const result of results) {
+    const key = `${result.target_id || "local"}::${result.kind}`;
+    const current = latest.get(key);
+    if (!current || Date.parse(result.checked_at) > Date.parse(current.checked_at)) latest.set(key, result);
   }
-
-  pending += Math.max(0, configuredProviders - statuses.length);
-  const total = Math.max(configuredProviders, statuses.length);
+  let healthy = 0;
+  const issueLabels: string[] = [];
+  for (const result of latest.values()) {
+    if (result.ok) healthy += 1;
+    else issueLabels.push(healthLabel(displayName(result.kind), result.target_name));
+  }
   return {
-    total,
+    total: latest.size,
     healthy,
-    issues,
+    issues: issueLabels.length,
     inactive: 0,
-    pending,
+    pending: 0,
     issueLabels,
-    level: total === 0 ? "empty" : issues > 0 || pending > 0 ? "warning" : "healthy",
+    level: latest.size === 0 ? "empty" : issueLabels.length > 0 ? "warning" : "healthy",
   };
 }

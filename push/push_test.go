@@ -352,7 +352,7 @@ func TestSubscribeValidatesWhatABrowserSends(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("subscriptions = %+v", list)
 	}
-	if removed, _ := svc.Unsubscribe(ctx, "tenant:t1", sub.ID); removed {
+	if removed, _ := svc.Unsubscribe(ctx, "account:a1", sub.ID); removed {
 		t.Fatal("another subscriber removed the subscription")
 	}
 	if removed, _ := svc.Unsubscribe(ctx, SubscriberAdmin, sub.ID); !removed {
@@ -378,8 +378,8 @@ func TestDeliveryFollowsKindsAndDropsDeadSubscriptions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tenantReq := subscribeRequest(t, "https://push.example/tenant")
-	if _, err := svc.Subscribe(ctx, "tenant:t1", tenantReq); err != nil {
+	memberReq := subscribeRequest(t, "https://push.example/member")
+	if _, err := svc.Subscribe(ctx, "account:a1", memberReq); err != nil {
 		t.Fatal(err)
 	}
 
@@ -418,9 +418,9 @@ func TestDeliveryFollowsKindsAndDropsDeadSubscriptions(t *testing.T) {
 	if sent := sender.take(); len(sent) != 1 || sent[0].message.Kind != "test" || sent[0].message.URL != "/#settings" {
 		t.Fatalf("test sent %+v", sent)
 	}
-	// A tenant's test reaches only the tenant's own subscription.
-	if results := svc.SendTest(ctx, "tenant:t1", ""); len(results) != 1 {
-		t.Fatalf("tenant test = %+v", results)
+	// A member's test reaches only the member's own subscription.
+	if results := svc.SendTest(ctx, "account:a1", ""); len(results) != 1 {
+		t.Fatalf("member test = %+v", results)
 	}
 	sender.take()
 
@@ -434,7 +434,7 @@ func TestDeliveryFollowsKindsAndDropsDeadSubscriptions(t *testing.T) {
 			for _, m := range sent {
 				got[m.endpoint] = true
 			}
-			if !got["https://push.example/machines-only"] || !got["https://push.example/all"] || got["https://push.example/tenant"] {
+			if !got["https://push.example/machines-only"] || !got["https://push.example/all"] || got["https://push.example/member"] {
 				t.Fatalf("machine event went to %v", got)
 			}
 			break

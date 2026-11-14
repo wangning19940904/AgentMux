@@ -53,7 +53,7 @@ it("asks for sign-in, explains a failure, and opens the Console after success", 
   const authSession = vi.spyOn(api, "authSession").mockResolvedValue(signedOut);
   const signIn = vi.spyOn(api, "signIn")
     .mockRejectedValueOnce(new APIError("wrong login name or password", 401, {}))
-    .mockResolvedValueOnce({ account: { id: "acct_1", login: "bob", role: "member", tenant_id: "ten_1" } });
+    .mockResolvedValueOnce({ account: { id: "acct_1", login: "bob", role: "member" } });
   const { container, root } = await render(<SignInGate><p>console</p></SignInGate>);
   try {
     expect(container.textContent).not.toContain("console");
@@ -71,7 +71,7 @@ it("asks for sign-in, explains a failure, and opens the Console after success", 
 
     authSession.mockResolvedValue({
       ...signedOut, sign_in_required: false, authenticated: true,
-      account: { id: "acct_1", login: "bob", role: "member", tenant_id: "ten_1" }, tenant_id: "ten_1",
+      account: { id: "acct_1", login: "bob", role: "member" },
     });
     await act(async () => {
       setInput(password, "bob-password-1");

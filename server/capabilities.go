@@ -32,35 +32,23 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Bridge.Enabled || s.cfg.Bridge.Token != "" || s.st != nil {
 		features = append(features, "console.session")
 	}
-	if s.st != nil {
-		features = append(features, "tenancy")
-	}
-
-	// The counts describe what the caller can see, so a tenant is told the
-	// size of its own scope rather than the whole instance.
+	// Agents and channels belong to administrators; a member is told nothing
+	// about them.
 	principal := requestPrincipal(r)
 	agents := map[string]any{"count": 0, "runtimes": availableAgentRuntimes()}
 	channels := map[string]any{"count": 0}
-	if s.st != nil {
-		if items, err := s.scopedAgentInstances(r.Context(), principal); err == nil {
+	if s.st != nil && principal.Admin {
+		if items, err := s.agentInstances(r.Context()); err == nil {
 			agents["count"] = len(items)
 		}
-		if principal.IsTenant() {
-			if items, err := s.st.ListChannelsForTenant(r.Context(), principal.TenantID); err == nil {
-				channels["count"] = len(items)
-			}
-		} else if items, err := s.st.ListChannels(r.Context()); err == nil {
+		if items, err := s.st.ListChannels(r.Context()); err == nil {
 			channels["count"] = len(items)
 		}
 	}
 
-	auth := map[string]any{"bridge_enabled": s.cfg.Bridge.Enabled}
-	if principal.IsTenant() {
-		auth["tenant"] = principal.TenantName
-		auth["tenant_id"] = principal.TenantID
-		auth["scope"] = "tenant"
-	} else {
-		auth["scope"] = "admin"
+	auth := map[string]any{"bridge_enabled": s.cfg.Bridge.Enabled, "scope": "admin"}
+	if principal.IsMember() {
+		auth["scope"] = "member"
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

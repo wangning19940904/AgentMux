@@ -2,7 +2,7 @@ import { LogIn } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, type AuthSession } from "./api";
 import { useI18n } from "./i18n";
-import { AUTH_CHANGED_EVENT, notifyAuthChanged, resolveSignInGate, signInErrorKey } from "./tenancyGate";
+import { AUTH_CHANGED_EVENT, notifyAuthChanged, resolveSignInGate, signInErrorKey } from "./signIn";
 
 // SignInGate shows the sign-in screen instead of the Console when accounts
 // exist and this browser has no credential of its own. With no accounts it

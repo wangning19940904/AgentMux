@@ -39,32 +39,29 @@ MODEL_FIELD_MAP: dict[str, tuple[type, dict[str, str]]] = {
     )),
     "agent_instance.json": (models.AgentInstance, identity_fields(
         "id", "name", "runtime_id", "desktop_thread_id", "work_dir", "workspace_mode",
-        "worktree_base_ref", "session_backend", "system_prompt", "provider_tool", "provider_id",
-        "provider_name", "default_model", "default_reasoning_effort", "default_service_tier",
+        "worktree_base_ref", "session_backend", "system_prompt",
+        "default_model", "default_reasoning_effort", "default_service_tier",
         "default_approval_mode", "private_chat_mode", "group_chat_mode", "memory_scope", "env", "channel_bindings", "schedules",
-        "mcp_servers", "skills", "clis", "enabled", "source", "owner_tenant_id",
-        "owner_tenant_name", "visibility", "created_at", "updated_at",
+        "mcp_servers", "skills", "clis", "enabled", "source",
+        "created_at", "updated_at",
     )),
     "channel.json": (models.Channel, identity_fields(
-        "id", "name", "type", "agent_id", "config", "enabled", "owner_tenant_id",
-        "owner_tenant_name", "visibility", "created_at", "updated_at",
+        "id", "name", "type", "agent_id", "config", "enabled",
+        "created_at", "updated_at",
     )),
     "trigger.json": (models.Trigger, identity_fields(
         "id", "name", "kind", "agent_id", "channel_id", "chat_id", "cron_expr", "prompt",
         "event", "action_type", "action_target", "token", "session_mode", "enabled", "last_run",
-        "last_status", "last_error", "owner_tenant_id", "created_at", "updated_at",
+        "last_status", "last_error", "created_at", "updated_at",
     )),
     "orchestration.json": (models.Orchestration, identity_fields(
-        "id", "name", "status", "max_concurrency", "error", "tasks", "owner_tenant_id",
+        "id", "name", "status", "max_concurrency", "error", "tasks",
         "created_at", "started_at", "finished_at", "updated_at",
     )),
     "orchestration_task.json": (models.OrchestrationTask, identity_fields(
         "id", "orchestration_id", "agent_id", "input", "depends_on", "status", "output",
         "error", "invocation_id", "conversation_id", "created_at", "started_at", "finished_at",
         "updated_at",
-    )),
-    "tenant.json": (models.Tenant, identity_fields(
-        "id", "name", "kind", "status", "note", "created_at", "updated_at",
     )),
     "turn_usage.json": (models.TurnUsage, {
         "model": "Model", "request_id": "RequestID", "requested_model": "RequestedModel",

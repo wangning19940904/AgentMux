@@ -15,7 +15,6 @@ func (s *Server) handleOrchestrationsList(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusServiceUnavailable, "orchestration store is unavailable")
 		return
 	}
-	principal := requestPrincipal(r)
 	if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" {
 		item, err := s.st.GetOrchestration(r.Context(), id)
 		if err != nil {
@@ -26,23 +25,12 @@ func (s *Server) handleOrchestrationsList(w http.ResponseWriter, r *http.Request
 			writeErr(w, http.StatusNotFound, "orchestration not found")
 			return
 		}
-		level := s.accessLevel(r.Context(), principal, core.ResourceTypeOrchestration, item.ID, item.OwnerTenantID, "")
-		if !core.GrantSatisfies(level, core.GrantLevelRead) {
-			writeNotVisible(w, "orchestration")
-			return
-		}
 		writeJSON(w, http.StatusOK, item)
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	activeOnly := r.URL.Query().Get("active") == "true"
-	var items []core.Orchestration
-	var err error
-	if principal.IsTenant() {
-		items, err = s.st.ListOrchestrationsForTenant(r.Context(), activeOnly, limit, principal.TenantID)
-	} else {
-		items, err = s.st.ListOrchestrations(r.Context(), activeOnly, limit)
-	}
+	items, err := s.st.ListOrchestrations(r.Context(), activeOnly, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,17 +55,6 @@ func (s *Server) handleOrchestrationCreate(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	// Every task target must be runnable by the caller, otherwise a tenant
-	// could reach a peer's agent through a DAG instead of a direct invocation.
-	principal := requestPrincipal(r)
-	if principal.IsTenant() {
-		orchestration.OwnerTenantID = principal.TenantID
-		for _, task := range orchestration.Tasks {
-			if !s.authorizeInvocationTarget(w, r, task.AgentID) {
-				return
-			}
-		}
 	}
 	if err := s.orchestrations.Create(r.Context(), orchestration); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

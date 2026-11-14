@@ -386,12 +386,6 @@ func (s *fakeStore) GetAgentInstance(ctx context.Context, id string) (*AgentInst
 func (s *fakeStore) UpdateAgentRuntimeSettings(ctx context.Context, id string, settings RuntimeSettings) error {
 	return nil
 }
-func (s *fakeStore) ActiveProviderRoutes(ctx context.Context) ([]ProviderRoute, error) {
-	return nil, nil
-}
-func (s *fakeStore) GetProvider(ctx context.Context, id string) (*Provider, error) {
-	return nil, nil
-}
 
 func (s *fakeStore) lastStatus(id string) string {
 	s.mu.Lock()

@@ -21,18 +21,15 @@ import (
 type LegacyObservationImportResult struct {
 	UsageScanned  int `json:"usage_scanned"`
 	UsageImported int `json:"usage_imported"`
-	ProxyScanned  int `json:"proxy_scanned"`
-	ProxyImported int `json:"proxy_imported"`
 }
 
 const (
 	legacyObservationImportBatchSize = 512
 	legacyUsageImportCursorKey       = "observation:legacy_usage_rowid"
-	legacyProxyImportCursorKey       = "observation:legacy_proxy_rowid"
 )
 
-// ImportLegacyObservations backfills the pre-observability usage_records and
-// proxy_traces tables into ObservationEnvelope v1. It deliberately leaves the
+// ImportLegacyObservations backfills the pre-observability usage_records
+// table into ObservationEnvelope v1. It deliberately leaves the
 // source rows untouched so the old Usage and Gateway APIs remain compatible.
 //
 // Legacy records do not contain a complete agent/turn/span causal chain. They
@@ -104,60 +101,6 @@ func (s *Store) ImportLegacyObservations(ctx context.Context) (LegacyObservation
 		}
 	}
 
-	proxyCursor, err := s.legacyObservationImportCursor(ctx, legacyProxyImportCursorKey)
-	if err != nil {
-		return result, err
-	}
-	for {
-		proxyRows, err := s.loadLegacyProxyRowsAfter(ctx, proxyCursor, legacyObservationImportBatchSize)
-		if err != nil {
-			return result, fmt.Errorf("load legacy proxy rows: %w", err)
-		}
-		if len(proxyRows) == 0 {
-			break
-		}
-		for _, row := range proxyRows {
-			result.ProxyScanned++
-			if row.TraceID != "" {
-				exists, err := s.observationTraceExists(ctx, row.TraceID)
-				if err != nil {
-					return result, err
-				}
-				if exists {
-					continue
-				}
-			}
-			terminalEventID := legacyEventID("proxy.end", row.identity())
-			alreadyImported, err := s.observationEventExists(ctx, terminalEventID)
-			if err != nil {
-				return result, fmt.Errorf("check legacy proxy %q: %w", row.identity(), err)
-			}
-			if alreadyImported {
-				continue
-			}
-			start, end := row.envelopes(correlations)
-			spanID, err := s.resolveLegacyModelSpanID(ctx, end.TraceID, row.RequestID, row.Attempt, end.SpanID)
-			if err != nil {
-				return result, fmt.Errorf("correlate legacy proxy %q: %w", row.identity(), err)
-			}
-			start.SpanID = spanID
-			end.SpanID = spanID
-			if err := s.RecordObservation(ctx, start); err != nil {
-				return result, fmt.Errorf("record legacy proxy start %q: %w", row.identity(), err)
-			}
-			if err := s.RecordObservation(ctx, end); err != nil {
-				return result, fmt.Errorf("record legacy proxy end %q: %w", row.identity(), err)
-			}
-			result.ProxyImported++
-			if err := s.saveLegacyObservationImportCursor(ctx, legacyProxyImportCursorKey, row.RowID); err != nil {
-				return result, err
-			}
-		}
-		proxyCursor = proxyRows[len(proxyRows)-1].RowID
-		if err := s.saveLegacyObservationImportCursor(ctx, legacyProxyImportCursorKey, proxyCursor); err != nil {
-			return result, err
-		}
-	}
 	return result, nil
 }
 
@@ -178,88 +121,6 @@ func (s *Store) saveLegacyObservationImportCursor(ctx context.Context, key strin
 		return fmt.Errorf("save legacy observation cursor %q: %w", key, err)
 	}
 	return nil
-}
-
-// SecureLegacyProxyErrors migrates pre-observability proxy error detail into
-// the recorder's encrypted content path, then replaces the compatibility
-// table value with a generic summary using a compare-and-swap update. Stable
-// event IDs make retries idempotent; content older than the recorder's policy
-// is discarded there before the plaintext source is cleared.
-func (s *Store) SecureLegacyProxyErrors(ctx context.Context, secure core.ObservationHandler) (int, error) {
-	if s.IsPostgres() {
-		return 0, nil
-	}
-	if secure == nil {
-		return 0, nil
-	}
-	correlations, err := s.loadLegacyCorrelations(ctx)
-	if err != nil {
-		return 0, err
-	}
-	secured := 0
-	// Stream the compatibility table in bounded batches instead of loading it
-	// wholesale; large stores hold hundreds of thousands of proxy rows.
-	var cursor int64
-	for {
-		rows, err := s.loadLegacyProxyRowsAfter(ctx, cursor, legacyObservationImportBatchSize)
-		if err != nil {
-			return secured, err
-		}
-		if len(rows) == 0 {
-			return secured, nil
-		}
-		cursor = rows[len(rows)-1].RowID
-		batchSecured, err := s.secureLegacyProxyBatch(ctx, secure, correlations, rows)
-		secured += batchSecured
-		if err != nil {
-			return secured, err
-		}
-	}
-}
-
-func (s *Store) secureLegacyProxyBatch(ctx context.Context, secure core.ObservationHandler, correlations legacyCorrelationIndex, rows []legacyProxyRow) (int, error) {
-	secured := 0
-	for _, row := range rows {
-		detail := strings.TrimSpace(row.Error)
-		if detail == "" || detail == "Proxy request failed" || detail == "Legacy proxy request failed" {
-			continue
-		}
-		_, end := row.envelopes(correlations)
-		modelSpanID, err := s.resolveLegacyModelSpanID(ctx, end.TraceID, row.RequestID, row.Attempt, end.SpanID)
-		if err != nil {
-			return secured, err
-		}
-		errorSpanID := legacyStableHex("proxy.error.span", row.identity(), 8)
-		eventID := legacyEventID("proxy.error", row.identity())
-		envelope := core.ObservationEnvelope{
-			Version: core.ObservationEnvelopeVersion, EventID: eventID,
-			DedupeKey: "legacy_proxy_error:" + legacyStableHex("proxy.error", row.identity(), 16),
-			Time:      parseLegacyObservationTime(row.TimestampRaw), TraceID: end.TraceID, SpanID: errorSpanID, ParentSpanID: modelSpanID,
-			Kind: "proxy.error", Name: "Legacy proxy error detail", Lifecycle: core.ObservationLifecycleEvent,
-			AgentID: end.AgentID, AgentName: end.AgentName, RuntimeID: end.RuntimeID,
-			ConversationID: end.ConversationID, SessionID: end.SessionID, TurnID: end.TurnID,
-			Source: "legacy_proxy", Provenance: []string{"proxy_traces", "encrypted_error_migration"},
-			Quality: core.ObservationQualityLegacy, Status: core.ObservationStatusUnset,
-			Attributes: map[string]any{"backfilled": true, "coverage": core.ObservationQualityPartial},
-			Content:    &core.ObservationContent{ContentType: "text/plain; charset=utf-8", Data: []byte(detail)},
-		}
-		alreadySecured, err := s.observationEventExists(ctx, eventID)
-		if err != nil {
-			return secured, err
-		}
-		if !alreadySecured {
-			if err := secure(ctx, envelope); err != nil {
-				return secured, err
-			}
-		}
-		result, err := s.observe.ExecContext(ctx, `UPDATE proxy_traces SET error='Legacy proxy request failed' WHERE id=? AND error=?`, row.ID, row.Error)
-		if err != nil {
-			return secured, err
-		}
-		changed, _ := result.RowsAffected()
-		secured += int(changed)
-	}
-	return secured, nil
 }
 
 type legacyUsageRow struct {
@@ -381,196 +242,6 @@ func (r legacyUsageRow) envelope(c legacyCorrelationIndex) core.ObservationEnvel
 		},
 		Attributes: attributes,
 	}
-}
-
-type legacyProxyRow struct {
-	RowID            int64
-	ID               string
-	RequestID        string
-	TraceID          string
-	Attempt          int
-	ParentAttemptID  string
-	TimestampRaw     string
-	StartedAtRaw     string
-	Tool             string
-	ProviderID       string
-	ProviderName     string
-	ClientProtocol   string
-	UpstreamProtocol string
-	ClientModel      string
-	UpstreamModel    string
-	StatusCode       int
-	Success          bool
-	Error            string
-	SessionID        string
-	ProjectDir       string
-	TTFTMs           int64
-	DurationMs       int64
-	StreamComplete   bool
-	FinishReason     string
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	RequestBytes     int64
-	ResponseBytes    int64
-}
-
-func (s *Store) loadLegacyProxyRowsAfter(ctx context.Context, after int64, limit int) ([]legacyProxyRow, error) {
-	query := `SELECT rowid,
-		COALESCE(id,''),COALESCE(request_id,''),COALESCE(trace_id,''),COALESCE(attempt,0),
-		COALESCE(parent_attempt_id,''),COALESCE(timestamp,''),COALESCE(started_at,''),COALESCE(tool,''),
-		COALESCE(provider_id,''),COALESCE(provider_name,''),COALESCE(client_protocol,''),
-		COALESCE(upstream_protocol,''),COALESCE(client_model,''),COALESCE(upstream_model,''),
-		COALESCE(status_code,0),COALESCE(success,0),COALESCE(error,''),COALESCE(session_id,''),
-		COALESCE(project_dir,''),COALESCE(ttft_ms,0),COALESCE(duration_ms,0),COALESCE(stream_complete,0),
-		COALESCE(finish_reason,''),COALESCE(input_tokens,0),COALESCE(output_tokens,0),
-		COALESCE(cache_read_tokens,0),COALESCE(cache_write_tokens,0),COALESCE(request_bytes,0),
-		COALESCE(response_bytes,0)
-		FROM proxy_traces WHERE rowid>? ORDER BY rowid`
-	args := []any{after}
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []legacyProxyRow
-	for rows.Next() {
-		var row legacyProxyRow
-		var success, streamComplete int
-		if err := rows.Scan(&row.RowID, &row.ID, &row.RequestID, &row.TraceID, &row.Attempt, &row.ParentAttemptID,
-			&row.TimestampRaw, &row.StartedAtRaw, &row.Tool, &row.ProviderID, &row.ProviderName,
-			&row.ClientProtocol, &row.UpstreamProtocol, &row.ClientModel, &row.UpstreamModel,
-			&row.StatusCode, &success, &row.Error, &row.SessionID, &row.ProjectDir,
-			&row.TTFTMs, &row.DurationMs, &streamComplete, &row.FinishReason,
-			&row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens,
-			&row.RequestBytes, &row.ResponseBytes); err != nil {
-			return nil, err
-		}
-		row.Success = success != 0
-		row.StreamComplete = streamComplete != 0
-		result = append(result, row)
-	}
-	return result, rows.Err()
-}
-
-func (r legacyProxyRow) identity() string {
-	if strings.TrimSpace(r.ID) != "" {
-		return r.ID
-	}
-	// id is the durable primary key in every normal row. The complete fallback
-	// keeps even malformed pre-release rows deterministic without a rowid.
-	return strings.Join([]string{
-		r.RequestID, r.TraceID, strconv.Itoa(r.Attempt), r.TimestampRaw, r.Tool,
-		r.ProviderID, r.ClientModel, r.UpstreamModel, r.SessionID, r.ProjectDir,
-	}, "\x00")
-}
-
-func (r legacyProxyRow) envelopes(c legacyCorrelationIndex) (core.ObservationEnvelope, core.ObservationEnvelope) {
-	identity := r.identity()
-	correlation := c.resolve("", r.SessionID, r.ProjectDir)
-	runtimeID := firstNonEmpty(correlation.RuntimeID, legacyRuntimeID(r.Tool))
-	traceID := strings.TrimSpace(r.TraceID)
-	if traceID == "" {
-		traceID = legacyTraceID("proxy", runtimeID, r.SessionID, "", r.RequestID, identity)
-	}
-	spanID := legacyModelSpanFallback(traceID, r.RequestID, r.Attempt, "proxy\x00"+identity)
-	endTime := parseLegacyObservationTime(r.TimestampRaw)
-	startTime := parseLegacyObservationTime(r.StartedAtRaw)
-	if !parseLegacyObservationTimeOK(r.StartedAtRaw) {
-		startTime = endTime.Add(-time.Duration(max(r.DurationMs, 0)) * time.Millisecond)
-	}
-	if startTime.After(endTime) {
-		if r.DurationMs > 0 {
-			endTime = startTime.Add(time.Duration(r.DurationMs) * time.Millisecond)
-		} else {
-			endTime = startTime
-		}
-	}
-	provider := firstNonEmpty(r.ProviderID, r.ProviderName)
-	protocol := firstNonEmpty(r.UpstreamProtocol, r.ClientProtocol)
-	model := &core.ObservationModel{
-		Provider:       provider,
-		Requested:      r.ClientModel,
-		Resolved:       r.UpstreamModel,
-		Protocol:       protocol,
-		RequestID:      r.RequestID,
-		Attempt:        r.Attempt,
-		FinishReason:   r.FinishReason,
-		TTFTMillis:     r.TTFTMs,
-		DurationMillis: r.DurationMs,
-	}
-	attributes := map[string]any{
-		"backfilled":       true,
-		"coverage":         core.ObservationQualityPartial,
-		"legacy_table":     "proxy_traces",
-		"status_code":      r.StatusCode,
-		"stream_complete":  r.StreamComplete,
-		"request_bytes":    r.RequestBytes,
-		"response_bytes":   r.ResponseBytes,
-		"legacy_error_set": r.Error != "",
-	}
-	setLegacyAttribute(attributes, "project_dir", r.ProjectDir)
-	setLegacyAttribute(attributes, "provider_name", r.ProviderName)
-	setLegacyAttribute(attributes, "client_protocol", r.ClientProtocol)
-	setLegacyAttribute(attributes, "upstream_protocol", r.UpstreamProtocol)
-	setLegacyAttribute(attributes, "parent_attempt_id", r.ParentAttemptID)
-	if !parseLegacyObservationTimeOK(r.TimestampRaw) {
-		setLegacyAttribute(attributes, "legacy_timestamp", r.TimestampRaw)
-	}
-	status := core.ObservationStatusError
-	var observationError *core.ObservationError
-	if r.Success {
-		status = core.ObservationStatusOK
-	} else {
-		// Raw legacy errors can contain provider responses or secrets. Preserve
-		// only their presence; content-bearing errors belong in encrypted payloads.
-		observationError = &core.ObservationError{Code: "legacy_proxy_failed", Message: "Legacy proxy request failed"}
-	}
-	base := core.ObservationEnvelope{
-		Version:        core.ObservationEnvelopeVersion,
-		TraceID:        traceID,
-		SpanID:         spanID,
-		Kind:           "model.request",
-		Name:           "Legacy proxy request",
-		AgentID:        correlation.AgentID,
-		AgentName:      correlation.AgentName,
-		RuntimeID:      runtimeID,
-		ConversationID: correlation.ConversationID,
-		SessionID:      r.SessionID,
-		Source:         "legacy_proxy",
-		Provenance:     []string{"proxy_traces", r.Tool},
-		Quality:        core.ObservationQualityLegacy,
-		Model:          model,
-		Attributes:     attributes,
-	}
-	start := base
-	start.EventID = legacyEventID("proxy.start", identity)
-	start.DedupeKey = "legacy_proxy:" + legacyStableHex("proxy.row", identity, 16) + ":start"
-	start.Time = startTime
-	start.Lifecycle = core.ObservationLifecycleStart
-	start.Status = core.ObservationStatusRunning
-
-	end := base
-	end.EventID = legacyEventID("proxy.end", identity)
-	end.DedupeKey = "legacy_proxy:" + legacyStableHex("proxy.row", identity, 16) + ":end"
-	end.Time = endTime
-	end.Lifecycle = core.ObservationLifecycleEnd
-	end.Status = status
-	end.Error = observationError
-	end.Usage = &core.ObservationUsage{
-		InputTokens:      r.InputTokens,
-		OutputTokens:     r.OutputTokens,
-		CacheReadTokens:  r.CacheReadTokens,
-		CacheWriteTokens: r.CacheWriteTokens,
-		TotalTokens:      r.InputTokens + r.OutputTokens + r.CacheReadTokens + r.CacheWriteTokens,
-		Cumulative:       true,
-	}
-	return start, end
 }
 
 func (s *Store) observationEventExists(ctx context.Context, eventID string) (bool, error) {
@@ -769,10 +440,10 @@ func legacyWorkDirKey(value string) string {
 }
 
 func legacyRuntimeID(value string) string {
-	switch core.NormalizeProviderTool(strings.ToLower(strings.TrimSpace(value))) {
-	case "claudecode":
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "claude", "claudecode", "claudecode-cli", "claude-code-cli":
 		return "claude"
-	case "codex":
+	case "codex", "codex-cli", "codex-app", "codex-desktop", "codex-app-server":
 		return "codex"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))

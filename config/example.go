@@ -26,10 +26,6 @@ connect_timeout_seconds = 10
 # the Console/API. Import a legacy project config with:
 #   amux database import-config --apply
 
-[provider]
-failover = true
-# proxy_addr = "127.0.0.1:15733"
-
 [usage]
 sources = ["claude", "codex", "cursor", "gemini"]
 offline = false

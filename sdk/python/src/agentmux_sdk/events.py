@@ -40,7 +40,6 @@ class EventSubscription(EventWireModel):
     event_types: list[str] = field(default_factory=list)
     callback_url: str = ""
     paused: bool = False
-    owner_tenant_id: str | None = None
     filters: dict[str, list[str]] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
@@ -61,7 +60,6 @@ class EventSubscription(EventWireModel):
             "filters",
             "callback_url",
             "paused",
-            "owner_tenant_id",
         )
         return {key: getattr(self, key) for key in keys}
 

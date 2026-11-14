@@ -20,7 +20,7 @@ func (h *harness) enableAutoWorkers(workDir string) {
 	defer h.store.mu.Unlock()
 	router := h.store.local["router"]
 	router.WorkDir = workDir
-	router.RuntimeID, router.ProviderID, router.DefaultModel = "dsh", "provider-1", "model-1"
+	router.RuntimeID, router.DefaultModel = "dsh", "model-1"
 	router.Env = map[string]string{"DEEPSEEK_API_KEY": "from-router"}
 	router.MCPServers, router.Skills = []string{"mcp-1"}, []string{"skill-1"}
 	h.store.local["router"] = router
@@ -67,7 +67,7 @@ func TestRouterLaunchesAWorkerNoOneConfigured(t *testing.T) {
 	if worker == nil || !IsManagedAgent(*worker) || !worker.Enabled {
 		t.Fatalf("worker = %+v", worker)
 	}
-	if worker.RuntimeID != "dsh" || worker.ProviderID != "provider-1" || worker.DefaultModel != "model-1" || worker.Env["DEEPSEEK_API_KEY"] != "from-router" {
+	if worker.RuntimeID != "dsh" || worker.DefaultModel != "model-1" || worker.Env["DEEPSEEK_API_KEY"] != "from-router" {
 		t.Fatalf("the worker must run like the router: %+v", worker)
 	}
 	if worker.DefaultApprovalMode != core.ApprovalModeAutoEdit {
@@ -426,7 +426,7 @@ func TestRouterChoosesAmongWorkerFrameworks(t *testing.T) {
 	if worker == nil || worker.RuntimeID != "kimi" || worker.DefaultApprovalMode != core.ApprovalModeAuto {
 		t.Fatalf("worker = %+v", worker)
 	}
-	if worker.ProviderID != "" || worker.DefaultModel != "" || len(worker.Env) != 0 {
+	if worker.DefaultModel != "" || len(worker.Env) != 0 {
 		t.Fatalf("the router's provider and environment belong to its framework: %+v", worker)
 	}
 

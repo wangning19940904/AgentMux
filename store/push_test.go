@@ -49,7 +49,7 @@ func TestPushSubscriptionsBelongToTheirSubscriber(t *testing.T) {
 		ctx := context.Background()
 		phone := core.PushSubscription{ID: "sub-phone", Subscriber: "admin", Endpoint: "https://push.example/a",
 			P256dh: "key-a", Auth: "auth-a", Kinds: []string{core.PushKindWaiting}, Label: "iPhone"}
-		tablet := core.PushSubscription{ID: "sub-tablet", Subscriber: "tenant:t1", Endpoint: "https://push.example/b",
+		tablet := core.PushSubscription{ID: "sub-tablet", Subscriber: "account:a1", Endpoint: "https://push.example/b",
 			P256dh: "key-b", Auth: "auth-b", Kinds: []string{}, CreatedAt: time.Now().Add(time.Minute)}
 		for _, sub := range []core.PushSubscription{phone, tablet} {
 			if err := st.UpsertPushSubscription(ctx, sub); err != nil {
@@ -87,7 +87,7 @@ func TestPushSubscriptionsBelongToTheirSubscriber(t *testing.T) {
 
 		// Another subscriber cannot remove it; the push service (no
 		// subscriber) can.
-		if removed, err := st.DeletePushSubscription(ctx, phone.ID, "tenant:t1"); err != nil || removed {
+		if removed, err := st.DeletePushSubscription(ctx, phone.ID, "account:a1"); err != nil || removed {
 			t.Fatalf("foreign delete = %v, %v", removed, err)
 		}
 		if removed, err := st.DeletePushSubscription(ctx, phone.ID, ""); err != nil || !removed {

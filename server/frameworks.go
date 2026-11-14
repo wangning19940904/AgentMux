@@ -102,8 +102,8 @@ type frameworkTestRequest struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	ServiceTier     string `json:"service_tier,omitempty"`
-	// AgentID tests with that Agent's runtime, environment and default model
-	// settings. Explicit fields above override the Agent's defaults.
+	// AgentID lends that Agent's environment. Without Kind, the Agent is
+	// tested as saved: its runtime and default model settings.
 	AgentID        string `json:"agent_id,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
@@ -133,20 +133,13 @@ func (s *Server) handleFrameworkTest(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "agent not found")
 			return
 		}
+		// Without a kind, test the Agent as saved. With one, test exactly the
+		// requested settings (such as an unsaved form) in the Agent's environment.
 		if opts.Kind == "" {
 			opts.Kind = agent.RuntimeID
-		} else if opts.Kind != agent.RuntimeID {
-			writeErr(w, http.StatusBadRequest, "kind does not match the agent's framework")
-			return
-		}
-		if opts.Model == "" {
 			opts.Model = agent.DefaultModel
-			if opts.ReasoningEffort == "" {
-				opts.ReasoningEffort = agent.DefaultReasoningEffort
-			}
-			if opts.ServiceTier == "" {
-				opts.ServiceTier = agent.DefaultServiceTier
-			}
+			opts.ReasoningEffort = agent.DefaultReasoningEffort
+			opts.ServiceTier = agent.DefaultServiceTier
 		}
 		opts.Env = agent.Env
 	}
@@ -162,6 +155,9 @@ func (s *Server) handleFrameworkTest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if err := s.recordFrameworkHealth(r.Context(), result); err != nil {
+		s.log.Warn("record framework health", "kind", result.Kind, "err", err)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, result)

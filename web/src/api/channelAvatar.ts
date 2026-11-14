@@ -1,4 +1,4 @@
-import { activeRemoteID, activeTenantScopeKey, tenantScopeHeaders } from "./client";
+import { activeRemoteID } from "./client";
 import type { Channel } from "./types";
 
 const avatarPath = "/api/v1/channel-avatar";
@@ -17,7 +17,7 @@ export function channelAvatarRequestPath(channel: Pick<Channel, "id" | "target_i
 }
 
 export async function fetchChannelAvatar(path: string, signal: AbortSignal): Promise<Blob> {
-  const key = JSON.stringify([activeTenantScopeKey(), path]);
+  const key = path;
   const cached = avatars.get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.pending;
   // Individual components may unmount while another still needs this image.
@@ -36,10 +36,10 @@ export async function fetchChannelAvatar(path: string, signal: AbortSignal): Pro
 }
 
 async function requestChannelAvatar(path: string, signal: AbortSignal): Promise<Blob> {
-  // Fetch instead of a bare <img> request so Console sessions and tenant
-  // previews carry the same authentication/scope headers as other API reads.
+  // Fetch instead of a bare <img> request so Console sessions carry the
+  // same authentication headers as other API reads.
   const response = await fetch(path, {
-    headers: { "X-AgentMux-Console": "1", ...tenantScopeHeaders(avatarPath) },
+    headers: { "X-AgentMux-Console": "1" },
     signal,
   });
   if (!response.ok) throw new Error(`Channel avatar: ${response.status}`);

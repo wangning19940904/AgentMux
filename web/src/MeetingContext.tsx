@@ -14,7 +14,9 @@ type MeetingState = {
 
 const MeetingContext = createContext<MeetingState | null>(null);
 
-export function MeetingProvider({ children }: { children: ReactNode }) {
+// enabled is false where meetings are out of reach, such as for a member
+// account, so nothing polls an endpoint that refuses the caller.
+export function MeetingProvider({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
   const [overview, setOverview] = useState<MeetingOverview>(EMPTY_OVERVIEW);
   const [lastEvent, setLastEvent] = useState<MeetingStreamEvent | null>(null);
   const [error, setError] = useState("");
@@ -37,6 +39,10 @@ export function MeetingProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setOverview(EMPTY_OVERVIEW);
+      return;
+    }
     let active = true;
     const controller = new AbortController();
     let reconnectTimer = 0;
@@ -61,7 +67,7 @@ export function MeetingProvider({ children }: { children: ReactNode }) {
     };
     void stream();
     return () => { active = false; controller.abort(); window.clearTimeout(reconnectTimer); };
-  }, [refresh, scopeVersion]);
+  }, [enabled, refresh, scopeVersion]);
 
   const value = useMemo(() => ({ overview, lastEvent, refresh, error }), [overview, lastEvent, refresh, error]);
   return <MeetingContext.Provider value={value}>{children}</MeetingContext.Provider>;

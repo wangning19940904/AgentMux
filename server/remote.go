@@ -348,9 +348,8 @@ func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetPath := "/api/v1/" + path
-	// An offline linked device is answered from what it last reported. A
-	// tenant preview is not: the copy is the device administrator's view.
-	if host.Kind == remotepkg.KindLink && r.Header.Get(tenantScopeHeader) == "" {
+	// An offline linked device is answered from what it last reported.
+	if host.Kind == remotepkg.KindLink {
 		reportedPath := targetPath
 		if r.URL.RawQuery != "" {
 			reportedPath += "?" + r.URL.RawQuery

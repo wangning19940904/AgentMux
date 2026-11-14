@@ -75,7 +75,7 @@ func TestSystemMetricsIsAFleetReadableRoute(t *testing.T) {
 	if !fleetOperationAllowed(http.MethodGet, "/api/v1/system/metrics", true) {
 		t.Fatal("machine status page reads metrics through fleet query")
 	}
-	if tenantRouteAllowed(http.MethodGet, "/api/v1/system/metrics") {
+	if memberRouteAllowed(http.MethodGet, "/api/v1/system/metrics") {
 		t.Fatal("host metrics describe the whole machine and stay admin-only")
 	}
 }

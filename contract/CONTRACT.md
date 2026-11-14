@@ -8,7 +8,7 @@
 | `schemas/*.json` | 由 Go 类型自动生成的 canonical JSON schema golden 文件 |
 | `contract_golden_test.go` | 防漂移测试：Go 结构体改动必须同步更新 golden |
 | `CONTRACT.md` | 本文档：版本策略、稳定性分级、接入路径 |
-| `HOST_INTEGRATION.md` | 宿主应用的 BFF、SDK、tenant 与产品接入规范 |
+| `HOST_INTEGRATION.md` | 宿主应用的 BFF、SDK 与产品接入规范 |
 
 官方 SDK 以本契约为准生成/校验：
 
@@ -17,7 +17,7 @@
 
 ## 契约版本（contract_version）
 
-当前契约版本：**`2.3`**（常量定义于 [`contract.go`](contract.go)，由
+当前契约版本：**`3.0`**（常量定义于 [`contract.go`](contract.go)，由
 `GET /api/v1/capabilities` 与 `GET /api/v1/status` 返回）。
 
 `1.1` 新增多租户：Agent 实例与渠道新增可选归属字段、`/api/v1/tenancy/*`
@@ -46,6 +46,18 @@ Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 
 `account` 字段。Bearer 凭证（bridge token、tenant token）的行为不变，也不会带
 `account`。
 
+`3.0` 两项不兼容变更：
+
+- 移除 LLM Provider 管理：Agent 实例不再有 `provider_tool`、`provider_id`、
+  `provider_name` 字段，Provider、路由与本机代理相关端点全部移除。Provider 与路由
+  由各 Agent 框架或用户自己的路由工具负责；AgentMux 通过
+  `POST /api/v1/frameworks/test` 检查框架可用性。
+- 移除多租户：`/api/v1/tenancy/*`、tenant token（`amxt_`）、资源授权、归属与
+  公开/私有可见性全部移除；Agent 实例、渠道、触发器、编排与事件订阅不再有
+  `owner_tenant_id`、`owner_tenant_name`、`visibility` 字段，`capabilities` 不再
+  报告 `tenancy` feature，`auth.scope` 取值为 `admin` 或 `member`。第三方统一使用
+  bridge token。
+
 `contract_version` 与二进制版本**相互独立**：
 
 - **minor 递增**（`2.0 → 2.1`）：向后兼容的新增——新端点、响应新增字段、新的
@@ -53,7 +65,7 @@ Provider 与其活跃路由；`use` 及以上权限才能将 Provider 绑定到 
 - **major 递增**（`2.x → 3.0`）：破坏性变更——删除/改名字段、修改语义、移除端点。
   必须提前一个 minor 版本在本文档声明弃用。
 
-SDK 声明其支持的契约区间（当前 `>=2.0,<3.0`）。握手时服务端 major 不在区间内，
+SDK 声明其支持的契约区间（当前 `>=3.0,<4.0`）。握手时服务端 major 不在区间内，
 SDK 报告 `incompatible` 状态并拒绝继续。
 
 ## 稳定性分级
@@ -82,7 +94,6 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `GET /api/v1/event-deliveries`、`POST /api/v1/event-deliveries/retry` | 投递历史与重试 |
 | `GET /api/v1/usage` | Token 用量报表 |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
-| `POST /api/v1/tenancy/register`、`GET /api/v1/tenancy/self` | 租户自助注册与自查（见「多租户」） |
 
 ### OpenAI 兼容层
 
@@ -93,77 +104,33 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 
 ### internal — 不对外承诺，随时可变
 
-其余全部 `/api/v1/*` 路由（observability、remote proxy、providers、tools、
+其余全部 `/api/v1/*` 路由（observability、remote proxy、tools、
 frameworks、sessions、meetings、setup 自动化、tts、menubar、memory、skills、
-mcp、guard、`/api/v1/tenancy/*` 的管理端点等）是 Console 专用管理面。第三方
+mcp、guard、devices、accounts 等）是 Console 专用管理面。第三方
 **不应**依赖它们；如确有需要，请提 issue 将其提升到 beta/stable。
 `/api/v1/usage/sources*` 同样属于 Console internal API，不出现在公开 OpenAPI。
 
-**自 `1.1` 起这一分级是强制执行的**：租户凭证只能访问上面 stable / beta 两层
-（外加若干只读目录：按授权过滤的 `providers`、`providers/active`，
-以及全局能力目录 `tools`、`frameworks`），访问 internal 层返回 `403`。策略表见
-[`server/tenancy_auth.go`](../server/tenancy_auth.go) 的 `tenantRoutePolicy`；
-未登记的路由默认拒绝，因此新增 internal 端点天然对租户关闭。
+第三方使用 bridge token，等同管理员。
 
 ## 鉴权
 
-两类主体：
-
 | 主体 | 凭证 | 可见范围 |
 | --- | --- | --- |
-| 管理员 | `config.toml` 的 `[bridge].token` | 全部路由、全部资源（并带归属标注） |
-| 租户 | `/api/v1/tenancy/*` 签发的 token（`amxt_` 前缀） | stable/beta 路由；自己的 ∪ 公共的 ∪ 被授权的资源 |
-| 账号 | Console 登录得到的 `agentmux_console` cookie（`amxs_` 会话） | 管理员账号同管理员；成员账号同租户（命名空间为账号自己的 tenant），另可管理自己配对的设备 |
+| 管理员 | `config.toml` 的 `[bridge].token`，或管理员账号的 Console 会话 | 全部路由、全部资源 |
+| 成员账号 | Console 登录得到的 `agentmux_console` cookie（`amxs_` 会话） | 仅自己配对的设备、自己的私信与自己的密码，外加 `status`、`capabilities`；其余路由返回 `403` |
 
 - `[bridge].enabled = true` 时，`/api/*` 与 `/v1/*` 要求
   `Authorization: Bearer <token>`；对外提供服务时必须开启。
 - `[bridge].enabled = false` 时继续兼容无凭证的本机管理员访问；但请求一旦显式携带
-  tenant token 或 Console cookie，仍会按该主体做权限隔离，不会回退成管理员。
+  Console cookie，仍按该主体鉴权，不会回退成管理员。
 - Console 会话 cookie（`agentmux_console`）是 Bearer 的等价凭证，通过
-  `POST /api/v1/console/sessions`（服务端间调用）签发，**并继承签发者的主体**：
-  用租户 token 签发的会话，其 Console 只能看到该租户的资源；租户签发不要求
-  全局 `[bridge]` 鉴权已开启。
+  `POST /api/v1/console/sessions`（服务端间调用，只接受 bridge token）签发，
+  得到管理员 Console。
 - `POST /hook/{id}` 使用触发器自带 token，不走 bridge。
-- 账号（Console 专用）：每个账号自带一个 `kind = "account"` 的 tenant 命名空间，
-  成员账号的归属、公开与授权完全复用下文的多租户规则。账号登录、登出与管理端点
-  （`/api/v1/auth/*`、`/api/v1/accounts*`）属于 Console 管理面，不在稳定性分级内；
-  第三方应继续使用 bridge 或 tenant token。尚无账号时一切行为与以前相同。
-
-## 多租户
-
-一个 AgentMux 实例可被多个宿主应用共享。每个应用是一个**租户**，它创建的
-Agent 实例与渠道归它所有，同侪不可见。
-
-**接入流程**
-
-新应用无需已有凭证即可调用 `POST /api/v1/tenancy/register`（请求体
-`{"name": "...", "kind": "app|web|service"}`），立即得到 tenant 与首个 token。
-tenant 名唯一，重名返回 `409` 而不是轮换既有凭证，因此无法接管已有 tenant。
-
-新 tenant 默认只有自己的空私有空间，不会继承任何管理员或其他 tenant 的资源。
-管理员随后通过 grant 或 ownership 明确授予 Agent、渠道、触发器和
-Provider 访问权。Provider 始终是实例级凭证资源，不属于任何 tenant，只能通过
-显式 grant 访问。
-
-任一方式接入后，应用可用 `GET /api/v1/tenancy/self` 读回自己的身份。
-
-**可见性**
-
-租户可见集合 = `owner_tenant_id` 为自己 ∪ `visibility = "public"` ∪ 被显式授权。
-Provider 没有 ownership/public 捷径，其可见集合只是被显式授权的 Provider。
-归属为空的资源（早于多租户创建的）视为未分配，**仅管理员可见**，可用
-`amux tenants assign` 或 `POST /api/v1/tenancy/ownership` 移交。
-
-**授权级别**（`read` < `use` < `manage`）
-
-| 级别 | 含义 |
-| --- | --- |
-| `read` | 出现在列表中、可读取 |
-| `use` | 可调用 / 可发送（`invocations`、`send`、`triggers/run`） |
-| `manage` | 可修改、可删除 |
-
-资源所有者对自己的资源隐含 `manage`；`visibility = "public"` 隐含 `use`。
-租户写入时归属字段会被强制改写为调用方自身，也不能把资源改为 public。
+- 账号（Console 专用）：账号登录、登出与管理端点（`/api/v1/auth/*`、
+  `/api/v1/accounts*`）属于 Console 管理面，不在稳定性分级内。成员可见的路由见
+  [`server/auth_policy.go`](../server/auth_policy.go) 的 `memberRoutePolicy`；
+  未登记的路由默认拒绝，因此新增端点天然只对管理员开放。尚无账号时一切行为与以前相同。
 
 ## 统一状态机（SDK 语义）
 

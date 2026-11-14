@@ -28,9 +28,6 @@ func (s *Server) handleInvocation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.authorizeInvocationTarget(w, r, req.AgentID) {
-		return
-	}
 	result, err := s.invoker.Invoke(r.Context(), req)
 	if err != nil {
 		writeErr(w, invocationErrorStatus(err), err.Error())
@@ -59,9 +56,6 @@ func (s *Server) handleInvocationSteer(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(body.AgentID) == "" || strings.TrimSpace(body.ConversationID) == "" || strings.TrimSpace(body.Text) == "" {
 		writeErr(w, http.StatusBadRequest, "agent_id, conversation_id and text are required")
-		return
-	}
-	if !s.authorizeInvocationTarget(w, r, body.AgentID) {
 		return
 	}
 	err := steerer.SteerInvocation(r.Context(), body.AgentID, body.ConversationID, body.Text)
@@ -99,9 +93,6 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 	r.Body = http.MaxBytesReader(w, r.Body, maxInvocationRequestBytes)
 	req, decoded := decodeJSON[core.InvocationRequest](w, r)
 	if !decoded {
-		return
-	}
-	if !s.authorizeInvocationTarget(w, r, req.AgentID) {
 		return
 	}
 

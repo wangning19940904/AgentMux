@@ -53,7 +53,7 @@ describe("events", () => {
   it("exposes subscription registration and delivery management", async () => {
     const calls: string[] = [];
     const client = new AgentMuxClient({
-      token: "tenant",
+      token: "bridge",
       fetch: async (input, init) => {
         const url = new URL(String(input));
         calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
@@ -128,7 +128,6 @@ it("event_subscription matches the Go contract", () => {
     last_error: true,
     last_success_at: true,
     name: true,
-    owner_tenant_id: true,
     paused: true,
     pending: true,
     source: true,

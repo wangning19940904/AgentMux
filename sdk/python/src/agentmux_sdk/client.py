@@ -34,7 +34,6 @@ from .models import (
     Capabilities,
     Channel,
     ConsoleSession,
-    TenantRegistration,
     HealthReport,
     HealthState,
     InvocationEvent,
@@ -42,7 +41,6 @@ from .models import (
     IntegrationSnapshot,
     Orchestration,
     OrchestrationTask,
-    TenancySelf,
     Trigger,
     contract_major,
     version_key,
@@ -213,7 +211,6 @@ class AgentMuxClient:
         self.orchestrations = OrchestrationsResource(self)
         self.integration = IntegrationResource(self)
         self.console = ConsoleResource(self)
-        self.tenancy = TenancyResource(self)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -550,7 +547,6 @@ class IntegrationResource:
     def snapshot(self, *, orchestration_limit: int = 8) -> IntegrationSnapshot:
         return IntegrationSnapshot(
             capabilities=self._client.capabilities(),
-            identity=self._client.tenancy.self(),
             runtimes=tuple(self._client.runtimes()),
             platforms=tuple(self._client.platforms()),
             agents=tuple(self._client.agents.list()),
@@ -567,30 +563,11 @@ class ConsoleResource:
         self._client = client
 
     def create_session(self, *, landing: str | None = None) -> ConsoleSession:
-        """Mint a one-time Console entry URL (requires a bearer token).
-
-        The session inherits this client's scope: a tenant token yields a
-        Console that shows only that application's resources.
-        """
+        """Mint a one-time Console entry URL (requires the bridge token)."""
         params = {"landing": landing} if landing else None
         response = self._client._request("POST", "/api/v1/console/sessions", params=params)
         return ConsoleSession.from_dict(response.json())
 
-
-class TenancyResource:
-    def __init__(self, client: AgentMuxClient) -> None:
-        self._client = client
-
-    def self(self) -> TenancySelf:
-        """Read back this credential's identity and scope."""
-        response = self._client._request("GET", "/api/v1/tenancy/self")
-        return TenancySelf.from_dict(response.json())
-
-    def register(self, name: str, *, kind: str = "app") -> TenantRegistration:
-        response = self._client._request(
-            "POST", "/api/v1/tenancy/register", json={"name": name, "kind": kind}
-        )
-        return TenantRegistration.from_dict(response.json())
 
 
 class AsyncAgentMuxClient:
@@ -626,7 +603,6 @@ class AsyncAgentMuxClient:
         self.orchestrations = AsyncOrchestrationsResource(self)
         self.integration = AsyncIntegrationResource(self)
         self.console = AsyncConsoleResource(self)
-        self.tenancy = AsyncTenancyResource(self)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -945,9 +921,8 @@ class AsyncIntegrationResource:
         self._client = client
 
     async def snapshot(self, *, orchestration_limit: int = 8) -> IntegrationSnapshot:
-        capabilities, identity, runtimes, platforms, agents, channels, triggers, orchestrations = await asyncio.gather(
+        capabilities, runtimes, platforms, agents, channels, triggers, orchestrations = await asyncio.gather(
             self._client.capabilities(),
-            self._client.tenancy.self(),
             self._client.runtimes(),
             self._client.platforms(),
             self._client.agents.list(),
@@ -957,7 +932,6 @@ class AsyncIntegrationResource:
         )
         return IntegrationSnapshot(
             capabilities=capabilities,
-            identity=identity,
             runtimes=tuple(runtimes),
             platforms=tuple(platforms),
             agents=tuple(agents),
@@ -978,20 +952,6 @@ class AsyncConsoleResource:
         )
         return ConsoleSession.from_dict(response.json())
 
-
-class AsyncTenancyResource:
-    def __init__(self, client: AsyncAgentMuxClient) -> None:
-        self._client = client
-
-    async def self(self) -> TenancySelf:
-        response = await self._client._request("GET", "/api/v1/tenancy/self")
-        return TenancySelf.from_dict(response.json())
-
-    async def register(self, name: str, *, kind: str = "app") -> TenantRegistration:
-        response = await self._client._request(
-            "POST", "/api/v1/tenancy/register", json={"name": name, "kind": kind}
-        )
-        return TenantRegistration.from_dict(response.json())
 
 
 class EventsResource:

@@ -1,6 +1,6 @@
 # Removing LLM providers and routing: framework-native models and health
 
-Status: proposal (rev 2) · 2026-11-14 · branch `claude/llm-provider-routing-integration-86a81b`
+Status: implemented · 2026-11-14 · branch `claude/llm-provider-routing-integration-86a81b`
 
 This proposal makes three changes.
 
@@ -192,24 +192,37 @@ shows Logged in only as a hint.
 
 ## 5. UI
 
-Replace "LLM Provider 与路由" with **"模型与可用性"**:
+The existing **Agent 框架** (Frameworks) page already lists each framework
+with its install and sign-in state, so model availability is added there
+rather than on a separate page. "LLM Provider 与路由" (LLM Provider and
+Routing) leaves the navigation in P1. Its `#gateway` address still opens it
+until P3, so existing provider settings stay readable during the hand-off.
 
-- **Framework table.** One row per framework, with Installed, Logged in and
-  Reachable badges. Each row shows the default model, the last test time and
-  latency, and has "测试" (Test) and "模型列表" (Model list) buttons. A failure
-  expands to show `ErrorKind`, the error detail and a one-line hint, such as
-  "Model not found — check the model ID or your router's configuration".
-- **Model list.** This is the framework catalog from §3, filtered per
-  framework, with Refresh. Clicking a model can test it, or use it for an
-  agent.
-- **Help text.** Something like: "Providers, API keys and routing are
-  configured in the framework itself or in a router such as Magpie." This
-  is the only mention of Magpie, and it lives in docs and copy, not in code.
-
-The agent form and the super-agent model picker
-([web/src/panels/superAgentModelPicker.tsx](../../web/src/panels/superAgentModelPicker.tsx))
-always read from runtime-settings. That is today's "route not configured"
-branch, which becomes the only branch. They also add a free-form model input.
+- **Framework table.** A new "可用性" (Availability) column shows each
+  framework's latest test: "Works · 4.7 s" with the model and the model a
+  router resolved it to, or the failure kind with the framework's own
+  message. It has "测试" (Test) and "模型" (Models) buttons. "全部测试" (Test
+  all) tests every framework shown, two at a time.
+- **Models dialog.** This is the framework catalog from §3, with Refresh. It
+  has a Test button per model and an input for model IDs the framework does
+  not list (a router's group, for example). Results are kept per model.
+- **Agent form.** The model section is titled "模型" (Model). The provider
+  selector is gone. The model select ends with "其他模型（手动填写）…" (Other
+  model, enter an ID…), which shows a text input. A "测试" (Test) button tests
+  the form's current model, effort and speed in the Agent's saved environment
+  (`agent_id` + explicit `kind`).
+- **Super-agent model picker**
+  ([web/src/panels/superAgentModelPicker.tsx](../../web/src/panels/superAgentModelPicker.tsx)).
+  It always reads runtime-settings. That was the old "route not configured"
+  branch, and it is now the only branch. It also gains an "Other model"
+  input.
+- **Overview.** The "模型服务" (Model services) health row, which came from
+  the provider monitor, becomes "框架可用性" (Framework availability). It
+  counts each framework's latest test on each machine, from `GET
+  /api/v1/frameworks/health`.
+- **Copy.** Strings say providers and routing live "in the framework or a
+  router such as Magpie". That copy is the only place Magpie is mentioned;
+  no code knows about it.
 
 ---
 
@@ -239,22 +252,46 @@ The takeover feature that AgentMux shipped has left AgentMux-owned keys in
 users' framework configs. Those keys have to be removed before the code that
 knows about them is deleted. This step is independent of the router.
 
-1. **Release ownership on upgrade.** If takeover is on, run the existing
-   `DisableTakeover`. It restores only the keys AgentMux owns, using the
-   ownership journal. Also remove the `[model_providers.agentmux]` block and
-   the Claude Desktop 3p profile.
+1. **Release ownership on every start** (`provider.Service.RetireLocalRouting`,
+   [provider/handoff.go](../../provider/handoff.go)). It replaces the old
+   boot-time proxy restore, and the proxy never starts again. For each taken-over
+   tool (Claude Code, Codex, Claude Desktop):
+   - **With an ownership journal,** it puts back only the values AgentMux
+     wrote and that are still AgentMux's. A value someone else changed since,
+     for example Magpie rewriting `ANTHROPIC_BASE_URL`, is left as it is and
+     reported, rather than failing the release as `DisableTakeover` does.
+     Version-one journals hold whole files; such a file is restored only while
+     it still points at the proxy.
+   - **Without a journal,** it rewrites a config to the direct provider only if
+     the config still points at the proxy. Any other config is left untouched.
+   - **Leftovers** are not removed separately. Restoring owned values already
+     removes the `[model_providers.agentmux]` block and the Claude Desktop
+     profile when AgentMux added them. Direct-mode blocks hold a working
+     upstream URL and key, so they stay and are now the user's own
+     configuration.
+   - **Failures** (for example, a locked file) keep that tool's journal and are
+     retried every few seconds until they succeed. The outcome per tool is
+     recorded in `settings` (`provider_handoff_v1`) and merged across retries.
+2. **Hand over the provider list.** The former provider page (`#gateway`,
+   [ProviderHandoffPanel.tsx](../../web/src/panels/ProviderHandoffPanel.tsx))
+   is now read-only. It shows:
+   - what was given back;
+   - each saved provider's name, base URL, protocol, models, key name and the
+     tools that used it, with keys never shown;
+   - a "删除已保存的 Key" (delete saved keys) action, which deletes the
+     keychain items only after the user confirms
+     (`POST /api/v1/providers/handoff/forget-keys` requires `confirm`).
 
-   Some users switched providers in "direct" mode, which wrote a real
-   upstream URL and key into a config. Those values work, so leave them, and
-   tell the user they are now the user's own configuration.
-2. **Hand over the provider list.** Show a read-only list of each provider's
-   name, base URL, protocol and models, with keys never shown. The user can
-   re-create them in their router. Keychain items `AGENTMUX_PROVIDER_*` are
-   deleted only after the user confirms, because the deletion can't be
-   undone.
-3. **Agents.** Keep each agent's model ID as it is. Run the smoke test for
-   every distinct (framework, model) pair the agents use, and flag the
-   failures in the UI.
+   The Frameworks page links there when this machine has a record or saved
+   providers. Every provider and routing write endpoint answers 410 Gone. The
+   provider monitor no longer runs. Fleet sync no longer copies providers or
+   keys in either direction.
+3. **Agents.** Each agent keeps its model ID. The hand-off page groups agents
+   by framework, model, effort and speed, and tests each group with one
+   agent's saved settings. At run time an agent's settings are its own: the
+   runtime no longer reads provider routes for defaults or model lists, and
+   Claude Code sessions fill their in-chat model menu from the framework's own
+   (cached) list.
 4. **Schema cleanup.** Drop `providers`, `active_provider`, `proxy_config`,
    `proxy_live_backup` and `proxy_traces`. Delete the monitor and gateway-token
    keys from `settings`. Do this in both the SQLite and Postgres migrations.
@@ -264,12 +301,43 @@ knows about them is deleted. This step is independent of the router.
 | Phase | Ships | Removes |
 | --- | --- | --- |
 | **P0 Native catalog and test** ✅ | Claude Code `RuntimeSettingsCatalog`, `framework.SmokeTest` and error classification, `POST /api/v1/frameworks/test` (`kind`/`model`/`reasoning_effort`/`service_tier`, or `agent_id` to reuse an Agent's runtime, env and defaults), `amux frameworks models|test` | — |
-| **P1 Read path** | The "模型与可用性" panel. The picker and agent form use only runtime-settings, plus free-form IDs. Saving an agent stops calling `provider.Switch`. | Gateway panel hidden behind a flag |
-| **P2 Hand-off** | Release takeover on upgrade, the read-only provider list, the bulk agent test | Proxy no longer started at boot (`RestoreProxyState` removed) |
-| **P3 Delete** | Schema cleanup | `provider/`, server provider, proxy, monitor and claude3p handlers and routes, `cmd/amux/provider.go`, provider sections of fleet sync, `web/src/panels/gateway/`, `ProvidersPanel.tsx`, provider API client and types, usage proxy hooks, tenancy provider grants |
+| **P1 Read path** ✅ | Availability on the Frameworks page (§5); latest results stored per machine (`GET /api/v1/frameworks/health`). The picker and agent form use only runtime-settings, plus typed IDs. Agent defaults are validated against the framework catalog, never a provider. Typed IDs are accepted, with effort and speed checked against what the framework offers. Saving an agent stops calling `provider.Switch`. The Overview row uses framework tests. | Gateway page removed from the navigation (still at `#gateway`). Provider and route loading removed from the Agents page. |
+| **P2 Hand-off** ✅ | Release on every start, with drift kept and retries (§7). The read-only hand-off page with a confirmed key deletion. Grouped agent model tests. Runtime defaults no longer come from providers. | Proxy never started; `EnableTakeover` returns `ErrLocalRoutingRetired`. Provider, route, proxy, monitor and Claude 3p write endpoints return 410, and their handlers are deleted. The provider monitor loop is gone. Fleet sync no longer copies providers or keys. |
+| **P3a Delete what the hand-off doesn't need** ✅ | — | `provider/` reduced to the hand-off (journal restore, live-config writers for the rebuild path, keychain secrets): the proxy, protocol translation, presets, provider CRUD and switching are gone. Server provider, route, proxy, monitor, probe and Claude 3p handlers and routes are deleted (404), leaving only `GET /providers/handoff` and `POST /providers/handoff/forget-keys`. Also removed: `cmd/amux/provider.go`; desktop `SwitchProvider`; fleet-sync provider sections (manifests from older machines are ignored); usage and observability proxy hooks; `core.ProviderManager`; tenancy provider grants (agents are authorized by agent grants alone); the web gateway UI, provider API client and types, proxy traces in Sessions, provider grants in Tenants, and their strings and styles. |
+| **P3b Schema cleanup** ✅ | Postgres migration v28 (`retire_provider_routing`) drops `providers`, `active_provider`, `proxy_config`, `proxy_live_backup`, `proxy_traces` and `agent_instances.provider_tool`/`provider_id`, and deletes stored Provider grants and the provider settings keys. Legacy SQLite stores drop the same tables on open. Contract 3.0. Checked on a fresh database (all Postgres integration tests) and by upgrading a database written by the previous build. | The hand-off (`provider/`, the hand-off page and its endpoints), `core.Provider*`, `core.ProxyTrace`, the store's provider and trace methods, the proxy half of the legacy observation import, `[provider]` config, `provider_*` fields in the SDKs, and the `#gateway` route (old links open the Frameworks page). |
 
-P1 and P2 ship in separate releases from P3. That way, users who upgrade get
-their configs restored by code that still knows the ownership journal.
+All phases ship together. That skips the hand-off for anyone upgrading
+straight from a build that had local routing turned on: their framework
+configs keep pointing at the retired proxy (`127.0.0.1:15733` with a
+`PROXY_MANAGED` token) and must be repointed by hand, for example by letting
+the framework or a router such as Magpie rewrite them. This was accepted
+because no deployment relied on local routing.
+
+### Multi-tenancy removed alongside (contract 3.0)
+
+The same release removes the tenancy model. It existed partly to scope
+providers per host application; without providers, nothing relied on it.
+
+- **Gone:** tenants, tenant tokens (`amxt_`) and self-registration, resource
+  grants, ownership and visibility on agents, channels, triggers, event
+  subscriptions and orchestrations, `/api/v1/tenancy/*`, `amux tenants`, the
+  Tenants page, and the `tenancy` capability feature. Integrations use the
+  bridge token, which is admin.
+- **Kept:** accounts. A principal is now admin or member
+  ([core/principal.go](../../core/principal.go)). Members reach only their own
+  devices, mailbox, push subscriptions and password (`memberRoutePolicy` in
+  [server/auth_policy.go](../../server/auth_policy.go)); everything else is
+  admin-only. Devices, pairing codes and push subscriptions belong to an
+  account (`owner_account_id`, `account:<id>`). Admins reassign devices on
+  System → Accounts, with `POST /api/v1/devices/owner` or
+  `amux accounts assign-device`.
+- **Migration v29 (`retire_tenancy`)** maps device and pairing-code owners and
+  push subscribers from each member's tenant to the account, keeps event
+  subscriptions that shared a key across tenants by suffixing `@<tenant id>`,
+  drops push subscriptions of non-account tenants, then drops the tenancy
+  tables and columns and the hub's stored device reports of the removed
+  lists. Checked on a fresh database and by upgrading a database seeded by
+  the previous build.
 
 ## 9. Risks and open questions
 

@@ -26,7 +26,6 @@ type Config struct {
 	// Daemon startup rejects them so PostgreSQL remains the sole runtime source.
 	Projects      []ProjectConfig     `toml:"projects"`
 	Hooks         []HookConfig        `toml:"hooks"`
-	Provider      ProviderConfig      `toml:"provider"`
 	Usage         UsageConfig         `toml:"usage"`
 	Observability ObservabilityConfig `toml:"observability"`
 }
@@ -119,12 +118,6 @@ type HookConfig struct {
 	Type    string `toml:"type"`
 	Command string `toml:"command"`
 	URL     string `toml:"url"`
-}
-
-// ProviderConfig configures provider management.
-type ProviderConfig struct {
-	ProxyAddr string `toml:"proxy_addr"`
-	Failover  bool   `toml:"failover"`
 }
 
 // UsageConfig configures the token-usage engine.

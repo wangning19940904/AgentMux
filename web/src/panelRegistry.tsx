@@ -9,7 +9,6 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
   orchestrations: lazy(() => import("./panels/OrchestrationsPanel").then((module) => ({ default: module.OrchestrationsPanel }))),
   frameworks: lazy(() => import("./panels/FrameworksPanel").then((module) => ({ default: module.FrameworksPanel }))),
-  gateway: lazy(() => import("./panels/GatewayPanel").then((module) => ({ default: module.GatewayPanel }))),
   observability: lazy(() => import("./panels/ObservabilityPanel").then((module) => ({ default: module.ObservabilityPanel }))),
   usage: lazy(() => import("./panels/UsagePanel").then((module) => ({ default: module.UsagePanel }))),
   settings: lazy(() => import("./panels/MenuBarPanel").then((module) => ({ default: module.MenuBarPanel }))),
@@ -22,6 +21,7 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   feedback: lazy(() => import("./panels/FeedbackPanel").then((module) => ({ default: module.FeedbackPanel }))),
   messages: lazy(() => import("./panels/MessagesPanel").then((module) => ({ default: module.MessagesPanel }))),
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
+  accounts: lazy(() => import("./panels/AccountsPanel").then((module) => ({ default: module.AccountsPanel }))),
 };
 
 export function RegisteredPanel({ tab, ...agentProps }: {

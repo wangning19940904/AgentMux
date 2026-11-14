@@ -419,21 +419,6 @@ button {
   font-weight: 500;
 }
 
-.account.switchable {
-  padding: 0;
-}
-
-.account.switchable::before {
-  margin-left: 8px;
-}
-
-.account.switchable .account-identity-select {
-  display: block;
-  padding-left: 34px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .primary-account {
   order: 3;
   flex: 0 0 auto;
@@ -445,16 +430,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.primary-account.switchable:hover,
-.primary-account.switchable:focus-within {
-  background: var(--accent-soft);
-}
-
-.primary-account.switchable:has(select:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 
 .primary-collapsed .primary-account {
@@ -471,16 +446,6 @@ button {
 .primary-collapsed .primary-account strong,
 .primary-collapsed .primary-account > svg {
   display: none;
-}
-
-.primary-collapsed .primary-account .account-identity-select {
-  padding: 0;
-  color: transparent;
-}
-
-.primary-collapsed .primary-account .account-identity-select option {
-  color: var(--text);
-  background: var(--bg-elevated);
 }
 
 .sidebar-resize-handle {
@@ -842,9 +807,7 @@ button {
 .statistics-summary-card,
 .usage-trend-card,
 .cursor-source-card,
-.provider-card,
 .route-card,
-.preset-card,
 .agent-section {
   background: var(--bg-elevated);
   border-color: var(--border);
@@ -878,7 +841,6 @@ h3 { font-size: 12px; font-weight: 640; }
 .system-pill,
 .pill,
 .status-badge,
-.owner-badge,
 .target-badge {
   min-height: 20px;
   gap: 5px;
@@ -1192,7 +1154,6 @@ dialog.surface {
   box-shadow: var(--shadow-floating);
 }
 
-.empty-card,
 .empty-state {
   color: var(--muted);
   background: var(--surface-subtle);
