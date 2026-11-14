@@ -1,5 +1,6 @@
-import { Check, ChevronDown, Zap } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, RotateCcw, Zap } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api } from "../api";
 import type { FrameworkRuntimeSettings, RuntimeOption } from "../api";
 import { useI18n } from "../i18n";
@@ -130,6 +131,18 @@ function revealSelected(popover: HTMLElement) {
   }
 }
 
+// EFFORT_ORDER ranks reasoning efforts from least to most thinking, so the
+// slider reads left to right whatever order the framework lists them in.
+const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+
+export function sortEfforts(efforts: string[]) {
+  const rank = (effort: string) => {
+    const index = EFFORT_ORDER.indexOf(effort);
+    return index < 0 ? EFFORT_ORDER.length : index;
+  };
+  return [...efforts].sort((a, b) => rank(a) - rank(b));
+}
+
 // describeModelChoice is the one-line form of a choice, as in "gpt-6 · High · Fast".
 export function describeModelChoice(t: (key: string, values?: Record<string, string | number>) => string, value: ModelChoice, catalog?: ModelCatalog) {
   const model = value.model ? catalog?.modelLabel(value.model) ?? value.model : t("superAgents.modelDefaultShort");
@@ -140,7 +153,9 @@ export function describeModelChoice(t: (key: string, values?: Record<string, str
 }
 
 // ModelPicker chooses a model, its reasoning effort and its speed in one
-// popover, like the model menus of Codex and Claude Code.
+// popover, after the model menus of Claude and Codex: a model list, an effort
+// slider, a fast-mode switch, and a second page for a model the framework
+// does not list.
 export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   runtime: string;
   value: ModelChoice;
@@ -150,6 +165,7 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   const { t } = useI18n();
   const catalog = useModelCatalog(runtime);
   const [open, setOpen] = useState(false);
+  const [page, setPage] = useState<"main" | "typed">("main");
   const [placement, setPlacement] = useState<PopoverPlacement | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -164,7 +180,14 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   useEffect(() => {
     if (!open) return;
     const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Escape leaves the second page first, then closes.
+      setPage((current) => {
+        if (current === "main") setOpen(false);
+        return "main";
+      });
+    };
     // Scrolling the drawer or resizing the window moves the trigger.
     const reposition = (event: Event) => { if (!popover.current?.contains(event.target as Node)) place(); };
     document.addEventListener("mousedown", close);
@@ -177,6 +200,7 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
       document.removeEventListener("scroll", reposition, true);
       window.removeEventListener("resize", reposition);
       setPlacement(null);
+      setPage("main");
       revealed.current = false;
     };
   }, [open]);
@@ -192,7 +216,7 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   });
 
   const effectiveModel = value.model || catalog.defaults.model;
-  const efforts = catalog.efforts(effectiveModel);
+  const efforts = sortEfforts(catalog.efforts(effectiveModel));
   const fastTier = catalog.tiers(effectiveModel).find((tier) => FAST_TIERS.includes(tier));
   const fast = isFastTier(value.service_tier);
   // Effort and speed that the new model does not offer go back to its default.
@@ -207,65 +231,70 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
     });
   };
   const defaultModel = catalog.defaults.model ? catalog.modelLabel(catalog.defaults.model) : "";
-  const defaultEffort = catalog.defaults.reasoning_effort ? effortLabel(t, catalog.defaults.reasoning_effort) : "";
   const unknownModel = value.model && !catalog.models.includes(value.model);
+  const triggerModel = value.model ? catalog.modelLabel(value.model) : t("superAgents.modelDefaultShort");
+  const listed = !catalog.loading && catalog.models.length > 0;
 
   return (
     <div className="model-picker" ref={root}>
       <button ref={trigger} type="button" className="model-picker-trigger" aria-haspopup="dialog" aria-expanded={open} aria-labelledby={labelledBy}
         aria-describedby={labelledBy ? `${labelledBy}-value` : undefined} onClick={() => setOpen((current) => !current)}>
-        {fast && <Zap size={13} className="model-picker-fast" />}
-        <span id={labelledBy ? `${labelledBy}-value` : undefined}>{describeModelChoice(t, value, catalog)}</span>
-        <ChevronDown size={14} />
+        {fast && <Zap size={13} className="model-picker-fast" aria-hidden />}
+        <span id={labelledBy ? `${labelledBy}-value` : undefined} className="model-picker-trigger-label" aria-label={describeModelChoice(t, value, catalog)}>
+          <span className="model-picker-trigger-model">{triggerModel}</span>
+          {value.reasoning_effort && <span className="model-picker-trigger-effort">{effortLabel(t, value.reasoning_effort)}</span>}
+        </span>
+        <ChevronDown size={14} className="model-picker-chevron" aria-hidden />
       </button>
       {open && (
         <div ref={popover} className="model-picker-popover" role="dialog" aria-label={t("superAgents.routerModel")}
           data-side={placement?.side ?? "bottom"} style={placement ? { maxHeight: placement.maxHeight } : undefined}>
-          {catalog.loading ? (
-            <small className="muted">{t("superAgents.modelLoading")}</small>
-          ) : catalog.models.length === 0 ? (
-            <label className="field">
-              <small>{catalog.error ? t("superAgents.modelUnavailable", { error: catalog.error }) : t("superAgents.modelNoCatalog")}</small>
-              <input aria-label={t("superAgents.routerModel")} placeholder={t("superAgents.modelCustomPlaceholder")} value={value.model}
-                onChange={(event) => onChange({ ...value, model: event.target.value.trim() })} />
-            </label>
+          {page === "typed" && listed ? (
+            <TypedModelPage value={unknownModel ? value.model : ""} onBack={() => setPage("main")}
+              onSubmit={(model) => { chooseModel(model); setPage("main"); }} />
           ) : (
-            <div className="model-picker-list" role="listbox" aria-label={t("superAgents.routerModel")}>
-              <ModelOption selected={!value.model} onSelect={() => chooseModel("")}
-                label={defaultModel ? t("superAgents.modelDefault", { model: defaultModel }) : t("superAgents.modelDefaultShort")} />
-              {catalog.models.map((model) => (
-                <ModelOption key={model} selected={value.model === model} label={catalog.modelLabel(model)} onSelect={() => chooseModel(model)} />
-              ))}
-              {unknownModel && <ModelOption selected label={value.model} onSelect={() => undefined} />}
-            </div>
-          )}
-          {!catalog.loading && catalog.models.length > 0 && (
-            <TypedModelInput value={unknownModel ? value.model : ""} onSubmit={(model) => chooseModel(model)} />
-          )}
-          {efforts.length > 0 && (
-            <div className="model-picker-section" role="radiogroup" aria-label={t("superAgents.reasoningEffort")}>
-              <small>{t("superAgents.reasoningEffort")}</small>
-              <div className="model-picker-segments">
-                <button type="button" role="radio" aria-checked={!value.reasoning_effort} onClick={() => onChange({ ...value, reasoning_effort: "" })}>
-                  {defaultEffort ? t("superAgents.effortDefaultWith", { effort: defaultEffort }) : t("superAgents.effortDefault")}
+            <>
+              <div className="model-picker-heading">{t("superAgents.modelHeading")}</div>
+              {catalog.loading ? (
+                <div className="model-picker-note">{t("superAgents.modelLoading")}</div>
+              ) : catalog.models.length === 0 ? (
+                <label className="model-picker-manual">
+                  <small>{catalog.error ? t("superAgents.modelUnavailable", { error: catalog.error }) : t("superAgents.modelNoCatalog")}</small>
+                  <input aria-label={t("superAgents.routerModel")} placeholder={t("superAgents.modelCustomPlaceholder")} value={value.model}
+                    onChange={(event) => onChange({ ...value, model: event.target.value.trim() })} />
+                </label>
+              ) : (
+                <div className="model-picker-list" role="listbox" aria-label={t("superAgents.routerModel")}>
+                  <ModelOption selected={!value.model} onSelect={() => chooseModel("")}
+                    label={t("superAgents.modelDefaultShort")} detail={defaultModel} />
+                  {catalog.models.map((model) => (
+                    <ModelOption key={model} selected={value.model === model} label={catalog.modelLabel(model)}
+                      detail={catalog.modelLabel(model) !== model ? model : ""} onSelect={() => chooseModel(model)} />
+                  ))}
+                  {unknownModel && <ModelOption selected label={value.model} detail={t("superAgents.modelTypedTag")} onSelect={() => undefined} />}
+                </div>
+              )}
+              {listed && (
+                <button type="button" className="model-picker-row model-picker-more" onClick={() => setPage("typed")}>
+                  <span>{t("superAgents.modelTyped")}</span>
+                  <ChevronRight size={14} aria-hidden />
                 </button>
-                {efforts.map((effort) => (
-                  <button key={effort} type="button" role="radio" aria-checked={value.reasoning_effort === effort} onClick={() => onChange({ ...value, reasoning_effort: effort })}>
-                    {effortLabel(t, effort)}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {fastTier && (
-            <label className="model-picker-section model-picker-toggle">
-              <span><Zap size={13} /> {t("superAgents.fastMode")}</span>
-              <small>{t("superAgents.fastModeHelp")}</small>
-              <input type="checkbox" role="switch" checked={fast} onChange={(event) => onChange({ ...value, service_tier: event.target.checked ? fastTier : "" })} />
-            </label>
-          )}
-          {!catalog.loading && catalog.models.length > 0 && (
-            <small className="muted">{t("superAgents.modelFromFramework")}</small>
+              )}
+              {efforts.length > 0 && (
+                <EffortSlider efforts={efforts} value={value.reasoning_effort} defaultEffort={catalog.defaults.reasoning_effort}
+                  onChange={(effort) => onChange({ ...value, reasoning_effort: effort })} />
+              )}
+              {fastTier && (
+                <label className="model-picker-row model-picker-toggle">
+                  <span className="model-picker-toggle-text">
+                    <span><Zap size={13} aria-hidden /> {t("superAgents.fastMode")}</span>
+                    <small>{t("superAgents.fastModeHelp")}</small>
+                  </span>
+                  <input type="checkbox" role="switch" className="model-picker-switch" checked={fast}
+                    onChange={(event) => onChange({ ...value, service_tier: event.target.checked ? fastTier : "" })} />
+                </label>
+              )}
+            </>
           )}
         </div>
       )}
@@ -273,34 +302,115 @@ export function ModelPicker({ runtime, value, onChange, labelledBy }: {
   );
 }
 
-// TypedModelInput takes a model ID the framework does not list, such as a
-// router's routing group. The framework test checks that it works.
-function TypedModelInput({ value, onSubmit }: { value: string; onSubmit: (model: string) => void }) {
+// EffortSlider picks a reasoning effort on a track of stops, least thinking on
+// the left. With no effort chosen the thumb rests, hollow, on the framework's
+// default; the reset button returns to it.
+function EffortSlider({ efforts, value, defaultEffort, onChange }: {
+  efforts: string[];
+  value: string;
+  defaultEffort: string;
+  onChange: (effort: string) => void;
+}) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const submit = () => {
-    const model = draft.trim();
-    if (model) onSubmit(model);
+  const track = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const chosen = efforts.indexOf(value);
+  const resting = chosen >= 0 ? chosen : efforts.indexOf(defaultEffort);
+  const last = Math.max(1, efforts.length - 1);
+  const position = (index: number) => efforts.length === 1 ? 50 : (index / last) * 100;
+  const label = chosen >= 0 ? effortLabel(t, value)
+    : defaultEffort ? t("superAgents.effortDefaultWith", { effort: effortLabel(t, defaultEffort) }) : t("superAgents.effortDefault");
+
+  const pick = (index: number) => {
+    const effort = efforts[Math.max(0, Math.min(efforts.length - 1, index))];
+    if (effort !== value) onChange(effort);
   };
+  const pickAt = (clientX: number) => {
+    const rect = track.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    pick(Math.round(((clientX - rect.left) / rect.width) * last));
+  };
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    const from = resting >= 0 ? resting : -1;
+    const moves: Record<string, number> = { ArrowRight: from + 1, ArrowUp: from + 1, ArrowLeft: Math.max(0, from - 1), ArrowDown: Math.max(0, from - 1), Home: 0, End: efforts.length - 1 };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    pick(moves[event.key]);
+  };
+
   return (
-    <div className="model-picker-section model-picker-typed">
-      <small>{t("superAgents.modelTyped")}</small>
-      <div className="model-picker-typed-row">
-        <input aria-label={t("superAgents.modelTyped")} placeholder={t("superAgents.modelTypedPlaceholder")} value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} />
-        <button type="button" className="ghost-action" disabled={!draft.trim() || draft.trim() === value} onClick={submit}>{t("superAgents.modelTypedUse")}</button>
+    <div className="model-picker-effort">
+      <div className="model-picker-effort-head">
+        <span className="model-picker-effort-title">{t("superAgents.reasoningEffort")}</span>
+        <span className="model-picker-effort-value" data-default={chosen < 0 || undefined}>{label}</span>
+        <button type="button" className="model-picker-reset" aria-label={t("superAgents.effortReset")} title={t("superAgents.effortReset")}
+          disabled={chosen < 0} onClick={() => onChange("")}>
+          <RotateCcw size={13} aria-hidden />
+        </button>
+      </div>
+      <div ref={track} className="model-picker-slider" role="slider" tabIndex={0} data-default={chosen < 0 || undefined}
+        aria-label={t("superAgents.reasoningEffort")} aria-valuemin={0} aria-valuemax={efforts.length - 1}
+        aria-valuenow={resting >= 0 ? resting : undefined} aria-valuetext={label} onKeyDown={onKeyDown}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          dragging.current = true;
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+          pickAt(event.clientX);
+        }}
+        onPointerMove={(event) => { if (dragging.current) pickAt(event.clientX); }}
+        onPointerUp={() => { dragging.current = false; }}
+        onPointerCancel={() => { dragging.current = false; }}>
+        <div className="model-picker-slider-fill" style={{ width: resting >= 0 ? `${position(resting)}%` : 0 }} />
+        {efforts.map((effort, index) => (
+          <button key={effort} type="button" tabIndex={-1} className="model-picker-stop" aria-label={effortLabel(t, effort)} title={effortLabel(t, effort)}
+            data-filled={resting >= 0 && index <= resting || undefined} style={{ left: `${position(index)}%` }}
+            onPointerDown={(event) => event.stopPropagation()} onClick={() => pick(index)} />
+        ))}
+        {resting >= 0 && <div className="model-picker-thumb" style={{ left: `${position(resting)}%` }} />}
+      </div>
+      <div className="model-picker-slider-ends" aria-hidden>
+        <span>{effortLabel(t, efforts[0])}</span>
+        {efforts.length > 1 && <span>{effortLabel(t, efforts[efforts.length - 1])}</span>}
       </div>
     </div>
   );
 }
 
-function ModelOption({ label, selected, onSelect }: { label: string; selected: boolean; onSelect: () => void }) {
+// TypedModelPage takes a model ID the framework does not list, such as a
+// router's routing group. The framework test checks that it works.
+function TypedModelPage({ value, onBack, onSubmit }: { value: string; onBack: () => void; onSubmit: (model: string) => void }) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState(value);
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => setDraft(value), [value]);
+  useEffect(() => input.current?.focus(), []);
+  const submit = () => {
+    const model = draft.trim();
+    if (model) onSubmit(model);
+  };
+  return (
+    <div className="model-picker-typed">
+      <button type="button" className="model-picker-row model-picker-back" onClick={onBack}>
+        <ChevronLeft size={14} aria-hidden />
+        <span>{t("superAgents.modelTyped")}</span>
+      </button>
+      <small className="model-picker-note">{t("superAgents.modelFromFramework")}</small>
+      <div className="model-picker-typed-row">
+        <input ref={input} aria-label={t("superAgents.modelTyped")} placeholder={t("superAgents.modelTypedPlaceholder")} value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submit(); } }} />
+        <button type="button" className="action" disabled={!draft.trim() || draft.trim() === value} onClick={submit}>{t("superAgents.modelTypedUse")}</button>
+      </div>
+    </div>
+  );
+}
+
+function ModelOption({ label, detail, selected, onSelect }: { label: string; detail?: string; selected: boolean; onSelect: () => void }) {
   return (
     <button type="button" role="option" aria-selected={selected} className="model-picker-option" onClick={onSelect}>
-      <span>{label}</span>
-      {selected && <Check size={14} />}
+      <span className="model-picker-option-label">{label}</span>
+      {detail && <span className="model-picker-option-detail">{detail}</span>}
+      <Check size={15} className="model-picker-check" aria-hidden />
     </button>
   );
 }

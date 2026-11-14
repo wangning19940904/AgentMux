@@ -49,7 +49,7 @@ func (m *machineStub) Launch(_ context.Context, hostID string, request core.Host
 		return core.HostedWorker{}, m.launchErr
 	}
 	m.launches, m.launchOn = append(m.launches, request), append(m.launchOn, hostID)
-	return core.HostedWorker{AgentID: hostedWorkerAgentID(request.OwnerID, request.RuntimeID), Name: request.OwnerName + " worker"}, nil
+	return core.HostedWorker{AgentID: hostedWorkerAgentID(request.OwnerID, request.RuntimeID, request.PathID), Name: request.OwnerName + " worker"}, nil
 }
 
 func (m *machineStub) Release(_ context.Context, hostID, ownerID string) error {
@@ -93,7 +93,7 @@ func TestRouterLaunchesAWorkerOnAnotherMachine(t *testing.T) {
 	h.settle()
 
 	prompt := h.router.prompts[0]
-	for _, want := range []string{`"id": "auto:dsh@dev_1"`, `"location": "machine studio"`, "Has the GPU.", "auto:<framework>@<machine>"} {
+	for _, want := range []string{`"id": "auto:dsh@dev_1"`, `"location": "machine studio"`, "Has the GPU.", "auto:<framework>@<path>"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("the roster must offer the machine (%s):\n%s", want, prompt)
 		}
@@ -110,7 +110,7 @@ func TestRouterLaunchesAWorkerOnAnotherMachine(t *testing.T) {
 		t.Fatalf("tickets = %+v", tickets)
 	}
 	worker := tickets[0].Worker
-	if worker.HostID != "dev_1" || worker.AgentID != hostedWorkerAgentID(h.agent.ID, "dsh") || worker.ID != "auto:dsh@dev_1" {
+	if worker.HostID != "dev_1" || worker.AgentID != hostedWorkerAgentID(h.agent.ID, "dsh", "") || worker.ID != "auto:dsh@dev_1" {
 		t.Fatalf("worker = %+v", worker)
 	}
 	if h.workers.callCount() != 1 || h.workers.calls[0].worker.HostID != "dev_1" {
@@ -200,7 +200,7 @@ func TestSaveChecksWorkerMachines(t *testing.T) {
 		"not connected": {{HostID: "dev_9"}},
 		"listed twice":  {{HostID: "dev_1"}, {HostID: "dev_1"}},
 		"absolute path": {{HostID: "dev_1", Dir: "code"}},
-		"must name":     {{HostID: " "}},
+		"needs a path":  {{HostID: " "}},
 	} {
 		if err := save(list...); err == nil || !strings.Contains(err.Error(), name) {
 			t.Fatalf("%s: err = %v", name, err)
@@ -210,7 +210,9 @@ func TestSaveChecksWorkerMachines(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, _ := h.store.GetSuperAgent(ctx, h.agent.ID)
-	if len(stored.WorkerMachines) != 2 || stored.WorkerMachines[0].HostID != "dev_1" {
+	// The directory chosen before there could be several joins the list.
+	if len(stored.WorkerMachines) != 3 || stored.WorkerMachines[0].HostID != "" || stored.WorkerMachines[0].Dir != h.agent.AutoWorkerDir ||
+		stored.WorkerMachines[1].HostID != "dev_1" || stored.WorkerMachines[1].ID != "dev_1" || stored.AutoWorkerDir != "" {
 		t.Fatalf("machines = %+v", stored.WorkerMachines)
 	}
 	// Taking a machine off the list has it drop this agent's workers.
@@ -375,5 +377,101 @@ func TestTicketsListsEveryAgentNewestFirst(t *testing.T) {
 	}
 	if one, _ := h.service.Tickets(context.Background(), 1); len(one) != 1 {
 		t.Fatalf("limit ignored: %d", len(one))
+	}
+}
+
+func TestAgentListsSeveralDirectoriesHereAndElsewhere(t *testing.T) {
+	h := newHarness(t)
+	machines := h.withMachines()
+	ctx := context.Background()
+	local, other := t.TempDir(), t.TempDir()
+	agent := h.agent
+	agent.AutoWorkerDir = ""
+	agent.WorkerMachines = []core.SuperAgentMachine{
+		{HostID: "dev_1", Dir: "~/code"},
+		{HostID: "", Dir: local, Capabilities: "The app repo."},
+		{HostID: "dev_1", Dir: "~/data"},
+		{HostID: "local", Dir: other},
+	}
+	saved, err := h.service.Save(ctx, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, machine := range saved.WorkerMachines {
+		ids = append(ids, machine.ID)
+	}
+	if !slices.Equal(ids, []string{"dev_1", "local", "dev_1-2", "local-2"}) || saved.WorkerMachines[3].HostID != "" {
+		t.Fatalf("ids = %v, machines = %+v", ids, saved.WorkerMachines)
+	}
+	for name, list := range map[string][]core.SuperAgentMachine{
+		"listed twice":   {{Dir: local}, {HostID: "local", Dir: local}},
+		"needs a path":   {{HostID: ""}},
+		"does not exist": {{Dir: "/no/such/dir"}},
+	} {
+		again := saved
+		again.WorkerMachines = list
+		if _, err := h.service.Save(ctx, again); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	h.agent = saved
+
+	// A directory here gets a worker of its own there; the default directory
+	// is still offered.
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh@local"), nil }
+	h.ingest("alice", "github:o/r#1", "fix the app", true)
+	h.settle()
+	prompt := h.router.prompts[0]
+	for _, want := range []string{`"id": "auto:dsh"`, `"id": "auto:dsh@local"`, `"id": "auto:dsh@local-2"`, `"id": "auto:dsh@dev_1-2"`, "The app repo.", "working in ~/data there"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("roster lacks %s:\n%s", want, prompt)
+		}
+	}
+	worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(h.agent.ID, "dsh", "local"))
+	if worker == nil || worker.WorkDir != local || !IsManagedAgent(*worker) {
+		t.Fatalf("worker = %+v", worker)
+	}
+	if ticket := h.store.allTickets()[0]; ticket.Worker.ID != "auto:dsh@local" || ticket.Worker.HostID != "" || ticket.Worker.AgentID != worker.ID {
+		t.Fatalf("ticket worker = %+v", ticket.Worker)
+	}
+
+	// A second directory on another machine asks for a worker of its own there.
+	h.router.answer = func(core.InvocationRequest) (string, error) { return acceptAnswer("auto:dsh@dev_1-2"), nil }
+	h.ingest("alice", "github:o/r#2", "clean the data", true)
+	h.settle()
+	if len(machines.launches) != 1 || machines.launchOn[0] != "dev_1" || machines.launches[0].Dir != "~/data" || machines.launches[0].PathID != "dev_1-2" {
+		t.Fatalf("launches = %+v on %v", machines.launches, machines.launchOn)
+	}
+
+	// Deleting the agent removes its workers in every directory here.
+	if err := h.service.Delete(ctx, h.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(h.agent.ID, "dsh", "local")); worker != nil {
+		t.Fatalf("worker left behind: %+v", worker)
+	}
+}
+
+func TestMachineKeepsAWorkerPerDirectory(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	first, second := t.TempDir(), t.TempDir()
+	a, err := h.service.HostWorker(ctx, core.HostedWorkerRequest{OwnerID: "sa_1", RuntimeID: "dsh", Dir: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.service.HostWorker(ctx, core.HostedWorkerRequest{OwnerID: "sa_1", RuntimeID: "dsh", Dir: second, PathID: "dev_1-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.AgentID == b.AgentID || a.WorkDir != first || b.WorkDir != second {
+		t.Fatalf("a = %+v, b = %+v", a, b)
+	}
+	if _, err := h.service.HostWorker(ctx, core.HostedWorkerRequest{OwnerID: "sa_1", RuntimeID: "dsh", PathID: "../x"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v", err)
+	}
+	if removed, err := h.service.ReleaseHostedWorkers(ctx, "sa_1"); err != nil || removed != 2 {
+		t.Fatalf("removed = %d, err = %v", removed, err)
 	}
 }

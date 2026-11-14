@@ -100,12 +100,12 @@ The router reads untrusted text. What limits the harm a crafted event can do:
   limit on who can reach the router. Channel sources have no list: whoever the
   channel lets reach the bot reaches the brain, as with any bound channel.
 - **An action** can only name a worker on this Super Agent's roster, `auto:<framework>`
-  for one of its worker frameworks, and a Ticket already on the event's thread.
-- **The router** is a [router agent](#router-agents): it runs on this machine in the
-  approval mode chosen for it, YOLO by default. With YOLO it can run any command as the
-  daemon's user, including reading AgentMux's own configuration; its charter, not a
-  sandbox, is what tells it to treat event text as data. Choose `auto`, `auto_edit` or
-  `plan` for a Super Agent whose triggers carry text from people you do not trust.
+  or `auto:<framework>@<path id>` for one of its worker frameworks, and a Ticket already
+  on the event's thread.
+- **The router** is a [router agent](#router-agents): it runs on this machine in its
+  framework's default router mode, `auto`, where the framework approves what looks safe
+  and declines the rest. Its charter, not a sandbox, is what tells it to treat event text
+  as data, so the triggers' allowed senders are still the limit on who can reach it.
 - **Observe mode** is the default for a Super Agent saved through
   `POST /api/v1/super-agents` without a mode. It records the router's reply and action without
   running work or messaging anyone, and tells the router to change nothing; its approval
@@ -244,7 +244,7 @@ there, and every Ticket has a folder below it:
 
 - A worker whose Agent uses per-conversation worktrees gets its worktree in `work/`, on
   an `agentmux/…` branch, instead of under `<repo>.agentmux-worktrees`. So does an auto
-  worker with no `auto_worker_dir`, as a plain directory.
+  worker in the default directory, as a plain directory.
 - Any other local worker keeps the directory its Agent is configured with, and `work/`
   links there. A remote worker's directory is on its own machine; its folder has the
   record files only.
@@ -262,39 +262,56 @@ offers `auto:<framework>` for each; the router names one when no listed worker s
 request, and the host starts a worker of that framework that was not configured in advance:
 
 - Each Ticket gets its own session and directory. In a git repository the directory is a
-  worktree in the Ticket's `work/` folder; with no `auto_worker_dir`, it is a new folder
+  worktree in the Ticket's `work/` folder; in the default directory it is a new folder
   there. Another directory outside a repository is shared by the Tickets.
 - An action supplies only the framework, the Ticket's title and instructions. A worker on
   the router agent's framework takes its provider, model and environment; another framework
-  uses its active provider route. The directory is `auto_worker_dir`, or else `~/.agentmux/super-agents/<id>/work`
-  (a Super Agent that still routes with an ordinary Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
-  which every worker framework must support; left empty, each uses `auto_edit`, or `auto`
-  where it lacks `auto_edit`. MCP servers, skills and channels are not inherited.
-- `max_concurrency` limits how many run at once. Auto workers run on this machine unless
-  `worker_machines` lists others; see below.
-- Each worker framework has one Agent instance, `saw_<super agent id>_<framework>`, removed
-  with the Super Agent. Worktrees are kept after a Ticket ends, and so is the home.
+  uses its active provider route. `auto:<framework>` works in the default directory,
+  `~/.agentmux/super-agents/<id>/work` (a Super Agent that still routes with an ordinary
+  Agent uses that Agent's directory). The approval mode is `auto_worker_approval_mode`,
+  which every worker framework must support; left empty, each uses `auto`, or `auto_edit`
+  where it lacks `auto`. MCP servers, skills and channels are not inherited.
+- `max_concurrency` limits how many run at once. Workers also run in the directories
+  `worker_machines` lists, here or on other machines; see below.
+- Each worker framework has one Agent instance per directory here,
+  `saw_<super agent id>_<framework>` for the default one and
+  `saw_<super agent id>_<framework>_<path id>` for a listed one, removed with the Super
+  Agent. Worktrees are kept after a Ticket ends, and so is the home.
 
-### Workers on other machines
+### Working directories
 
-`worker_machines` lists machines connected to this AgentMux, as linked devices or SSH
-hosts, that the agent may also launch workers on:
+The default directory is always offered. `worker_machines` lists more directories the
+agent may launch workers in, on this machine (an empty `host_id`) or on machines connected
+to this AgentMux as linked devices or SSH hosts:
 
 ```json
-"worker_machines": [{ "host_id": "dev_23f0…", "dir": "~/code/app", "capabilities": "Has the GPU." }]
+"worker_machines": [
+  { "id": "local", "host_id": "", "dir": "~/code/app", "capabilities": "The app repository." },
+  { "id": "dev_23f0…", "host_id": "dev_23f0…", "dir": "~/code/app", "capabilities": "Has the GPU." },
+  { "id": "dev_23f0…-2", "host_id": "dev_23f0…", "dir": "~/data" }
+]
 ```
 
-- The roster offers `auto:<framework>@<host_id>` for each machine and worker framework,
-  with the machine's name, the operator's `capabilities` text, and whether the machine is
-  reachable and has that framework installed right now. A decision can only name an entry
-  on the roster.
-- The machine itself creates the worker. The host sends the framework, `dir` and
-  `auto_worker_approval_mode` to `POST /api/v1/super-agents/workers/launch` on that machine,
-  which checks them as it would for its own agents: the framework must be installed, `dir`
-  must exist (empty gives the worker `~/.agentmux/hosted-workers/<agent id>/work`), and the
-  approval mode must be an unattended one. The worker is the Agent instance
-  `sawr_<agent id>_<framework>` there. It uses that machine's provider route, tools and
-  environment; nothing is inherited from the agent's machine.
+- A directory here must exist. One on another machine may be empty, giving the workers a
+  directory of their own there; the same directory cannot be listed twice. Saving assigns
+  each entry an `id`: the first one on another machine takes the machine's id, as entries
+  did when each machine had one directory, and the others are numbered. `auto_worker_dir`,
+  from before there could be several directories here, becomes the first entry when the
+  agent is saved.
+- The roster offers `auto:<framework>@<id>` for each directory and worker framework, with
+  the directory, the operator's `capabilities` text, and for another machine its name and
+  whether it is reachable and has that framework installed right now. A decision can only
+  name an entry on the roster.
+- Another machine itself creates the worker. The host sends the framework, `dir`,
+  `auto_worker_approval_mode` and, for any but the first directory there, the entry's
+  `path_id` to `POST /api/v1/super-agents/workers/launch` on that machine, which checks
+  them as it would for its own agents: the framework must be installed, `dir` must exist
+  (empty gives the worker `~/.agentmux/hosted-workers/<agent id>/work`), and the approval
+  mode must be an unattended one. The worker is the Agent instance
+  `sawr_<agent id>_<framework>`, or `sawr_<agent id>_<framework>_<path id>`, there. A
+  machine whose AgentMux predates `path_id` keeps one worker per framework, which moves to
+  whichever of its directories was launched last. It uses that machine's provider route,
+  tools and environment; nothing is inherited from the agent's machine.
 - The Ticket, its inputs, results and progress stay on the agent's machine. The worker's
   session and files stay on its own, so `base_ticket` only carries commits between Tickets
   on the same machine.
@@ -386,15 +403,15 @@ kind `messages` that names the sender and never the text.
 
 A router agent is an Agent made only to route, kept apart from ordinary Agents. The
 Super Agent form chooses one, or creates one with a framework, a model, a reasoning effort,
-a speed, its permissions and the MCP servers it may use. Each router agent belongs to one Super Agent and
+a speed, and the MCP servers it may use. Each router agent belongs to one Super Agent and
 works in its home, so it can read every Ticket's folder; another Super Agent cannot route
 with it.
 
-- It runs unattended in any approval mode its framework offers except `manual`: `yolo` by
-  default, or `auto`, `auto_edit` or `plan`. A framework with only `manual` cannot route.
-  Saving without a mode keeps the one it has, so routers saved when routers were
-  read-only stay in `plan` until the operator chooses otherwise. Its framework cannot
-  change after it is created.
+- It runs unattended in its framework's default router mode: `auto`, or, for a framework
+  without it, `auto_edit`, then `yolo`, then `plan`. The Console always saves it in that
+  mode, so it moves an older router onto it; the API still accepts any mode the framework
+  offers except `manual`, and saving without one keeps the one it has. A framework with
+  only `manual` cannot route. Its framework cannot change after it is created.
 - Its MCP servers are the registered, enabled ones listed on it, none by default. AgentMux
   can give MCP servers only to Claude Code and Codex routers.
 - It never has skills, CLIs, channels, schedules or a system prompt. Saving it restores

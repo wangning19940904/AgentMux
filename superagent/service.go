@@ -545,9 +545,9 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, decision
 
 // checkWorker is assignedWorker without launching anything.
 func (s *Service) checkWorker(agent core.SuperAgent, workerID string) error {
-	if runtimeID, hostID, ok := parseAutoWorkerID(workerID); ok {
-		if hostID != "" {
-			return checkMachineWorker(agent, workerID, runtimeID, hostID)
+	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
+		if pathID != "" {
+			return checkMachineWorker(agent, workerID, runtimeID, pathID)
 		}
 		if !agent.AutoWorkers {
 			return errors.New("this Super Agent cannot launch workers; choose one from the roster")
@@ -712,9 +712,9 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
-	if runtimeID, hostID, ok := parseAutoWorkerID(workerID); ok {
-		if hostID != "" {
-			return s.launchMachineWorker(ctx, agent, runtimeID, hostID)
+	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
+		if pathID != "" {
+			return s.launchMachineWorker(ctx, agent, runtimeID, pathID)
 		}
 		return s.launchAutoWorker(ctx, agent, runtimeID)
 	}

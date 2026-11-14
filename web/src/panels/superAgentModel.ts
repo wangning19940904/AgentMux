@@ -148,6 +148,7 @@ export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRo
   // An agent with its own brain may only chat; a router needs someone to work.
   if (!canStartWorkers(agent) && !ownsBrain(agent)) problems.push("superAgents.problem.noWorkers");
   if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
+  if (agent.auto_workers && (agent.worker_machines ?? []).some((path) => !path.host_id && !path.dir?.trim())) problems.push("superAgents.problem.localPath");
   for (const source of agent.sources.filter((item) => !isChannelSource(item))) {
     if (source.enabled && source.allowed_actors.length === 0) problems.push("superAgents.problem.actors");
     if (source.allowed_actors.includes("*") && source.kind !== "feishu_message") problems.push("superAgents.problem.wildcard");

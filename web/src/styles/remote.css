@@ -1465,54 +1465,140 @@
 .super-agent-section > header h3 { margin: 0; font-size: 14px; }
 .super-agent-section > header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
 .super-agent-section > header.super-agent-section-head { align-items: flex-start; }
+.super-agent-section-head > button { flex: none; white-space: nowrap; }
+/* A working directory: the machine and the directory line up whatever help
+   text sits under either. */
+.super-agent-path-grid { align-items: start; }
+.super-agent-path-grid > .field { align-content: start; }
+.super-agent-path-grid > .field > span { display: inline-flex; align-items: center; gap: 5px; }
+.super-agent-path-grid .directory-input-row { grid-template-columns: minmax(0, 1fr) 31px; }
+.super-agent-path-grid .directory-input-row .icon-action { width: 31px; height: 31px; min-height: 31px; padding: 0; }
 .super-agent-router-summary { gap: 6px; }
 .super-agent-template-action { justify-self: start; }
+/* Model picker: a compact trigger and a menu after the model menus of Claude
+   (list rows, a check on the chosen one, a second page for more) and Codex
+   (an effort slider with a reset). */
 .model-picker { position: relative; justify-self: start; min-width: 0; max-width: 100%; }
 .model-picker-trigger {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
-  min-height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px;
+  min-height: 30px; padding: 0 8px 0 11px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--bg-elevated); color: var(--text); font-size: 13px; font-weight: 500;
 }
-.model-picker-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.model-picker-trigger:hover, .model-picker-trigger[aria-expanded="true"] { border-color: var(--accent); }
-.model-picker-fast { color: var(--accent); }
+.model-picker-trigger:hover { background: var(--bg-subtle); }
+.model-picker-trigger[aria-expanded="true"] { background: var(--bg-subtle); border-color: var(--border-strong); }
+.model-picker-trigger-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; }
+.model-picker-trigger-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-trigger-effort { flex: none; color: var(--muted); font-weight: 450; }
+.model-picker-chevron { flex: none; color: var(--muted); }
+.model-picker-fast { flex: none; color: var(--amber); }
 /* The picker sets max-height to the room it has; only the model list scrolls,
    so effort and speed stay in view. */
 .model-picker-popover {
   position: absolute; z-index: 30; top: calc(100% + 6px); left: 0;
-  display: flex; flex-direction: column; gap: 8px; width: min(340px, calc(100vw - 48px)); max-height: 420px;
-  overflow-y: auto; overscroll-behavior: contain; padding: 10px;
+  display: flex; flex-direction: column; gap: 2px; width: min(300px, calc(100vw - 48px)); max-height: 420px;
+  overflow-y: auto; overscroll-behavior: contain; padding: 6px;
   border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elevated);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
+  box-shadow: var(--shadow-floating);
+  font-size: 13px;
 }
 .model-picker-popover[data-side="top"] { top: auto; bottom: calc(100% + 6px); }
 .model-picker-popover > * { flex: none; }
+.model-picker-heading { padding: 6px 8px 4px; color: var(--muted); font-size: 12px; }
+.model-picker-note { padding: 4px 8px 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .model-picker-popover > .model-picker-list {
-  display: grid; align-content: start; gap: 2px; overflow-y: auto; overscroll-behavior: contain;
+  display: grid; align-content: start; gap: 1px; overflow-y: auto; overscroll-behavior: contain;
 }
 /* A long list gives up room before anything else, down to three and a half
    rows, so the cut-off row shows there is more to scroll. */
 .model-picker-popover > .model-picker-list:has(> :nth-child(4)) { flex: 0 1 auto; min-height: 120px; }
-.model-picker-option {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+.model-picker-option, .model-picker-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
   min-height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left;
 }
-.model-picker-option:hover { background: var(--bg-subtle); }
-.model-picker-option[aria-selected="true"] { font-weight: 600; }
-.model-picker-option svg { color: var(--accent); flex: none; }
-.model-picker-section { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
-.model-picker-section > small, .model-picker-toggle > small { color: var(--muted); }
-.model-picker-typed-row { display: flex; gap: 6px; }
-.model-picker-typed-row > input { flex: 1 1 auto; min-width: 0; }
-.model-picker-typed-row > button { flex: none; }
-.model-picker-segments { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg-subtle); }
-.model-picker-segments button {
-  flex: 1 1 auto; min-height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-soft); font-size: 12px;
+.model-picker-option:hover, .model-picker-row:hover, .model-picker-option:focus-visible, .model-picker-row:focus-visible { background: var(--bg-subtle); outline: none; }
+.model-picker-option[aria-selected="true"] { background: var(--bg-subtle); }
+.model-picker-option-label { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-option-detail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.model-picker-check { flex: none; margin-left: auto; color: var(--text); visibility: hidden; }
+.model-picker-option[aria-selected="true"] .model-picker-check { visibility: visible; }
+.model-picker-more { justify-content: space-between; color: var(--text); }
+.model-picker-more svg, .model-picker-back svg { flex: none; color: var(--muted); }
+/* Each group after the list starts on a hairline, like menu sections. */
+.model-picker-more, .model-picker-effort, .model-picker-toggle { position: relative; margin-top: 7px; }
+.model-picker-more::before, .model-picker-effort::before, .model-picker-toggle::before {
+  content: ""; position: absolute; top: -4px; left: 8px; right: 8px; border-top: 1px solid var(--border);
 }
-.model-picker-segments button[aria-checked="true"] { background: var(--accent); color: #fff; font-weight: 600; }
-.model-picker-toggle { grid-template-columns: auto 1fr auto; column-gap: 8px; align-items: center; cursor: pointer; }
-.model-picker-toggle > span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; white-space: nowrap; }
-.model-picker-toggle > input { width: auto; margin: 0; }
+.model-picker-more + .model-picker-effort, .model-picker-more + .model-picker-toggle { margin-top: 7px; }
+.model-picker-manual { display: grid; gap: 6px; padding: 2px 8px 8px; }
+.model-picker-manual > small { color: var(--muted); line-height: 1.45; }
+
+.model-picker-effort { display: grid; gap: 8px; padding: 8px 8px 6px; }
+.model-picker-effort-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.model-picker-effort-title { color: var(--text); }
+.model-picker-effort-value { margin-left: auto; font-weight: 600; white-space: nowrap; }
+.model-picker-effort-value[data-default] { color: var(--muted); font-weight: 500; }
+.model-picker-reset {
+  display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted);
+}
+.model-picker-reset:hover:not(:disabled) { background: var(--bg-subtle); color: var(--text); }
+.model-picker-reset:disabled { opacity: 0.35; }
+.model-picker-slider {
+  --thumb: 20px;
+  position: relative; height: 26px; margin: 0 10px; cursor: pointer; touch-action: none; outline: none;
+}
+/* The rail runs past the end stops so the thumb sits fully on it. */
+.model-picker-slider::before {
+  content: ""; position: absolute; top: 50%; left: -10px; right: -10px; height: 22px; transform: translateY(-50%);
+  border-radius: 999px; background: var(--bg-subtle); box-shadow: inset 0 0 0 1px var(--border);
+}
+.model-picker-slider-fill {
+  position: absolute; top: 50%; left: -10px; height: 22px; transform: translateY(-50%);
+  padding-left: 20px; box-sizing: content-box; border-radius: 999px; background: var(--accent-strong);
+}
+.model-picker-slider[data-default] .model-picker-slider-fill { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.model-picker-stop {
+  position: absolute; top: 50%; width: 14px; height: 14px; padding: 0; transform: translate(-50%, -50%);
+  border: 0; border-radius: 50%; background: transparent;
+}
+.model-picker-stop::after {
+  content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--muted); opacity: 0.55;
+}
+.model-picker-stop[data-filled]::after { background: var(--bg-elevated); opacity: 0.7; }
+.model-picker-slider[data-default] .model-picker-stop[data-filled]::after { background: var(--text-soft); opacity: 0.55; }
+.model-picker-thumb {
+  position: absolute; top: 50%; width: var(--thumb); height: var(--thumb); transform: translate(-50%, -50%);
+  border-radius: 50%; background: #fff; box-shadow: 0 0 0 2px var(--bg-elevated), 0 1px 4px 2px rgba(0, 0, 0, 0.2);
+  pointer-events: none; transition: left 120ms ease;
+}
+.model-picker-slider-fill { transition: width 120ms ease; }
+.model-picker-slider[data-default] .model-picker-thumb { box-shadow: 0 0 0 1.5px var(--border-strong), 0 1px 2px rgba(0, 0, 0, 0.1); }
+.model-picker-slider:focus-visible .model-picker-thumb { box-shadow: 0 0 0 3px rgba(90, 90, 98, 0.28), 0 1px 3px rgba(0, 0, 0, 0.22); }
+.model-picker-slider-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+
+.model-picker-toggle { gap: 10px; min-height: 44px; padding-block: 6px; cursor: pointer; }
+.model-picker-toggle-text { display: grid; gap: 1px; min-width: 0; }
+.model-picker-toggle-text > span { display: inline-flex; align-items: center; gap: 6px; }
+.model-picker-toggle-text > span svg { color: var(--amber); }
+.model-picker-toggle-text > small { color: var(--muted); font-size: 12px; }
+.model-picker-switch {
+  appearance: none; -webkit-appearance: none; flex: none; position: relative; margin: 0 0 0 auto;
+  width: 30px; min-height: 0; height: 18px; padding: 0; border: 0; border-radius: 999px;
+  background: var(--border-strong); cursor: pointer; transition: background-color 120ms ease;
+}
+.model-picker-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 120ms ease;
+}
+.model-picker-switch:checked { background: var(--accent-strong); }
+.model-picker-switch:checked::after { transform: translateX(12px); background: var(--bg-elevated); }
+.model-picker-switch:focus-visible { outline: 2px solid rgba(90, 90, 98, 0.35); outline-offset: 2px; box-shadow: none; }
+
+.model-picker-typed { display: grid; gap: 2px; }
+.model-picker-back { gap: 4px; padding-left: 4px; font-weight: 600; }
+.model-picker-typed-row { display: flex; gap: 6px; padding: 0 8px 8px; }
+.model-picker-typed-row > input { flex: 1 1 auto; min-width: 0; }
+.model-picker-typed-row > button { flex: none; min-height: 31px; }
 .super-agent-router-editor .field > strong { font-size: 13px; }
 .super-agent-advanced > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .super-agent-advanced > .super-agent-form { margin-top: 12px; }

@@ -126,10 +126,11 @@ func (s *Service) withWorkerRuntimes(ctx context.Context, agent core.SuperAgent)
 	return agent
 }
 
-// defaultAutoWorkerApproval is the least permissive unattended mode the
-// framework has, since frameworks differ in which modes they offer.
+// defaultAutoWorkerApproval is Auto, where the framework approves what looks
+// safe and declines the rest, like the router. A framework without Auto gets
+// Auto edit, since frameworks differ in which modes they offer.
 func defaultAutoWorkerApproval(runtimeID string) string {
-	if core.ApprovalModeSupported(runtimeID, core.ApprovalModeAuto) && !core.ApprovalModeSupported(runtimeID, core.ApprovalModeAutoEdit) {
+	if core.ApprovalModeSupported(runtimeID, core.ApprovalModeAuto) {
 		return core.ApprovalModeAuto
 	}
 	return core.ApprovalModeAutoEdit

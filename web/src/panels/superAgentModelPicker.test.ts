@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placePopover } from "./superAgentModelPicker";
+import { placePopover, sortEfforts } from "./superAgentModelPicker";
 
 describe("placePopover", () => {
   const window = { top: 0, bottom: 800 };
@@ -24,5 +24,12 @@ describe("placePopover", () => {
 
   it("measures from the clipping container, not the window", () => {
     expect(placePopover({ top: 500, bottom: 532 }, { top: 400, bottom: 700 }, 300)).toEqual({ side: "bottom", maxHeight: 150 });
+  });
+});
+
+describe("sortEfforts", () => {
+  it("orders efforts from least to most thinking, unknown ones last", () => {
+    expect(sortEfforts(["low", "medium", "high", "xhigh", "max", "ultra", "minimal", "none", "turbo"]))
+      .toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "turbo"]);
   });
 });
