@@ -35,7 +35,7 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		t.Fatalf("saved = %+v", saved)
 	}
 	instance, _ := h.store.GetAgentInstance(ctx, saved.ID)
-	if instance == nil || !IsRouterAgent(*instance) || IsManagedAgent(*instance) || instance.DefaultApprovalMode != core.ApprovalModeYolo || !instance.Enabled || saved.ApprovalMode != core.ApprovalModeYolo {
+	if instance == nil || !IsRouterAgent(*instance) || IsManagedAgent(*instance) || instance.DefaultApprovalMode != core.ApprovalModeAuto || !instance.Enabled || saved.ApprovalMode != core.ApprovalModeAuto {
 		t.Fatalf("instance = %+v", instance)
 	}
 	if filepath.Base(instance.WorkDir) != saved.ID {
@@ -59,7 +59,7 @@ func TestSaveRouterCreatesARestrictedRouterAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	instance, _ = h.store.GetAgentInstance(ctx, saved.ID)
-	if instance.DefaultApprovalMode != core.ApprovalModeYolo || len(instance.Skills) != 0 || len(instance.CLIs) != 0 ||
+	if instance.DefaultApprovalMode != core.ApprovalModeAuto || len(instance.Skills) != 0 || len(instance.CLIs) != 0 ||
 		len(instance.ChannelBindings) != 0 || instance.SystemPrompt != "" || len(instance.MCPServers) != 0 {
 		t.Fatalf("limits not restored: %+v", instance)
 	}
@@ -137,11 +137,14 @@ func TestRouterFrameworkCapabilities(t *testing.T) {
 	if framework := routerFramework("kimi"); !framework.CanRoute || !slices.Equal(framework.ApprovalModes, []string{"auto"}) || framework.DefaultApprovalMode != "auto" {
 		t.Errorf("kimi = %+v", framework)
 	}
-	if framework := routerFramework("codex"); !framework.CanRoute || !framework.MCPServers || framework.DefaultApprovalMode != "yolo" || slices.Contains(framework.ApprovalModes, "manual") {
+	if framework := routerFramework("codex"); !framework.CanRoute || !framework.MCPServers || framework.DefaultApprovalMode != "auto" || slices.Contains(framework.ApprovalModes, "manual") {
 		t.Errorf("codex = %+v", framework)
 	}
 	if framework := routerFramework("cursor"); !framework.CanRoute || framework.MCPServers || !slices.Equal(framework.ApprovalModes, []string{"auto", "plan", "yolo"}) {
 		t.Errorf("cursor = %+v", framework)
+	}
+	if framework := routerFramework("gemini"); framework.DefaultApprovalMode != "auto_edit" {
+		t.Errorf("gemini = %+v", framework)
 	}
 	if framework := routerFramework("unknown-framework"); !framework.CanRoute || len(framework.ApprovalModes) != 0 || framework.DefaultApprovalMode != "" {
 		t.Errorf("unknown = %+v", framework)

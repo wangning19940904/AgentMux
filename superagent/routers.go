@@ -15,7 +15,7 @@ import (
 )
 
 // Router agents are Agent instances made only to route. They run unattended in
-// the approval mode the operator chose, YOLO unless chosen otherwise, get only
+// their framework's default approval mode, Auto where it has one, get only
 // the MCP servers listed on them, and never have skills, CLIs, channels or
 // schedules. Their charter, sent with every event, is what tells them how to
 // treat untrusted text. They are kept apart from other Agents, and only they
@@ -95,11 +95,13 @@ func routerApprovalModes(runtimeID string) []string {
 	return modes
 }
 
-// defaultRouterApproval is the most capable mode the framework offers, so a
-// new router can act on its own: YOLO where there is one.
+// defaultRouterApproval is the mode a new router runs in: Auto, where the
+// framework approves what looks safe and declines the rest, so the router can
+// keep its memory and look things up without a blanket licence to run any
+// command. A framework without Auto gets Auto edit, then YOLO, then plan.
 func defaultRouterApproval(runtimeID string) string {
 	modes := routerApprovalModes(runtimeID)
-	for _, mode := range []string{core.ApprovalModeYolo, core.ApprovalModeAuto, core.ApprovalModeAutoEdit, core.ApprovalModePlan} {
+	for _, mode := range []string{core.ApprovalModeAuto, core.ApprovalModeAutoEdit, core.ApprovalModeYolo, core.ApprovalModePlan} {
 		if slices.Contains(modes, mode) {
 			return mode
 		}

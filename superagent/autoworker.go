@@ -27,9 +27,14 @@ func isAutoWorkerID(id string) bool {
 }
 
 // autoWorkerAgentID names the Agent instance that runs a Super Agent's auto
-// workers of one framework.
-func autoWorkerAgentID(superAgentID, runtimeID string) string {
-	return "saw_" + superAgentID + "_" + runtimeID
+// workers of one framework in its default directory, or, with a path ID, in
+// one of the directories the operator listed on this machine.
+func autoWorkerAgentID(superAgentID, runtimeID string, pathID ...string) string {
+	id := "saw_" + superAgentID + "_" + runtimeID
+	if len(pathID) > 0 && pathID[0] != "" {
+		id += "_" + pathID[0]
+	}
+	return id
 }
 
 // IsManagedAgent reports whether a Super Agent owns this Agent instance.
@@ -69,7 +74,24 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, r
 	if err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	id := autoWorkerAgentID(agent.ID, runtimeID)
+	return s.launchLocalWorker(ctx, agent, runtimeID, "", workDir)
+}
+
+// launchLocalWorker keeps the Agent instance that runs a Super Agent's auto
+// workers of one framework in one directory on this machine: its default
+// directory with no path ID, or a directory the operator listed.
+func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID, workDir string) (core.SuperAgentWorker, error) {
+	if !agent.AutoWorkers {
+		return core.SuperAgentWorker{}, errors.New("router chose to launch a worker, which this Super Agent does not allow")
+	}
+	router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
+	if err != nil {
+		return core.SuperAgentWorker{}, err
+	}
+	if router == nil {
+		return core.SuperAgentWorker{}, fmt.Errorf("router agent %q not found on this machine", agent.RouterAgentID)
+	}
+	id := autoWorkerAgentID(agent.ID, runtimeID, pathID)
 	now := s.now().UTC()
 	createdAt := now
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -111,7 +133,7 @@ func (s *Service) deleteAutoWorkers(ctx context.Context, superAgentID string) er
 	prefix := autoWorkerAgentID(superAgentID, "")
 	for _, instance := range instances {
 		runtimeID, found := strings.CutPrefix(instance.ID, prefix)
-		owned := instance.ID == "saw_"+superAgentID || (found && runtimeID == instance.RuntimeID)
+		owned := instance.ID == "saw_"+superAgentID || (found && (runtimeID == instance.RuntimeID || strings.HasPrefix(runtimeID, instance.RuntimeID+"_")))
 		if !IsManagedAgent(instance) || !owned {
 			continue
 		}

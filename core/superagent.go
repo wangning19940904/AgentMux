@@ -81,9 +81,10 @@ type SuperAgent struct {
 	WorkerRuntimes         []string `json:"worker_runtimes,omitempty"`
 	AutoWorkerDir          string   `json:"auto_worker_dir,omitempty"`
 	AutoWorkerApprovalMode string   `json:"auto_worker_approval_mode,omitempty"`
-	// WorkerMachines are the other machines the router may launch a worker
-	// on, besides this one. Like the rest of the auto worker settings they are
-	// the operator's: a router decision picks among them and cannot add one.
+	// WorkerMachines are the directories the router may launch a worker in
+	// besides this machine's default one: paths on this machine, and paths on
+	// other machines. Like the rest of the auto worker settings they are the
+	// operator's: a router decision picks among them and cannot add one.
 	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
 	Sources        []SuperAgentSource  `json:"sources"`
 	Enabled        bool                `json:"enabled"`
@@ -101,11 +102,15 @@ type SuperAgentWorker struct {
 	Capabilities string `json:"capabilities,omitempty"`
 }
 
-// SuperAgentMachine is a machine an agent may launch workers on: a device
-// linked to this hub, or an SSH host. Dir is a directory on that machine and
-// Capabilities tells the router what the machine is good for. An empty Dir
-// gives the workers a directory of their own there.
+// SuperAgentMachine is a directory an agent may launch workers in. An empty
+// HostID is this machine; otherwise it names a device linked to this hub or an
+// SSH host. Dir is a directory on that machine and Capabilities tells the
+// router what it is good for. An empty Dir, allowed only on another machine,
+// gives the workers a directory of their own there. ID names the entry on the
+// roster, as auto:<framework>@<id>; it is assigned when the agent is saved,
+// and an entry saved before IDs existed goes by its HostID.
 type SuperAgentMachine struct {
+	ID           string `json:"id,omitempty"`
 	HostID       string `json:"host_id"`
 	Dir          string `json:"dir,omitempty"`
 	Capabilities string `json:"capabilities,omitempty"`
@@ -125,7 +130,10 @@ type SuperAgentMachineStatus struct {
 // may be: it checks the framework, the directory and the approval mode
 // against what it has, exactly as it would for an agent of its own.
 type HostedWorkerRequest struct {
-	OwnerID      string `json:"owner_id"`
+	OwnerID string `json:"owner_id"`
+	// PathID tells apart workers of one framework in different directories
+	// on the machine. Empty keeps the single worker per framework.
+	PathID       string `json:"path_id,omitempty"`
 	OwnerName    string `json:"owner_name,omitempty"`
 	RuntimeID    string `json:"runtime_id"`
 	Dir          string `json:"dir,omitempty"`

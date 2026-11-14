@@ -17,10 +17,11 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 )
 
-// An agent can launch a worker on another machine. The agent, its Tickets and
-// their history stay on the machine the agent lives on; the worker's session
-// and files are on the machine it runs on. The roster names such a worker
-// auto:<framework>@<machine>.
+// An agent can launch a worker in a directory the operator listed, on this
+// machine or another. The agent, its Tickets and their history stay on the
+// machine the agent lives on; the worker's session and files are on the
+// machine it runs on. The roster names such a worker auto:<framework>@<path>,
+// where <path> is the listed directory's ID.
 
 const (
 	// hostedWorkerPrefix names the Agents a machine keeps for agents that
@@ -33,7 +34,12 @@ const (
 	hostedWorkersRemovePath = "/api/v1/super-agents/workers/release"
 	steerPath               = "/api/v1/invocations/steer"
 
-	machineGuidance = "Launches a new %s worker on %s with its own session and directory there."
+	machineGuidance    = "Launches a new %s worker on %s with its own session and directory there."
+	machineDirGuidance = "Launches a new %s worker on %s, working in %s there."
+	localDirGuidance   = "Launches a new %s worker on this machine, working in %s."
+
+	// localPathID names the paths on this machine that have no ID yet.
+	localPathID = "local"
 )
 
 // ErrInvalid marks a request this machine refuses as it stands.
@@ -42,22 +48,48 @@ var ErrInvalid = errors.New("invalid request")
 // ErrMachineOutdated means the machine's AgentMux predates hosted workers.
 var ErrMachineOutdated = errors.New("this machine's AgentMux is too old to host workers for another machine; update it")
 
-func machineWorkerRosterID(runtimeID, hostID string) string {
-	return autoWorkerRosterID(runtimeID) + "@" + hostID
+func machineWorkerRosterID(runtimeID, pathID string) string {
+	return autoWorkerRosterID(runtimeID) + "@" + pathID
 }
 
-// parseAutoWorkerID splits auto:<framework> and auto:<framework>@<machine>.
-func parseAutoWorkerID(id string) (runtimeID, hostID string, ok bool) {
+// parseAutoWorkerID splits auto:<framework> and auto:<framework>@<path>.
+func parseAutoWorkerID(id string) (runtimeID, pathID string, ok bool) {
 	rest, ok := strings.CutPrefix(id, autoWorkerID+":")
 	if !ok {
 		return "", "", false
 	}
-	runtimeID, hostID, _ = strings.Cut(rest, "@")
-	return runtimeID, hostID, runtimeID != ""
+	runtimeID, pathID, _ = strings.Cut(rest, "@")
+	return runtimeID, pathID, runtimeID != ""
 }
 
-func hostedWorkerAgentID(ownerID, runtimeID string) string {
-	return hostedWorkerPrefix + ownerID + "_" + runtimeID
+// machinePathID is the ID a listed directory goes by on the roster. One saved
+// before directories had IDs, when each machine had one, goes by its machine.
+func machinePathID(machine core.SuperAgentMachine) string {
+	return firstNonEmpty(machine.ID, machine.HostID)
+}
+
+// validPathID keeps path IDs usable in roster entries and Agent IDs.
+func validPathID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+// hostedWorkerAgentID names the Agent a machine keeps for an agent elsewhere:
+// one per framework, and one per framework and directory when the agent
+// lists several directories there.
+func hostedWorkerAgentID(ownerID, runtimeID, pathID string) string {
+	id := hostedWorkerPrefix + ownerID + "_" + runtimeID
+	if pathID != "" {
+		id += "_" + pathID
+	}
+	return id
 }
 
 // MachineFleet is what a WorkerRunner offers when it reaches other machines.
@@ -77,49 +109,108 @@ func (s *Service) machineFleet() MachineFleet {
 	return fleet
 }
 
-func agentMachine(agent core.SuperAgent, hostID string) (core.SuperAgentMachine, bool) {
-	index := slices.IndexFunc(agent.WorkerMachines, func(machine core.SuperAgentMachine) bool { return machine.HostID == hostID })
+func agentMachine(agent core.SuperAgent, pathID string) (core.SuperAgentMachine, bool) {
+	index := slices.IndexFunc(agent.WorkerMachines, func(machine core.SuperAgentMachine) bool { return machinePathID(machine) == pathID })
 	if index < 0 {
 		return core.SuperAgentMachine{}, false
 	}
 	return agent.WorkerMachines[index], true
 }
 
-// normalizeWorkerMachines checks the machines an agent may launch workers on.
-// Their directories are on those machines, and a machine may be offline while
-// it is being configured, so both are checked when a worker is launched.
+// normalizeWorkerMachines checks the directories an agent may launch workers
+// in besides this machine's default one. A directory on this machine must
+// exist. Another machine's directory is on that machine, and the machine may
+// be offline while it is being configured, so it is checked when a worker is
+// launched. A directory chosen before there could be several on this machine
+// (AutoWorkerDir) joins the list, and the default directory stays.
 func (s *Service) normalizeWorkerMachines(agent *core.SuperAgent) error {
-	if !agent.AutoWorkers || len(agent.WorkerMachines) == 0 {
+	if !agent.AutoWorkers {
+		agent.WorkerMachines = nil
+		return nil
+	}
+	if dir := strings.TrimSpace(agent.AutoWorkerDir); dir != "" {
+		if !slices.ContainsFunc(agent.WorkerMachines, func(machine core.SuperAgentMachine) bool {
+			return strings.TrimSpace(machine.HostID) == "" && strings.TrimSpace(machine.Dir) == dir
+		}) {
+			agent.WorkerMachines = append([]core.SuperAgentMachine{{Dir: dir}}, agent.WorkerMachines...)
+		}
+		agent.AutoWorkerDir = ""
+	}
+	if len(agent.WorkerMachines) == 0 {
 		agent.WorkerMachines = nil
 		return nil
 	}
 	fleet := s.machineFleet()
-	if fleet == nil {
-		return errors.New("this AgentMux has no other machines to launch workers on")
-	}
-	seen := map[string]bool{}
+	places := map[string]bool{}
+	ids := map[string]bool{}
 	machines := make([]core.SuperAgentMachine, 0, len(agent.WorkerMachines))
 	for _, machine := range agent.WorkerMachines {
+		machine.ID = strings.TrimSpace(machine.ID)
 		machine.HostID = strings.TrimSpace(machine.HostID)
 		machine.Dir = strings.TrimSpace(machine.Dir)
 		machine.Capabilities = strings.TrimSpace(machine.Capabilities)
-		if machine.HostID == "" {
-			return errors.New("each worker machine must name a machine")
-		}
-		if strings.ContainsAny(machine.HostID, "@ \t\n") {
-			return fmt.Errorf("machine id %q cannot be used for workers", machine.HostID)
-		}
-		if seen[machine.HostID] {
-			return fmt.Errorf("machine %q is listed twice", machine.HostID)
-		}
-		seen[machine.HostID] = true
-		if _, known := fleet.MachineName(machine.HostID); !known {
-			return fmt.Errorf("machine %q is not connected to this AgentMux", machine.HostID)
+		if machine.HostID == "local" {
+			machine.HostID = ""
 		}
 		if machine.Dir != "" && !strings.HasPrefix(machine.Dir, "/") && machine.Dir != "~" && !strings.HasPrefix(machine.Dir, "~/") {
-			return fmt.Errorf("the directory on machine %q must be an absolute path or start with ~/", machine.HostID)
+			return fmt.Errorf("worker directory %q must be an absolute path or start with ~/", machine.Dir)
+		}
+		where := "this machine"
+		if machine.HostID == "" {
+			if machine.Dir == "" {
+				return errors.New("each worker directory on this machine needs a path")
+			}
+			if err := validateAutoWorkerDir(machine.Dir); err != nil {
+				return err
+			}
+		} else {
+			if strings.ContainsAny(machine.HostID, "@ \t\n") {
+				return fmt.Errorf("machine id %q cannot be used for workers", machine.HostID)
+			}
+			if fleet == nil {
+				return errors.New("this AgentMux has no other machines to launch workers on")
+			}
+			name, known := fleet.MachineName(machine.HostID)
+			if !known {
+				return fmt.Errorf("machine %q is not connected to this AgentMux", machine.HostID)
+			}
+			where = name
+		}
+		place := machine.HostID + "\x00" + machine.Dir
+		if places[place] {
+			if machine.Dir == "" {
+				return fmt.Errorf("%s is listed twice with its own directory", where)
+			}
+			return fmt.Errorf("%s on %s is listed twice", machine.Dir, where)
+		}
+		places[place] = true
+		if machine.ID != "" {
+			if !validPathID(machine.ID) {
+				return fmt.Errorf("worker directory id %q can only use letters, digits, '-', '_' and '.'", machine.ID)
+			}
+			if ids[machine.ID] {
+				return fmt.Errorf("worker directory id %q is used twice", machine.ID)
+			}
+			ids[machine.ID] = true
 		}
 		machines = append(machines, machine)
+	}
+	// New entries get an ID. The first on a machine takes the machine's, as
+	// entries did when each machine had one directory.
+	for index := range machines {
+		if machines[index].ID != "" {
+			continue
+		}
+		base := firstNonEmpty(machines[index].HostID, localPathID)
+		if !validPathID(base) {
+			base = "path"
+		}
+		id := base
+		for n := 2; ids[id]; n++ {
+			id = fmt.Sprintf("%s-%d", base, n)
+		}
+		ids[id] = true
+		machines[index].ID = id
 	}
 	agent.WorkerMachines = machines
 	return nil
@@ -132,6 +223,12 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 	var wg sync.WaitGroup
 	for index, machine := range agent.WorkerMachines {
 		statuses[index] = core.SuperAgentMachineStatus{HostID: machine.HostID, Name: machine.HostID}
+		if machine.HostID == "" {
+			// This machine runs the agent, so it is up and has its frameworks.
+			statuses[index].Name, statuses[index].Available = "this machine", true
+			statuses[index].Runtimes = append([]string{}, agent.WorkerRuntimes...)
+			continue
+		}
 		if fleet == nil {
 			statuses[index].Detail = "other machines are unavailable"
 			continue
@@ -160,39 +257,56 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 }
 
 // checkMachineWorker is launchMachineWorker without launching anything.
-func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, hostID string) error {
+func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID string) error {
 	if !agent.AutoWorkers {
 		return errors.New("this Super Agent cannot launch workers; choose one from the roster")
 	}
-	if _, allowed := agentMachine(agent, hostID); !allowed || !slices.Contains(agent.WorkerRuntimes, runtimeID) {
+	if _, allowed := agentMachine(agent, pathID); !allowed || !slices.Contains(agent.WorkerRuntimes, runtimeID) {
 		return fmt.Errorf("worker %q is not on the roster", workerID)
 	}
 	return nil
 }
 
-// launchMachineWorker gives a new Ticket a worker on another machine. The
-// operator's settings are sent as they are; the machine applies its own
-// checks to them and answers with the Agent it keeps for this agent.
-func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent, runtimeID, hostID string) (core.SuperAgentWorker, error) {
-	workerID := machineWorkerRosterID(runtimeID, hostID)
-	if err := checkMachineWorker(agent, workerID, runtimeID, hostID); err != nil {
+// launchMachineWorker gives a new Ticket a worker in one of the listed
+// directories. On this machine it is an auto worker kept for that directory.
+// On another, the operator's settings are sent as they are; the machine
+// applies its own checks to them and answers with the Agent it keeps for this
+// agent.
+func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, error) {
+	workerID := machineWorkerRosterID(runtimeID, pathID)
+	if err := checkMachineWorker(agent, workerID, runtimeID, pathID); err != nil {
 		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q: %w", workerID, err)
+	}
+	machine, _ := agentMachine(agent, pathID)
+	if machine.HostID == "" {
+		dir, err := expandHome(machine.Dir)
+		if err != nil {
+			return core.SuperAgentWorker{}, err
+		}
+		worker, err := s.launchLocalWorker(ctx, agent, runtimeID, pathID, dir)
+		worker.ID = workerID
+		return worker, err
 	}
 	fleet := s.machineFleet()
 	if fleet == nil {
 		return core.SuperAgentWorker{}, errors.New("this AgentMux has no other machines to launch workers on")
 	}
-	machine, _ := agentMachine(agent, hostID)
-	launchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	hosted, err := fleet.Launch(launchCtx, hostID, core.HostedWorkerRequest{
+	request := core.HostedWorkerRequest{
 		OwnerID: agent.ID, OwnerName: agent.Name, RuntimeID: runtimeID,
 		Dir: machine.Dir, ApprovalMode: agent.AutoWorkerApprovalMode,
-	})
+	}
+	// The first directory on a machine keeps the worker it had when each
+	// machine had one directory.
+	if pathID != machine.HostID {
+		request.PathID = pathID
+	}
+	launchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	hosted, err := fleet.Launch(launchCtx, machine.HostID, request)
 	if err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: hostID, AgentID: hosted.AgentID}, nil
+	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, nil
 }
 
 // releaseMachineWorkers has machines drop the workers they keep for an agent.
@@ -202,7 +316,12 @@ func (s *Service) releaseMachineWorkers(ctx context.Context, agentID string, mac
 	if fleet == nil {
 		return
 	}
+	released := map[string]bool{}
 	for _, machine := range machines {
+		if machine.HostID == "" || released[machine.HostID] {
+			continue
+		}
+		released[machine.HostID] = true
 		releaseCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		if err := fleet.Release(releaseCtx, machine.HostID, agentID); err != nil {
 			s.log.Warn("release workers on machine", "agent", agentID, "machine", machine.HostID, "err", err)
@@ -211,10 +330,15 @@ func (s *Service) releaseMachineWorkers(ctx context.Context, agentID string, mac
 	}
 }
 
-// removedMachines are the machines in before that are not in after.
+// removedMachines are the other machines in before that have no directory
+// left in after. A machine keeps its workers while any directory there is
+// listed.
 func removedMachines(before, after []core.SuperAgentMachine) []core.SuperAgentMachine {
 	var removed []core.SuperAgentMachine
 	for _, machine := range before {
+		if machine.HostID == "" {
+			continue
+		}
 		if !slices.ContainsFunc(after, func(kept core.SuperAgentMachine) bool { return kept.HostID == machine.HostID }) {
 			removed = append(removed, machine)
 		}
@@ -243,11 +367,15 @@ func (s *Service) HostWorker(ctx context.Context, request core.HostedWorkerReque
 	} else if modes := core.ApprovalModeValuesForRuntime(runtimeID); len(modes) > 0 && !core.ApprovalModeSupported(runtimeID, mode) {
 		return core.HostedWorker{}, fmt.Errorf("%w: approval mode %q is not supported by %s", ErrInvalid, mode, runtimeID)
 	}
+	pathID := strings.TrimSpace(request.PathID)
+	if pathID != "" && !validPathID(pathID) {
+		return core.HostedWorker{}, fmt.Errorf("%w: invalid path id", ErrInvalid)
+	}
 	workDir, err := s.hostedWorkerDir(ownerID, request.Dir)
 	if err != nil {
 		return core.HostedWorker{}, err
 	}
-	id := hostedWorkerAgentID(ownerID, runtimeID)
+	id := hostedWorkerAgentID(ownerID, runtimeID, pathID)
 	now := s.now().UTC()
 	createdAt := now
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -311,7 +439,8 @@ func (s *Service) ReleaseHostedWorkers(ctx context.Context, ownerID string) (int
 	}
 	removed := 0
 	for _, instance := range instances {
-		if !IsManagedAgent(instance) || instance.ID != hostedWorkerAgentID(ownerID, instance.RuntimeID) {
+		base := hostedWorkerAgentID(ownerID, instance.RuntimeID, "")
+		if !IsManagedAgent(instance) || (instance.ID != base && !strings.HasPrefix(instance.ID, base+"_")) {
 			continue
 		}
 		if err := s.store.DeleteAgentInstance(ctx, instance.ID); err != nil {

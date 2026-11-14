@@ -103,7 +103,7 @@ const activity: SuperAgentActivity = {
 const routerList: SuperAgentRouterList = {
   routers: [{ id: "router", name: "Router", runtime_id: "codex", approval_mode: "plan", mcp_servers: [], used_by: [{ id: "sa_1", name: "Repo keeper" }] }],
   frameworks: [
-    { runtime_id: "codex", can_route: true, mcp_servers: true, approval_modes: ["auto_edit", "auto", "plan", "yolo"], default_approval_mode: "yolo" },
+    { runtime_id: "codex", can_route: true, mcp_servers: true, approval_modes: ["auto_edit", "auto", "plan", "yolo"], default_approval_mode: "auto" },
     { runtime_id: "kimi", can_route: false, mcp_servers: false, reason: "no read-only mode" },
   ],
   mcp_servers: ["oncall"],
@@ -126,8 +126,14 @@ const codexSettings = {
 };
 const picker = () => container.querySelector<HTMLButtonElement>(".model-picker-trigger")!;
 const fastSwitch = () => container.querySelector<HTMLInputElement>(".model-picker input[role=switch]");
-const efforts_ = () => [...container.querySelectorAll(".model-picker-segments button")].map((item) => item.textContent);
-const models = () => [...container.querySelectorAll(".model-picker-option")].map((item) => item.textContent);
+// The effort slider's stops, least thinking first, and what it reads now.
+const efforts_ = () => [...container.querySelectorAll(".model-picker-stop")].map((item) => item.getAttribute("aria-label"));
+const effortStop = (name: string) => [...container.querySelectorAll(".model-picker-stop")].find((item) => item.getAttribute("aria-label") === name);
+const effortValue = () => container.querySelector(".model-picker-effort-value")?.textContent;
+const models = () => [...container.querySelectorAll(".model-picker-option-label")].map((item) => item.textContent);
+const modelOption = (name: string) => [...container.querySelectorAll(".model-picker-option")].find((item) => item.querySelector(".model-picker-option-label")?.textContent === name);
+// choice is the trigger's full reading, as in "GPT-6 Astra · High · Fast".
+const choice = () => container.querySelector(".model-picker-trigger-label")?.getAttribute("aria-label");
 
 function renderPanel(props = {}) {
   mount(<I18nProvider language="en"><SuperAgentsPanel {...props} /></I18nProvider>);
@@ -223,11 +229,12 @@ describe("SuperAgentsPanel", () => {
     setValue(control(/^Agent name/), "Triage");
     expect(saveButton().disabled).toBe(false);
 
-    // A remote path allows workers on that machine.
-    await until(() => !(button(/^Add remote path$/) as HTMLButtonElement).disabled);
-    click(button(/^Add remote path$/));
-    expect(workerFramework("GPU box")?.checked).toBe(true);
-    setValue(control(/^Directory on that machine/), "~/models");
+    // A path on another machine allows workers there.
+    click(button(/^Add path$/));
+    await until(() => hasOption("GPU box"));
+    expect(valueOf(/^\s*Machine/)).toBe("");
+    setValue(control(/^\s*Machine/), "h1");
+    setValue(control(/^Directory/), "~/models");
     setValue(control(/^Add trigger/), "feishu_message");
 
     await until(() => hasOption("Team bot"));
@@ -270,22 +277,58 @@ describe("SuperAgentsPanel", () => {
     await until(() => !container.querySelector("[role=dialog]"));
   });
 
-  it("works in a folder it creates by default, or in a local path chosen for it", async () => {
+  it("keeps its default folder and adds paths here or elsewhere, chosen by browsing", async () => {
     vi.spyOn(api, "superAgentRouters").mockResolvedValue(noRouters);
+    vi.spyOn(api, "directories").mockImplementation(async (path = "", target?: string) => ({
+      path: path || (target === "h1" ? "/home/gpu" : "/Users/me"), parent: "/", entries: [{ name: "app", path: `${path || "/Users/me"}/app` }],
+    }) as never);
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue({ ...saved, id: "sa_2" });
     renderPanel({ createRequested: true });
     await until(() => valueOf(/^Framework/) === "codex");
     expect(hasText("Default directory (created automatically)")).toBe(true);
-    click(button(/Choose a local path$/));
-    setValue(control(/^Local path/), "~/code/app");
-    click(button(/^Use default$/));
-    expect(() => control(/^Local path/)).toThrow();
-    click(button(/Choose a local path$/));
-    setValue(control(/^Local path/), "~/code/web");
+    click(button(/^Add path$/));
+    click(button(/^Add path$/));
+    const directories = () => [...container.querySelectorAll<HTMLInputElement>(".directory-input-row input")];
+    const machinesOf = () => [...container.querySelectorAll<HTMLSelectElement>(".super-agent-card select")];
+    expect(directories()).toHaveLength(2);
+    // Choosing a folder on this machine browses this machine.
+    click(container.querySelectorAll(".directory-input-row button")[0]);
+    await until(() => vi.mocked(api.directories).mock.calls.length > 0);
+    expect(vi.mocked(api.directories).mock.calls[0][1]).toBe("local");
+    const choose = () => [...document.body.querySelectorAll<HTMLButtonElement>(".remote-directory-picker-actions button")].find((item) => item.textContent?.includes("Select this directory"));
+    await until(() => choose() && !choose()!.disabled);
+    click(choose());
+    await until(() => directories()[0].value === "/Users/me");
+    expect(document.body.querySelector(".remote-directory-picker-actions")).toBeNull();
+    // On another machine it browses that machine.
+    await until(() => hasOption("GPU box"));
+    setValue(machinesOf()[1], "h1");
+    click(container.querySelectorAll(".directory-input-row button")[1]);
+    await until(() => vi.mocked(api.directories).mock.calls.some((call) => call[1] === "h1"));
+    await until(() => choose() && !choose()!.disabled);
+    click(choose());
+    await until(() => directories()[1].value === "/home/gpu");
+    setValue(directories()[1], "~/models");
+    // The default folder stays however many paths there are.
+    expect(hasText("Default directory (created automatically)")).toBe(true);
+    setValue(directories()[0], "~/code/app");
     setValue(control(/^Agent name/), "Web");
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
-    expect(save.mock.calls[0][0]).toMatchObject({ auto_worker_dir: "~/code/web" });
+    expect(save.mock.calls[0][0]).toMatchObject({ auto_worker_dir: "", worker_machines: [{ host_id: "", dir: "~/code/app" }, { host_id: "h1", dir: "~/models" }] });
+  });
+
+  it("shows a path chosen before there could be several as the first path", async () => {
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], auto_worker_dir: "~/code/old" }]);
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    click(button(/^Edit$/));
+    await until(() => container.querySelector<HTMLInputElement>(".directory-input-row input")?.value === "~/code/old");
+    setValue(control(/^What this directory is for/), "The old repo");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ auto_worker_dir: "", worker_machines: [{ host_id: "", dir: "~/code/old", capabilities: "The old repo" }] });
   });
 
   it("guides a GitHub trigger: the token fills in the login, and a local install gets a forward command", async () => {
@@ -553,11 +596,11 @@ describe("SuperAgentsPanel", () => {
     expect(hasOption("Remote DSH")).toBe(false);
     // There is no Provider to choose.
     expect(hasText("Provider override")).toBe(false);
-    // A new router acts on its own unless the operator chooses otherwise; its
-    // permissions are folded away.
-    expect(control(/^Permissions/).value).toBe("yolo");
-    expect(control(/^Permissions/).closest("details")?.open).toBe(false);
-    expect(hasText("With YOLO it answers from files")).toBe(true);
+    // A router always runs in Auto; there is no mode to choose, and the
+    // explanation is folded away.
+    expect(() => control(/^Permissions/)).toThrow();
+    expect(hasText("The router runs unattended in Auto mode")).toBe(true);
+    expect(container.querySelector(".super-agent-advanced")?.hasAttribute("open")).toBe(false);
     expect(button(/Draft settings/)).toBeUndefined();
 
     setValue(control(/^Agent name/), "Ops");
@@ -634,28 +677,26 @@ describe("SuperAgentsPanel", () => {
     const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
     renderPanel();
     await until(() => hasText("Train it"));
-    const chip = [...container.querySelectorAll(".super-agent-chip")].find((item) => item.textContent === "GPU boxlaunches workers");
-    expect(chip?.getAttribute("title")).toBe("device is offline");
+    const chip = [...container.querySelectorAll(".super-agent-chip")].find((item) => item.textContent === "GPU box · ~/codelaunches workers");
+    expect(chip?.getAttribute("title")).toBe("device is offline · ~/code");
     expect(chip?.querySelector("i")?.className).toBe("offline");
     expect(hasText("Repo keeper worker (codex) · GPU box")).toBe(true);
 
     click(button(/^Edit$/));
-    await until(() => control(/^Directory on that machine/).value === "~/code");
-    // The only machine is already listed, so there is none left to add.
+    await until(() => control(/^Directory/).value === "~/code");
     await until(() => hasOption("GPU box"));
-    expect((button(/^Add remote path$/) as HTMLButtonElement).disabled).toBe(true);
-    expect(workerFramework("GPU box")?.checked).toBe(true);
-    setValue(control(/^What this machine is for/), "Has the GPU");
+    expect(valueOf(/^\s*Machine/)).toBe("h1");
+    setValue(control(/^What this directory is for/), "Has the GPU");
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
     expect(save.mock.calls[0][0]).toMatchObject({ auto_workers: true, worker_machines: [{ host_id: "h1", dir: "~/code", capabilities: "Has the GPU" }] });
 
-    // Unchecking the machine removes it and its directory.
+    // Removing the path removes the machine.
     vi.mocked(api.saveSuperAgent).mockClear();
     click(button(/^Edit$/));
-    await until(() => workerFramework("GPU box")?.checked);
-    click(workerFramework("GPU box")!);
-    expect(() => control(/^Directory on that machine/)).toThrow();
+    await until(() => control(/^Directory/).value === "~/code");
+    click(button(/^Remove$/));
+    expect(() => control(/^Directory/)).toThrow();
   });
 
   it("edits an existing agent's own router, directories, workers and triggers outside advanced settings", async () => {
@@ -678,12 +719,12 @@ describe("SuperAgentsPanel", () => {
     renderPanel();
     await until(() => hasText("Fix build"));
     click(button(/^Edit$/));
-    await until(() => valueOf(/^Permissions/) === "plan");
-    setValue(control(/^Permissions/), "yolo");
+    // A router saved in another mode moves onto Auto.
+    await until(() => hasText("The router runs unattended in Auto mode"));
     click(workerFramework("oncall")!);
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
-    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "router", name: "Router", runtime_id: "codex", approval_mode: "yolo", mcp_servers: ["oncall"] });
+    expect(vi.mocked(api.saveSuperAgentRouter).mock.calls[0][0]).toMatchObject({ id: "router", name: "Router", runtime_id: "codex", approval_mode: "auto", mcp_servers: ["oncall"] });
     expect(save.mock.calls[0][0]).toMatchObject({ id: "sa_1", router_agent_id: "router" });
   });
 
@@ -698,7 +739,7 @@ describe("SuperAgentsPanel", () => {
     click(button(/^Edit$/));
     await until(() => hasText("This agent routes with an older Agent"));
     expect(hasText("Coder · claudecode")).toBe(true);
-    expect(() => control(/^Permissions/)).toThrow();
+    expect(hasText("The router runs unattended in Auto mode")).toBe(false);
     click(workerFramework("Codex")!);
     click(button(/^Save$/) as HTMLButtonElement);
     await until(() => save.mock.calls.length > 0);
@@ -737,23 +778,31 @@ describe("SuperAgentsPanel", () => {
     click(picker());
     await until(() => models().length > 0);
     expect(api.frameworkRuntimeSettings).toHaveBeenCalledWith("codex", "", "local");
-    expect(models()).toEqual(["Default (GPT-6 Astra)", "GPT-6 Astra", "gpt-6-mini"]);
-    expect(efforts_()).toEqual(["Default (Medium)", "Low", "Medium", "High", "Extra high"]);
-    expect(hasText("The framework lists these models for its current setup (its own sign-in, a gateway or a router).")).toBe(true);
-    click(button(/^Extra high$/));
+    expect(models()).toEqual(["Default model", "GPT-6 Astra", "gpt-6-mini"]);
+    expect(modelOption("Default model")?.textContent).toContain("GPT-6 Astra");
+    expect(efforts_()).toEqual(["Low", "Medium", "High", "Extra high"]);
+    expect(effortValue()).toBe("Default (Medium)");
+    click(effortStop("Extra high"));
+    expect(effortValue()).toBe("Extra high");
     click(fastSwitch()!);
-    expect(picker().textContent).toBe("Default model · Extra high · Fast");
+    expect(choice()).toBe("Default model · Extra high · Fast");
+    expect(picker().textContent).toBe("Default modelExtra high");
 
     // A model that lacks the chosen effort or fast mode falls back to its defaults.
-    click(button(/^gpt-6-mini$/));
-    expect(picker().textContent).toBe("gpt-6-mini");
-    expect(efforts_()).toEqual(["Default (Medium)", "Low", "Medium"]);
+    click(modelOption("gpt-6-mini"));
+    expect(choice()).toBe("gpt-6-mini");
+    expect(efforts_()).toEqual(["Low", "Medium"]);
+    expect(effortValue()).toBe("Default (Medium)");
     expect(fastSwitch()).toBeNull();
 
-    click(button(/^GPT-6 Astra$/));
-    click(button(/^High$/));
+    click(modelOption("GPT-6 Astra"));
+    click(effortStop("High"));
     click(fastSwitch()!);
-    expect(picker().textContent).toBe("GPT-6 Astra · High · Fast");
+    expect(choice()).toBe("GPT-6 Astra · High · Fast");
+    // The reset button returns to the framework's default effort.
+    click(container.querySelector(".model-picker-reset")!);
+    expect(choice()).toBe("GPT-6 Astra · Fast");
+    click(effortStop("High"));
     act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     expect(container.querySelector(".model-picker-popover")).toBeNull();
 
@@ -775,7 +824,8 @@ describe("SuperAgentsPanel", () => {
     click(picker());
     await until(() => models().length > 0);
     expect(models()[0]).toBe("Default model");
-    expect(efforts_()).toEqual(["Default", "Low", "Ultra"]);
+    expect(efforts_()).toEqual(["Low", "Ultra"]);
+    expect(effortValue()).toBe("Default");
     expect(fastSwitch()).not.toBeNull();
   });
 
@@ -787,10 +837,12 @@ describe("SuperAgentsPanel", () => {
     await until(() => models().length > 0);
     // Models always come from the framework, never from AgentMux providers.
     expect(api.frameworkRuntimeSettings).toHaveBeenCalledWith("codex", "", "local");
+    click(button(/^Other model$/));
+    expect(hasText("The framework lists these models for its current setup (its own sign-in, a gateway or a router).")).toBe(true);
     const input = container.querySelector<HTMLInputElement>(".model-picker-typed input")!;
     setValue(input, "group/opus-anywhere");
     click(button(/^Use$/));
-    expect(picker().textContent).toBe("group/opus-anywhere");
+    expect(choice()).toBe("group/opus-anywhere");
     expect(models()).toContain("group/opus-anywhere");
   });
 
@@ -803,7 +855,7 @@ describe("SuperAgentsPanel", () => {
     await until(() => hasText("Couldn't read the models: not signed in."));
     const input = container.querySelector<HTMLInputElement>(".model-picker-popover input")!;
     setValue(input, "gpt-6");
-    expect(picker().textContent).toBe("gpt-6");
+    expect(choice()).toBe("gpt-6");
     expect(fastSwitch()).toBeNull();
   });
 

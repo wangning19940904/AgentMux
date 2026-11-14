@@ -1359,7 +1359,11 @@ export interface SuperAgentWorker {
 }
 
 // A machine an agent may launch workers on, besides the one it lives on.
+// SuperAgentMachine is a working directory for an agent's workers besides
+// this machine's default one. An empty host_id is this machine. id names it on
+// the router's roster; the server assigns it.
 export interface SuperAgentMachine {
+  id?: string;
   host_id: string;
   dir?: string;
   capabilities?: string;

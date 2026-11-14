@@ -1,11 +1,14 @@
 import { Bot, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
+import { isDesktopApp } from "../../api/desktop";
 import type { SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
 import { confirmAction } from "../../components/ConfirmDialog";
 import { SourceEditor } from "../superAgentSetup";
+import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
+import { workDirErrorMessage } from "./agentUtils";
 import { ModelPicker } from "../superAgentModelPicker";
 import type { ModelChoice } from "../superAgentModelPicker";
 import { isReachableOrigin } from "../superAgentSetupModel";
@@ -99,7 +102,7 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
     if (!routerDraft) return draft;
     const name = routerDraft.id ? routerDraft.name : draft.name.trim() ? routerNameFor(draft, routerDraft.runtime_id) : "";
     try {
-      const saved = await api.saveSuperAgentRouter({ ...routerDraft, name });
+      const saved = await api.saveSuperAgentRouter({ ...routerDraft, name, approval_mode: routerApproval });
       const next = { ...draft, router_agent_id: saved.id, router_runtime: "" };
       setRouterDraft({ ...saved, ...modelChoice(saved), approval_mode: saved.approval_mode ?? "", mcp_servers: [...saved.mcp_servers] });
       onChange(next);
@@ -116,29 +119,47 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
     if (!current.trim() || current === text || await confirmAction(t("superAgents.replaceRoutingRules"))) onChange({ ...draft, router_prompt: text });
   };
 
-  // Machines: this one always; others the operator allows. A machine's
-  // directory is set with the working directories.
-  const machines = draft.worker_machines ?? [];
+  // Working directories: this machine's default one always, plus any paths
+  // the operator lists, here or on other machines. A path chosen before there
+  // could be several (auto_worker_dir) is shown, and saved, as the first one.
   const hostList = hosts.data ?? [];
-  const unusedHosts = hostList.filter((host) => !machines.some((machine) => machine.host_id === host.id));
-  const hostName = (id: string) => hostList.find((host) => host.id === id)?.name ?? id;
-  const setMachines = (list: SuperAgentMachine[]) => onChange({ ...draft, worker_machines: list });
-  const updateMachine = (hostID: string, patch: Partial<SuperAgentMachine>) =>
-    setMachines(machines.map((machine) => machine.host_id === hostID ? { ...machine, ...patch } : machine));
-  const toggleMachine = (hostID: string, checked: boolean) =>
-    setMachines(checked ? [...machines, { host_id: hostID }] : machines.filter((machine) => machine.host_id !== hostID));
+  const paths: SuperAgentMachine[] = [
+    ...(draft.auto_worker_dir ? [{ host_id: "", dir: draft.auto_worker_dir }] : []),
+    ...(draft.worker_machines ?? []),
+  ];
+  const setPaths = (list: SuperAgentMachine[]) => onChange({ ...draft, auto_worker_dir: "", worker_machines: list });
+  const updatePath = (index: number, patch: Partial<SuperAgentMachine>) =>
+    setPaths(paths.map((path, position) => position === index ? { ...path, ...patch } : path));
+  const [picking, setPicking] = useState<{ index: number; target: string } | null>(null);
+  const [pathNotice, setPathNotice] = useState<{ index: number; text: string } | null>(null);
+  // choosePath opens the system's folder dialog for this machine in the
+  // desktop app, and otherwise browses the machine's folders here.
+  const choosePath = async (index: number) => {
+    const path = paths[index];
+    const target = path.host_id || "local";
+    setPathNotice(null);
+    if (target !== "local" || !isDesktopApp()) {
+      setPicking({ index, target });
+      return;
+    }
+    try {
+      const selected = await api.selectDirectory(path.dir ?? "");
+      if (selected.path) updatePath(index, { dir: selected.path });
+    } catch (error) {
+      setPathNotice({ index, text: workDirErrorMessage(error, t) });
+    }
+  };
   const toggleWorkerRuntime = (kind: string, checked: boolean) =>
     onChange(withWorkerRuntimes(draft, checked ? [...workerRuntimes, kind] : workerRuntimes.filter((item) => item !== kind)));
-  const [customLocalDir, setCustomLocalDir] = useState(Boolean(draft.auto_worker_dir));
 
   const updateSource = (index: number, patch: Partial<SuperAgentSource>) =>
     onChange({ ...draft, sources: draft.sources.map((source, position) => position === index ? { ...source, ...patch } : source) });
   const channelSources = draft.sources.filter(isChannelSource);
 
   const routerCapability = routerDraft ? capability(routerDraft.runtime_id) : undefined;
-  const listedApprovals = routerCapability?.approval_modes ?? [];
-  const routerApproval = routerDraft ? routerDraft.approval_mode || routerCapability?.default_approval_mode || "" : "";
-  const approvalModes = routerApproval && !listedApprovals.includes(routerApproval) ? [...listedApprovals, routerApproval] : listedApprovals;
+  // Routers always run in their framework's default mode, Auto where it has
+  // one; saving moves an older router onto it.
+  const routerApproval = routerCapability?.default_approval_mode ?? "";
   const availableMCP = [...new Set([...(routers.data?.mcp_servers ?? []), ...(routerDraft?.mcp_servers ?? [])])];
   const toggleMCP = (name: string, checked: boolean) => routerDraft &&
     setRouterDraft({ ...routerDraft, mcp_servers: checked ? [...routerDraft.mcp_servers, name] : routerDraft.mcp_servers.filter((item) => item !== name) });
@@ -220,13 +241,13 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
               <details className="super-agent-advanced">
                 <summary>{t("superAgentForm.routerAdvanced")}</summary>
                 <div className="super-agent-form">
-                  <label className="field"><span>{t("superAgents.routerApproval")}</span>
-                    <select value={routerApproval} onChange={(event) => setRouterDraft({ ...routerDraft, approval_mode: event.target.value })}>
-                      {approvalModes.length === 0 && <option value="">{t("superAgents.routerApprovalDefault")}</option>}
-                      {approvalModes.map((mode) => <option key={mode} value={mode}>{t(`superAgents.routerApprovalMode.${mode}`)}</option>)}
-                    </select>
-                    <small>{routerApproval === "plan" ? t("superAgents.routerApprovalPlanNotice") : t("superAgents.routerApprovalHelp")}</small>
-                  </label>
+                  {routerApproval && (
+                    <div className="field">
+                      <span>{t("superAgents.routerApproval")}</span>
+                      <small>{routerApproval === "auto" ? t("superAgents.routerApprovalAuto")
+                        : t("superAgents.routerApprovalFallback", { mode: t(`superAgents.routerApprovalShort.${routerApproval}`) })}</small>
+                    </div>
+                  )}
                   <div className="field" role="group" aria-labelledby="saf-router-tools">
                     <span id="saf-router-tools">{t("superAgents.routerToolsTitle")}</span>
                     {routerDraft.runtime_id && !routerCapability?.mcp_servers ? (
@@ -253,48 +274,54 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
           <section className="super-agent-section" aria-labelledby="saf-dirs">
             <header className="super-agent-section-head">
               <div><h3 id="saf-dirs"><FolderOpen size={15} aria-hidden="true" /> {t("superAgentForm.section.dirs")}</h3><p>{t("superAgentForm.section.dirsHelp")}</p></div>
-              <button className="ghost-action" type="button" disabled={unusedHosts.length === 0} title={hostList.length === 0 ? t("superAgents.noMachines") : undefined}
-                onClick={() => setMachines([...machines, { host_id: unusedHosts[0].id }])}><Plus size={14} /> {t("superAgentForm.addRemoteDir")}</button>
+              <button className="ghost-action" type="button" onClick={() => setPaths([...paths, { host_id: "" }])}><Plus size={14} /> {t("superAgentForm.addDir")}</button>
             </header>
             <div className="super-agent-card">
-              <div className="super-agent-section-head">
-                <strong><HardDrive size={14} aria-hidden="true" /> {t("superAgents.thisMachine")}</strong>
-                {customLocalDir
-                  ? <button className="ghost-action" type="button" onClick={() => { setCustomLocalDir(false); onChange({ ...draft, auto_worker_dir: "" }); }}>{t("superAgentForm.useDefaultDir")}</button>
-                  : <button className="ghost-action" type="button" onClick={() => setCustomLocalDir(true)}><Plus size={13} /> {t("superAgentForm.addLocalDir")}</button>}
+              <strong><HardDrive size={14} aria-hidden="true" /> {t("superAgents.thisMachine")}</strong>
+              <div className="field"><span>{t("superAgentForm.defaultDir")}</span>
+                <code>{`super-agents/${draft.id || "<id>"}/tickets/<ticket>/work`}</code>
+                <small>{t("superAgentForm.defaultDirHelp")}</small>
               </div>
-              {customLocalDir ? (
-                <label className="field"><span>{t("superAgentForm.localDir")}</span>
-                  <input placeholder="~/code/my-repo" value={draft.auto_worker_dir ?? ""} onChange={(event) => onChange({ ...draft, auto_worker_dir: event.target.value })} />
-                  <small>{t("superAgentForm.localDirHelp")}</small>
-                </label>
-              ) : (
-                <div className="field"><span>{t("superAgentForm.defaultDir")}</span>
-                  <code>{`super-agents/${draft.id || "<id>"}/tickets/<ticket>/work`}</code>
-                  <small>{t("superAgentForm.defaultDirHelp")}</small>
-                </div>
-              )}
             </div>
-            {machines.map((machine) => (
-              <div className="super-agent-card" key={machine.host_id}>
-                <div className="field-grid">
-                  <label className="field"><span><Server size={13} aria-hidden="true" /> {t("superAgents.machine")}</span>
-                    <select value={machine.host_id} onChange={(event) => setMachines(machines.map((item) => item.host_id === machine.host_id ? { ...item, host_id: event.target.value } : item))}>
-                      {!hostList.some((host) => host.id === machine.host_id) && <option value={machine.host_id}>{machine.host_id}</option>}
-                      {hostList.filter((host) => host.id === machine.host_id || unusedHosts.includes(host)).map((host) => <option key={host.id} value={host.id}>{host.name}</option>)}
-                    </select>
+            {paths.map((path, index) => {
+              const local = !path.host_id;
+              return (
+                <div className="super-agent-card" key={path.id || `path-${index}`}>
+                  <div className="field-grid super-agent-path-grid">
+                    <label className="field"><span>{local ? <HardDrive size={13} aria-hidden="true" /> : <Server size={13} aria-hidden="true" />} {t("superAgents.machine")}</span>
+                      <select value={path.host_id} onChange={(event) => updatePath(index, { host_id: event.target.value, id: undefined })}>
+                        <option value="">{t("superAgents.thisMachine")}</option>
+                        {path.host_id && !hostList.some((host) => host.id === path.host_id) && <option value={path.host_id}>{path.host_id}</option>}
+                        {hostList.map((host) => <option key={host.id} value={host.id}>{host.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="field"><span>{t("superAgentForm.pathDir")}</span>
+                      <div className="directory-input-row">
+                        <input placeholder={local ? t("superAgentForm.localPathPlaceholder") : t("superAgents.machineDirPlaceholder")} value={path.dir ?? ""}
+                          onChange={(event) => updatePath(index, { dir: event.target.value })} />
+                        <button className="ghost-action icon-action" type="button" title={t("superAgentForm.chooseDir")} aria-label={t("superAgentForm.chooseDir")}
+                          onClick={() => void choosePath(index)}><FolderOpen size={15} /></button>
+                      </div>
+                      {pathNotice?.index === index ? <small className="directory-notice" role="status">{pathNotice.text}</small>
+                        : <small>{local ? t("superAgentForm.localPathHelp") : t("superAgentForm.remotePathHelp")}</small>}
+                    </label>
+                  </div>
+                  <label className="field"><span>{t("superAgents.machineCapabilities")}</span>
+                    <input placeholder={t("superAgents.machineCapabilitiesPlaceholder")} value={path.capabilities ?? ""} onChange={(event) => updatePath(index, { capabilities: event.target.value })} />
                   </label>
-                  <label className="field"><span>{t("superAgents.machineDir")}</span>
-                    <input placeholder={t("superAgents.machineDirPlaceholder")} value={machine.dir ?? ""} onChange={(event) => updateMachine(machine.host_id, { dir: event.target.value })} />
-                  </label>
+                  <button className="ghost-action danger-action" type="button" onClick={() => setPaths(paths.filter((_, position) => position !== index))}><Trash2 size={13} /> {t("superAgents.remove")}</button>
                 </div>
-                <label className="field"><span>{t("superAgents.machineCapabilities")}</span>
-                  <input placeholder={t("superAgents.machineCapabilitiesPlaceholder")} value={machine.capabilities ?? ""} onChange={(event) => updateMachine(machine.host_id, { capabilities: event.target.value })} />
-                </label>
-                <button className="ghost-action danger-action" type="button" onClick={() => toggleMachine(machine.host_id, false)}><Trash2 size={13} /> {t("superAgents.remove")}</button>
-              </div>
-            ))}
-            {hostList.length === 0 && !hosts.loading && <small className="muted">{t("superAgents.noMachines")}</small>}
+              );
+            })}
+            {picking && (
+              <RemoteDirectoryPicker
+                initialPath={paths[picking.index]?.dir ?? ""}
+                targetID={picking.target}
+                onClose={() => setPicking(null)}
+                onSelect={(dir) => { updatePath(picking.index, { dir }); setPicking(null); }}
+                t={t}
+              />
+            )}
           </section>
 
           <section className="super-agent-section" aria-labelledby="saf-workers">
@@ -310,19 +337,6 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                 ))}
               </div>
               <small>{t("superAgentForm.workerFrameworksHelp")}</small>
-            </div>
-            <div className="field" role="group" aria-labelledby="saf-worker-machines">
-              <span id="saf-worker-machines">{t("superAgentForm.workerMachines")}</span>
-              <div className="super-agent-chips">
-                <label className="super-agent-chip super-agent-toggle"><input type="checkbox" checked disabled /> {t("superAgents.thisMachine")}</label>
-                {[...hostList.map((host) => host.id), ...machines.map((machine) => machine.host_id).filter((id) => !hostList.some((host) => host.id === id))].map((id) => (
-                  <label key={id} className="super-agent-chip super-agent-toggle">
-                    <input type="checkbox" checked={machines.some((machine) => machine.host_id === id)} onChange={(event) => toggleMachine(id, event.target.checked)} />
-                    {hostName(id)}
-                  </label>
-                ))}
-              </div>
-              <small>{t("superAgentForm.workerMachinesHelp")}</small>
             </div>
             <div className="field-grid">
               <label className="field"><span>{t("superAgentForm.workerApproval")}</span>

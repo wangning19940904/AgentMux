@@ -230,7 +230,7 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	router, _ := h.store.GetAgentInstance(ctx, saved.RouterAgentID)
-	if router == nil || !IsRouterAgent(*router) || IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModeYolo || router.WorkDir == "" {
+	if router == nil || !IsRouterAgent(*router) || IsManagedAgent(*router) || router.RuntimeID != "codex" || router.DefaultApprovalMode != core.ApprovalModeAuto || router.WorkDir == "" {
 		t.Fatalf("router = %+v", router)
 	}
 	if saved.Name != "Super Agent (codex)" || !slices.Equal(saved.WorkerRuntimes, []string{"codex"}) {
@@ -243,7 +243,7 @@ func TestFrameworkIsEnoughToCreateASuperAgent(t *testing.T) {
 	h.ingest("alice", "github:o/r#1", "work", true)
 	h.settle()
 	worker, _ := h.store.GetAgentInstance(ctx, autoWorkerAgentID(saved.ID, "codex"))
-	if worker == nil || worker.RuntimeID != "codex" || worker.DefaultApprovalMode != core.ApprovalModeAutoEdit || worker.WorkDir == router.WorkDir || !strings.Contains(worker.WorkDir, saved.ID) {
+	if worker == nil || worker.RuntimeID != "codex" || worker.DefaultApprovalMode != core.ApprovalModeAuto || worker.WorkDir == router.WorkDir || !strings.Contains(worker.WorkDir, saved.ID) {
 		t.Fatalf("workers must not share the router's scratch directory: %+v", worker)
 	}
 	if info, err := os.Stat(worker.WorkDir); err != nil || !info.IsDir() {
@@ -324,8 +324,11 @@ func TestDefaultApprovalFitsTheFramework(t *testing.T) {
 	if mode := defaultAutoWorkerApproval("cursor"); mode != core.ApprovalModeAuto {
 		t.Errorf("cursor = %q", mode)
 	}
-	if mode := defaultAutoWorkerApproval("codex"); mode != core.ApprovalModeAutoEdit {
+	if mode := defaultAutoWorkerApproval("codex"); mode != core.ApprovalModeAuto {
 		t.Errorf("codex = %q", mode)
+	}
+	if mode := defaultAutoWorkerApproval("dsh"); mode != core.ApprovalModeAutoEdit {
+		t.Errorf("dsh has no auto mode, got %q", mode)
 	}
 	h := newHarness(t)
 	if _, err := h.service.Save(context.Background(), core.SuperAgent{RouterRuntime: "cursor", AutoWorkers: true, AutoWorkerApprovalMode: core.ApprovalModeAutoEdit}); err == nil {

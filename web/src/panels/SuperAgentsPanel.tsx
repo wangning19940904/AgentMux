@@ -104,12 +104,14 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   {selected.auto_workers && (selected.worker_runtimes ?? []).map((runtime) => (
                     <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{t("superAgents.autoWorkersOn")}</small></span>
                   ))}
-                  {selected.auto_workers && (selected.worker_machines ?? []).map((machine) => {
-                    const status = activity.data?.machines?.find((item) => item.host_id === machine.host_id);
+                  {selected.auto_workers && (selected.worker_machines ?? []).map((machine, index) => {
+                    const local = !machine.host_id;
+                    const status = local ? undefined : activity.data?.machines?.find((item) => item.host_id === machine.host_id);
+                    const name = local ? t("superAgents.thisMachine") : status?.name || machine.host_id;
                     return (
-                      <span key={machine.host_id} className="super-agent-chip" title={status?.detail || machine.capabilities}>
-                        <i className={status?.available ? "online" : "offline"} />
-                        {status?.name || machine.host_id}
+                      <span key={machine.id || `${machine.host_id}-${index}`} className="super-agent-chip" title={[status?.detail || machine.capabilities, machine.dir].filter(Boolean).join(" · ")}>
+                        <i className={local || status?.available ? "online" : "offline"} />
+                        {machine.dir ? `${name} · ${machine.dir}` : name}
                         <small>{t("superAgents.workerMachine")}</small>
                       </span>
                     );
