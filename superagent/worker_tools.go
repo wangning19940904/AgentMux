@@ -137,7 +137,7 @@ func (p toolProbe) mcpServers(runtimeID string) []string {
 		var names []string
 		for _, match := range codexMCPHeader.FindAllSubmatch(read(".codex", "config.toml"), -1) {
 			name := strings.TrimSpace(string(match[2]))
-			if match[1] == nil || len(match[1]) == 0 {
+			if len(match[1]) == 0 {
 				name, _, _ = strings.Cut(name, ".") // [mcp_servers.x.env] belongs to x
 			}
 			if !slices.Contains(names, name) {
