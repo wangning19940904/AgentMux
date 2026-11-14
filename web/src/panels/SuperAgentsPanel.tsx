@@ -106,13 +106,14 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   ))}
                   {selected.auto_workers && (selected.worker_machines ?? []).map((machine, index) => {
                     const local = !machine.host_id;
-                    const status = local ? undefined : activity.data?.machines?.find((item) => item.host_id === machine.host_id);
+                    const status = activity.data?.machines?.find((item) => item.host_id === machine.host_id);
                     const name = local ? t("superAgents.thisMachine") : status?.name || machine.host_id;
+                    const tools = [...new Set(Object.values(status?.tools ?? {}).flat())];
                     return (
                       <span key={machine.id || `${machine.host_id}-${index}`} className="super-agent-chip" title={[status?.detail || machine.capabilities, machine.dir].filter(Boolean).join(" · ")}>
                         <i className={local || status?.available ? "online" : "offline"} />
                         {machine.dir ? `${name} · ${machine.dir}` : name}
-                        <small>{t("superAgents.workerMachine")}</small>
+                        <small>{[t("superAgents.workerMachine"), ...tools.map((tool) => tool === "computer_use" ? t("superAgents.toolComputerUse") : t("superAgents.toolBrowser"))].join(" · ")}</small>
                       </span>
                     );
                   })}

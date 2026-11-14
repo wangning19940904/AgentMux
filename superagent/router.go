@@ -136,6 +136,9 @@ type routerContext struct {
 	Where    string
 	// Machines are the other machines a worker can be launched on.
 	Machines []core.SuperAgentMachineStatus
+	// LocalTools are, for each framework, what its workers on this machine
+	// can use besides code.
+	LocalTools map[string][]string
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -394,8 +397,11 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		Label        string `json:"label,omitempty"`
 		Location     string `json:"location"`
 		Capabilities string `json:"capabilities,omitempty"`
-		Available    bool   `json:"available"`
-		Detail       string `json:"detail,omitempty"`
+		// Tools are what the worker can use besides code, as its machine
+		// reports them; nil when the machine cannot say.
+		Tools     []string `json:"tools,omitempty"`
+		Available bool     `json:"available"`
+		Detail    string   `json:"detail,omitempty"`
 	}
 	roster := make([]rosterEntry, 0, len(agent.Workers))
 	for index, worker := range agent.Workers {
@@ -410,7 +416,7 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	}
 	if agent.AutoWorkers {
 		for _, runtimeID := range agent.WorkerRuntimes {
-			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Available: true})
+			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Tools: view.LocalTools[runtimeID], Available: true})
 		}
 		// One entry per framework in each directory the operator listed, so
 		// the router sees where the work can go and which machine can take
@@ -421,7 +427,8 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 				for _, runtimeID := range agent.WorkerRuntimes {
 					roster = append(roster, rosterEntry{
 						ID: machineWorkerRosterID(runtimeID, pathID), Label: machine.Dir, Location: "local",
-						Capabilities: strings.TrimSpace(fmt.Sprintf(localDirGuidance, runtimeID, machine.Dir) + " " + machine.Capabilities), Available: true,
+						Capabilities: strings.TrimSpace(fmt.Sprintf(localDirGuidance, runtimeID, machine.Dir) + " " + machine.Capabilities),
+						Tools:        view.LocalTools[runtimeID], Available: true,
 					})
 				}
 				continue
@@ -438,6 +445,7 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 				entry := rosterEntry{
 					ID: machineWorkerRosterID(runtimeID, pathID), Label: status.Name, Location: "machine " + status.Name,
 					Capabilities: strings.TrimSpace(guidance + " " + machine.Capabilities),
+					Tools:        status.Tools[runtimeID],
 					Available:    status.Available && slices.Contains(status.Runtimes, runtimeID), Detail: status.Detail,
 				}
 				if status.Available && !entry.Available {

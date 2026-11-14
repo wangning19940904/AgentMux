@@ -100,6 +100,9 @@ type Options struct {
 	ChannelHasAgent func(context.Context, string) bool
 	// RuntimeAvailable reports whether an agent framework can run on this machine.
 	RuntimeAvailable func(string) bool
+	// DetectTools finds what workers on this machine can use besides code,
+	// such as a browser; DetectWorkerTools looks at the real machine.
+	DetectTools func(runtimes []string) WorkerTools
 	// MCP lists the MCP servers a router agent may be given.
 	MCP core.MCPRegistry
 	// StateDir holds directories the service creates. Empty means ~/.agentmux.
@@ -146,11 +149,13 @@ type Service struct {
 	channelHasAgent func(context.Context, string) bool
 
 	runtimeAvailable func(string) bool
-	mcp              core.MCPRegistry
-	state            string
-	directory        Directory
-	scopes           FeishuScopeChecker
-	mailbox          Mailbox
+	// detectTools finds what this machine's workers can use besides code.
+	detectTools func(runtimes []string) WorkerTools
+	mcp         core.MCPRegistry
+	state       string
+	directory   Directory
+	scopes      FeishuScopeChecker
+	mailbox     Mailbox
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -192,7 +197,7 @@ func New(options Options) *Service {
 		routerAttempts: map[string]int{}, routerFeedback: map[string]string{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
-		runtimeAvailable: options.RuntimeAvailable, mcp: options.MCP, state: options.StateDir,
+		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes,
 	}
 }

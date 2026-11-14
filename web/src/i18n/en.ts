@@ -249,6 +249,8 @@ export const en = {
     "superAgents.machineCapabilities": "What this directory is for",
     "superAgents.machineCapabilitiesPlaceholder": "Tells the agent when to choose it",
     "superAgents.workersHelp": "Workers run unattended, so give them a non-manual approval mode. Worktree isolation keeps parallel tickets apart.",
+    "superAgents.toolBrowser": "Browser",
+    "superAgents.toolComputerUse": "Computer use",
     "superAgents.machine": "Machine",
     "superAgents.thisMachine": "This machine",
     "superAgents.agent": "Agent",

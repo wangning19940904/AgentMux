@@ -1374,6 +1374,7 @@ export interface SuperAgentMachineStatus {
   name?: string;
   available: boolean;
   runtimes?: string[];
+  tools?: Record<string, string[]>;
   detail?: string;
 }
 

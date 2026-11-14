@@ -148,6 +148,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		Directory:        feishuAPI,
 		Scopes:           feishuAPI,
 		RuntimeAvailable: server.AgentRuntimeAvailable,
+		DetectTools:      superagent.DetectWorkerTools,
 		MCP:              mcpRegistry,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {
 			channel, err := st.GetChannel(ctx, id)

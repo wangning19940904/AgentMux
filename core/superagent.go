@@ -138,7 +138,11 @@ type SuperAgentMachineStatus struct {
 	Name      string   `json:"name,omitempty"`
 	Available bool     `json:"available"`
 	Runtimes  []string `json:"runtimes,omitempty"`
-	Detail    string   `json:"detail,omitempty"`
+	// Tools are, for each framework, what its workers on the machine can use
+	// besides code, such as "browser" or "computer_use". Nil when the machine
+	// cannot say.
+	Tools  map[string][]string `json:"tools,omitempty"`
+	Detail string              `json:"detail,omitempty"`
 }
 
 // HostedWorkerRequest asks a machine to keep a worker for an agent that lives

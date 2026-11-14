@@ -251,6 +251,8 @@ export const zh: Record<keyof typeof en, string> = {
     "superAgents.machineCapabilities": "这个目录适合做什么",
     "superAgents.machineCapabilitiesPlaceholder": "告诉 Agent 何时选择这里",
     "superAgents.workersHelp": "Worker 无人值守运行，请使用非手动审批模式。Worktree 隔离可避免并行工单相互影响。",
+    "superAgents.toolBrowser": "浏览器",
+    "superAgents.toolComputerUse": "电脑操控",
     "superAgents.machine": "机器",
     "superAgents.thisMachine": "本机",
     "superAgents.agent": "Agent",

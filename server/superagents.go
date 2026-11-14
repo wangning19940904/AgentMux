@@ -59,6 +59,12 @@ func (s *Server) registerSuperAgentRoutes() {
 	// Workers this machine keeps for agents that live on another machine.
 	s.mux.HandleFunc("POST /api/v1/super-agents/workers/launch", s.handleHostedWorkerLaunch)
 	s.mux.HandleFunc("POST /api/v1/super-agents/workers/release", s.handleHostedWorkerRelease)
+	s.mux.HandleFunc("GET /api/v1/super-agents/workers/tools", func(w http.ResponseWriter, _ *http.Request) {
+		if !s.requireSuperAgents(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, s.superAgents.HostTools(availableAgentRuntimes()))
+	})
 	s.mux.HandleFunc("POST /api/v1/super-agents/setup", s.handleSuperAgentSetup)
 	s.mux.HandleFunc("POST /api/v1/super-agents/trigger", s.handleSuperAgentTrigger)
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/stop", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {

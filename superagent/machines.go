@@ -104,6 +104,29 @@ type MachineFleet interface {
 	Release(ctx context.Context, hostID, ownerID string) error
 }
 
+// MachineToolsFleet is a MachineFleet that can also say what a machine's
+// workers can use besides code.
+type MachineToolsFleet interface {
+	Tools(ctx context.Context, hostID string) (WorkerTools, error)
+}
+
+// localTools is what workers on this machine can use besides code.
+func (s *Service) localTools(runtimes []string) map[string][]string {
+	if s.detectTools == nil {
+		return nil
+	}
+	return s.detectTools(runtimes).Runtimes
+}
+
+// HostTools answers another machine asking what workers here can use, given
+// the frameworks installed here.
+func (s *Service) HostTools(runtimes []string) WorkerTools {
+	if s.detectTools == nil {
+		return WorkerTools{Runtimes: map[string][]string{}}
+	}
+	return s.detectTools(runtimes)
+}
+
 func (s *Service) machineFleet() MachineFleet {
 	fleet, _ := s.workers.(MachineFleet)
 	return fleet
@@ -227,6 +250,7 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 			// This machine runs the agent, so it is up and has its frameworks.
 			statuses[index].Name, statuses[index].Available = "this machine", true
 			statuses[index].Runtimes = append([]string{}, agent.WorkerRuntimes...)
+			statuses[index].Tools = s.localTools(agent.WorkerRuntimes)
 			continue
 		}
 		if fleet == nil {
@@ -250,6 +274,12 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 				return
 			}
 			statuses[index].Available, statuses[index].Runtimes = true, runtimes
+			if tooled, ok := fleet.(MachineToolsFleet); ok {
+				// A machine too old to say leaves its tools unknown.
+				if tools, err := tooled.Tools(statusCtx, machine.HostID); err == nil {
+					statuses[index].Tools = tools.Runtimes
+				}
+			}
 		}()
 	}
 	wg.Wait()
@@ -514,6 +544,15 @@ func (f *Fleet) Runtimes(ctx context.Context, hostID string) ([]string, error) {
 		return nil, err
 	}
 	return runtimes, nil
+}
+
+func (f *Fleet) Tools(ctx context.Context, hostID string) (WorkerTools, error) {
+	var tools WorkerTools
+	status, err := f.remoteJSON(ctx, hostID, http.MethodGet, workerToolsPath, nil, &tools)
+	if err == nil && status >= http.StatusBadRequest {
+		err = fmt.Errorf("worker tools: %d", status)
+	}
+	return tools, err
 }
 
 func (f *Fleet) Launch(ctx context.Context, hostID string, request core.HostedWorkerRequest) (core.HostedWorker, error) {
