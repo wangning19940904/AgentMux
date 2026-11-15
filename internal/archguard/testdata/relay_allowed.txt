@@ -8,6 +8,8 @@
 GET /api/v1/agents
 GET /api/v1/agent-instances
 GET /api/v1/super-agents/workers/tools
+# Placement reads the machine's framework health records.
+GET /api/v1/frameworks/health
 
 # Hosted workers on the other machine.
 POST /api/v1/super-agents/workers/launch

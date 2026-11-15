@@ -1,7 +1,7 @@
 import { Bot, Play, Plus, RefreshCw, RotateCcw, Square, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { SuperAgent } from "../api";
+import type { SuperAgent, SuperAgentRuntimeHealth } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
@@ -61,6 +61,16 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
   }
 
   const time = (value?: string) => value ? new Date(value).toLocaleString(language === "zh" ? "zh-CN" : "en-US") : "";
+  // A framework that is failing or at its usage limit on a machine; unknown
+  // and ok show nothing.
+  const healthMarks = (hostID: string | undefined, runtimes: Array<string | undefined>) => runtimes
+    .map((runtime) => activity.data?.runtime_health?.find((record) => (record.host_id ?? "") === (hostID ?? "") && record.runtime === runtime))
+    .filter((record): record is SuperAgentRuntimeHealth => Boolean(record && (record.state === "failing" || record.state === "usage_limit")))
+    .map((record) => (
+      <span key={`${record.host_id ?? ""}-${record.runtime}`} className={`super-agent-health ${record.state}`} title={record.reason}>
+        {runtimes.length > 1 || hostID ? `${record.runtime} · ` : ""}{t(`superAgents.health.${record.state}`)}{record.resets_at ? ` ${t("superAgents.health.until", { time: time(record.resets_at) })}` : ""}
+      </span>
+    ));
 
   return (
     <div className="page-stack">
@@ -102,7 +112,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                 {!selected.auto_workers && selected.workers.length === 0 && <p className="muted">{t("agents.work.chatOnly")}</p>}
                 <div className="super-agent-chips">
                   {selected.auto_workers && (selected.worker_runtimes ?? []).map((runtime) => (
-                    <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{t("superAgents.autoWorkersOn")}</small></span>
+                    <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{t("superAgents.autoWorkersOn")}</small>{healthMarks("", [runtime])}</span>
                   ))}
                   {selected.auto_workers && (selected.worker_machines ?? []).map((machine, index) => {
                     const local = !machine.host_id;
@@ -114,6 +124,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         <i className={local || status?.available ? "online" : "offline"} />
                         {machine.dir ? `${name} · ${machine.dir}` : name}
                         <small>{[t("superAgents.workerMachine"), ...tools.map((tool) => tool === "computer_use" ? t("superAgents.toolComputerUse") : t("superAgents.toolBrowser"))].join(" · ")}</small>
+                        {!local && healthMarks(machine.host_id, selected.worker_runtimes ?? [])}
                       </span>
                     );
                   })}
@@ -124,6 +135,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         <i className={status?.available ? "online" : "offline"} />
                         {worker.label || worker.agent_id}
                         <small>{worker.host_id ? t("superAgents.remote") : t("superAgents.local")}</small>
+                        {healthMarks(worker.host_id, [status?.runtime_id])}
                       </span>
                     );
                   })}
@@ -170,6 +182,11 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         </span>
                       </header>
                       <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.worker.host_id)?.name ?? t("superAgents.remote")) : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
+                      {ticket.placement && (
+                        <small className="super-agent-ticket-moved" title={ticket.placement.reason}>
+                          {t("superAgents.ticketMoved", { from: ticket.placement.requested_worker_id, to: ticket.placement.worker_id, machine: ticket.placement.machine || t("superAgents.thisMachine") })}: {ticket.placement.reason}
+                        </small>
+                      )}
                       {(ticket.done_when ?? []).length > 0 && (
                         <div className="super-agent-ticket-criteria">
                           <small>{t("superAgents.ticketDoneWhen")}{ticket.expect_minutes ? ` · ${t("superAgents.ticketExpect", { minutes: ticket.expect_minutes })}` : ""}</small>

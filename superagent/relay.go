@@ -44,6 +44,7 @@ func RelayAllowed(method, path string) bool {
 	case "GET /api/v1/agents",
 		"GET /api/v1/agent-instances",
 		"GET " + workerToolsPath,
+		"GET " + frameworkHealthPath,
 		"POST " + hostedWorkersPath,
 		"POST " + hostedWorkersRemovePath,
 		"POST " + steerPath,

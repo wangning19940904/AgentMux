@@ -139,6 +139,9 @@ func (f *Fleet) Status(ctx context.Context, worker core.SuperAgentWorker) core.S
 		status.Available = true
 		status.Detail = instance.Name
 	}
+	if instance != nil {
+		status.RuntimeID = instance.RuntimeID
+	}
 	return status
 }
 

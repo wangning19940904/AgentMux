@@ -276,6 +276,46 @@ installed on the agent's machine and offer the read-only `plan` approval mode.
 - **Not yet:** remote workers, whose files are on another machine, and workers that share
   a directory with other Tickets are not reviewed. A review takes at most 30 minutes.
 
+## Placement
+
+Where a new Ticket runs takes each machine's [framework health](../docs/architecture/framework-health.md)
+into account. Placement reads stored records; it never runs a check of its own.
+
+- **The roster marks health.** A roster entry whose framework is `failing` or
+  `usage_limit` on its machine gets `"health"`, such as `"usage-limited until
+  2026-11-15T09:00:00Z: …"` or `"failing: not signed in"`. `ok` and `unknown` add
+  nothing; `unknown` never holds work back. This machine's frameworks come from its own
+  records, another machine's from that machine's `GET /api/v1/frameworks/health`,
+  reached the way its workers are (SSH, the node link, or the hub relay, which carries
+  this call). A machine's answer is reused for up to a minute. A roster worker's
+  framework is the one its Agent reports. When an entry is marked, or work can go to
+  another machine, the brain gets a short `PLACEMENT` note explaining the marks and
+  `machine_policy`.
+- **`machine_policy`** on an `accept`:
+
+  ```
+  {"action":"accept","worker_id":"auto:codex@studio","machine_policy":"flexible","title":"…","instructions":"…"}
+  ```
+
+  `fixed`, the default and what an accept without it means, runs the Ticket exactly where
+  the brain named. If that machine cannot be reached, the framework is not installed
+  there, or its health is `failing` or `usage_limit`, the action is refused before
+  anything is carried out, with the reason, and the brain answers again. `flexible` lets
+  AgentMux move the Ticket to another entry of the same roster that can take it: first
+  the same directory with another framework, then the same framework elsewhere, then the
+  rest in roster order. Nothing outside the roster is ever chosen. When no entry can
+  take it, the action is refused with what was tried. Another value is refused.
+- **A moved Ticket** records `placement` (`policy`, `requested_worker_id`, `worker_id`,
+  `host_id`, `machine`, `reason`, `at`). The Trigger's reason says where it went, the
+  brain sees it under `moved` in OPEN TICKETS, and the Console shows it on the Ticket.
+- **Failed runs feed health.** When a turn fails for a reason the framework owns (see
+  the classification in the health document), a worker on this machine stores it with
+  `RecordFailure`, unless periodic checks are on, in which case the engine already
+  learned it and confirms it with a recheck. A failure on another machine marks that
+  framework here for up to an hour, or until that machine's own record is newer.
+- **The Console** shows a mark beside each failing or usage-limited framework on the
+  agent's roster (`runtime_health` in the activity response), and the move on a Ticket.
+
 ## What the host enforces
 
 The router reads untrusted text. What limits the harm a crafted event can do:
@@ -703,7 +743,7 @@ These routes are for Console administrators and are closed to member accounts.
 | Method and path | Purpose |
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
-| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, and `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours |
+| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours, and `runtime_health`: each roster framework's health per machine (`host_id`, `runtime`, `state`, `reason`, `resets_at`) |
 | `GET /api/v1/super-agents/prompts` | The built-in prompt parts with their default text |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |

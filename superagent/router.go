@@ -59,8 +59,11 @@ type routerAction struct {
 	// long the brain expects a turn to take; see criteria.go.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
-	To            string   `json:"to,omitempty"`
-	Text          string   `json:"text,omitempty"`
+	// MachinePolicy is an accept's: fixed (default) or flexible; see
+	// placement.go.
+	MachinePolicy string `json:"machine_policy,omitempty"`
+	To            string `json:"to,omitempty"`
+	Text          string `json:"text,omitempty"`
 	// In or At says when a follow_up is due, Note what to do then. TimerID
 	// names the timer a cancel_timer withdraws.
 	In      string `json:"in,omitempty"`
@@ -72,6 +75,9 @@ type routerAction struct {
 	Verdict string                       `json:"verdict,omitempty"`
 	Checks  []core.SuperAgentReviewCheck `json:"checks,omitempty"`
 	Reason  string                       `json:"reason,omitempty"`
+
+	// placed is where preflight decided an accept runs.
+	placed *placement
 }
 
 // routerDecision is the router's reply to this event's thread and the
@@ -108,6 +114,10 @@ type routerContext struct {
 	// LocalTools are, for each framework, what its workers on this machine
 	// can use besides code.
 	LocalTools map[string][]string
+	// Statuses are the roster workers' statuses, and Health each roster
+	// framework's health per machine.
+	Statuses []core.SuperAgentWorkerStatus
+	Health   []core.SuperAgentRuntimeHealth
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -124,7 +134,7 @@ func (s *Service) route(ctx context.Context, agent core.SuperAgent, trigger core
 	request := core.InvocationRequest{
 		AgentID:        agent.RouterAgentID,
 		ConversationID: routerConversationID(trigger),
-		Input:          routerPrompt(agent, trigger, s.workerStatuses(routerCtx, agent), view),
+		Input:          routerPrompt(agent, trigger, view.Statuses, view),
 	}
 	var result core.InvocationResult
 	var err error
@@ -297,6 +307,9 @@ func validateDecision(decision routerDecision) error {
 			if strings.TrimSpace(action.WorkerID) == "" {
 				return errors.New("an accept action has no worker_id")
 			}
+			if err := checkMachinePolicy(action.MachinePolicy); err != nil {
+				return err
+			}
 		case actionAttach, actionStop, actionLink:
 			if strings.TrimSpace(action.TicketID) == "" {
 				return fmt.Errorf("a %s action has no ticket_id", action.Action)
@@ -375,7 +388,16 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		Tools     []string `json:"tools,omitempty"`
 		Available bool     `json:"available"`
 		Detail    string   `json:"detail,omitempty"`
+		// Health is set when the entry's framework is failing or at its
+		// usage limit on its machine.
+		Health string `json:"health,omitempty"`
 	}
+	healthOf := healthIndex(view.Health)
+	mark := func(hostID, runtime string) string {
+		record, ok := healthOf[failureKey(hostID, runtime)]
+		return rosterHealthMark(record, ok)
+	}
+	marked := false
 	roster := make([]rosterEntry, 0, len(agent.Workers))
 	for index, worker := range agent.Workers {
 		entry := rosterEntry{ID: worker.ID, Label: worker.Label, Location: "local", Capabilities: worker.Capabilities}
@@ -384,12 +406,13 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		}
 		if index < len(statuses) {
 			entry.Available, entry.Detail = statuses[index].Available, statuses[index].Detail
+			entry.Health = mark(worker.HostID, statuses[index].RuntimeID)
 		}
 		roster = append(roster, entry)
 	}
 	if agent.AutoWorkers {
 		for _, runtimeID := range agent.WorkerRuntimes {
-			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Tools: view.LocalTools[runtimeID], Available: true})
+			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Tools: view.LocalTools[runtimeID], Available: true, Health: mark("", runtimeID)})
 		}
 		// One entry per framework in each directory the operator listed, so
 		// the router sees where the work can go and which machine can take
@@ -401,7 +424,7 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 					roster = append(roster, rosterEntry{
 						ID: machineWorkerRosterID(runtimeID, pathID), Label: machine.Dir, Location: "local",
 						Capabilities: strings.TrimSpace(fmt.Sprintf(localDirGuidance, runtimeID, machine.Dir) + " " + machine.Capabilities),
-						Tools:        view.LocalTools[runtimeID], Available: true,
+						Tools:        view.LocalTools[runtimeID], Available: true, Health: mark("", runtimeID),
 					})
 				}
 				continue
@@ -424,9 +447,15 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 				if status.Available && !entry.Available {
 					entry.Detail = runtimeID + " is not installed on " + status.Name
 				}
+				entry.Health = mark(machine.HostID, runtimeID)
 				roster = append(roster, entry)
 			}
 		}
+	}
+	remote := false
+	for _, entry := range roster {
+		marked = marked || entry.Health != ""
+		remote = remote || entry.Location != "local"
 	}
 	rosterJSON, _ := json.MarshalIndent(roster, "", "  ")
 	tickets := view.Tickets
@@ -441,7 +470,11 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	if memory == "" {
 		memory = "(empty)"
 	}
-	fmt.Fprintf(prompt, "\nWORKER ROSTER:\n%s\n\nOPEN TICKETS (every thread, newest first):\n%s\n", rosterJSON, ticketsJSON)
+	fmt.Fprintf(prompt, "\nWORKER ROSTER:\n%s\n", rosterJSON)
+	if marked || remote {
+		prompt.WriteString("\nPLACEMENT: " + placementNote + "\n")
+	}
+	fmt.Fprintf(prompt, "\nOPEN TICKETS (every thread, newest first):\n%s\n", ticketsJSON)
 	if len(view.Places) > 0 {
 		placesJSON, _ := json.MarshalIndent(view.Places, "", "  ")
 		fmt.Fprintf(prompt, "\nPLACES AND PEOPLE (where post can send, and who is there):\n%s\n", placesJSON)

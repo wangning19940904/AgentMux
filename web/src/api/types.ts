@@ -1614,7 +1614,30 @@ export interface SuperAgentTicket {
   rework_rounds?: number;
   // The latest independent review of the Ticket's work.
   auto_review?: SuperAgentAutoReview;
+  // Set when AgentMux ran the Ticket somewhere other than where the brain
+  // named (machine_policy flexible).
+  placement?: SuperAgentTicketPlacement;
   updated_at: string;
+}
+
+export interface SuperAgentTicketPlacement {
+  policy: string;
+  requested_worker_id: string;
+  worker_id: string;
+  host_id?: string;
+  machine?: string;
+  reason: string;
+  at: string;
+}
+
+// The health record of one framework on one machine of an agent's roster;
+// an empty host_id is this machine.
+export interface SuperAgentRuntimeHealth {
+  host_id?: string;
+  runtime: string;
+  state: "ok" | "failing" | "usage_limit" | "unknown";
+  reason?: string;
+  resets_at?: string;
 }
 
 export interface SuperAgentTicketSignal {
@@ -1745,8 +1768,10 @@ export interface SuperAgentTimer {
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
-  workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
+  workers: Array<{ worker_id: string; available: boolean; detail?: string; runtime_id?: string }>;
   machines?: SuperAgentMachineStatus[];
+  // Each roster framework's health, per machine.
+  runtime_health?: SuperAgentRuntimeHealth[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
   // Timers still set come first, then those that fired or were cancelled
   // lately. timer_warning says when the daily limit is holding due ones back.

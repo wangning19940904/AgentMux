@@ -738,6 +738,27 @@ describe("SuperAgentsPanel", () => {
     expect(chips).toEqual(["codexAuto workers", "kimiAuto workers"]);
   });
 
+  it("marks failing or usage-limited frameworks on the roster and shows where a ticket moved", async () => {
+    vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, workers: [], auto_workers: true, worker_runtimes: ["codex", "kimi"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity, machines: [{ host_id: "h1", name: "GPU box", available: true, runtimes: ["codex", "kimi"] }],
+      runtime_health: [
+        { runtime: "codex", state: "usage_limit", reason: "limit reached" },
+        { runtime: "kimi", state: "unknown" },
+        { host_id: "h1", runtime: "kimi", state: "failing", reason: "not signed in" },
+      ],
+      tickets: [{ id: "t4", title: "Moved work", status: "running", worker: { id: "auto:kimi", agent_id: "saw_sa_1_kimi" },
+        placement: { policy: "flexible", requested_worker_id: "auto:codex", worker_id: "auto:kimi", machine: "this machine", reason: "codex on this machine is usage-limited", at: "2026-11-03T00:00:00Z" },
+        updated_at: "2026-11-03T00:00:00Z" }],
+    });
+    renderPanel();
+    await until(() => hasText("Moved work"));
+    const marks = [...container.querySelectorAll(".super-agent-health")].map((item) => item.textContent);
+    expect(marks).toEqual(["Usage limit", "kimi · Failing"]);
+    expect(container.querySelector(".super-agent-health.usage_limit")?.getAttribute("title")).toBe("limit reached");
+    expect(container.querySelector(".super-agent-ticket-moved")?.textContent).toBe("Moved from auto:codex to auto:kimi on this machine: codex on this machine is usage-limited");
+  });
+
   it("lets an agent launch workers on another machine, and names the machine on its tickets", async () => {
     vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
     vi.spyOn(api, "superAgentActivity").mockResolvedValue({

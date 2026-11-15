@@ -62,7 +62,10 @@ type ticketView struct {
 	// Signals are what supervision noticed that still holds, in act mode.
 	Signals []string `json:"signals,omitempty"`
 	// Review is the latest review's verdict, and how much rework is left.
-	Review   string `json:"review,omitempty"`
+	Review string `json:"review,omitempty"`
+	// Moved says where AgentMux ran the Ticket instead of where it was
+	// accepted, and why.
+	Moved    string `json:"moved,omitempty"`
 	Started  string `json:"started,omitempty"`
 	Updated  string `json:"updated"`
 	Activity string `json:"last_activity,omitempty"`
@@ -118,7 +121,8 @@ type activity struct {
 
 // routerView assembles everything the router is shown with an event.
 func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket) routerContext {
-	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent)}
+	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent), Statuses: s.workerStatuses(ctx, agent)}
+	view.Health = s.rosterHealth(ctx, agent, view.Statuses)
 	if agent.AutoWorkers {
 		view.LocalTools = s.localTools(agent.WorkerRuntimes)
 	}
@@ -202,6 +206,9 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			entry.Signals = signalLines(ticket)
 		}
 		entry.Review = reviewSummary(ticket)
+		if moved := ticket.Placement; moved != nil {
+			entry.Moved = fmt.Sprintf("from %s to %s on %s: %s", moved.RequestedWorkerID, moved.WorkerID, firstNonEmpty(moved.Machine, "this machine"), moved.Reason)
+		}
 		if s.existingTicketDir(ticket) != "" {
 			entry.Folder = ticketsDirName + "/" + ticket.ID
 		}

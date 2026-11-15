@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework/health"
 )
 
 // An agent can launch a worker in a directory the operator listed, on this
@@ -33,6 +34,7 @@ const (
 	hostedWorkersPath       = "/api/v1/super-agents/workers/launch"
 	hostedWorkersRemovePath = "/api/v1/super-agents/workers/release"
 	steerPath               = "/api/v1/invocations/steer"
+	frameworkHealthPath     = "/api/v1/frameworks/health"
 
 	machineGuidance    = "Launches a new %s worker on %s with its own session and directory there."
 	machineDirGuidance = "Launches a new %s worker on %s, working in %s there."
@@ -268,12 +270,13 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 			defer wg.Done()
 			statusCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			runtimes, err := fleet.Runtimes(statusCtx, machine.HostID)
-			if err != nil {
-				statuses[index].Detail = err.Error()
+			// Asking also refreshes what placement knows of the machine.
+			info := s.refreshMachine(statusCtx, machine.HostID)
+			if info.err != nil {
+				statuses[index].Detail = info.err.Error()
 				return
 			}
-			statuses[index].Available, statuses[index].Runtimes = true, runtimes
+			statuses[index].Available, statuses[index].Runtimes = true, info.runtimes
 			if tooled, ok := fleet.(MachineToolsFleet); ok {
 				// A machine too old to say leaves its tools unknown.
 				if tools, err := tooled.Tools(statusCtx, machine.HostID); err == nil {
@@ -545,6 +548,18 @@ func (f *Fleet) Runtimes(ctx context.Context, hostID string) ([]string, error) {
 		return nil, err
 	}
 	return runtimes, nil
+}
+
+// Health reads the machine's framework health records.
+func (f *Fleet) Health(ctx context.Context, hostID string) ([]health.Record, error) {
+	var answer struct {
+		Records []health.Record `json:"records"`
+	}
+	status, err := f.remoteJSON(ctx, hostID, http.MethodGet, frameworkHealthPath, nil, &answer)
+	if err == nil && status >= http.StatusBadRequest {
+		err = fmt.Errorf("framework health: %d", status)
+	}
+	return answer.Records, err
 }
 
 func (f *Fleet) Tools(ctx context.Context, hostID string) (WorkerTools, error) {

@@ -107,6 +107,9 @@ type Options struct {
 	MCP core.MCPRegistry
 	// StateDir holds directories the service creates. Empty means ~/.agentmux.
 	StateDir string
+	// Health is this machine's framework health; nil leaves every framework
+	// here unknown, which holds nothing back.
+	Health LocalHealth
 }
 
 // Service owns intake, routing and execution for every Super Agent.
@@ -160,6 +163,10 @@ type Service struct {
 	directory   Directory
 	scopes      FeishuScopeChecker
 	mailbox     Mailbox
+	// healthRecords and placement decide where new Tickets run; see
+	// placement.go.
+	healthRecords LocalHealth
+	placement     placementCache
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -183,6 +190,9 @@ type Activity struct {
 	// those that fired or were cancelled lately.
 	Timers       []core.SuperAgentTimer `json:"timers"`
 	TimerWarning string                 `json:"timer_warning,omitempty"`
+	// RuntimeHealth is the health of each framework on the roster, per
+	// machine.
+	RuntimeHealth []core.SuperAgentRuntimeHealth `json:"runtime_health,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -203,7 +213,7 @@ func New(options Options) *Service {
 		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
-		directory: options.Directory, scopes: options.Scopes,
+		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
 	}
 }
 
@@ -545,7 +555,7 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 		}
 		return ticket.Status, nil
 	}
-	for _, action := range decision.Actions {
+	for index, action := range decision.Actions {
 		switch action.Action {
 		case actionAccept:
 			if err := s.checkWorker(agent, action.WorkerID); err != nil {
@@ -554,6 +564,14 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			if err := checkCriteria(action.DoneWhen, action.ExpectMinutes); err != nil {
 				return err
 			}
+			// Where it runs is decided here, so a place that cannot take it
+			// is refused before anything is carried out. decision.Actions
+			// shares its array with the caller's, which apply then reads.
+			placed, err := s.place(ctx, agent, action, nil)
+			if err != nil {
+				return err
+			}
+			decision.Actions[index].placed = &placed
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
 				if strings.TrimSpace(id) == "" {
 					continue
@@ -694,6 +712,10 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if id, err = s.accept(ctx, agent, trigger, action); err == nil {
 				accepted = true
 				ticketIDs = append(ticketIDs, id)
+				if action.placed != nil && action.placed.moved != nil {
+					moved := action.placed.moved
+					reasons = append(reasons, fmt.Sprintf("moved %s from %s to %s (%s): %s", id, moved.RequestedWorkerID, moved.WorkerID, moved.Machine, moved.Reason))
+				}
 				if ref := strings.TrimSpace(action.Ref); ref != "" {
 					refs[ref] = id
 				}
@@ -792,6 +814,11 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 }
 
 func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, action routerAction) (string, error) {
+	var moved *core.SuperAgentTicketPlacement
+	if action.placed != nil && action.placed.moved != nil {
+		moved = action.placed.moved
+		action.WorkerID = moved.WorkerID
+	}
 	worker, err := s.assignedWorker(ctx, agent, action.WorkerID)
 	if err != nil {
 		return "", err
@@ -819,6 +846,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		DependsOn: action.DependsOn, BaseTicket: base,
 		Instructions: strings.TrimSpace(action.Instructions),
 		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
+		Placement: moved,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
@@ -1090,6 +1118,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		s.log.Error("finish super agent ticket", "ticket", ticketID, "err", mutateErr)
 		return
 	}
+	if runErr != nil {
+		s.noteRunFailure(ctx, agent, ticket.Worker, runErr)
+	}
 	if runErr == nil {
 		s.appendTicketLog(ticket, ticketResultFile, answer)
 	}
@@ -1227,10 +1258,12 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	if err != nil {
 		return nil, err
 	}
+	workers := s.workerStatuses(ctx, *agent)
 	activity := &Activity{
-		Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Machines: s.machineStatuses(ctx, *agent),
+		Tickets: tickets, Triggers: triggers, Workers: workers, Machines: s.machineStatuses(ctx, *agent),
 		Sources: map[string]SourceHealth{}, Timers: timers, TimerWarning: timerWarning,
 	}
+	activity.RuntimeHealth = s.rosterHealth(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
 	s.mu.Lock()
 	for _, source := range agent.Sources {
 		activity.Sources[source.ID] = s.health[source.ID]

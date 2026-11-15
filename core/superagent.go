@@ -282,6 +282,9 @@ type SuperAgentTicket struct {
 	ReworkRounds int                      `json:"rework_rounds,omitempty"`
 	// AutoReview is the latest independent review of the Ticket's work.
 	AutoReview *SuperAgentAutoReview `json:"auto_review,omitempty"`
+	// Placement is set when the host ran the Ticket somewhere other than
+	// where the brain named (machine_policy flexible).
+	Placement *SuperAgentTicketPlacement `json:"placement,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -376,6 +379,40 @@ type SuperAgentWorkerStatus struct {
 	WorkerID  string `json:"worker_id"`
 	Available bool   `json:"available"`
 	Detail    string `json:"detail,omitempty"`
+	// RuntimeID is the worker Agent's framework, when its machine said.
+	RuntimeID string `json:"runtime_id,omitempty"`
+}
+
+// Where a Ticket runs. MachinePolicyFixed runs it exactly where the brain
+// named; MachinePolicyFlexible lets the host move it to another place the
+// agent may use when that one cannot take it now.
+const (
+	MachinePolicyFixed    = "fixed"
+	MachinePolicyFlexible = "flexible"
+)
+
+// SuperAgentTicketPlacement records that the host moved a Ticket.
+type SuperAgentTicketPlacement struct {
+	Policy string `json:"policy"`
+	// RequestedWorkerID is the roster entry the brain named; WorkerID is
+	// where the Ticket went, and Machine that place's machine name.
+	RequestedWorkerID string    `json:"requested_worker_id"`
+	WorkerID          string    `json:"worker_id"`
+	HostID            string    `json:"host_id,omitempty"`
+	Machine           string    `json:"machine,omitempty"`
+	Reason            string    `json:"reason"`
+	At                time.Time `json:"at"`
+}
+
+// SuperAgentRuntimeHealth is the health record of one framework on one
+// machine, as an agent's roster shows it. State is ok, failing,
+// usage_limit or unknown; HostID is empty for this machine.
+type SuperAgentRuntimeHealth struct {
+	HostID   string     `json:"host_id,omitempty"`
+	Runtime  string     `json:"runtime"`
+	State    string     `json:"state"`
+	Reason   string     `json:"reason,omitempty"`
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
 }
 
 // FeishuUserGrant is one person's own authorization of a Feishu channel's app.
