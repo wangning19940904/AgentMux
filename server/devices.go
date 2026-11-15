@@ -57,7 +57,7 @@ func (b *deviceBackend) roles(ctx context.Context) map[string]string {
 func (b *deviceBackend) linked(device core.Device, roles map[string]string) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
 	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
-		HubRole: roles[device.ID]}
+		HubRole: roles[device.ID], MachineUID: device.MachineUID}
 }
 
 // lastReports is when each device last sent the hub its data.
@@ -692,6 +692,36 @@ type nodeLink struct {
 	// reportInterval overrides how often the node looks for changes to
 	// report; zero is the default.
 	reportInterval time.Duration
+	// uid is this machine's UID, read from the state directory when the
+	// server starts; empty before that, as in tests that never run it.
+	uid string
+	// pathsStarted is set once the remote Manager knows this machine's
+	// own paths (startMachinePaths).
+	pathsStarted bool
+}
+
+// machineUID is this machine's UID, or "" when the server has not started.
+func (n *nodeLink) machineUID() string {
+	if n == nil {
+		return ""
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.uid
+}
+
+// loadMachineUID reads this machine's UID, creating it on first run. A
+// machine without one still works; it is only never merged with another
+// entry for the same computer.
+func (n *nodeLink) loadMachineUID() {
+	uid, err := linkpkg.LoadOrCreateMachineUID(n.server.cfg.Hub.StateDir)
+	if err != nil {
+		n.server.log.Warn("machine UID unavailable", "err", err)
+		return
+	}
+	n.mu.Lock()
+	n.uid = uid
+	n.mu.Unlock()
 }
 
 func (n *nodeLink) statePath() (string, error) {
@@ -701,6 +731,8 @@ func (n *nodeLink) statePath() (string, error) {
 // run starts the connection kept in the membership file, if there is one,
 // and stops it when ctx ends.
 func (n *nodeLink) run(ctx context.Context) {
+	n.loadMachineUID()
+	n.startMachinePaths(ctx)
 	n.mu.Lock()
 	n.ctx = ctx
 	n.mu.Unlock()
@@ -734,8 +766,10 @@ func (n *nodeLink) start(state linkpkg.State) {
 	if s.cfg.Bridge.Enabled {
 		token = s.cfg.Bridge.Token
 	}
+	info := linkpkg.LocalDeviceInfo(state.Name, s.version)
+	info.MachineUID = n.uid
 	client := &linkpkg.Client{
-		State: state, Info: linkpkg.LocalDeviceInfo(state.Name, s.version),
+		State: state, Info: info,
 		Handler: linkpkg.LocalAPIHandler(linkpkg.LoopbackAddr(s.cfg.Server.Addr), token), Log: s.log,
 		ReportInterval: n.reportInterval,
 	}
@@ -813,7 +847,9 @@ func (s *Server) handleLinkJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	state, err := linkpkg.Pair(ctx, join, linkpkg.LocalDeviceInfo(req.Name, s.version))
+	info := linkpkg.LocalDeviceInfo(req.Name, s.version)
+	info.MachineUID = s.node.machineUID()
+	state, err := linkpkg.Pair(ctx, join, info)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

@@ -312,6 +312,47 @@ idempotent by `invocation_id`. When a node reconnects, it re-announces its live
 Tickets and sessions, and the hub reconciles them, applying Agent Relay's rule
 that the first `completed` wins.
 
+**One machine, several paths**
+
+A computer can be known more than one way: as an SSH host, as a device paired
+with this hub, through the relay of the hub this machine is linked to, or as
+this machine itself. Each daemon keeps a machine UID (a UUIDv4 in
+`machine-uid` in its hub state directory, mode 0600, replaced when missing or
+corrupt; `amux machine-uid reset` gives a cloned VM its own). It reports the
+UID in `core.DeviceInfo` when it pairs and each time it connects, and in
+`GET /api/v1/status`, which is what a controller probing an SSH host calls.
+The hub stores it per device (`devices.machine_uid`); the controller stores it
+per SSH host once it has contacted it (`remote-hosts.json`); the relay list a
+hub gives its devices carries it too.
+
+Entries with the same UID are one machine
+([remote/machines.go](../../remote/machines.go)). The machine list
+(`GET /api/v1/remote/hosts`, and everything built on it such as fleet targets)
+shows it once, as its first entry (SSH hosts before devices), with `paths`:
+for each `via` (`local`, `ssh`, `link`, `relay`), the entry it uses, whether it
+works, its round-trip time and whether it is the one in use. An entry whose UID
+is unknown, such as an SSH host never contacted or a node too old to report
+one, is never merged. An entry that later reports another UID moves to the
+machine it reaches.
+
+Dialing any entry of a machine, or its UID, picks the path in one place
+([remote/paths.go](../../remote/paths.go)): local first, then direct (SSH or
+the machine's own link), then through the hub; within a class the lower
+round-trip time. A healthy active path is kept. When it fails, the next usable
+path is used at once. The chooser moves back only to a path that is clearly
+better (a better class, or the same class with a round-trip time over 30% and
+at least 5 ms lower) and has stayed so for 60 seconds. A failed path is not
+tried again for 2 seconds, doubling up to a minute. Every 30 seconds the paths
+of each machine with more than one are checked with the status endpoint. The
+relay carries only the worker API, so `DialContext` never uses it; the
+request-level `Manager.Transport` does. A machine known one way is reached
+exactly as before, without the chooser.
+
+The local path answers through this machine's own API with its own token, as a
+request over its hub link would be. A request built for one entry may travel
+another path, so `Manager.Get` lends a merged device the API token of its SSH
+host; the link and local paths replace it with the node's own.
+
 ### 4.4 What is stored where
 
 | Data | Hub | Node |

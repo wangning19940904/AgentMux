@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 const defaultRemoteAddr = "127.0.0.1:8765"
@@ -33,6 +35,10 @@ type Host struct {
 	RemoteAddr         string `json:"remote_addr"`
 	APIToken           string `json:"api_token,omitempty"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	// MachineUID is the computer this host reached when it was last
+	// contacted (see core.DeviceInfo.MachineUID); empty until then, and for
+	// an AgentMux too old to report one.
+	MachineUID string `json:"machine_uid,omitempty"`
 	// Kind is KindLink for a paired device, which is never stored here, and
 	// empty for the SSH hosts that are.
 	Kind string `json:"-"`
@@ -60,6 +66,12 @@ type HostView struct {
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
 	// HubRole marks a machine that is a hub (see LinkedDevice).
 	HubRole string `json:"hub_role,omitempty"`
+	// MachineUID is the computer this entry reaches, once known.
+	MachineUID string `json:"machine_uid,omitempty"`
+	// Paths lists every way of reaching the machine when there is more than
+	// one: this entry's own and those of the entries that reach the same
+	// computer, which are not listed separately.
+	Paths []MachinePath `json:"paths,omitempty"`
 }
 
 func (h Host) View() HostView {
@@ -67,6 +79,7 @@ func (h Host) View() HostView {
 		ID: h.ID, Name: h.Name, Host: h.Host, Port: h.Port, User: h.User,
 		KeyPath: h.KeyPath, SSHAlias: h.SSHAlias, RemoteAddr: h.RemoteAddr, APITokenSet: h.APIToken != "",
 		HostKeyFingerprint: h.HostKeyFingerprint, Trusted: h.HostKeyFingerprint != "", Kind: KindSSH,
+		MachineUID: h.MachineUID,
 	}
 }
 
@@ -189,6 +202,15 @@ func (s *Store) upsertLocked(host Host, clearAPIToken bool) (Host, error) {
 			current.Port == host.Port && current.User == host.User {
 			host.SSHAlias = current.SSHAlias
 		}
+		// Only contacting the host says which computer it is
+		// (SetMachineUID). A new address may reach another one, so what
+		// was learned is kept only while the address stays.
+		host.MachineUID = ""
+		if current.Host == host.Host && current.Port == host.Port {
+			host.MachineUID = current.MachineUID
+		}
+	} else {
+		host.MachineUID = ""
 	}
 	normalized, err := normalizeHost(host)
 	if err != nil {
@@ -221,6 +243,28 @@ func (s *Store) SetHostKeyFingerprint(id, fingerprint string) (Host, error) {
 		return Host{}, err
 	}
 	return host, nil
+}
+
+// SetMachineUID records the computer a host reached, and reports whether
+// that changed what was known.
+func (s *Store) SetMachineUID(id, uid string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	host, ok := s.hosts[id]
+	if !ok {
+		return false, os.ErrNotExist
+	}
+	if host.MachineUID == uid {
+		return false, nil
+	}
+	previous := host
+	host.MachineUID = uid
+	s.hosts[id] = host
+	if err := s.saveLocked(); err != nil {
+		s.hosts[id] = previous
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) Delete(id string) error {
@@ -288,6 +332,7 @@ func normalizeHost(host Host) (Host, error) {
 	host.RemoteAddr = strings.TrimSpace(host.RemoteAddr)
 	host.APIToken = strings.TrimSpace(host.APIToken)
 	host.HostKeyFingerprint = strings.TrimSpace(host.HostKeyFingerprint)
+	host.MachineUID = core.NormalizeMachineUID(host.MachineUID)
 	if host.ID == "" {
 		return Host{}, fmt.Errorf("id is required")
 	}

@@ -49,13 +49,20 @@ func (s *Server) handleWorkerRelayDevices(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	listed := make([]superagent.RelayDevice, 0, len(devices))
+	listed := make([]relayedDevice, 0, len(devices))
 	for _, device := range devices {
 		if host, known := s.remote.Get(device.ID); !known || host.Kind != remotepkg.KindLink {
 			continue // Not a machine this hub reaches, such as the hub itself.
 		}
 		if device.ID != source.ID && device.OwnerAccountID == source.OwnerAccountID {
-			listed = append(listed, superagent.RelayDevice{ID: device.ID, Name: device.Name})
+			// The machine UID and whether it is connected let the asking
+			// machine use the relay as one path among others to it.
+			entry := relayedDevice{RelayDevice: superagent.RelayDevice{ID: device.ID, Name: device.Name}, MachineUID: device.MachineUID}
+			if s.linkHub != nil {
+				_, online := s.linkHub.Connection(device.ID)
+				entry.Online = &online
+			}
+			listed = append(listed, entry)
 		}
 	}
 	writeJSON(w, http.StatusOK, listed)
@@ -96,7 +103,13 @@ func (s *Server) handleWorkerRelay(w http.ResponseWriter, r *http.Request) {
 			request.SetURL(&url.URL{Scheme: "http", Host: host.RemoteAddr})
 			request.Out.URL.Path, request.Out.URL.RawPath = targetPath, ""
 			request.Out.Host = host.RemoteAddr
+			// Over the device's link, the device puts its own token here. The
+			// machine may also be reached over SSH, which needs the token of
+			// its SSH host (remote.Manager.Get lends it).
 			request.Out.Header.Del("Authorization")
+			if host.APIToken != "" {
+				request.Out.Header.Set("Authorization", "Bearer "+host.APIToken)
+			}
 			request.Out.Header.Set("X-AgentMux-Relayed-From", source.Name)
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {

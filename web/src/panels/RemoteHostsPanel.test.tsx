@@ -290,3 +290,47 @@ describe("machines that connect to the hub themselves", () => {
     expect(vi.mocked(api.remoteHosts).mock.calls.length).toBe(before + 1);
   });
 });
+
+describe("machines reached more than one way", () => {
+  const merged: RemoteHost = {
+    ...hosts[1],
+    machine_uid: "0f8fad5b-d9cb-469f-a165-70867728950e",
+    paths: [
+      { via: "ssh", host_id: "lemon_claw", name: "lemon_claw", ok: true, rtt_ms: 12.5, active: false },
+      { via: "link", host_id: "dev_lemon", name: "lemon (link)", ok: true, rtt_ms: 3.1, active: true },
+      { via: "relay", host_id: "dev_lemon", name: "lemon (link)", ok: false, active: false, error: "offline at the hub" },
+    ],
+  };
+
+  beforeEach(async () => {
+    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], merged]);
+    await act(async () => { root.render(<I18nProvider language="en"><RemoteHostsPanel key="merged" /></I18nProvider>); });
+  });
+
+  it("lists the machine once with every path, its round trip and the one in use", () => {
+    const rows = Array.from(container.querySelectorAll("article")).filter((item) => item.textContent?.includes("lemon"));
+    expect(rows).toHaveLength(1);
+    const paths = Array.from(rows[0].querySelectorAll(".remote-host-paths li"));
+    expect(paths.map((item) => item.textContent?.trim())).toEqual([
+      "SSH · 12.5 ms", "its link · 3.1 ms · in use", "through the hub",
+    ]);
+    expect(paths[1].className).toContain("active");
+    expect(paths[2].className).toContain("danger");
+    expect(paths[2].getAttribute("title")).toBe("offline at the hub");
+  });
+
+  it("removes one path and keeps the machine", async () => {
+    vi.mocked(api.deleteRemoteHost).mockResolvedValue({ ok: true });
+    const row = Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes("lemon"))!;
+    const remove = row.querySelector<HTMLButtonElement>('button[aria-label="Remove the its link path"]')!;
+    // The entry the machine is listed as, and the hub's relay, are not removed here.
+    expect(row.querySelectorAll(".remote-host-paths button")).toHaveLength(1);
+    await click(remove);
+    vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], { ...hosts[1], machine_uid: merged.machine_uid }]);
+    await click(button(dialog(), "Delete"));
+    expect(api.deleteRemoteHost).toHaveBeenCalledWith("dev_lemon");
+    const rows = Array.from(container.querySelectorAll("article")).filter((item) => item.textContent?.includes("lemon"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector(".remote-host-paths")).toBeNull();
+  });
+});

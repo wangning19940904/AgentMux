@@ -1688,6 +1688,28 @@
   justify-content: flex-end;
   gap: 6px;
 }
+/* Each way of reaching a machine known more than one way; the one in use is
+   outlined. */
+.remote-host-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.remote-host-paths .status-badge.active { box-shadow: inset 0 0 0 1px currentColor; }
+.remote-host-paths .icon-button {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.remote-host-paths .icon-button:disabled { cursor: default; opacity: 0.4; }
 /* Built-in prompt parts: one row each, opening to the default text and, for an
    editable part, the agent's own. */
 .super-agent-prompts { display: grid; gap: 6px; }

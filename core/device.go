@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // DeviceInfo is what a node says about itself when it pairs with a hub and
@@ -15,6 +18,26 @@ type DeviceInfo struct {
 	OS       string `json:"os,omitempty"`
 	Arch     string `json:"arch,omitempty"`
 	Version  string `json:"version,omitempty"`
+	// MachineUID identifies the computer however it is reached (a UUIDv4
+	// the daemon keeps in its state directory). Nodes from before it was
+	// reported leave it empty, and are then never taken for another entry.
+	MachineUID string `json:"machine_uid,omitempty"`
+}
+
+// ValidMachineUID reports whether value is a machine UID: a UUIDv4 in its
+// canonical lower-case form.
+func ValidMachineUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 && parsed.String() == value
+}
+
+// NormalizeMachineUID returns value as a machine UID, or "" when it is not one.
+func NormalizeMachineUID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if !ValidMachineUID(value) {
+		return ""
+	}
+	return value
 }
 
 // Device is a node paired with this hub. The node opens the connection, so the
@@ -26,6 +49,7 @@ type Device struct {
 	OS          string     `json:"os,omitempty"`
 	Arch        string     `json:"arch,omitempty"`
 	Version     string     `json:"version,omitempty"`
+	MachineUID  string     `json:"machine_uid,omitempty"`
 	TokenPrefix string     `json:"token_prefix,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`

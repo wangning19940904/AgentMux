@@ -370,6 +370,14 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     setError("");
     try {
       await api.deleteRemoteHost(host.id);
+      if (!hosts.some((item) => item.id === host.id)) {
+        // One path of a machine listed under another entry: the machine
+        // stays, with one path fewer.
+        setDeleteCandidate(null);
+        setMessage(t("remote.pathRemoved"));
+        void load();
+        return;
+      }
       // A list or health request started before deletion must not restore the host.
       ++hostsRequestVersion.current;
       probeVersions.current[host.id] = (probeVersions.current[host.id] ?? 0) + 1;
@@ -1003,6 +1011,39 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                       </span>
                     </span>
                   </header>
+                  {host.paths && host.paths.length > 1 && (
+                    <ul className="remote-host-paths" aria-label={t("remote.paths")}>
+                      {host.paths.map((path) => (
+                        <li
+                          key={`${path.via}:${path.host_id ?? ""}`}
+                          className={`status-badge ${path.ok ? "success" : "danger"}${path.active ? " active" : ""}`}
+                          title={path.error || path.name}
+                        >
+                          {path.ok ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}
+                          {t(`remote.path.${path.via}`)}
+                          {typeof path.rtt_ms === "number" && path.rtt_ms > 0 && ` · ${t("remote.pathRTT", { ms: path.rtt_ms })}`}
+                          {path.active && ` · ${t("remote.pathActive")}`}
+                          {path.host_id && path.host_id !== host.id && path.via !== "relay" && (
+                            <button
+                              aria-label={t("remote.pathRemove", { path: t(`remote.path.${path.via}`) })}
+                              className="icon-button"
+                              disabled={deleting}
+                              onClick={() => {
+                                setDeleteError("");
+                                setDeleteCandidate({
+                                  ...host, id: path.host_id ?? "", name: path.name || host.name,
+                                  kind: path.via === "ssh" ? "ssh" : "link", paths: undefined,
+                                });
+                              }}
+                              type="button"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {pendingFingerprint && (
                     <div className="host-key-confirmation">
                       <Fingerprint size={18} />

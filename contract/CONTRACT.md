@@ -75,7 +75,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | 端点 | 用途 |
 | --- | --- |
 | `GET /api/v1/capabilities` | 能力发现与握手（推荐的唯一健康探测端点） |
-| `GET /api/v1/status` | 轻量存活检查 |
+| `GET /api/v1/status` | 轻量存活检查；`machine_uid` 标识这台计算机（新增可选字段） |
 | `POST /api/v1/invocations` | 同步运行 Agent |
 | `POST /api/v1/invocations/stream` | SSE 流式运行 Agent |
 | `POST /api/v1/send` | 向活动 Channel conversation 发送出站消息（不运行 Agent） |

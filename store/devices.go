@@ -40,9 +40,16 @@ CREATE TABLE IF NOT EXISTS device_pairing_codes (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_device_pairing_codes_hash ON device_pairing_codes(code_hash);
 `
 
+// deviceMachineUIDMigration records which computer each device is (see
+// core.DeviceInfo.MachineUID), so the entries that reach one computer can be
+// listed as one machine.
+const deviceMachineUIDMigration = `
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS machine_uid TEXT;
+`
+
 const (
 	deviceTokenPrefix = "amxd_"
-	deviceColumns     = `id,name,hostname,os,arch,version,token_prefix,created_at,last_seen_at,owner_account_id`
+	deviceColumns     = `id,name,hostname,os,arch,version,token_prefix,created_at,last_seen_at,owner_account_id,machine_uid`
 	// DevicePairingCodeTTL is how long a pairing code can be used.
 	DevicePairingCodeTTL = 30 * time.Minute
 	pairingCodeLength    = 8
@@ -121,7 +128,7 @@ func (s *Store) RedeemDevicePairingCode(ctx context.Context, code string, info c
 	token := generateSecret(deviceTokenPrefix)
 	device := &core.Device{
 		ID: newRecordID("dev"), Name: firstNonEmpty(strings.TrimSpace(name.String), info.Name, info.Hostname, "device"),
-		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch, Version: info.Version,
+		Hostname: info.Hostname, OS: info.OS, Arch: info.Arch, Version: info.Version, MachineUID: info.MachineUID,
 		TokenPrefix: secretDisplayPrefix(token), CreatedAt: now, OwnerAccountID: owner.String,
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
@@ -139,9 +146,10 @@ func (s *Store) RedeemDevicePairingCode(ctx context.Context, code string, info c
 	if count, err := claimed.RowsAffected(); err != nil || count != 1 {
 		return nil, "", err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id,name,hostname,os,arch,version,token_hash,token_prefix,created_at,owner_account_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id,name,hostname,os,arch,version,token_hash,token_prefix,created_at,owner_account_id,machine_uid) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		device.ID, device.Name, device.Hostname, device.OS, device.Arch, device.Version,
-		HashSecret(token), device.TokenPrefix, now.Format(time.RFC3339Nano), nullableString(device.OwnerAccountID)); err != nil {
+		HashSecret(token), device.TokenPrefix, now.Format(time.RFC3339Nano), nullableString(device.OwnerAccountID),
+		nullableString(device.MachineUID)); err != nil {
 		return nil, "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -219,15 +227,17 @@ func (s *Store) RenameDevice(ctx context.Context, id, name string) error {
 }
 
 // TouchDevice records that a device was connected at seen. A zero info leaves
-// what the device said about itself unchanged.
+// what the device said about itself unchanged. Otherwise the machine UID is
+// replaced too, even by none: a device that stopped reporting one, or now
+// reports another, belongs with the computer it now says it is.
 func (s *Store) TouchDevice(ctx context.Context, id string, info core.DeviceInfo, seen time.Time) error {
 	at := seen.UTC().Format(time.RFC3339Nano)
 	if info == (core.DeviceInfo{}) {
 		_, err := s.writer.ExecContext(ctx, `UPDATE devices SET last_seen_at=? WHERE id=?`, at, id)
 		return err
 	}
-	_, err := s.writer.ExecContext(ctx, `UPDATE devices SET last_seen_at=?,hostname=?,os=?,arch=?,version=? WHERE id=?`,
-		at, info.Hostname, info.OS, info.Arch, info.Version, id)
+	_, err := s.writer.ExecContext(ctx, `UPDATE devices SET last_seen_at=?,hostname=?,os=?,arch=?,version=?,machine_uid=? WHERE id=?`,
+		at, info.Hostname, info.OS, info.Arch, info.Version, nullableString(info.MachineUID), id)
 	return err
 }
 
@@ -253,14 +263,15 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 
 func scanDevice(sc scanner) (core.Device, error) {
 	var device core.Device
-	var hostname, os, arch, version, prefix, lastSeen, owner sql.NullString
+	var hostname, os, arch, version, prefix, lastSeen, owner, machineUID sql.NullString
 	var created string
-	if err := sc.Scan(&device.ID, &device.Name, &hostname, &os, &arch, &version, &prefix, &created, &lastSeen, &owner); err != nil {
+	if err := sc.Scan(&device.ID, &device.Name, &hostname, &os, &arch, &version, &prefix, &created, &lastSeen, &owner, &machineUID); err != nil {
 		return core.Device{}, err
 	}
 	device.Hostname, device.OS, device.Arch, device.Version, device.TokenPrefix = hostname.String, os.String, arch.String, version.String, prefix.String
 	device.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	device.LastSeenAt = nullableTime(lastSeen)
 	device.OwnerAccountID = owner.String
+	device.MachineUID = machineUID.String
 	return device, nil
 }

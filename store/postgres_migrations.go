@@ -385,6 +385,11 @@ CREATE TABLE IF NOT EXISTS super_agent_timers (
 CREATE INDEX IF NOT EXISTS idx_super_agent_timers_due ON super_agent_timers(status,due_at);
 CREATE INDEX IF NOT EXISTS idx_super_agent_timers_agent ON super_agent_timers(super_agent_id,status,updated_at);
 `},
+		// A nullable column with no default: hub replication copies rows
+		// with jsonb_populate_record, which leaves it NULL for rows logged
+		// by a primary that has not upgraded yet, and a standby at the other
+		// schema version stops applying changes until both have this one.
+		{version: 31, name: "machine_identity", sql: deviceMachineUIDMigration},
 	}
 }
 
