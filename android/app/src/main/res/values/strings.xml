@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AgentMux</string>
+    <string name="connect_intro">Open the hub\'s Console on a computer and show the phone link, then scan its QR code.</string>
+    <string name="scan_qr">Scan QR code</string>
+    <string name="scan_prompt">Scan the hub link from the AgentMux Console</string>
+    <string name="or_paste">Or paste the link:</string>
+    <string name="connect">Connect</string>
+    <string name="pinned_certificate">Certificate pinned: %1$s…</string>
+    <string name="login">Login name</string>
+    <string name="password">Password</string>
+    <string name="sign_in">Sign in</string>
+    <string name="use_another_hub">Use another hub</string>
+    <string name="refresh">Refresh</string>
+    <string name="sign_out">Sign out</string>
+    <string name="no_messages">No conversations yet.</string>
+</resources>
