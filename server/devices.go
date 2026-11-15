@@ -15,7 +15,6 @@ import (
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
-	"github.com/wangning19940904/AgentMux/hubha"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	pushpkg "github.com/wangning19940904/AgentMux/push"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -200,6 +199,7 @@ func (s *Server) registerDeviceRoutes() {
 	s.mux.HandleFunc("DELETE /api/v1/devices", s.handleDeviceDelete)
 	s.mux.HandleFunc("POST /api/v1/devices/owner", s.handleDeviceOwner)
 	s.mux.HandleFunc("POST /api/v1/devices/pairing-codes", s.handleDevicePairingCode)
+	s.mux.HandleFunc("GET /api/v1/hub/client-link", s.handleHubClientLink)
 	s.mux.HandleFunc("GET /api/v1/devices/reports", s.handleDeviceReports)
 	s.mux.HandleFunc("GET /api/v1/link", s.handleLinkStatus)
 	s.mux.HandleFunc("POST /api/v1/link/join", s.handleLinkJoin)
@@ -640,13 +640,7 @@ func (s *Server) startHubListener(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hub.addr: %w", err)
 	}
-	mux := http.NewServeMux()
-	s.linkHub.Register(mux)
-	if s.hubHA != nil {
-		// The relay in front of two hubs reaches each through this listener.
-		mux.HandleFunc("POST "+hubha.LeasePath, s.hubHA.controller.ServeLease)
-	}
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
+	server := &http.Server{Handler: s.hubListenerHandler(), ReadHeaderTimeout: 15 * time.Second}
 	secure := s.cfg.Hub.TLS != config.HubTLSOff
 	if secure {
 		if _, _, err := s.hubCertificate(); err != nil {

@@ -297,7 +297,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 // routes when the bridge is on. When the bridge is off, legacy unauthenticated
 // local access remains available, but an explicitly supplied credential is
 // still resolved, so a signed-in member keeps member scope instead of
-// silently inheriting administrator access.
+// silently inheriting administrator access. A client on the hub listener
+// always needs a credential: the open local access is for this machine only.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isObservabilityPath(r.URL.Path) {
@@ -329,7 +330,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			}
 		}
 		if isBridgeAPIPath(r.URL.Path) && !isSelfAuthenticatingPath(r.URL.Path) &&
-			(s.cfg.Bridge.Enabled || hasExplicitCredential(r)) {
+			(s.cfg.Bridge.Enabled || hasExplicitCredential(r) || isHubClient(r)) {
 			principal := s.resolvePrincipal(r)
 			if principal == nil {
 				if strings.HasPrefix(r.URL.Path, "/v1/") {
