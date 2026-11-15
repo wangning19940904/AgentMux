@@ -2079,6 +2079,29 @@ export interface EventDeliveryPage {
   has_more: boolean;
 }
 
+// A machine of the fleet as the primary hub sees it: whether it is connected
+// to the hub right now.
+export interface FleetMachine {
+  id: string;
+  name: string;
+  version?: string;
+  online: boolean;
+  last_seen_at?: string;
+  reported_at?: string;
+  hub_role?: "hub" | "standby";
+}
+
+// GET /api/v1/fleet. "hub" when this machine asked its hub, "local" when it
+// is the hub holding the connections. Stale is the hub's last answer, kept
+// while the hub cannot be reached.
+export interface FleetView {
+  source: "hub" | "local";
+  fetched_at: string;
+  stale?: boolean;
+  error?: string;
+  machines: FleetMachine[];
+}
+
 export interface HubReplicationInfo {
   enabled: boolean;
   // Whether this machine serves as a hub, and its name.

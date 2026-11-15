@@ -12,6 +12,7 @@ import {
   Server,
   ShieldAlert,
   Trash2,
+  WifiOff,
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import {
   api,
   DevicePairingCode,
   DiscoveredRemoteHost,
+  FleetView,
   notifyRemoteHostsChanged,
   RemoteConnectionError,
   RemoteHost,
@@ -28,7 +30,9 @@ import {
 import { useI18n } from "../i18n";
 import { DeleteRemoteHostDialog } from "./DeleteRemoteHostDialog";
 import {
+  fleetOnlyMachines,
   isRemoteUpdateAvailable,
+  linkPresence,
   remoteUpdateCandidates,
   type RemoteHostSnapshot,
 } from "./remoteHostModel";
@@ -89,6 +93,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   // "standby", or "" when it does not serve as one).
   const [localMachine, setLocalMachine] = useState<{ name: string; role: "" | "hub" | "standby" } | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, RemoteHostSnapshot>>({});
+  // The hub's view of which machines are connected, or null before it is
+  // known or where this machine has none.
+  const [fleet, setFleet] = useState<FleetView | null>(null);
   const [pendingFingerprints, setPendingFingerprints] = useState<Record<string, string>>({});
   const [pendingImportFingerprints, setPendingImportFingerprints] = useState<Record<string, string>>({});
   const hostsRequestVersion = useRef(0);
@@ -162,7 +169,16 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     await Promise.allSettled(nextHosts.map((host) => probeHost(host)));
   };
 
+  const loadFleet = async () => {
+    try {
+      setFleet(await api.fleet());
+    } catch {
+      setFleet(null);
+    }
+  };
+
   const load = async (): Promise<RemoteHost[] | null> => {
+    void loadFleet();
     const version = ++hostsRequestVersion.current;
     setLoading(true);
     try {
@@ -217,6 +233,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
       setSyncingSSHConfig(false);
     }
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void loadFleet(), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -941,7 +962,12 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               <div className="remote-host-actions" />
             </article>
           )}
-          {!loading && hosts.length === 0 && (
+          {fleet?.stale && (
+            <div className="remote-feedback error" role="status" title={fleet.error}>
+              {t("remote.fleetStale", { time: new Date(fleet.fetched_at).toLocaleString() })}
+            </div>
+          )}
+          {!loading && hosts.length === 0 && fleetOnlyMachines(hosts, fleet).length === 0 && (
             <div className="empty-state">
               <Laptop size={28} />
               <strong>{t("remote.empty")}</strong>
@@ -950,10 +976,22 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
           )}
           {hosts.map((host) => {
             const pendingFingerprint = pendingFingerprints[host.id];
-            const snapshot = snapshots[host.id] ?? {
-              health: host.trusted ? "checking" as const : "unverified" as const,
+            const probed: RemoteHostSnapshot = snapshots[host.id] ?? {
+              health: host.trusted ? "checking" : "unverified",
             };
             const linked = host.kind === "link";
+            const presence = linkPresence(host, fleet);
+            // A machine connected to no hub is offline whatever a probe says;
+            // one the hub sees connected is healthy even where this machine
+            // cannot reach it itself.
+            const snapshot: RemoteHostSnapshot = presence && !presence.online
+              ? {
+                health: "offline",
+                error: presence.lastSeenAt ? t("remote.lastSeen", { time: new Date(presence.lastSeenAt).toLocaleString() }) : undefined,
+              }
+              : presence?.viaHub && probed.health !== "healthy"
+                ? { health: "healthy", version: presence.version }
+                : probed;
             const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
@@ -966,9 +1004,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               ? t("remote.healthHealthy")
               : snapshot.health === "error"
                 ? t("remote.healthError")
-                : snapshot.health === "unverified"
-                  ? t("remote.healthUnverified")
-                  : t("remote.healthChecking");
+                : snapshot.health === "offline"
+                  ? t("remote.healthOffline")
+                  : snapshot.health === "unverified"
+                    ? t("remote.healthUnverified")
+                    : t("remote.healthChecking");
             return (
               <article key={host.id} className={`remote-host-card${active ? " active" : ""}`}>
                 <div className="remote-host-icon">
@@ -979,7 +1019,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <div>
                       <strong>{host.name}</strong>
                       <span>
-                        {linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
+                        {linked
+                          ? t(presence?.viaHub ? "remote.linkSubtitleViaHub" : "remote.linkSubtitle")
+                          : `${host.user}@${host.host}:${host.port}`}
                         {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
                       </span>
                       {!linked && host.ssh_alias && host.ssh_alias !== host.name && (
@@ -998,7 +1040,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                           ? <RefreshCw size={13} className="spin" />
                           : snapshot.health === "healthy"
                             ? <CheckCircle2 size={13} />
-                            : <ShieldAlert size={13} />}
+                            : snapshot.health === "offline"
+                              ? <WifiOff size={13} />
+                              : <ShieldAlert size={13} />}
                         {healthLabel}
                       </span>
                     </span>
@@ -1055,6 +1099,38 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
               </article>
             );
           })}
+          {fleetOnlyMachines(hosts, fleet).map((machine) => (
+            <article key={machine.id} className="remote-host-card">
+              <div className="remote-host-icon">
+                <Server size={19} />
+              </div>
+              <div className="remote-host-main">
+                <header>
+                  <div>
+                    <strong>{machine.name}</strong>
+                    <span>
+                      {t("remote.fleetViaHub")}
+                      {machine.version && ` · v${machine.version.replace(/^v/, "")}`}
+                      {!machine.online && machine.last_seen_at && ` · ${t("remote.lastSeen", { time: new Date(machine.last_seen_at).toLocaleString() })}`}
+                    </span>
+                  </div>
+                  <span className="remote-host-badges">
+                    {machine.hub_role && (
+                      <span className="status-badge" title={t(machine.hub_role === "hub" ? "remote.hubRoleHubHint" : "remote.hubRoleStandbyHint")}>
+                        <Server size={13} />
+                        {t(machine.hub_role === "hub" ? "remote.hubRoleHub" : "remote.hubRoleStandby")}
+                      </span>
+                    )}
+                    <span className={`status-badge ${machine.online ? "success" : "warning"}`}>
+                      {machine.online ? <CheckCircle2 size={13} /> : <WifiOff size={13} />}
+                      {t(machine.online ? "remote.healthHealthy" : "remote.healthOffline")}
+                    </span>
+                  </span>
+                </header>
+              </div>
+              <div className="remote-host-actions" />
+            </article>
+          ))}
         </div>
       </section>
     </div>

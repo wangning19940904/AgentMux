@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
@@ -134,5 +135,59 @@ func TestWorkerRelayReachesAnotherMachineOfTheSameOwner(t *testing.T) {
 	var devices []superagent.RelayDevice
 	if err := json.Unmarshal(listed.Body.Bytes(), &devices); err != nil || len(devices) != 1 || devices[0].Name != "dev-box" {
 		t.Fatalf("relay devices = %s", listed.Body)
+	}
+}
+
+// A standby hub checks the primary's machines through the primary, and the
+// primary answers for itself.
+func TestWorkerRelayAnswersHealthProbes(t *testing.T) {
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	ids := map[string]string{}
+	for _, name := range []string{"standby", "node", "primary"} {
+		code, err := st.CreateDevicePairingCode(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		device, _, err := st.RedeemDevicePairingCode(ctx, code.Code, core.DeviceInfo{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = device.ID
+	}
+	manager, err := remotepkg.NewManager(filepath.Join(t.TempDir(), "hosts.json"), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetLinkBackend(pipeLinks{st: st, handlers: map[string]http.Handler{
+		ids["standby"]: http.NotFoundHandler(),
+		ids["node"]: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"ok":true,"version":"node-1"}`))
+		}),
+	}})
+	cfg := &config.Config{}
+	cfg.Hub.StateDir = t.TempDir()
+	if err := linkpkg.SaveState(filepath.Join(cfg.Hub.StateDir, hubPeerFile), linkpkg.State{HubURL: "https://hub", Token: "t", DeviceID: ids["primary"]}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{st: st, remote: manager, cfg: cfg, version: "primary-1"}
+	mux := http.NewServeMux()
+	s.registerWorkerRelay(mux)
+	probe := func(target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, superagent.WorkerRelayPrefix+ids[target]+superagent.RelayStatusPath, nil)
+		request = request.WithContext(linkpkg.WithDeviceID(request.Context(), ids["standby"]))
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		return recorder
+	}
+	if got := probe("node"); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"node-1"`) {
+		t.Fatalf("node status = %d %s", got.Code, got.Body)
+	}
+	if got := probe("primary"); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"primary-1"`) {
+		t.Fatalf("hub status = %d %s", got.Code, got.Body)
 	}
 }

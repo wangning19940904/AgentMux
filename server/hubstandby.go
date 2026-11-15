@@ -285,6 +285,7 @@ func (s *Server) saveHubIdentity(identity hubha.Identity) error {
 
 func (s *Server) registerHubStandbyRoutes() {
 	s.mux.HandleFunc("GET /api/v1/hub/replication", s.handleHubReplication)
+	s.mux.HandleFunc("GET /api/v1/fleet", s.handleFleet)
 	s.mux.HandleFunc("POST /api/v1/hub/standby", s.handleHubStandby)
 }
 

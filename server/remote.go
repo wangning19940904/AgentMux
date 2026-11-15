@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	linkpkg "github.com/wangning19940904/AgentMux/link"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 )
 
@@ -264,7 +265,13 @@ func (s *Server) checkRemoteStatus(ctx context.Context, id string) (remotepkg.Te
 	probe := s.remoteStatusChecks.DoChan(id, func() (any, error) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), remoteStatusTimeout)
 		defer cancel()
-		return s.remote.Status(probeCtx, id)
+		result, err := s.remote.Status(probeCtx, id)
+		if err != nil && linkpkg.IsOffline(err) {
+			if relayed, ok := s.relayedStatus(probeCtx, id); ok {
+				return relayed, nil
+			}
+		}
+		return result, err
 	})
 	select {
 	case <-ctx.Done():
