@@ -111,3 +111,71 @@
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
+
+/* Settings → Phone app (pwa/PhoneAppLink.tsx). */
+.phone-app-link {
+  margin-bottom: 14px;
+}
+
+.phone-app-link-body {
+  display: grid;
+  gap: 14px;
+}
+
+.phone-app-link-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.phone-app-link-details {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 12px;
+  min-width: 0;
+}
+
+.phone-app-link-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.phone-app-link-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.phone-app-link-facts dt {
+  color: var(--muted);
+}
+
+.phone-app-link-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.phone-app-link .control-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.phone-app-link-config {
+  margin: 4px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}

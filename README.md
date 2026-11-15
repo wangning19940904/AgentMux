@@ -254,7 +254,8 @@ curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.exampl
 
 **手机 App（原生客户端）。** 开启 `[hub] client_api = true` 后，`[hub] addr` 的端口（及其前面的 relay）也提供 `/api/v1/`，手机 App 不需要 Console 的 HTTPS 地址：
 
-- `GET /api/v1/hub/client-link` 返回 Hub 地址、证书指纹和一个 `agentmux://hub?url=…&fp=…` 链接，Console 可把它显示成二维码；其中没有任何密钥。成员也可调用。
+- Console 的「设置 → 手机 App」把 `GET /api/v1/hub/client-link` 显示成二维码，用 App 的「扫描二维码」扫描即可，也可以复制链接粘贴到 App。链接是 `agentmux://hub?url=…&fp=…`，只含 Hub 地址和证书指纹，没有任何密钥；成员也可调用。
+- Hub 不需要自己的公网 IP：设置了 `[hub] public_url` 时链接用它，指向中转（`amux hub relay`）、隧道或端口转发都可以。地址是回环或 `http://` 时接口拒绝并说明要改什么；局域网或 VPN 地址（如 Tailscale）可以用，但手机须在同一网络。
 - App 校验服务端证书的 SHA-256 等于 `fp`（与设备配对相同；Hub 使用自签证书，不能用系统 CA 校验），然后用 `POST /api/v1/auth/sign-in` 登录，之后每个请求带上会话 Cookie 和 `X-AgentMux-Console: 1` 请求头；也可以用 Bridge Token 作为 `Authorization: Bearer`。
 - 这个端口上的请求一律需要凭证，即使关闭了 bridge，也不会得到本机 Console 的免登录管理员身份；只允许本机调用的接口（如渠道投递、会话控制）在这里始终拒绝，`/api/v1/observability` 不提供。主备 Hub 共用同一证书，账号和会话也随 Hub 数据复制到备用 Hub，切换后 App 不需要重新扫码或登录。
 

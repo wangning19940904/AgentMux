@@ -77,16 +77,35 @@ type hubClientLinkResponse struct {
 	HubURL      string `json:"hub_url"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 	// Link is what the Console shows as a QR code for a phone to scan.
-	Link    string `json:"link"`
+	Link string `json:"link"`
+	// Reach says who can dial HubURL: "public" for any network, "private"
+	// for a phone on the same network or VPN as the hub.
+	Reach   string `json:"reach"`
 	Warning string `json:"warning,omitempty"`
+}
+
+// Reasons a phone link is refused, for the Console to explain.
+const (
+	hubClientLinkDisabled = "disabled" // [hub] addr or client_api is not set
+	hubClientLinkLoopback = "loopback" // the address only works on the hub itself
+	hubClientLinkInsecure = "insecure" // http://; the app only signs in over https
+)
+
+func writeHubClientLinkRefusal(w http.ResponseWriter, reason, message string) {
+	writeJSON(w, http.StatusConflict, map[string]string{"error": message, "reason": reason})
 }
 
 // handleHubClientLink tells a signed-in person where a phone reaches this
 // hub. Nothing in it is secret: the phone still has to sign in.
+//
+// The hub needs no public IP of its own: public_url can name a relay, a
+// tunnel or a forwarded port. What it cannot be is an address the phone
+// never reaches, so a loopback or plain http address is refused rather than
+// shown as a code that fails after scanning.
 func (s *Server) handleHubClientLink(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !s.cfg.Hub.ClientAPI || s.cfg.Hub.Addr == "" {
-		writeErr(w, http.StatusConflict, "phones cannot reach this hub yet; set [hub] addr and [hub] client_api = true")
+		writeHubClientLinkRefusal(w, hubClientLinkDisabled, "phones cannot reach this hub yet; set [hub] addr and [hub] client_api = true")
 		return
 	}
 	address, err := s.hubJoinAddress("", nil)
@@ -94,13 +113,50 @@ func (s *Server) handleHubClientLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	parsed, err := url.Parse(address.url)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	host := parsed.Hostname()
+	switch {
+	case isLoopbackHost(host):
+		writeHubClientLinkRefusal(w, hubClientLinkLoopback, "the hub's address "+address.url+" only works on this machine; set [hub] public_url to an address phones can reach, such as a relay or tunnel")
+		return
+	case parsed.Scheme != "https":
+		writeHubClientLinkRefusal(w, hubClientLinkInsecure, "the phone app signs in only over https, and the hub's address is "+address.url+"; use [hub] tls = \"auto\" or an https public_url")
+		return
+	}
 	query := url.Values{"url": {address.url}}
 	if address.fingerprint != "" {
 		query.Set("fp", address.fingerprint)
 	}
 	link := url.URL{Scheme: hubClientLinkScheme, Host: "hub", RawQuery: query.Encode()}
-	writeJSON(w, http.StatusOK, hubClientLinkResponse{
+	response := hubClientLinkResponse{
 		HubURL: strings.TrimRight(address.url, "/"), Fingerprint: address.fingerprint,
-		Link: link.String(), Warning: address.warning,
-	})
+		Link: link.String(), Reach: "public", Warning: address.warning,
+	}
+	if privateHost(host) {
+		response.Reach = "private"
+		response.Warning = "Phones reach " + host + " only on the same network or VPN as the hub. Set [hub] public_url to a relay or tunnel to connect from anywhere."
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// privateHost reports whether host is only reachable from a local network
+// or VPN: private, shared (CGNAT, as Tailscale uses) and link-local
+// addresses, and mDNS .local names.
+func privateHost(host string) bool {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".local") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	_, shared, _ := net.ParseCIDR("100.64.0.0/10")
+	return shared.Contains(ip)
 }
