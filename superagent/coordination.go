@@ -65,7 +65,9 @@ type ticketView struct {
 	Review string `json:"review,omitempty"`
 	// Moved says where AgentMux ran the Ticket instead of where it was
 	// accepted, and why.
-	Moved    string `json:"moved,omitempty"`
+	Moved string `json:"moved,omitempty"`
+	// Holds is the directory the Ticket holds now.
+	Holds    string `json:"holds,omitempty"`
 	Started  string `json:"started,omitempty"`
 	Updated  string `json:"updated"`
 	Activity string `json:"last_activity,omitempty"`
@@ -123,6 +125,7 @@ type activity struct {
 func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket) routerContext {
 	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent), Statuses: s.workerStatuses(ctx, agent)}
 	view.Health = s.rosterHealth(ctx, agent, view.Statuses)
+	view.Workspaces = s.workspaceViews(ctx, agent)
 	if agent.AutoWorkers {
 		view.LocalTools = s.localTools(agent.WorkerRuntimes)
 	}
@@ -206,6 +209,9 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			entry.Signals = signalLines(ticket)
 		}
 		entry.Review = reviewSummary(ticket)
+		if holdsWorkspace(ticket) {
+			entry.Holds = ticket.Workspace.Dir + " on " + s.machineLabel(ticket.Workspace.HostID)
+		}
 		if moved := ticket.Placement; moved != nil {
 			entry.Moved = fmt.Sprintf("from %s to %s on %s: %s", moved.RequestedWorkerID, moved.WorkerID, firstNonEmpty(moved.Machine, "this machine"), moved.Reason)
 		}

@@ -39,6 +39,32 @@ func (s *Server) RemoteHosts() superagent.HostDialer {
 	return s.remote
 }
 
+// MachineUID returns a machine's UID by remote host id, or this machine's own
+// for "", and "" when it is not known. A host id may name any path to the
+// machine. Workspace claims key directories by it.
+func (s *Server) MachineUID(hostID string) string {
+	if hostID == "" {
+		if s.node == nil {
+			return ""
+		}
+		return s.node.machineUID()
+	}
+	if s.remote == nil {
+		return ""
+	}
+	for _, machine := range s.remote.List() {
+		if machine.ID == hostID {
+			return machine.MachineUID
+		}
+		for _, path := range machine.Paths {
+			if path.HostID == hostID {
+				return machine.MachineUID
+			}
+		}
+	}
+	return ""
+}
+
 // AgentRuntimeAvailable reports whether an Agent can run on this framework here.
 func AgentRuntimeAvailable(id string) bool {
 	return knownAgentRuntime(id) && agentRuntimeAvailable(id)

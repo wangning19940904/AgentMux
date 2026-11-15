@@ -285,6 +285,9 @@ type SuperAgentTicket struct {
 	// Placement is set when the host ran the Ticket somewhere other than
 	// where the brain named (machine_policy flexible).
 	Placement *SuperAgentTicketPlacement `json:"placement,omitempty"`
+	// Workspace is the directory the Ticket's worker writes in, and while
+	// HeldSince is set, the Ticket's claim on it.
+	Workspace *SuperAgentTicketWorkspace `json:"workspace,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -402,6 +405,18 @@ type SuperAgentTicketPlacement struct {
 	Machine           string    `json:"machine,omitempty"`
 	Reason            string    `json:"reason"`
 	At                time.Time `json:"at"`
+}
+
+// SuperAgentTicketWorkspace is where a Ticket's worker writes. Isolated
+// means the worker gets its own copy (a git worktree or the Ticket's own
+// folder), so nothing conflicts. Otherwise the Ticket holds the directory
+// from the start of its first turn (HeldSince) until it is ready, failed or
+// stopped, and no other Ticket may start there meanwhile.
+type SuperAgentTicketWorkspace struct {
+	HostID    string    `json:"host_id,omitempty"`
+	Dir       string    `json:"dir,omitempty"`
+	Isolated  bool      `json:"isolated,omitempty"`
+	HeldSince time.Time `json:"held_since,omitzero"`
 }
 
 // SuperAgentRuntimeHealth is the health record of one framework on one

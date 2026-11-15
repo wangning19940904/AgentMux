@@ -118,6 +118,9 @@ type routerContext struct {
 	// framework's health per machine.
 	Statuses []core.SuperAgentWorkerStatus
 	Health   []core.SuperAgentRuntimeHealth
+	// Workspaces are the directories Tickets hold now on this agent's
+	// machines.
+	Workspaces []workspaceView
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -475,6 +478,10 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		prompt.WriteString("\nPLACEMENT: " + placementNote + "\n")
 	}
 	fmt.Fprintf(prompt, "\nOPEN TICKETS (every thread, newest first):\n%s\n", ticketsJSON)
+	if len(view.Workspaces) > 0 {
+		workspacesJSON, _ := json.MarshalIndent(view.Workspaces, "", "  ")
+		fmt.Fprintf(prompt, "\nDIRECTORIES IN USE (a running ticket holds each; an accept that would write in one is refused unless it depends on that ticket):\n%s\n", workspacesJSON)
+	}
 	if len(view.Places) > 0 {
 		placesJSON, _ := json.MarshalIndent(view.Places, "", "  ")
 		fmt.Fprintf(prompt, "\nPLACES AND PEOPLE (where post can send, and who is there):\n%s\n", placesJSON)

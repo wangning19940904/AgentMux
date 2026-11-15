@@ -1617,7 +1617,21 @@ export interface SuperAgentTicket {
   // Set when AgentMux ran the Ticket somewhere other than where the brain
   // named (machine_policy flexible).
   placement?: SuperAgentTicketPlacement;
+  // The directory the worker writes in; held_since is set while the Ticket
+  // holds it. An isolated worker has its own copy and holds nothing.
+  workspace?: { host_id?: string; dir?: string; isolated?: boolean; held_since?: string };
   updated_at: string;
+}
+
+// A directory a running Ticket holds, on a machine this agent's workers use.
+export interface SuperAgentWorkspaceClaim {
+  ticket_id: string;
+  title: string;
+  agent_id: string;
+  host_id?: string;
+  machine: string;
+  dir: string;
+  since: string;
 }
 
 export interface SuperAgentTicketPlacement {
@@ -1772,6 +1786,9 @@ export interface SuperAgentActivity {
   machines?: SuperAgentMachineStatus[];
   // Each roster framework's health, per machine.
   runtime_health?: SuperAgentRuntimeHealth[];
+  // Directories Tickets hold now: this agent's first, then other agents' on
+  // the same machines.
+  workspace_claims?: SuperAgentWorkspaceClaim[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
   // Timers still set come first, then those that fired or were cancelled
   // lately. timer_warning says when the daily limit is holding due ones back.

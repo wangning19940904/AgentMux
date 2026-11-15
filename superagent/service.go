@@ -110,6 +110,10 @@ type Options struct {
 	// Health is this machine's framework health; nil leaves every framework
 	// here unknown, which holds nothing back.
 	Health LocalHealth
+	// MachineUIDs returns a machine's UID by host id ("" is this machine),
+	// or "" when unknown. Workspace claims use it so one computer reached
+	// several ways counts once; nil keys claims by host id.
+	MachineUIDs func(hostID string) string
 }
 
 // Service owns intake, routing and execution for every Super Agent.
@@ -167,6 +171,7 @@ type Service struct {
 	// placement.go.
 	healthRecords LocalHealth
 	placement     placementCache
+	machineUIDs   func(hostID string) string
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -193,6 +198,9 @@ type Activity struct {
 	// RuntimeHealth is the health of each framework on the roster, per
 	// machine.
 	RuntimeHealth []core.SuperAgentRuntimeHealth `json:"runtime_health,omitempty"`
+	// WorkspaceClaims are the directories Tickets hold now on the machines
+	// this agent's workers use.
+	WorkspaceClaims []WorkspaceClaim `json:"workspace_claims,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -214,6 +222,7 @@ func New(options Options) *Service {
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
+		machineUIDs: options.MachineUIDs,
 	}
 }
 
@@ -533,6 +542,8 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
 	refs := map[string]string{}
 	reviewed := map[string]bool{}
+	// Directories held now, read when an accept first needs them.
+	claims := &claimCheck{s: s, agent: agent}
 	// The thread's and the agent's follow-ups, read when an action first
 	// needs them.
 	var timers *timerLedger
@@ -567,11 +578,14 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			// Where it runs is decided here, so a place that cannot take it
 			// is refused before anything is carried out. decision.Actions
 			// shares its array with the caller's, which apply then reads.
-			placed, err := s.place(ctx, agent, action, nil)
+			placed, err := s.place(ctx, agent, action, func(place workerPlace) string {
+				return claims.conflict(ctx, action, place)
+			})
 			if err != nil {
 				return err
 			}
 			decision.Actions[index].placed = &placed
+			claims.claim(ctx, action, placed.place)
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
 				if strings.TrimSpace(id) == "" {
 					continue
@@ -819,9 +833,18 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		moved = action.placed.moved
 		action.WorkerID = moved.WorkerID
 	}
-	worker, err := s.assignedWorker(ctx, agent, action.WorkerID)
+	worker, workspaceMode, err := s.launchAssigned(ctx, agent, action.WorkerID)
 	if err != nil {
 		return "", err
+	}
+	var workspace *core.SuperAgentTicketWorkspace
+	if place, err := s.placeOf(ctx, agent, action.WorkerID); err == nil {
+		if found, ok := s.workspaceOf(ctx, agent, place); ok {
+			if workspaceMode != "" {
+				found.Isolated = strings.EqualFold(workspaceMode, "worktree")
+			}
+			workspace = &found
+		}
 	}
 	base := strings.TrimSpace(action.BaseTicket)
 	if base == "" && len(action.DependsOn) == 1 {
@@ -846,7 +869,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		DependsOn: action.DependsOn, BaseTicket: base,
 		Instructions: strings.TrimSpace(action.Instructions),
 		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
-		Placement: moved,
+		Placement: moved, Workspace: workspace,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
@@ -861,12 +884,25 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
+	worker, _, err := s.launchAssigned(ctx, agent, workerID)
+	return worker, err
+}
+
+// launchAssigned is assignedWorker that also says, for a worker launched on
+// another machine, how that machine isolates its conversations.
+func (s *Service) launchAssigned(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, string, error) {
 	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
 		if pathID != "" {
-			return s.launchMachineWorker(ctx, agent, runtimeID, pathID)
+			return s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
 		}
-		return s.launchAutoWorker(ctx, agent, runtimeID)
+		worker, err := s.launchAutoWorker(ctx, agent, runtimeID)
+		return worker, "", err
 	}
+	worker, err := s.rosterWorker(agent, workerID)
+	return worker, "", err
+}
+
+func (s *Service) rosterWorker(agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
 	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID })
 	if index < 0 {
 		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q, which is not on the roster", workerID)
@@ -972,6 +1008,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 	}
 	ticket.UpdatedAt = s.now().UTC()
 	closeSignals(ticket, ticket.UpdatedAt)
+	releaseWorkspace(ticket)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -985,7 +1022,21 @@ func (s *Service) startQueued(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A Ticket whose directory another one holds waits for it. Claims taken
+	// in this pass count too, before their Tickets record them.
+	var holders map[string]core.SuperAgentTicket
+	if slices.ContainsFunc(queued, needsWorkspace) {
+		if holders, err = s.workspaceHolders(ctx); err != nil {
+			return err
+		}
+	}
 	for _, ticket := range queued {
+		if needsWorkspace(ticket) && ticket.Workspace.HeldSince.IsZero() {
+			key := s.workspaceKey(*ticket.Workspace)
+			if holder, held := holders[key]; held && holder.ID != ticket.ID {
+				continue
+			}
+		}
 		agent, err := s.store.GetSuperAgent(ctx, ticket.SuperAgentID)
 		if err != nil {
 			return err
@@ -1009,6 +1060,9 @@ func (s *Service) startQueued(ctx context.Context) error {
 		runCtx, cancel := context.WithTimeout(ctx, workerTimeout)
 		s.running[agent.ID+"|"+ticket.ID] = cancel
 		s.mu.Unlock()
+		if needsWorkspace(ticket) {
+			holders[s.workspaceKey(*ticket.Workspace)] = ticket
+		}
 		s.wg.Add(1)
 		go func(agent core.SuperAgent, ticketID string) {
 			defer s.wg.Done()
@@ -1042,6 +1096,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		current.Attempts++
 		if current.StartedAt.IsZero() {
 			current.StartedAt = s.now().UTC()
+		}
+		if needsWorkspace(*current) && current.Workspace.HeldSince.IsZero() {
+			current.Workspace.HeldSince = s.now().UTC()
 		}
 		s.turnStarts[ticketID] = s.now().UTC()
 		delivered = len(current.Inputs)
@@ -1179,6 +1236,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
 	closeSignals(ticket, now)
+	releaseWorkspace(ticket)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -1264,6 +1322,7 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 		Sources: map[string]SourceHealth{}, Timers: timers, TimerWarning: timerWarning,
 	}
 	activity.RuntimeHealth = s.rosterHealth(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
+	activity.WorkspaceClaims = s.workspaceClaims(ctx, *agent)
 	s.mu.Lock()
 	for _, source := range agent.Sources {
 		activity.Sources[source.ID] = s.health[source.ID]

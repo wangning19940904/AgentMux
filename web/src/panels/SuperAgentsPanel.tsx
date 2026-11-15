@@ -182,6 +182,9 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         </span>
                       </header>
                       <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.worker.host_id)?.name ?? t("superAgents.remote")) : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
+                      {ticket.workspace?.held_since && ["queued", "running"].includes(ticket.status) && (
+                        <small className="super-agent-ticket-holds">{t("superAgents.ticketHolds", { dir: ticket.workspace.dir ?? "", machine: ticket.workspace.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.workspace?.host_id)?.name ?? ticket.workspace.host_id) : t("superAgents.thisMachine") })}</small>
+                      )}
                       {ticket.placement && (
                         <small className="super-agent-ticket-moved" title={ticket.placement.reason}>
                           {t("superAgents.ticketMoved", { from: ticket.placement.requested_worker_id, to: ticket.placement.worker_id, machine: ticket.placement.machine || t("superAgents.thisMachine") })}: {ticket.placement.reason}
@@ -228,6 +231,21 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     </article>
                   ))}
                 </div>
+
+                {(activity.data?.workspace_claims ?? []).length > 0 && (
+                  <>
+                    <h4>{t("superAgents.workspaceClaims")}</h4>
+                    <div className="orchestration-task-list super-agent-workspace-claims">
+                      {(activity.data?.workspace_claims ?? []).map((claim) => (
+                        <article key={`${claim.ticket_id}-${claim.dir}`}>
+                          <header><strong>{claim.dir}</strong><span className="status-badge status-running">{claim.host_id ? claim.machine : t("superAgents.thisMachine")}</span></header>
+                          <small>{claim.title} · {claim.ticket_id}{claim.agent_id !== selected.id ? ` · ${t("superAgents.workspaceClaimOther", { agent: claim.agent_id })}` : ""}</small>
+                          <time>{time(claim.since)}</time>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                )}
 
                 {((activity.data?.timers ?? []).length > 0 || activity.data?.timer_warning) && (
                   <>

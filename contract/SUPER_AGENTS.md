@@ -316,6 +316,44 @@ into account. Placement reads stored records; it never runs a check of its own.
 - **The Console** shows a mark beside each failing or usage-limited framework on the
   agent's roster (`runtime_health` in the activity response), and the move on a Ticket.
 
+## Workspace claims
+
+Two Tickets never write in the same directory at once.
+
+- **What is claimed.** A Ticket records where its worker writes (`workspace`: `host_id`,
+  `dir`, `isolated`, `held_since`) when it is accepted. A worker that gets its own copy
+  holds nothing: an auto worker or roster Agent in a git repository (a per-conversation
+  worktree), an auto worker given no directory (each Ticket's own `work/` folder), and a
+  roster Agent whose workspace mode is `worktree`. On another machine, whether the
+  directory is a git repository is what that machine says when it launches the worker.
+  A roster Agent whose directory cannot be read holds nothing.
+- **Keyed by machine and directory.** The machine is its machine UID when known, so a
+  computer reached over SSH, the node link and the hub relay counts once; otherwise the
+  way this machine reaches it. A directory here is compared expanded; one on another
+  machine as the operator wrote it, and an empty one as that machine's default worker
+  directory.
+- **How long.** From the start of the Ticket's first turn until it is ready, failed or
+  stopped. Retries, follow-ups during a turn, and a daemon restart keep the claim:
+  claims are read from the stored Tickets, with no table of their own. A ready Ticket
+  that gets new input claims the directory again when its next turn starts.
+- **An accept for a held directory is refused** before anything is carried out, naming
+  the holding Ticket (any agent's on that machine) and when it took the directory, so the
+  brain can give the new Ticket `depends_on` that Ticket, choose another worker, or wait.
+  An accept that depends on the holder, directly or through other Tickets, is allowed.
+  Two accepts in one block for the same directory are refused unless the second depends
+  on the first's `ref`. With `machine_policy` `flexible`, a held directory is one more
+  reason to move the Ticket.
+- **A queued Ticket whose directory is held waits** until it is free, as a Ticket with
+  unmet dependencies does.
+- **What the brain sees.** `DIRECTORIES IN USE` lists each held directory on the agent's
+  machines (`dir`, `machine`, `ticket_id`, `title`, `agent` when another agent's, `since`),
+  and a holding Ticket shows `holds` in OPEN TICKETS. The Console shows the same list as
+  "Directories in use" (`workspace_claims` in the activity response) and the directory on
+  the holding Ticket.
+- **Not covered:** two different spellings of one directory on another machine (`~/code`
+  and `/Users/me/code`) are two directories; claims of agents on other machines are not
+  seen.
+
 ## What the host enforces
 
 The router reads untrusted text. What limits the harm a crafted event can do:
@@ -743,7 +781,7 @@ These routes are for Console administrators and are closed to member accounts.
 | Method and path | Purpose |
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
-| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours, and `runtime_health`: each roster framework's health per machine (`host_id`, `runtime`, `state`, `reason`, `resets_at`) |
+| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours, `runtime_health`: each roster framework's health per machine (`host_id`, `runtime`, `state`, `reason`, `resets_at`), and `workspace_claims`: the directories Tickets hold now on the agent's machines (`ticket_id`, `title`, `agent_id`, `host_id`, `machine`, `dir`, `since`) |
 | `GET /api/v1/super-agents/prompts` | The built-in prompt parts with their default text |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |

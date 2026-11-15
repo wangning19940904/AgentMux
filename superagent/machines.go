@@ -306,23 +306,30 @@ func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID strin
 // applies its own checks to them and answers with the Agent it keeps for this
 // agent.
 func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, error) {
+	worker, _, err := s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
+	return worker, err
+}
+
+// launchMachineWorkerMode is launchMachineWorker that also returns how
+// another machine isolates the worker's conversations ("" on this machine).
+func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, string, error) {
 	workerID := machineWorkerRosterID(runtimeID, pathID)
 	if err := checkMachineWorker(agent, workerID, runtimeID, pathID); err != nil {
-		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q: %w", workerID, err)
+		return core.SuperAgentWorker{}, "", fmt.Errorf("router chose worker %q: %w", workerID, err)
 	}
 	machine, _ := agentMachine(agent, pathID)
 	if machine.HostID == "" {
 		dir, err := expandHome(machine.Dir)
 		if err != nil {
-			return core.SuperAgentWorker{}, err
+			return core.SuperAgentWorker{}, "", err
 		}
 		worker, err := s.launchLocalWorker(ctx, agent, runtimeID, pathID, dir)
 		worker.ID = workerID
-		return worker, err
+		return worker, "", err
 	}
 	fleet := s.machineFleet()
 	if fleet == nil {
-		return core.SuperAgentWorker{}, errors.New("this AgentMux has no other machines to launch workers on")
+		return core.SuperAgentWorker{}, "", errors.New("this AgentMux has no other machines to launch workers on")
 	}
 	request := core.HostedWorkerRequest{
 		OwnerID: agent.ID, OwnerName: agent.Name, RuntimeID: runtimeID,
@@ -337,9 +344,9 @@ func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent
 	defer cancel()
 	hosted, err := fleet.Launch(launchCtx, machine.HostID, request)
 	if err != nil {
-		return core.SuperAgentWorker{}, err
+		return core.SuperAgentWorker{}, "", err
 	}
-	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, nil
+	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, hosted.WorkspaceMode, nil
 }
 
 // releaseMachineWorkers has machines drop the workers they keep for an agent.

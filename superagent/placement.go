@@ -67,6 +67,8 @@ type placementCache struct {
 	mu       sync.Mutex
 	machines map[string]machineInfo
 	failures map[string]health.Record
+	// uids are machine UIDs by host id, for workspace claims.
+	uids map[string]cachedUID
 }
 
 func failureKey(hostID, runtime string) string { return hostID + "|" + runtime }

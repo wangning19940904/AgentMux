@@ -759,6 +759,23 @@ describe("SuperAgentsPanel", () => {
     expect(container.querySelector(".super-agent-ticket-moved")?.textContent).toBe("Moved from auto:codex to auto:kimi on this machine: codex on this machine is usage-limited");
   });
 
+  it("lists the directories tickets hold and marks the holding ticket", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      tickets: [{ id: "t5", title: "Edits docs", status: "running", worker: { id: "auto:codex", agent_id: "saw_sa_1_codex" },
+        workspace: { dir: "/srv/docs", held_since: "2026-11-03T00:00:00Z" }, updated_at: "2026-11-03T00:00:00Z" }],
+      workspace_claims: [
+        { ticket_id: "t5", title: "Edits docs", agent_id: saved.id, machine: "this machine", dir: "/srv/docs", since: "2026-11-03T00:00:00Z" },
+        { ticket_id: "t9", title: "Other work", agent_id: "ops", host_id: "h1", machine: "GPU box", dir: "~/code", since: "2026-11-03T00:00:00Z" },
+      ],
+    });
+    renderPanel();
+    await until(() => hasText("Directories in use"));
+    expect(container.querySelector(".super-agent-ticket-holds")?.textContent).toBe("Holds /srv/docs on This machine");
+    const claims = [...container.querySelectorAll(".super-agent-workspace-claims article small")].map((item) => item.textContent);
+    expect(claims).toEqual(["Edits docs · t5", "Other work · t9 · agent ops"]);
+  });
+
   it("lets an agent launch workers on another machine, and names the machine on its tickets", async () => {
     vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
     vi.spyOn(api, "superAgentActivity").mockResolvedValue({
