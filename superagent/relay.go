@@ -21,6 +21,9 @@ import (
 const (
 	WorkerRelayPrefix      = "/uplink/v1/relay/"
 	WorkerRelayDevicesPath = "/uplink/v1/relay-devices"
+	// RelayStatusPath is the health probe: a standby hub, whose machines are
+	// linked to the primary rather than to it, checks them this way.
+	RelayStatusPath = "/api/v1/status"
 
 	relayDevicesTTL = 30 * time.Second
 )
@@ -41,7 +44,8 @@ type RelayDevice struct {
 // RelayAllowed reports whether a worker API call may travel through the hub.
 func RelayAllowed(method, path string) bool {
 	switch method + " " + path {
-	case "GET /api/v1/agents",
+	case "GET " + RelayStatusPath,
+		"GET /api/v1/agents",
 		"GET /api/v1/agent-instances",
 		"GET " + workerToolsPath,
 		"GET " + frameworkHealthPath,

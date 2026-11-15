@@ -57,6 +57,11 @@ type Server struct {
 	obs                *observabilityRuntime
 	remote             *remotepkg.Manager
 	remoteStatusChecks singleflight.Group
+	fleet              fleetCache
+	// primaryHubForTest and standbyForTest stand in for the hub lease and
+	// the standby's record, which need PostgreSQL.
+	primaryHubForTest  *bool
+	standbyForTest     string
 	linkHub            *linkpkg.Hub
 	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service

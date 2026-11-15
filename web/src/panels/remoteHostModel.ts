@@ -1,6 +1,6 @@
-import type { RemoteHost } from "../api";
+import type { FleetMachine, FleetView, RemoteHost } from "../api";
 
-export type RemoteHealthState = "checking" | "healthy" | "error" | "unverified";
+export type RemoteHealthState = "checking" | "healthy" | "error" | "unverified" | "offline";
 
 export type RemoteHostSnapshot = {
   health: RemoteHealthState;
@@ -65,4 +65,34 @@ export function remoteUpdateCandidates(
       isRemoteUpdateAvailable(snapshot.version, localVersion),
     );
   });
+}
+
+// LinkPresence is whether a linked machine is connected to the hub, from the
+// hub's own list when this machine follows a hub, or from this hub's
+// connections when it is the hub.
+export type LinkPresence = {
+  online: boolean;
+  lastSeenAt?: string;
+  version?: string;
+  viaHub: boolean;
+};
+
+export function linkPresence(host: RemoteHost, fleet: FleetView | null): LinkPresence | undefined {
+  if (host.kind !== "link") return undefined;
+  if (fleet?.source === "hub") {
+    const machine = fleet.machines.find((item) => item.id === host.id);
+    if (machine) {
+      return { online: machine.online, lastSeenAt: machine.last_seen_at, version: machine.version, viaHub: true };
+    }
+  }
+  if (host.online === undefined) return undefined;
+  return { online: host.online, lastSeenAt: host.last_seen_at, version: host.version, viaHub: false };
+}
+
+// fleetOnlyMachines are the machines the hub knows that this machine does
+// not list itself, such as the other nodes seen from a node.
+export function fleetOnlyMachines(hosts: RemoteHost[], fleet: FleetView | null): FleetMachine[] {
+  if (fleet?.source !== "hub") return [];
+  const known = new Set(hosts.map((host) => host.id));
+  return fleet.machines.filter((machine) => !known.has(machine.id));
 }

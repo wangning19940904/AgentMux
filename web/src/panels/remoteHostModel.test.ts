@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RemoteHost } from "../api";
-import { isRemoteUpdateAvailable, remoteUpdateCandidates } from "./remoteHostModel";
+import { fleetOnlyMachines, isRemoteUpdateAvailable, linkPresence, remoteUpdateCandidates } from "./remoteHostModel";
+import type { FleetView } from "../api";
 
 const host = (id: string, trusted = true): RemoteHost => ({
   id,
@@ -51,5 +52,33 @@ describe("remote update candidates", () => {
   it("leaves out a linked machine, which has no SSH connection to update through", () => {
     const linked = { ...host("linked"), kind: "link" as const };
     expect(remoteUpdateCandidates([linked], { linked: { health: "healthy", version: "0.1.3" } }, "0.1.4")).toEqual([]);
+  });
+});
+
+describe("fleet presence", () => {
+  const linked = (id: string, online?: boolean): RemoteHost => ({ ...host(id), kind: "link", online });
+  const fleet: FleetView = {
+    source: "hub",
+    fetched_at: "2026-11-15T01:00:00Z",
+    machines: [
+      { id: "node", name: "node", online: true, version: "0.1.0" },
+      { id: "gone", name: "gone", online: false, last_seen_at: "2026-11-14T01:00:00Z" },
+      { id: "hub", name: "primary", online: true, hub_role: "hub" },
+    ],
+  };
+
+  it("takes a linked machine's presence from the hub when this machine follows one", () => {
+    expect(linkPresence(linked("node", false), fleet)).toMatchObject({ online: true, viaHub: true });
+    expect(linkPresence(linked("gone", false), fleet)).toMatchObject({ online: false, lastSeenAt: "2026-11-14T01:00:00Z" });
+  });
+
+  it("uses this hub's own connections otherwise, and nothing for SSH machines", () => {
+    expect(linkPresence(linked("node", false), { ...fleet, source: "local" })).toMatchObject({ online: false, viaHub: false });
+    expect(linkPresence(host("ssh"), fleet)).toBeUndefined();
+  });
+
+  it("lists the machines only the hub knows", () => {
+    expect(fleetOnlyMachines([linked("node")], fleet).map((machine) => machine.id)).toEqual(["gone", "hub"]);
+    expect(fleetOnlyMachines([], { ...fleet, source: "local" })).toEqual([]);
   });
 });

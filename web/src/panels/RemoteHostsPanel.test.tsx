@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
     remoteHosts: vi.fn(),
     localStatus: vi.fn(),
     hubReplication: vi.fn(),
+    fleet: vi.fn(),
     statusRemoteHost: vi.fn(),
     deleteRemoteHost: vi.fn(),
     syncRemoteHostsFromSSHConfig: vi.fn(),
@@ -78,6 +79,7 @@ beforeEach(async () => {
   vi.mocked(api.remoteHosts).mockResolvedValue(hosts);
   vi.mocked(api.localStatus).mockResolvedValue({ version: "0.1.8" } as Awaited<ReturnType<typeof api.localStatus>>);
   vi.mocked(api.hubReplication).mockResolvedValue({ enabled: false });
+  vi.mocked(api.fleet).mockRejectedValue(new Error("no fleet"));
   vi.mocked(api.statusRemoteHost).mockResolvedValue({ status: { version: "0.1.8" } } as Awaited<ReturnType<typeof api.statusRemoteHost>>);
   container = document.createElement("div");
   document.body.append(container);
@@ -234,6 +236,29 @@ describe("SSH machine deletion in the desktop console", () => {
 });
 
 describe("machines that connect to the hub themselves", () => {
+  it("shows on a standby what the primary hub sees, not its own failed probes", async () => {
+    const linked = (id: string, name: string): RemoteHost => ({ id, name, host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: false });
+    vi.mocked(api.remoteHosts).mockResolvedValue([linked("dev_up", "up-box"), linked("dev_down", "down-box")]);
+    vi.mocked(api.statusRemoteHost).mockRejectedValue(new Error("device is offline"));
+    vi.mocked(api.fleet).mockResolvedValue({
+      source: "hub",
+      fetched_at: "2026-11-15T01:00:00Z",
+      machines: [
+        { id: "dev_up", name: "up-box", online: true },
+        { id: "dev_down", name: "down-box", online: false, last_seen_at: "2026-11-14T01:00:00Z" },
+        { id: "dev_node", name: "other-node", online: true, version: "0.1.0" },
+      ],
+    });
+    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="standby" /></I18nProvider>); });
+    const row = (name: string) => Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes(name))!;
+    expect(row("up-box").textContent).toContain("健康");
+    expect(row("up-box").textContent).toContain("连接到 Hub");
+    expect(row("down-box").textContent).toContain("离线");
+    expect(row("down-box").textContent).not.toContain("异常");
+    expect(row("other-node").textContent).toContain("经由 Hub 获知");
+    expect(row("other-node").querySelectorAll("button")).toHaveLength(0);
+  });
+
   it("shows a linked machine without SSH details or SSH-only actions", async () => {
     const linked: RemoteHost = { id: "dev_1", name: "home-box", host: "", port: 0, user: "", remote_addr: "", trusted: true, kind: "link", online: true };
     vi.mocked(api.remoteHosts).mockResolvedValue([hosts[0], linked]);

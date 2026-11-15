@@ -42,6 +42,14 @@ type deviceBackend struct {
 	hubRoles func(ctx context.Context) map[string]string
 	// passiveRefresh tells the hub's dialer the listening devices changed.
 	passiveRefresh func()
+	// following reports whether this machine follows another hub over its
+	// own link, as a standby does. Devices then connect to that hub, not
+	// here, so none is worth waiting for.
+	following func() bool
+	// viaHub opens a stream through the primary hub to a machine linked to
+	// it, and presence says which machines are linked to it, for a standby.
+	viaHub   func(ctx context.Context, id string) (net.Conn, error)
+	presence func(ctx context.Context) map[string]bool
 }
 
 func (b *deviceBackend) isSelf(id string) bool {
@@ -55,8 +63,16 @@ func (b *deviceBackend) roles(ctx context.Context) map[string]string {
 	return b.hubRoles(ctx)
 }
 
-func (b *deviceBackend) linked(device core.Device, roles map[string]string, passive map[string]bool) remotepkg.LinkedDevice {
+func (b *deviceBackend) hubPresence(ctx context.Context) map[string]bool {
+	if b.presence == nil {
+		return nil
+	}
+	return b.presence(ctx)
+}
+
+func (b *deviceBackend) linked(device core.Device, roles map[string]string, passive, presence map[string]bool) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
+	online = online || presence[device.ID]
 	linked := remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
 		HubRole: roles[device.ID], MachineUID: device.MachineUID}
 	if passive[device.ID] {
@@ -88,12 +104,13 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 	latest := b.lastReports(ctx)
 	roles := b.roles(ctx)
 	passive := b.passiveSet(ctx)
+	presence := b.hubPresence(ctx)
 	out := make([]remotepkg.LinkedDevice, 0, len(devices))
 	for _, device := range devices {
 		if b.isSelf(device.ID) {
 			continue
 		}
-		linked := b.linked(device, roles, passive)
+		linked := b.linked(device, roles, passive, presence)
 		if at, ok := latest[device.ID]; ok {
 			linked.ReportedAt = &at
 		}
@@ -111,7 +128,7 @@ func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.Linked
 		return remotepkg.LinkedDevice{}, false
 	}
 	link, _ := b.st.PassiveLink(ctx, id)
-	return b.linked(*device, b.roles(ctx), map[string]bool{id: link != nil}), true
+	return b.linked(*device, b.roles(ctx), map[string]bool{id: link != nil}, b.hubPresence(ctx)), true
 }
 
 const (
@@ -132,6 +149,9 @@ const (
 // machine as offline.
 func (b *deviceBackend) Dial(ctx context.Context, id string) (net.Conn, error) {
 	conn, err := b.hub.Dial(ctx, id)
+	if err != nil && linkpkg.IsOffline(err) && b.viaHub != nil && b.following != nil && b.following() {
+		return b.viaHub(ctx, id)
+	}
 	if err == nil || !linkpkg.IsOffline(err) || !b.expectingReconnect(ctx, id) {
 		return conn, err
 	}
@@ -149,6 +169,9 @@ func (b *deviceBackend) Dial(ctx context.Context, id string) (net.Conn, error) {
 }
 
 func (b *deviceBackend) expectingReconnect(ctx context.Context, id string) bool {
+	if b.following != nil && b.following() {
+		return false
+	}
 	started := b.hub.StartedAt()
 	if time.Since(started) > reconnectGrace {
 		return false
@@ -198,7 +221,8 @@ func (s *Server) setupLink() {
 		}
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
-	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels}
+	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels,
+		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence}
 	s.setupPassiveLink()
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
@@ -335,7 +359,7 @@ func (s *Server) reportedResponse(ctx context.Context, deviceID, method, path st
 	if s.linkHub == nil || method != http.MethodGet {
 		return nil, time.Time{}, false
 	}
-	if _, online := s.linkHub.Connection(deviceID); online {
+	if s.deviceOnline(ctx, deviceID) {
 		return nil, time.Time{}, false
 	}
 	payload, at, ok, err := s.st.DeviceReportedResponse(ctx, deviceID, path)

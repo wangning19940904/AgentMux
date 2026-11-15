@@ -25,6 +25,14 @@ GET /uplink/v1/relay-devices
 POST /uplink/v1/dispatch/start
 POST /uplink/v1/dispatch/read
 
+# Which machines are connected to the primary hub (server/fleet_presence.go):
+# a standby or a node asks, and shows the answer beside its machine list.
+GET /uplink/v1/fleet
+
+# The primary opens a stream to one of its machines for its standby
+# (server/standby_tunnel.go), so the standby's pages reach machines live.
+GET /uplink/v1/standby/dial/{id}
+
 # The standby hub's feed (hubha/feed.go), mounted by prefix in
 # server/hubstandby.go.
 prefix /uplink/v1/hub/

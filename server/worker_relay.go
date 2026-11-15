@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
@@ -84,6 +87,12 @@ func (s *Server) handleWorkerRelay(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such machine")
 		return
 	}
+	// The hub is paired too, so a standby lists it among its machines; it
+	// answers the health probe for itself.
+	if targetPath == superagent.RelayStatusPath && targetID == s.hubPeerDeviceID() {
+		s.handleStatus(w, r)
+		return
+	}
 	host, known := s.remote.Get(targetID)
 	if !known || host.Kind != remotepkg.KindLink {
 		writeErr(w, http.StatusNotFound, "no such machine")
@@ -117,4 +126,34 @@ func (s *Server) handleWorkerRelay(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// relayedStatus asks this machine's hub for a linked machine's status. A
+// standby hub keeps the primary's machine list, but those machines link to
+// the primary, so the standby cannot reach them itself.
+func (s *Server) relayedStatus(ctx context.Context, id string) (remotepkg.TestResult, bool) {
+	uplink := s.HubRelay().Uplink()
+	if uplink == nil {
+		return remotepkg.TestResult{}, false
+	}
+	started := time.Now()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://hub"+superagent.WorkerRelayPrefix+url.PathEscape(id)+superagent.RelayStatusPath, nil)
+	if err != nil {
+		return remotepkg.TestResult{}, false
+	}
+	response, err := uplink.RoundTrip(request)
+	if err != nil {
+		return remotepkg.TestResult{}, false
+	}
+	defer response.Body.Close()
+	var status map[string]any
+	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&status) != nil {
+		return remotepkg.TestResult{}, false
+	}
+	name := id
+	if host, known := s.remote.Get(id); known {
+		name = host.Name
+	}
+	return remotepkg.TestResult{OK: true, Name: name, LatencyMS: time.Since(started).Milliseconds(), Status: status}, true
 }

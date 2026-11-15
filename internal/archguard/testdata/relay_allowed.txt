@@ -4,6 +4,9 @@
 # source and checked against the function. "METHOD /path", one a line; see
 # docs/architecture/guards.md "The hub's surface".
 
+# The health probe: a standby hub checks the machines linked to the primary.
+GET /api/v1/status
+
 # What a router reads to pick a worker.
 GET /api/v1/agents
 GET /api/v1/agent-instances
