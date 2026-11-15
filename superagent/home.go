@@ -243,28 +243,31 @@ func linkTicketWork(dir string, placement ticketPlacement) error {
 // ticketRecord is ticket.json: the Ticket without the inputs, output and
 // reply routing, which live in their own files or stay with AgentMux.
 type ticketRecord struct {
-	ID             string                `json:"id"`
-	SuperAgentID   string                `json:"super_agent_id"`
-	Title          string                `json:"title"`
-	Status         string                `json:"status"`
-	SourceKind     string                `json:"source_kind"`
-	ThreadKey      string                `json:"thread_key"`
-	Actor          string                `json:"actor,omitempty"`
-	Worker         core.SuperAgentWorker `json:"worker"`
-	ConversationID string                `json:"conversation_id"`
-	WorkDir        string                `json:"work_dir,omitempty"`
-	DependsOn      []string              `json:"depends_on,omitempty"`
-	BaseTicket     string                `json:"base_ticket,omitempty"`
-	DoneWhen       []string              `json:"done_when,omitempty"`
-	ExpectMinutes  int                   `json:"expect_minutes,omitempty"`
-	LinkedThreads  []string              `json:"linked_threads,omitempty"`
-	Attempts       int                   `json:"attempts"`
-	Error          string                `json:"error,omitempty"`
-	ReplyError     string                `json:"reply_error,omitempty"`
-	CreatedAt      time.Time             `json:"created_at"`
-	StartedAt      time.Time             `json:"started_at,omitzero"`
-	FinishedAt     time.Time             `json:"finished_at,omitzero"`
-	UpdatedAt      time.Time             `json:"updated_at"`
+	ID             string                        `json:"id"`
+	SuperAgentID   string                        `json:"super_agent_id"`
+	Title          string                        `json:"title"`
+	Status         string                        `json:"status"`
+	SourceKind     string                        `json:"source_kind"`
+	ThreadKey      string                        `json:"thread_key"`
+	Actor          string                        `json:"actor,omitempty"`
+	Worker         core.SuperAgentWorker         `json:"worker"`
+	ConversationID string                        `json:"conversation_id"`
+	WorkDir        string                        `json:"work_dir,omitempty"`
+	DependsOn      []string                      `json:"depends_on,omitempty"`
+	BaseTicket     string                        `json:"base_ticket,omitempty"`
+	DoneWhen       []string                      `json:"done_when,omitempty"`
+	ExpectMinutes  int                           `json:"expect_minutes,omitempty"`
+	Signals        []core.SuperAgentTicketSignal `json:"signals,omitempty"`
+	Reviews        []core.SuperAgentTicketReview `json:"reviews,omitempty"`
+	ReworkRounds   int                           `json:"rework_rounds,omitempty"`
+	LinkedThreads  []string                      `json:"linked_threads,omitempty"`
+	Attempts       int                           `json:"attempts"`
+	Error          string                        `json:"error,omitempty"`
+	ReplyError     string                        `json:"reply_error,omitempty"`
+	CreatedAt      time.Time                     `json:"created_at"`
+	StartedAt      time.Time                     `json:"started_at,omitzero"`
+	FinishedAt     time.Time                     `json:"finished_at,omitzero"`
+	UpdatedAt      time.Time                     `json:"updated_at"`
 }
 
 // recordTicket rewrites ticket.json. The store stays the source of truth, so
@@ -284,6 +287,7 @@ func (s *Service) recordTicket(ctx context.Context, ticket core.SuperAgentTicket
 		ConversationID: ticket.ConversationID, WorkDir: placement.WorkDir, Attempts: ticket.Attempts,
 		DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
 		DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
+		Signals: ticket.Signals, Reviews: ticket.Reviews, ReworkRounds: ticket.ReworkRounds,
 		Error: ticket.Error, ReplyError: ticket.ReplyError, CreatedAt: ticket.CreatedAt,
 		StartedAt: ticket.StartedAt, FinishedAt: ticket.FinishedAt, UpdatedAt: ticket.UpdatedAt,
 	}

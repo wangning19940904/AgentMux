@@ -522,6 +522,7 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 // same decision.
 func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
 	refs := map[string]string{}
+	reviewed := map[string]bool{}
 	// The thread's and the agent's follow-ups, read when an action first
 	// needs them.
 	var timers *timerLedger
@@ -613,6 +614,10 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 				return err
 			}
 			counts.cancel(timer.ID)
+		case actionReview:
+			if err := s.preflightReview(ctx, agent, trigger, action, reviewed); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -651,8 +656,8 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 		return id
 	}
-	var accepted, attached, stopped, posted bool
-	var ticketIDs, problems, reasons []string
+	var accepted, attached, stopped, posted, reviewed bool
+	var ticketIDs, problems, reasons, notices []string
 	if decision.Reason != "" {
 		reasons = append(reasons, decision.Reason)
 	}
@@ -732,6 +737,22 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if cancelled, err = s.cancelTimer(ctx, strings.TrimSpace(action.TimerID)); cancelled {
 				reasons = append(reasons, "cancelled follow-up "+strings.TrimSpace(action.TimerID))
 			}
+		case actionReview:
+			id := strings.TrimSpace(action.TicketID)
+			var outcome reviewOutcome
+			if outcome, err = s.review(ctx, trigger, id, action); err == nil {
+				reviewed = true
+				attached = attached || outcome.rework
+				ticketIDs = append(ticketIDs, id)
+				if outcome.notice != "" {
+					notices = append(notices, outcome.notice)
+				}
+				if outcome.refused != "" {
+					reasons = append(reasons, "refused a rework of "+id+": "+outcome.refused)
+				} else {
+					reasons = append(reasons, "reviewed "+id+": "+reviewVerdict(action))
+				}
+			}
 		}
 		if err != nil {
 			s.log.Error("apply router action", "trigger", trigger.ID, "action", action.Action, "err", err)
@@ -739,6 +760,13 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 	}
 	sendReply()
+	// What AgentMux itself must tell the thread, such as a ticket that needs
+	// a decision, goes after the brain's reply, in a message of its own.
+	for _, notice := range notices {
+		if err := s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, notice); err != nil {
+			problems = append(problems, "notice: "+err.Error())
+		}
+	}
 	disposition := core.SuperAgentDispositionIgnored
 	switch {
 	case accepted:
@@ -747,7 +775,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		disposition = core.SuperAgentDispositionFollowUp
 	case stopped:
 		disposition = core.SuperAgentDispositionStopped
-	case reply != "" || posted:
+	case reply != "" || posted || reviewed:
 		disposition = core.SuperAgentDispositionAnswered
 	case len(problems) > 0:
 		disposition = core.SuperAgentDispositionFailed

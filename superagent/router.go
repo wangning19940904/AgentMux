@@ -25,6 +25,9 @@ const (
 	// event's thread; see timers.go.
 	actionFollowUp    = "follow_up"
 	actionCancelTimer = "cancel_timer"
+	// actionReview is the brain's verdict on a Ticket on the event's thread;
+	// see review.go.
+	actionReview = "review"
 )
 
 const recoveryNote = "AgentMux restarted while you were working on this ticket. Check the current state of your work, then continue."
@@ -64,7 +67,11 @@ type routerAction struct {
 	At      string `json:"at,omitempty"`
 	Note    string `json:"note,omitempty"`
 	TimerID string `json:"timer_id,omitempty"`
-	Reason  string `json:"reason,omitempty"`
+	// Verdict and Checks are a review's; its Note is what else to fix, or
+	// the decision someone must make.
+	Verdict string                       `json:"verdict,omitempty"`
+	Checks  []core.SuperAgentReviewCheck `json:"checks,omitempty"`
+	Reason  string                       `json:"reason,omitempty"`
 }
 
 // routerDecision is the router's reply to this event's thread and the
@@ -309,8 +316,12 @@ func validateDecision(decision routerDecision) error {
 			if strings.TrimSpace(action.TimerID) == "" {
 				return errors.New("a cancel_timer action has no timer_id")
 			}
+		case actionReview:
+			if err := checkReview(action); err != nil {
+				return err
+			}
 		default:
-			return fmt.Errorf("unknown action %q; use accept, attach, stop, link, post, follow_up or cancel_timer", action.Action)
+			return fmt.Errorf("unknown action %q; use accept, attach, stop, link, post, follow_up, cancel_timer or review", action.Action)
 		}
 	}
 	return nil

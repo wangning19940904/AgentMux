@@ -87,8 +87,9 @@ When no available worker can do the work, the router tells the sender. An action
   ```
 
   `accept` starts a Ticket, `attach` passes the event to a Ticket on the thread with the
-  router's optional note, and `stop` stops one. An `accept` may say what done means;
-  see [Owning a Ticket](#owning-a-ticket). `follow_up` and `cancel_timer` set
+  router's optional note, and `stop` stops one. An `accept` may say what done means, and
+  `review` judges a Ticket whose worker finished a turn; see
+  [Owning a Ticket](#owning-a-ticket). `follow_up` and `cancel_timer` set
   and withdraw a wake-up; see [Follow-ups](#follow-ups). `reason` goes to the audit
   log. A JSON-only answer in the form routers used before is still read as an action.
 - **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
@@ -204,6 +205,44 @@ derives **signals** from records it already has. It calls no model.
   Ticket and accept the work again, tell the people waiting, or nothing; an empty reply
   sends nothing. When the router fails on a supervision event after its retries, the
   event is recorded as failed and nothing is sent.
+
+### Review
+
+After a worker finishes a turn, the brain gives its verdict with a `review`:
+
+```
+<agentmux-action>
+{"action":"review","ticket_id":"tkt_…","verdict":"rework",
+ "checks":[{"criterion":"go test ./pricing/... passes","met":false,"evidence":"TestTax fails"},
+           {"criterion":"no float64 left in pricing/","met":true,"evidence":"grep finds none"}],
+ "note":"Also keep the old rounding behind a flag."}
+</agentmux-action>
+```
+
+| Verdict | What the host does |
+| --- | --- |
+| `accepted` | Records it. The Ticket stays ready: its work is done. Refused while a check is unmet. |
+| `rework` | Sends the itemized gaps (unmet checks with their evidence, then the note) to the same worker conversation and counts a round. Needs an unmet check or a note. A third `rework` of a Ticket is refused: it is recorded with `refused`, and the people on the thread are told, in AgentMux's words, that the Ticket needs a decision, with what is still open. |
+| `needs_user` | Needs a `note` saying what must be decided. Records it, and tells the people on the thread, in AgentMux's words: "“<title>” needs a decision from you: <note>". |
+
+- The host enforces it like any other action: the Ticket must be this agent's and on the
+  event's thread, its worker must have finished a turn (the Ticket is ready; `needs_user`
+  also takes a failed one), and an answer reviews each Ticket at most once. Otherwise the
+  decision is refused before anything is carried out and the router is told why.
+- At most 12 checks, each naming its criterion (at most 300 characters); evidence is cut
+  at 1,000 characters and the note at 2,000.
+- Every review is recorded on the Ticket (`reviews`: `verdict`, `checks`, `note`, `round`,
+  `refused`, `trigger_id`, `at`; `rework_rounds` counts the rounds) and in `ticket.json`.
+  OPEN TICKETS shows the latest under `review`.
+- AgentMux's own message goes after the brain's reply, as a message of its own.
+- A ticket update for a Ticket with `done_when` asks the brain to check the report against
+  them and answer with a review, and says how many rework rounds are used. A Ticket
+  without them is reported as before, and nothing requires a review.
+
+| Limit | Value |
+| --- | --- |
+| Rework rounds per Ticket | 2 |
+| Checks per review | 12 |
 
 ## What the host enforces
 

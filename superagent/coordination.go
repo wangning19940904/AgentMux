@@ -60,11 +60,13 @@ type ticketView struct {
 	ExpectMinutes int          `json:"expect_minutes,omitempty"`
 	Linked        []threadLink `json:"linked_threads,omitempty"`
 	// Signals are what supervision noticed that still holds, in act mode.
-	Signals  []string `json:"signals,omitempty"`
-	Started  string   `json:"started,omitempty"`
-	Updated  string   `json:"updated"`
-	Activity string   `json:"last_activity,omitempty"`
-	Folder   string   `json:"folder,omitempty"`
+	Signals []string `json:"signals,omitempty"`
+	// Review is the latest review's verdict, and how much rework is left.
+	Review   string `json:"review,omitempty"`
+	Started  string `json:"started,omitempty"`
+	Updated  string `json:"updated"`
+	Activity string `json:"last_activity,omitempty"`
+	Folder   string `json:"folder,omitempty"`
 }
 
 type threadLink struct {
@@ -199,6 +201,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 		if supervisionMode(agent) == core.SuperAgentSupervisionAct {
 			entry.Signals = signalLines(ticket)
 		}
+		entry.Review = reviewSummary(ticket)
 		if s.existingTicketDir(ticket) != "" {
 			entry.Folder = ticketsDirName + "/" + ticket.ID
 		}
@@ -556,6 +559,9 @@ func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket 
 	}
 	if !failed {
 		fmt.Fprintf(&text, "\nWorker's report:\n%s\n", truncateRunes(strings.TrimSpace(report), maxReportRunes))
+		if len(ticket.DoneWhen) > 0 {
+			fmt.Fprintf(&text, "\nCheck the report against its done_when, and its files where you can, then answer with a review action. Rework rounds used: %d of %d.\n", ticket.ReworkRounds, maxReworkRounds)
+		}
 	}
 	return s.insertAgentMuxEvent(ctx, agent, ticket, core.SuperAgentTriggerTicketUpdate, "Ticket update: "+ticket.Title, text.String(), replyTo, "ticket:"+ticket.ID+":"+uuid.NewString())
 }

@@ -63,6 +63,14 @@ const (
 	SuperAgentSignalOrphaned = "orphaned"
 )
 
+// Review verdicts: the brain's judgement of a Ticket after its worker
+// finished a turn.
+const (
+	SuperAgentReviewAccepted  = "accepted"
+	SuperAgentReviewRework    = "rework"
+	SuperAgentReviewNeedsUser = "needs_user"
+)
+
 // SuperAgentTimerFollowUp is a one-off wake-up the router set for itself.
 const SuperAgentTimerFollowUp = "follow_up"
 
@@ -264,6 +272,10 @@ type SuperAgentTicket struct {
 	// Signals are what supervision noticed about the Ticket, oldest first.
 	// One without ClearedAt still holds.
 	Signals []SuperAgentTicketSignal `json:"signals,omitempty"`
+	// Reviews are the brain's verdicts on the Ticket, oldest first, and
+	// ReworkRounds how many times it was sent back to its worker.
+	Reviews      []SuperAgentTicketReview `json:"reviews,omitempty"`
+	ReworkRounds int                      `json:"rework_rounds,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -285,6 +297,25 @@ type SuperAgentTicketSignal struct {
 	At        time.Time `json:"at"`
 	WokeAt    time.Time `json:"woke_at,omitzero"`
 	ClearedAt time.Time `json:"cleared_at,omitzero"`
+}
+
+// SuperAgentTicketReview is one review of a Ticket. Round is the rework round
+// a rework started; Refused says why AgentMux did not carry the review out.
+type SuperAgentTicketReview struct {
+	Verdict   string                  `json:"verdict"`
+	Checks    []SuperAgentReviewCheck `json:"checks,omitempty"`
+	Note      string                  `json:"note,omitempty"`
+	Round     int                     `json:"round,omitempty"`
+	Refused   string                  `json:"refused,omitempty"`
+	TriggerID string                  `json:"trigger_id,omitempty"`
+	At        time.Time               `json:"at"`
+}
+
+// SuperAgentReviewCheck is the brain's judgement of one acceptance criterion.
+type SuperAgentReviewCheck struct {
+	Criterion string `json:"criterion"`
+	Met       bool   `json:"met"`
+	Evidence  string `json:"evidence,omitempty"`
 }
 
 // SuperAgentTicketLink is a thread other than a Ticket's own that cares about
