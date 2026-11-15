@@ -539,6 +539,9 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			if err := s.checkWorker(agent, action.WorkerID); err != nil {
 				return err
 			}
+			if err := checkCriteria(action.DoneWhen, action.ExpectMinutes); err != nil {
+				return err
+			}
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
 				if strings.TrimSpace(id) == "" {
 					continue
@@ -775,6 +778,8 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		Inputs:    []string{workerAssignment(agent, trigger, action, background)},
 		Reply:     trigger.Reply,
 		DependsOn: action.DependsOn, BaseTicket: base,
+		Instructions: strings.TrimSpace(action.Instructions),
+		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {

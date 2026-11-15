@@ -87,7 +87,8 @@ When no available worker can do the work, the router tells the sender. An action
   ```
 
   `accept` starts a Ticket, `attach` passes the event to a Ticket on the thread with the
-  router's optional note, and `stop` stops one. `follow_up` and `cancel_timer` set
+  router's optional note, and `stop` stops one. An `accept` may say what done means;
+  see [Owning a Ticket](#owning-a-ticket). `follow_up` and `cancel_timer` set
   and withdraw a wake-up; see [Follow-ups](#follow-ups). `reason` goes to the audit
   log. A JSON-only answer in the form routers used before is still read as an action.
 - **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
@@ -146,6 +147,31 @@ The host limits them, whatever the router asks for:
 
 A follow-up may set another, which is how "check every hour until it merges"
 works. The 24-hour limit is what bounds such a chain.
+
+## Owning a Ticket
+
+The brain owns the completion and quality of the Tickets it starts, instead of only
+relaying a worker's last answer.
+
+### Acceptance criteria
+
+```
+<agentmux-action>
+{"action":"accept","worker_id":"auto:codex","title":"Decimal pricing","instructions":"…",
+ "done_when":["go test ./pricing/... passes","no float64 left in pricing/"],"expect_minutes":30}
+</agentmux-action>
+```
+
+- `done_when` is optional: up to 6 criteria, each one line of at most 300 characters,
+  none repeated. `expect_minutes` is optional: how long the brain expects a turn to take,
+  from 1 to 360 (the longest a worker's turn may run).
+- Malformed values are refused before anything is carried out, like any other action the
+  host rejects: the router is told why and answers again.
+- The Ticket keeps them (`done_when`, `expect_minutes`, with the `instructions` it was
+  accepted with), and `ticket.json` records them. The worker's first input lists them
+  under `DONE WHEN`, with a request to end its report with one line per criterion:
+  whether it is met, and the evidence. The brain sees them with the Ticket in OPEN TICKETS.
+- An `accept` without them starts a Ticket exactly as before.
 
 ## What the host enforces
 

@@ -226,6 +226,14 @@ type SuperAgentTicket struct {
 	// worktree starts from BaseTicket's latest commit instead of the default.
 	DependsOn  []string `json:"depends_on,omitempty"`
 	BaseTicket string   `json:"base_ticket,omitempty"`
+	// Instructions are what the brain asked the worker to achieve when it
+	// accepted the work.
+	Instructions string `json:"instructions,omitempty"`
+	// DoneWhen are the brain's acceptance criteria, and ExpectMinutes how long
+	// it expects a turn to take. Both are optional: a Ticket without them is
+	// done when its worker says so.
+	DoneWhen      []string `json:"done_when,omitempty"`
+	ExpectMinutes int      `json:"expect_minutes,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`

@@ -52,8 +52,12 @@ type routerAction struct {
 	Instructions string   `json:"instructions,omitempty"`
 	DependsOn    []string `json:"depends_on,omitempty"`
 	BaseTicket   string   `json:"base_ticket,omitempty"`
-	To           string   `json:"to,omitempty"`
-	Text         string   `json:"text,omitempty"`
+	// DoneWhen and ExpectMinutes are an accept's acceptance criteria and how
+	// long the brain expects a turn to take; see criteria.go.
+	DoneWhen      []string `json:"done_when,omitempty"`
+	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	To            string   `json:"to,omitempty"`
+	Text          string   `json:"text,omitempty"`
 	// In or At says when a follow_up is due, Note what to do then. TimerID
 	// names the timer a cancel_timer withdraws.
 	In      string `json:"in,omitempty"`
@@ -462,6 +466,7 @@ func workerAssignment(agent core.SuperAgent, trigger core.SuperAgentTrigger, act
 	if instructions := strings.TrimSpace(action.Instructions); instructions != "" {
 		prompt.WriteString("\nRouter's note:\n" + instructions + "\n")
 	}
+	writeCriteria(&prompt, cleanCriteria(action.DoneWhen), action.ExpectMinutes)
 	for _, line := range background {
 		prompt.WriteString("\n" + line + "\n")
 	}

@@ -255,6 +255,8 @@ type ticketRecord struct {
 	WorkDir        string                `json:"work_dir,omitempty"`
 	DependsOn      []string              `json:"depends_on,omitempty"`
 	BaseTicket     string                `json:"base_ticket,omitempty"`
+	DoneWhen       []string              `json:"done_when,omitempty"`
+	ExpectMinutes  int                   `json:"expect_minutes,omitempty"`
 	LinkedThreads  []string              `json:"linked_threads,omitempty"`
 	Attempts       int                   `json:"attempts"`
 	Error          string                `json:"error,omitempty"`
@@ -281,6 +283,7 @@ func (s *Service) recordTicket(ctx context.Context, ticket core.SuperAgentTicket
 		SourceKind: ticket.SourceKind, ThreadKey: ticket.ThreadKey, Actor: ticket.Actor, Worker: ticket.Worker,
 		ConversationID: ticket.ConversationID, WorkDir: placement.WorkDir, Attempts: ticket.Attempts,
 		DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
+		DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
 		Error: ticket.Error, ReplyError: ticket.ReplyError, CreatedAt: ticket.CreatedAt,
 		StartedAt: ticket.StartedAt, FinishedAt: ticket.FinishedAt, UpdatedAt: ticket.UpdatedAt,
 	}

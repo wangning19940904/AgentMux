@@ -56,7 +56,7 @@ To have AgentMux act, end your final message with an action block holding one ac
 [{"action":"accept","ref":"a","worker_id":"","title":"","instructions":"","depends_on":[],"base_ticket":""},
  {"action":"post","to":"","text":""}]
 ` + actionClose + `
-- "accept": new work. worker_id comes from the roster and title is a short name. instructions say what the worker should achieve and what it needs: decisions made, who decides what, related tickets, branches and commits. "ref" names the new ticket so later actions in the same block can use it in ticket_id, depends_on, base_ticket or to.
+- "accept": new work. worker_id comes from the roster and title is a short name. instructions say what the worker should achieve and what it needs: decisions made, who decides what, related tickets, branches and commits. "ref" names the new ticket so later actions in the same block can use it in ticket_id, depends_on, base_ticket or to. Optionally, "done_when" lists up to 6 short, checkable criteria that say what done means, and "expect_minutes" how long you expect a turn to take; the worker is asked for evidence per criterion, and AgentMux uses the time to tell slow work from stalled work.
 - "attach": pass this event to an open ticket on any thread, with an optional note for its worker in "instructions".
 - "stop": stop an open ticket on any thread.
 - "link": link this event's thread to an open ticket without disturbing its worker, so the thread hears when the ticket moves.
@@ -79,7 +79,7 @@ To have AgentMux act, end your reply with one block, holding one action or a JSO
 ` + actionOpen + `
 {"action":"accept","worker_id":"","title":"","instructions":"","reason":""}
 ` + actionClose + `
-- "accept" starts a ticket: worker_id from the roster, a short title, and instructions with everything the worker needs.
+- "accept" starts a ticket: worker_id from the roster, a short title, and instructions with everything the worker needs. Optionally add "done_when", up to 6 short, checkable criteria for done, and "expect_minutes", how long you expect a turn to take.
 - "attach" passes this message to an open ticket, with an optional note in "instructions"; "stop" stops one; both take "ticket_id".
 - "follow_up" wakes you later about this chat: give "in" (such as "30m", "18h" or "3d") or "at" (a time written like NOW below), and a "note" telling your later self what to check and do. Use it when you are waiting on someone or promised to check back, never to watch a worker. Your reply then is posted to this chat. "cancel_timer" withdraws one listed under TIMERS ON THIS THREAD, by its "timer_id".
 - "reason" is a short note for the operator's audit log.

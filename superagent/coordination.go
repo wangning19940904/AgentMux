@@ -46,19 +46,23 @@ const (
 
 // ticketView is one Ticket as the router is shown it.
 type ticketView struct {
-	ID         string       `json:"id"`
-	Title      string       `json:"title"`
-	Status     string       `json:"status"`
-	Worker     string       `json:"worker_id"`
-	Thread     string       `json:"thread"`
-	WaitingFor []string     `json:"waiting_for,omitempty"`
-	DependsOn  []string     `json:"depends_on,omitempty"`
-	BaseTicket string       `json:"base_ticket,omitempty"`
-	Linked     []threadLink `json:"linked_threads,omitempty"`
-	Started    string       `json:"started,omitempty"`
-	Updated    string       `json:"updated"`
-	Activity   string       `json:"last_activity,omitempty"`
-	Folder     string       `json:"folder,omitempty"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Status     string   `json:"status"`
+	Worker     string   `json:"worker_id"`
+	Thread     string   `json:"thread"`
+	WaitingFor []string `json:"waiting_for,omitempty"`
+	DependsOn  []string `json:"depends_on,omitempty"`
+	BaseTicket string   `json:"base_ticket,omitempty"`
+	// DoneWhen and ExpectMinutes are what the brain asked for when it
+	// accepted the work.
+	DoneWhen      []string     `json:"done_when,omitempty"`
+	ExpectMinutes int          `json:"expect_minutes,omitempty"`
+	Linked        []threadLink `json:"linked_threads,omitempty"`
+	Started       string       `json:"started,omitempty"`
+	Updated       string       `json:"updated"`
+	Activity      string       `json:"last_activity,omitempty"`
+	Folder        string       `json:"folder,omitempty"`
 }
 
 type threadLink struct {
@@ -168,6 +172,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 		entry := ticketView{
 			ID: ticket.ID, Title: ticket.Title, Status: ticket.Status, Worker: ticket.Worker.ID,
 			Thread: "this thread", DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
+			DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
 			Updated: ago(now, ticket.UpdatedAt),
 		}
 		if !onThread {
