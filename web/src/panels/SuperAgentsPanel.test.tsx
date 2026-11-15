@@ -776,6 +776,67 @@ describe("SuperAgentsPanel", () => {
     expect(claims).toEqual(["Edits docs · t5", "Other work · t9 · agent ops"]);
   });
 
+  it("shows plans for approval, approves, remembers and declines, and lists remembered approvals", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      cost_tiers: { w1: "low", w2: "high" },
+      plans: [
+        { id: "pln_1", super_agent_id: "sa_1", title: "Fix and document", summary: "Two steps.", requester: "alice", requester_name: "Alice", thread_key: "t",
+          tier: "medium", status: "pending", created_at: "2026-11-03T00:00:00Z",
+          tickets: [
+            { ref: "a", title: "Fix it", worker_id: "auto:codex", tier: "medium", where: "this machine" },
+            { ref: "b", title: "Document it", worker_id: "w1", tier: "low", where: "this machine", depends_on: ["a"] },
+          ] },
+        { id: "pln_0", super_agent_id: "sa_1", title: "Old plan", thread_key: "t", tier: "low", status: "declined", decided_by: "Ops", note: "not now", created_at: "2026-11-02T00:00:00Z", tickets: [] },
+      ],
+      trust: [{ requester: "bob", requester_name: "Bob", tier: "high", approved_by: "Ops", at: "2026-11-01T00:00:00Z" }],
+    });
+    const approve = vi.spyOn(api, "approveSuperAgentPlan").mockResolvedValue({} as never);
+    const decline = vi.spyOn(api, "declineSuperAgentPlan").mockResolvedValue({} as never);
+    const revoke = vi.spyOn(api, "revokeSuperAgentTrust").mockResolvedValue({ ok: true });
+    renderPanel();
+    await until(() => hasText("Fix and document"));
+    const chips = [...container.querySelectorAll(".super-agent-chip small")].map((item) => item.textContent);
+    expect(chips).toEqual(["local · low cost", "remote · high cost"]);
+    const pending = container.querySelector(".super-agent-plan.plan-pending")!;
+    expect(pending.textContent).toContain("Requested by Alice");
+    expect([...pending.querySelectorAll("li small")].map((item) => item.textContent)).toEqual([
+      "auto:codex on this machine · medium cost", "w1 on this machine · low cost · after a",
+    ]);
+    expect(container.querySelector(".super-agent-plan.plan-declined")?.textContent).toContain("Declined by Ops · not now");
+    expect(hasText("Bob: work up to high cost starts without a plan")).toBe(true);
+
+    click(button(/^Approve$/));
+    await until(() => approve.mock.calls.length > 0);
+    expect(approve.mock.calls[0]).toEqual(["sa_1", "pln_1", false]);
+    const ready = (name: RegExp) => until(() => { const found = button(name); return found && !found.disabled ? found : null; });
+    click(await ready(/don't ask again up to medium cost/));
+    await until(() => approve.mock.calls.length > 1);
+    expect(approve.mock.calls[1]).toEqual(["sa_1", "pln_1", true]);
+    setValue(control(/^Why/), "too much");
+    click(await ready(/^Decline$/));
+    await until(() => decline.mock.calls.length > 0);
+    expect(decline.mock.calls[0]).toEqual(["sa_1", "pln_1", "too much"]);
+    click(await ready(/^Revoke$/));
+    await until(() => revoke.mock.calls.length > 0);
+    expect(revoke.mock.calls[0]).toEqual(["sa_1", "bob"]);
+  });
+
+  it("saves plan approval and a roster worker's cost tier", async () => {
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Repo keeper"));
+    click(button(/^Edit$/));
+    await until(() => valueOf(/^Plan approval/) === "off");
+    setValue(control(/^Plan approval/), "above_medium");
+    const tiers = [...container.querySelectorAll<HTMLSelectElement>("select[aria-label='Cost']")];
+    expect(tiers.length).toBe(2);
+    setValue(tiers[1], "high");
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ plan_approval: "above_medium", workers: [{ id: "w1" }, { id: "w2", cost_tier: "high" }] });
+  });
+
   it("lets an agent launch workers on another machine, and names the machine on its tickets", async () => {
     vi.spyOn(api, "superAgents").mockResolvedValue([{ ...saved, auto_workers: true, worker_runtimes: ["codex"], worker_machines: [{ host_id: "h1", dir: "~/code" }] }]);
     vi.spyOn(api, "superAgentActivity").mockResolvedValue({

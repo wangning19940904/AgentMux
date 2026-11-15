@@ -45,6 +45,11 @@ const SuperAgentTriggerTimer = "timer"
 // progress. Like a ticket update it comes from AgentMux, on the Tickets' thread.
 const SuperAgentTriggerSupervision = "supervision"
 
+// SuperAgentTriggerPlan tells the brain that a person approved or declined a
+// plan it proposed. Like a ticket update it comes from AgentMux, on the
+// thread the plan was proposed on.
+const SuperAgentTriggerPlan = "plan"
+
 // Supervision modes say what AgentMux does with the signals it derives from
 // an agent's open Tickets. Empty is observe.
 const (
@@ -129,6 +134,11 @@ type SuperAgent struct {
 	// of a local worker in a git worktree after each finished turn, before the
 	// brain hears about it. Empty turns independent review off.
 	ReviewRuntime string `json:"review_runtime,omitempty"`
+	// PlanApproval says when work needs the requester's approval before it
+	// starts: off (empty, accept starts at once), always, above_low or
+	// above_medium (work of a higher cost tier needs a plan).
+	PlanApproval string `json:"plan_approval,omitempty"`
+
 	// Supervision is observe (empty), act or off: whether AgentMux records
 	// the signals it derives from open Tickets, and whether it also wakes the
 	// brain with them.
@@ -155,6 +165,9 @@ type SuperAgentWorker struct {
 	HostID       string `json:"host_id,omitempty"`
 	AgentID      string `json:"agent_id"`
 	Capabilities string `json:"capabilities,omitempty"`
+	// CostTier overrides the tier derived from the worker's framework and
+	// model: low, medium or high.
+	CostTier string `json:"cost_tier,omitempty"`
 }
 
 // SuperAgentMachine is a directory an agent may launch workers in. An empty
@@ -417,6 +430,84 @@ type SuperAgentTicketWorkspace struct {
 	Dir       string    `json:"dir,omitempty"`
 	Isolated  bool      `json:"isolated,omitempty"`
 	HeldSince time.Time `json:"held_since,omitzero"`
+}
+
+// Cost tiers say roughly what a worker's turn costs, from its framework and
+// model, so a person can be asked before expensive work starts.
+const (
+	CostTierLow    = "low"
+	CostTierMedium = "medium"
+	CostTierHigh   = "high"
+)
+
+// Plan approval settings (SuperAgent.PlanApproval). Off is empty.
+const (
+	PlanApprovalAlways      = "always"
+	PlanApprovalAboveLow    = "above_low"
+	PlanApprovalAboveMedium = "above_medium"
+)
+
+// Plan states.
+const (
+	SuperAgentPlanPending  = "pending"
+	SuperAgentPlanApproved = "approved"
+	SuperAgentPlanDeclined = "declined"
+	SuperAgentPlanExpired  = "expired"
+)
+
+// SuperAgentPlan is several Tickets the brain proposed together, waiting for
+// the requester's approval before any of them starts.
+type SuperAgentPlan struct {
+	ID           string `json:"id"`
+	SuperAgentID string `json:"super_agent_id"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary,omitempty"`
+	// Requester is who asked for the work (the event's actor).
+	Requester     string               `json:"requester,omitempty"`
+	RequesterName string               `json:"requester_name,omitempty"`
+	ThreadKey     string               `json:"thread_key"`
+	TriggerID     string               `json:"trigger_id"`
+	Tickets       []SuperAgentPlanItem `json:"tickets"`
+	// Tier is the highest tier among the Tickets.
+	Tier   string `json:"tier"`
+	Status string `json:"status"`
+	// DecidedBy is who approved or declined it, or "remembered trust".
+	DecidedBy string    `json:"decided_by,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	TicketIDs []string  `json:"ticket_ids,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	DecidedAt time.Time `json:"decided_at,omitzero"`
+	// Trigger is the event the plan answers; Tickets start from it. Never
+	// sent to the Console.
+	Trigger *SuperAgentTrigger `json:"trigger,omitempty"`
+}
+
+// SuperAgentPlanItem is one proposed Ticket and where it would run now.
+type SuperAgentPlanItem struct {
+	Ref           string   `json:"ref,omitempty"`
+	Title         string   `json:"title"`
+	WorkerID      string   `json:"worker_id"`
+	Instructions  string   `json:"instructions,omitempty"`
+	DoneWhen      []string `json:"done_when,omitempty"`
+	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	BaseTicket    string   `json:"base_ticket,omitempty"`
+	MachinePolicy string   `json:"machine_policy,omitempty"`
+	Tier          string   `json:"tier"`
+	// Where is the machine placement would run it on; PlacedWorkerID is set
+	// when that is another roster entry than WorkerID.
+	Where          string `json:"where"`
+	PlacedWorkerID string `json:"placed_worker_id,omitempty"`
+}
+
+// SuperAgentTrust is a requester's standing approval: work for them at or
+// under Tier starts without a plan card.
+type SuperAgentTrust struct {
+	Requester     string    `json:"requester"`
+	RequesterName string    `json:"requester_name,omitempty"`
+	Tier          string    `json:"tier"`
+	ApprovedBy    string    `json:"approved_by,omitempty"`
+	At            time.Time `json:"at"`
 }
 
 // SuperAgentRuntimeHealth is the health record of one framework on one

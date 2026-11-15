@@ -23,6 +23,7 @@ type memoryStore struct {
 	tickets  map[string]core.SuperAgentTicket
 	timers   map[string]core.SuperAgentTimer
 	state    map[string]string
+	settings map[string]string
 	local    map[string]core.AgentInstance
 	channels []core.Channel
 }
@@ -242,6 +243,23 @@ func (m *memoryStore) ListAgentInstances(context.Context) ([]core.AgentInstance,
 	}
 	return out, nil
 }
+func (m *memoryStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.settings[key]
+	return value, ok, nil
+}
+
+func (m *memoryStore) SetSetting(_ context.Context, key, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.settings == nil {
+		m.settings = map[string]string{}
+	}
+	m.settings[key] = value
+	return nil
+}
+
 func (m *memoryStore) ListChannels(context.Context) ([]core.Channel, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

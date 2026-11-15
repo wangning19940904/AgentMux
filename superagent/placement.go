@@ -166,7 +166,14 @@ func (s *Service) refreshMachine(ctx context.Context, hostID string) machineInfo
 	callCtx, cancel := context.WithTimeout(ctx, machineCallWait)
 	defer cancel()
 	info.runtimes, info.err = fleet.Runtimes(callCtx, hostID)
-	if info.err == nil {
+	s.placement.mu.Lock()
+	previous := s.placement.machines[hostID]
+	s.placement.mu.Unlock()
+	if info.err == nil && !previous.healthAt.IsZero() && s.now().Sub(previous.healthAt) < machineInfoTTL/2 {
+		// The Console asks every few seconds; health records change slowly,
+		// so a recent read is reused.
+		info.health, info.healthAt = previous.health, previous.healthAt
+	} else if info.err == nil {
 		if reader, ok := s.workers.(MachineHealthFleet); ok {
 			// A machine too old to keep health records leaves them unknown.
 			if records, err := reader.Health(callCtx, hostID); err == nil {

@@ -25,6 +25,7 @@ import type {
   FeishuUserList,
   SuperAgent,
   SuperAgentActivity,
+  SuperAgentPlan,
   SuperAgentRouter,
   SuperAgentPromptPart,
   SuperAgentRouterList,
@@ -941,6 +942,12 @@ export const api = {
   stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
   cancelSuperAgentTimer: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/timers/cancel", { id }),
+  approveSuperAgentPlan: (agentID: string, planID: string, remember: boolean) =>
+    postChecked<SuperAgentPlan>("/api/v1/super-agents/plans/approve", { agent_id: agentID, plan_id: planID, remember }),
+  declineSuperAgentPlan: (agentID: string, planID: string, note = "") =>
+    postChecked<SuperAgentPlan>("/api/v1/super-agents/plans/decline", { agent_id: agentID, plan_id: planID, note }),
+  revokeSuperAgentTrust: (agentID: string, requester: string) =>
+    del<{ ok: boolean }>(`/api/v1/super-agents/trust?agent_id=${encodeURIComponent(agentID)}&requester=${encodeURIComponent(requester)}`),
   superAgentGitHubSetup: () => getChecked<SuperAgentGitHubSetup>("/api/v1/super-agents/github/setup"),
   githubOperator: (apiBase = "") =>
     getChecked<GitHubOperator>(`/api/v1/super-agents/github/operator?api_base=${encodeURIComponent(apiBase)}`),

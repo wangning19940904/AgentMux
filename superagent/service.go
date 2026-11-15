@@ -77,6 +77,9 @@ type Store interface {
 	DeleteAgentInstance(context.Context, string) error
 	ListAgentInstances(context.Context) ([]core.AgentInstance, error)
 	ListChannels(context.Context) ([]core.Channel, error)
+	// Plans and remembered approvals are kept as settings (plans.go).
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+	SetSetting(ctx context.Context, key, value string) error
 }
 
 // Options holds the service's collaborators.
@@ -128,6 +131,8 @@ type Service struct {
 
 	mu     sync.Mutex
 	asksMu sync.Mutex
+	// plansMu makes each change to an agent's plans and trust one step.
+	plansMu sync.Mutex
 	// timersMu makes each change to a timer one step. It is taken after mu,
 	// never before it.
 	timersMu       sync.Mutex
@@ -201,6 +206,11 @@ type Activity struct {
 	// WorkspaceClaims are the directories Tickets hold now on the machines
 	// this agent's workers use.
 	WorkspaceClaims []WorkspaceClaim `json:"workspace_claims,omitempty"`
+	// CostTiers are the roster entries' cost tiers by roster id; Plans the
+	// agent's plans, newest first; Trust its remembered approvals.
+	CostTiers map[string]string      `json:"cost_tiers,omitempty"`
+	Plans     []core.SuperAgentPlan  `json:"plans,omitempty"`
+	Trust     []core.SuperAgentTrust `json:"trust,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -500,7 +510,7 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
-	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision {
+	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision || trigger.Kind == core.SuperAgentTriggerPlan {
 		// Nobody is waiting for an answer to a follow-up or a supervision
 		// signal, and either is for the router, not for a worker or a person.
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), trigger.TicketID)
@@ -586,6 +596,12 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			}
 			decision.Actions[index].placed = &placed
 			claims.claim(ctx, action, placed.place)
+			if !action.approved {
+				requester, _ := s.requester(ctx, agent.ID, trigger)
+				if problem := s.approvalProblem(ctx, agent, requester, s.placeTier(ctx, agent, placed.place)); problem != "" {
+					return errors.New(problem)
+				}
+			}
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
 				if strings.TrimSpace(id) == "" {
 					continue
@@ -650,6 +666,12 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			if err := s.preflightReview(ctx, agent, trigger, action, reviewed); err != nil {
 				return err
 			}
+		case actionPlan:
+			items, tier, err := s.preflightPlan(ctx, agent, action, claims, resolve)
+			if err != nil {
+				return err
+			}
+			decision.Actions[index].planItems, decision.Actions[index].planTier = items, tier
 		}
 	}
 	return nil
@@ -688,7 +710,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 		return id
 	}
-	var accepted, attached, stopped, posted, reviewed bool
+	var accepted, attached, stopped, posted, reviewed, planned bool
 	var ticketIDs, problems, reasons, notices []string
 	if decision.Reason != "" {
 		reasons = append(reasons, decision.Reason)
@@ -773,6 +795,20 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if cancelled, err = s.cancelTimer(ctx, strings.TrimSpace(action.TimerID)); cancelled {
 				reasons = append(reasons, "cancelled follow-up "+strings.TrimSpace(action.TimerID))
 			}
+		case actionPlan:
+			var plan core.SuperAgentPlan
+			var notice string
+			if plan, notice, err = s.proposePlan(ctx, agent, trigger, action); err == nil {
+				planned = true
+				notices = append(notices, notice)
+				if plan.Status == core.SuperAgentPlanApproved {
+					accepted = true
+					ticketIDs = append(ticketIDs, plan.TicketIDs...)
+					reasons = append(reasons, "started plan "+plan.ID+" (remembered approval)")
+				} else {
+					reasons = append(reasons, "proposed plan "+plan.ID+" for approval")
+				}
+			}
 		case actionReview:
 			id := strings.TrimSpace(action.TicketID)
 			var outcome reviewOutcome
@@ -811,7 +847,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		disposition = core.SuperAgentDispositionFollowUp
 	case stopped:
 		disposition = core.SuperAgentDispositionStopped
-	case reply != "" || posted || reviewed:
+	case reply != "" || posted || reviewed || planned:
 		disposition = core.SuperAgentDispositionAnswered
 	case len(problems) > 0:
 		disposition = core.SuperAgentDispositionFailed
@@ -1323,6 +1359,13 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	}
 	activity.RuntimeHealth = s.rosterHealth(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
 	activity.WorkspaceClaims = s.workspaceClaims(ctx, *agent)
+	activity.CostTiers = s.rosterTiers(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
+	if activity.Plans, err = s.Plans(ctx, id); err != nil {
+		return nil, err
+	}
+	if activity.Trust, err = s.Trust(ctx, id); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	for _, source := range agent.Sources {
 		activity.Sources[source.ID] = s.health[source.ID]

@@ -1407,6 +1407,16 @@
   color: var(--danger, #c0392b);
   border: 1px solid color-mix(in srgb, var(--danger, #c0392b) 35%, var(--border));
 }
+.super-agent-tier {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.super-agent-tier.tier-high { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, var(--border)); }
+.super-agent-plan ol { margin: 6px 0; padding-left: 20px; display: grid; gap: 4px; }
+.super-agent-plan .control-row input { flex: 1; min-width: 120px; }
 .super-agent-health.usage_limit {
   color: var(--amber);
   border-color: color-mix(in srgb, var(--amber) 35%, var(--border));

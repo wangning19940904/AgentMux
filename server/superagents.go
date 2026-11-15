@@ -92,6 +92,7 @@ func (s *Server) registerSuperAgentRoutes() {
 		writeJSON(w, http.StatusOK, s.superAgents.HostTools(availableAgentRuntimes()))
 	})
 	s.mux.HandleFunc("POST /api/v1/super-agents/setup", s.handleSuperAgentSetup)
+	s.registerSuperAgentPlanRoutes()
 	s.mux.HandleFunc("POST /api/v1/super-agents/trigger", s.handleSuperAgentTrigger)
 	s.mux.HandleFunc("POST /api/v1/super-agents/tickets/stop", s.handleSuperAgentTicketAction(func(r *http.Request, id string) error {
 		return s.superAgents.StopTicket(r.Context(), id)

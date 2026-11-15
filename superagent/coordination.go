@@ -126,6 +126,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent), Statuses: s.workerStatuses(ctx, agent)}
 	view.Health = s.rosterHealth(ctx, agent, view.Statuses)
 	view.Workspaces = s.workspaceViews(ctx, agent)
+	view.Tiers = s.rosterTiers(ctx, agent, view.Statuses)
 	if agent.AutoWorkers {
 		view.LocalTools = s.localTools(agent.WorkerRuntimes)
 	}
@@ -166,6 +167,14 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 	view.Places = append(view.Places, s.mailPlaces(ctx, agent)...)
 	view.Where = describeThread(trigger.ThreadKey, trigger.DedupeKey, names)
 	view.Asks = s.asksIn(agent.ID, trigger.ThreadKey, names)
+	view.Plans = s.pendingPlanViews(ctx, agent.ID, trigger.ThreadKey, names)
+	if agent.PlanApproval != "" {
+		trusted := ""
+		if requester, _ := s.requester(ctx, agent.ID, trigger); requester != "" {
+			trusted = s.trustedTier(ctx, agent.ID, requester)
+		}
+		view.PlanNote = planNote(agent, trusted)
+	}
 	view.Timers = s.timerViews(ctx, agent.ID, trigger.ThreadKey)
 	now := s.now()
 	view.Now = now.Format(time.RFC3339) + " (" + now.Weekday().String() + ")"

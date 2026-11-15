@@ -90,7 +90,10 @@ When no available worker can do the work, the router tells the sender. An action
   router's optional note, and `stop` stops one. An `accept` may say what done means, and
   `review` judges a Ticket whose worker finished a turn; see
   [Owning a Ticket](#owning-a-ticket). `follow_up` and `cancel_timer` set
-  and withdraw a wake-up; see [Follow-ups](#follow-ups). `reason` goes to the audit
+  and withdraw a wake-up; see [Follow-ups](#follow-ups). An `accept` may say where it
+  may run (`machine_policy`, see [Placement](#placement)), and `plan` proposes several
+  Tickets for the requester's approval; see
+  [Plans](#plans-cost-tiers-and-remembered-approvals). `reason` goes to the audit
   log. A JSON-only answer in the form routers used before is still read as an action.
 - **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
   keeps. A read-only router can read it but not change it.
@@ -353,6 +356,76 @@ Two Tickets never write in the same directory at once.
 - **Not covered:** two different spellings of one directory on another machine (`~/code`
   and `/Users/me/code`) are two directories; claims of agents on other machines are not
   seen.
+
+## Plans, cost tiers and remembered approvals
+
+### Cost tiers
+
+Every roster entry shows a `cost_tier`, `low`, `medium` or `high`: roughly what a turn
+there costs. It comes from the framework and model: a model name with `haiku`, `mini`,
+`nano`, `flash`, `lite` or `small` is low, one with `opus`, `-pro`, `ultra`, `max` or
+`o3` is high, any other named model is medium, and without a model Claude Code is high
+and other frameworks medium. An auto worker of the brain's own framework on this machine
+uses the brain's model. The operator can set `cost_tier` on a roster worker to override
+it. The Console shows the tier on each roster entry (`cost_tiers` in the activity
+response).
+
+### The plan action
+
+```
+<agentmux-action>
+{"action":"plan","title":"Fix and document","text":"Why, in a sentence or two.",
+ "tickets":[{"ref":"a","worker_id":"auto:codex","title":"Fix it","instructions":"…","done_when":["…"]},
+            {"ref":"b","worker_id":"auto:claudecode","title":"Document it","instructions":"…","depends_on":["a"]}]}
+</agentmux-action>
+```
+
+- A plan proposes up to 8 Tickets without starting any. Each has an accept's fields
+  (`worker_id`, `title`, `instructions`, `done_when`, `expect_minutes`, `depends_on`,
+  `base_ticket`, `machine_policy`, `ref`); refs are the plan's own and work in its
+  `depends_on`. Each is checked as an accept would be, including
+  [placement](#placement) and [workspace claims](#workspace-claims), and the host
+  records its tier and where it would run now (`where`, and `placed_worker_id` when
+  flexible placement would use another entry). The plan's `tier` is its highest.
+- AgentMux stores the plan (`pln_…`), and after the brain's reply sends the thread it
+  came from a text version: each Ticket with its worker, machine, tier and what it waits
+  for, and that approval happens in the Console. The Console shows it as a card on the
+  agent's page. Pending plans are listed to the brain under `PLANS WAITING FOR APPROVAL`
+  so it does not propose them twice. A plan nobody decides expires after 7 days.
+- **Approve** starts the Tickets through the normal accept path, in order, with refs
+  resolved, as Tickets of the original request (its sender is their actor). The checks
+  run again; when the Tickets cannot start now, the plan stays pending and the Console
+  shows why. The thread is told how many started; the brain sees them with its next
+  event, without a turn of its own.
+- **Decline** starts nothing and wakes the brain with an event of kind `plan` on the
+  plan's thread, with the person's note, so it can answer the requester.
+
+### When a plan is required
+
+The agent's `plan_approval` setting:
+
+| Value | An accept |
+| --- | --- |
+| `off` (default, also empty) | starts at once, as before |
+| `always` | needs a plan |
+| `above_low` | of medium or high tier needs a plan |
+| `above_medium` | of high tier needs a plan |
+
+An accept that needs a plan is refused before anything is carried out, with the reason,
+and the brain answers again, usually with a plan. While the setting is on, the brain gets
+a `PLANS` note explaining the plan action. A plan may be proposed with the setting off
+too. The requester is the event's sender; for AgentMux's own news about a Ticket, whoever
+asked for that Ticket.
+
+### Remembered approvals
+
+Approving with "don't ask again" keeps (agent, requester, the plan's tier); a later
+approval keeps the higher tier. Work for that requester at or under the tier starts
+without a plan: an accept goes through, and a plan starts at once, recorded as approved
+by `remembered trust`. The Console lists remembered approvals on the agent's page and
+can revoke each. Plans and remembered approvals are stored as settings of this machine
+(`super_agent_plans:<agent>`, `super_agent_trust:<agent>`), never in the agent's home,
+which its brain can write, and are deleted with the agent.
 
 ## What the host enforces
 
@@ -781,7 +854,7 @@ These routes are for Console administrators and are closed to member accounts.
 | Method and path | Purpose |
 | --- | --- |
 | `GET`, `POST`, `DELETE /api/v1/super-agents` | List, save and delete every agent; secrets are write-only. The list includes each agent's channel sources. Saving an agent whose brain is its own renames and enables or disables the brain with it, and needs no workers; saving with channel sources sent back stores none. Deleting it deletes its own brain. |
-| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours, `runtime_health`: each roster framework's health per machine (`host_id`, `runtime`, `state`, `reason`, `resets_at`), and `workspace_claims`: the directories Tickets hold now on the agent's machines (`ticket_id`, `title`, `agent_id`, `host_id`, `machine`, `dir`, `since`) |
+| `GET /api/v1/super-agents/activity?id=` | Tickets, events, worker reachability, trigger health, `timers`: the follow-ups still set, then those that fired or were cancelled in the last 72 hours, `cost_tiers`, `plans` and `trust` (see [Plans](#plans-cost-tiers-and-remembered-approvals)), `runtime_health`: each roster framework's health per machine (`host_id`, `runtime`, `state`, `reason`, `resets_at`), and `workspace_claims`: the directories Tickets hold now on the agent's machines (`ticket_id`, `title`, `agent_id`, `host_id`, `machine`, `dir`, `since`) |
 | `GET /api/v1/super-agents/prompts` | The built-in prompt parts with their default text |
 | `GET`, `POST`, `DELETE /api/v1/super-agents/routers` | List router agents with the frameworks that can route and the MCP servers they may use; create or update one; delete an unused one |
 | `POST /api/v1/super-agents/setup` | Propose a configuration from an instruction; stores nothing |
@@ -793,6 +866,10 @@ These routes are for Console administrators and are closed to member accounts.
 | `POST /api/v1/super-agents/github/account` | The GitHub login, classic scopes and reachable repositories of a token in the body, or of a saved Source's token when the body sends it redacted with `super_agent_id` and `source_id` |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
 | `POST /api/v1/super-agents/timers/cancel` | Cancel a follow-up by `id`; `409` when it already fired or was cancelled |
+| `GET /api/v1/super-agents/plans?agent_id=` | Beta. The agent's plans, newest first, and its remembered approvals (`{plans, trust}`) |
+| `POST /api/v1/super-agents/plans/approve` | Beta. `{agent_id, plan_id, remember}`: start a pending plan's Tickets; `remember` keeps the requester's approval up to its tier; `400` with the reason when they cannot start now, `409` when the plan is no longer pending |
+| `POST /api/v1/super-agents/plans/decline` | Beta. `{agent_id, plan_id, note}`: decline a pending plan and tell the brain |
+| `GET`, `DELETE /api/v1/super-agents/trust?agent_id=[&requester=]` | Beta. List remembered approvals, or revoke a requester's |
 
 ## DeepSeek Harness runtime
 

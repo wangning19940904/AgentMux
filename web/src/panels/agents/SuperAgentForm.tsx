@@ -2,7 +2,7 @@ import { Bot, ChevronRight, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { isDesktopApp } from "../../api/desktop";
-import type { SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind } from "../../api";
+import type { SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
 import { confirmAction } from "../../components/ConfirmDialog";
@@ -330,6 +330,10 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                   {draft.workers.map((worker, index) => (
                     <span key={worker.id || index} className="super-agent-chip">
                       {worker.label || worker.agent_id}
+                      <select aria-label={t("superAgentForm.costTier")} value={worker.cost_tier ?? ""} onChange={(event) => onChange({ ...draft, workers: draft.workers.map((item, position) => position === index ? { ...item, cost_tier: (event.target.value || undefined) as SuperAgentWorker["cost_tier"] } : item) })}>
+                        <option value="">{t("superAgentForm.costTier.default")}</option>
+                        {(["low", "medium", "high"] as const).map((tier) => <option key={tier} value={tier}>{t(`superAgents.costTier.${tier}`)}</option>)}
+                      </select>
                       <button className="ghost-action icon-action" type="button" title={t("superAgents.remove")} onClick={() => onChange({ ...draft, workers: draft.workers.filter((_, position) => position !== index) })}><X size={12} /></button>
                     </span>
                   ))}
@@ -402,6 +406,12 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                     <option value="off">{t("superAgentForm.supervision.off")}</option>
                   </select>
                   <small>{t("superAgentForm.supervisionHelp")}</small>
+                </label>
+                <label className="field"><span>{t("superAgentForm.planApproval")}</span>
+                  <select value={draft.plan_approval || "off"} onChange={(event) => onChange({ ...draft, plan_approval: event.target.value as SuperAgent["plan_approval"] })}>
+                    {(["off", "always", "above_low", "above_medium"] as const).map((mode) => <option key={mode} value={mode}>{t(`superAgentForm.planApproval.${mode}`)}</option>)}
+                  </select>
+                  <small>{t("superAgentForm.planApprovalHelp")}</small>
                 </label>
                 <label className="field"><span>{t("superAgentForm.reviewRuntime")}</span>
                   <select value={draft.review_runtime ?? ""} onChange={(event) => onChange({ ...draft, review_runtime: event.target.value })}>

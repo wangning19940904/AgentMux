@@ -76,8 +76,16 @@ type routerAction struct {
 	Checks  []core.SuperAgentReviewCheck `json:"checks,omitempty"`
 	Reason  string                       `json:"reason,omitempty"`
 
+	// Tickets are a plan's proposed Tickets, each with an accept's fields.
+	Tickets []routerAction `json:"tickets,omitempty"`
+
 	// placed is where preflight decided an accept runs.
 	placed *placement
+	// approved marks an accept of an approved plan, which needs no plan.
+	approved bool
+	// planItems and planTier are what preflight found for a plan.
+	planItems []core.SuperAgentPlanItem
+	planTier  string
 }
 
 // routerDecision is the router's reply to this event's thread and the
@@ -121,6 +129,12 @@ type routerContext struct {
 	// Workspaces are the directories Tickets hold now on this agent's
 	// machines.
 	Workspaces []workspaceView
+	// Tiers are the roster entries' cost tiers by roster id. Plans are the
+	// agent's plans waiting for approval, and PlanNote explains plans when
+	// the agent asks for approval.
+	Tiers    map[string]string
+	Plans    []planView
+	PlanNote string
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -336,8 +350,12 @@ func validateDecision(decision routerDecision) error {
 			if err := checkReview(action); err != nil {
 				return err
 			}
+		case actionPlan:
+			if err := checkPlanShape(action); err != nil {
+				return err
+			}
 		default:
-			return fmt.Errorf("unknown action %q; use accept, attach, stop, link, post, follow_up, cancel_timer or review", action.Action)
+			return fmt.Errorf("unknown action %q; use accept, attach, stop, link, post, follow_up, cancel_timer, review or plan", action.Action)
 		}
 	}
 	return nil
@@ -394,6 +412,8 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		// Health is set when the entry's framework is failing or at its
 		// usage limit on its machine.
 		Health string `json:"health,omitempty"`
+		// CostTier is low, medium or high.
+		CostTier string `json:"cost_tier,omitempty"`
 	}
 	healthOf := healthIndex(view.Health)
 	mark := func(hostID, runtime string) string {
@@ -456,6 +476,9 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		}
 	}
 	remote := false
+	for index := range roster {
+		roster[index].CostTier = view.Tiers[roster[index].ID]
+	}
 	for _, entry := range roster {
 		marked = marked || entry.Health != ""
 		remote = remote || entry.Location != "local"
@@ -476,6 +499,13 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	fmt.Fprintf(prompt, "\nWORKER ROSTER:\n%s\n", rosterJSON)
 	if marked || remote {
 		prompt.WriteString("\nPLACEMENT: " + placementNote + "\n")
+	}
+	if view.PlanNote != "" {
+		prompt.WriteString("\nPLANS: " + view.PlanNote + "\n")
+	}
+	if len(view.Plans) > 0 {
+		plansJSON, _ := json.MarshalIndent(view.Plans, "", "  ")
+		fmt.Fprintf(prompt, "\nPLANS WAITING FOR APPROVAL (proposed; nothing started yet):\n%s\n", plansJSON)
 	}
 	fmt.Fprintf(prompt, "\nOPEN TICKETS (every thread, newest first):\n%s\n", ticketsJSON)
 	if len(view.Workspaces) > 0 {
@@ -532,7 +562,7 @@ func workerAssignment(agent core.SuperAgent, trigger core.SuperAgentTrigger, act
 // fromAgentMux reports whether an event is AgentMux's own news about a Ticket,
 // which the router passes on to a worker only as its own note.
 func fromAgentMux(trigger core.SuperAgentTrigger) bool {
-	return trigger.Kind == core.SuperAgentTriggerTicketUpdate || trigger.Kind == core.SuperAgentTriggerSupervision
+	return trigger.Kind == core.SuperAgentTriggerTicketUpdate || trigger.Kind == core.SuperAgentTriggerSupervision || trigger.Kind == core.SuperAgentTriggerPlan
 }
 
 // workerFollowUp delivers an event to a Ticket's worker, with the router's
