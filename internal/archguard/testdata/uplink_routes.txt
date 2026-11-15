@@ -1,0 +1,27 @@
+# The routes the hub serves up the node link: what a linked machine may send
+# to its hub. Kept by TestUplinkRoutes (hub_surface_test.go), compared both
+# ways with the source. Edit by hand, one entry a line; see
+# docs/architecture/guards.md "The hub's surface".
+#
+# Only the hub's own communication belongs here: reports, relays between
+# machines, the standby feed and mail. Business logic belongs on the nodes.
+
+# Reports a machine keeps on the hub (link/report.go).
+GET /uplink/v1/reports/{collection}
+POST /uplink/v1/reports/{collection}
+
+# Mail between agents on different machines (server/mailbox.go).
+POST /uplink/v1/mail/messages
+GET /uplink/v1/mail/directory
+
+# The worker relay between one owner's machines (server/worker_relay.go);
+# which calls it carries is pinned in relay_allowed.txt.
+GET /uplink/v1/relay-devices
+/uplink/v1/relay/{id}/{path...}
+
+# The standby hub's feed (hubha/feed.go), mounted by prefix in
+# server/hubstandby.go.
+prefix /uplink/v1/hub/
+GET /uplink/v1/hub/changes
+GET /uplink/v1/hub/snapshot
+GET /uplink/v1/hub/identity

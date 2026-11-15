@@ -1,0 +1,13 @@
+# Known violations of the package boundaries in boundaries_test.go. Shrink-only.
+#
+# One line per violation: "<rule> <package> <dependency>", paths relative to the
+# module for its own packages and in full otherwise. A line that no longer
+# matches a violation fails the test: delete it when the violation goes away.
+# Never add a line to let a new import pass; see docs/architecture/guards.md for
+# the rare case where adding one is legitimate.
+
+# core/hooks.go runs webhook hooks over HTTP and command hooks as processes.
+# Removed when hook execution moves to the channel runtime package that §8 of
+# hub-and-super-agents.md plans (channels/), leaving core the hook types.
+core-no-transport core net/http
+core-no-transport core os/exec

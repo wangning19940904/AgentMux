@@ -1,0 +1,18 @@
+# The tables that make up hub data: store.HubTables (store/hubsync.go). A
+# standby hub copies them from the primary, and a fenced primary refuses writes
+# to them. Kept by TestHubTables (hub_surface_test.go). One table a line; see
+# docs/architecture/guards.md "The hub's surface".
+
+# Accounts and their sign-in sessions.
+accounts
+account_sessions
+
+# Devices, pairing and what devices report.
+devices
+device_pairing_codes
+device_collections
+device_resources
+
+# Web Push.
+push_vapid_keys
+push_subscriptions
