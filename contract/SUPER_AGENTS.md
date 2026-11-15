@@ -638,7 +638,11 @@ description.
 | Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
 | Triggers | Where requests come from. |
 
-Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings.
+Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings,
+with supervision (record only, record and tell the agent, or off; see
+[Supervision](#supervision)) and the framework for [independent review](#independent-review).
+The Tickets list shows each Ticket's `done_when`, its open signals, its latest review with
+its checks, and its independent review's findings.
 
 ## Prompt parts
 

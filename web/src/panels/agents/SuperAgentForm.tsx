@@ -395,6 +395,23 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                   <input type="number" min={1} max={32} value={draft.max_concurrency} onChange={(event) => onChange({ ...draft, max_concurrency: Number(event.target.value) })} />
                   <small>{t("superAgentForm.concurrencyHelp")}</small>
                 </label>
+                <label className="field"><span>{t("superAgentForm.supervision")}</span>
+                  <select value={draft.supervision || "observe"} onChange={(event) => onChange({ ...draft, supervision: event.target.value as SuperAgent["supervision"] })}>
+                    <option value="observe">{t("superAgentForm.supervision.observe")}</option>
+                    <option value="act">{t("superAgentForm.supervision.act")}</option>
+                    <option value="off">{t("superAgentForm.supervision.off")}</option>
+                  </select>
+                  <small>{t("superAgentForm.supervisionHelp")}</small>
+                </label>
+                <label className="field"><span>{t("superAgentForm.reviewRuntime")}</span>
+                  <select value={draft.review_runtime ?? ""} onChange={(event) => onChange({ ...draft, review_runtime: event.target.value })}>
+                    <option value="">{t("superAgentForm.reviewRuntime.off")}</option>
+                    {[...frameworkOptions, ...(draft.review_runtime && !frameworkOptions.some((item) => item.kind === draft.review_runtime) ? [{ kind: draft.review_runtime, display: draft.review_runtime }] : [])].map((item) => (
+                      <option key={item.kind} value={item.kind}>{item.display}</option>
+                    ))}
+                  </select>
+                  <small>{t("superAgentForm.reviewRuntimeHelp")}</small>
+                </label>
                 {(promptParts.data ?? []).length > 0 && (
                   <div className="field" role="group" aria-labelledby="saf-worker-prompts">
                     <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>

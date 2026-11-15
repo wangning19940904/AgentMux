@@ -236,6 +236,31 @@ describe("SuperAgentsPanel", () => {
     expect(cancel).toHaveBeenCalledWith("stm_1");
   });
 
+  it("shows a ticket's criteria, open signals, latest review and independent review", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      tickets: [{
+        id: "t4", title: "Decimal pricing", status: "ready", worker: saved.workers[0], updated_at: "2026-11-03T00:00:00Z",
+        done_when: ["tests pass", "no float in pricing/"], expect_minutes: 30,
+        signals: [
+          { kind: "stalled", detail: "no progress since 10:00 UTC", since: "2026-11-03T10:00:00Z", at: "2026-11-03T10:30:00Z", cleared_at: "2026-11-03T10:40:00Z" },
+          { kind: "orphaned", detail: "its worker's machine cannot be reached", since: "2026-11-03T11:00:00Z", at: "2026-11-03T11:01:00Z" },
+        ],
+        reviews: [{ verdict: "rework", round: 1, at: "2026-11-03T12:00:00Z", checks: [{ criterion: "tests pass", met: false, evidence: "TestTax fails" }] }],
+        rework_rounds: 1,
+        auto_review: { runtime: "codex", findings: "- [P1] pricing/price.go:3: still a float64", count: 1, blocking: 1, at: "2026-11-03T12:00:00Z" },
+      }],
+    });
+    renderPanel();
+    await until(() => hasText("Decimal pricing"));
+    for (const text of ["Done when · about 30 min expected", "no float in pricing/", "Orphaned: its worker's machine cannot be reached",
+      "Sent back, round 1 of 2", "✗ tests pass (TestTax fails)", "Independent review (codex): 1 findings, 1 blocking", "pricing/price.go:3"]) {
+      expect(hasText(text), text).toBe(true);
+    }
+    // A signal that ended is history, not a warning.
+    expect(hasText("no progress since 10:00 UTC")).toBe(false);
+  });
+
   it("shows no follow-ups section for an agent that set none", async () => {
     renderPanel();
     await until(() => hasText("Fix build"));
