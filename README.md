@@ -181,6 +181,7 @@ addr = "0.0.0.0:8766"   # 只提供配对和设备连接，不暴露管理 API
 # tls = "auto"          # 默认：Hub 自签证书，设备按指纹校验，不需要域名
 # public_url = "https://hub.example.com"  # 经隧道、反向代理或端口转发访问时填写
 # pin_certificate = true                  # public_url 后面仍是 Hub 自签证书（如纯端口转发）时开启
+# client_api = true                       # 同一端口也提供 /api/v1/，供手机 App 使用（见「手机 App」）
 ```
 
 ```bash
@@ -250,6 +251,12 @@ Console 在窄屏上换成底部标签栏（总览、Agent、机器、更多）�
 curl -s -X POST -H "Authorization: Bearer $BRIDGE_TOKEN" https://your-hub.example.com/api/v1/console/sessions
 # 在手机上打开返回的 enter_url
 ```
+
+**手机 App（原生客户端）。** 开启 `[hub] client_api = true` 后，`[hub] addr` 的端口（及其前面的 relay）也提供 `/api/v1/`，手机 App 不需要 Console 的 HTTPS 地址：
+
+- `GET /api/v1/hub/client-link` 返回 Hub 地址、证书指纹和一个 `agentmux://hub?url=…&fp=…` 链接，Console 可把它显示成二维码；其中没有任何密钥。成员也可调用。
+- App 校验服务端证书的 SHA-256 等于 `fp`（与设备配对相同；Hub 使用自签证书，不能用系统 CA 校验），然后用 `POST /api/v1/auth/sign-in` 登录，之后每个请求带上会话 Cookie 和 `X-AgentMux-Console: 1` 请求头；也可以用 Bridge Token 作为 `Authorization: Bearer`。
+- 这个端口上的请求一律需要凭证，即使关闭了 bridge，也不会得到本机 Console 的免登录管理员身份；只允许本机调用的接口（如渠道投递、会话控制）在这里始终拒绝，`/api/v1/observability` 不提供。主备 Hub 共用同一证书，账号和会话也随 Hub 数据复制到备用 Hub，切换后 App 不需要重新扫码或登录。
 
 如果 `[hub] public_url` 填的是 HTTPS 地址，推送服务看到的联系人（VAPID subject）就是它，否则使用项目主页地址。
 

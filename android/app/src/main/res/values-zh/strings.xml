@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connect_intro">在电脑上打开 Hub 的 Console，显示手机连接二维码，然后扫码。</string>
+    <string name="scan_qr">扫描二维码</string>
+    <string name="scan_prompt">扫描 AgentMux Console 中的 Hub 链接</string>
+    <string name="or_paste">或粘贴链接：</string>
+    <string name="connect">连接</string>
+    <string name="pinned_certificate">已固定证书：%1$s…</string>
+    <string name="login">登录名</string>
+    <string name="password">密码</string>
+    <string name="sign_in">登录</string>
+    <string name="use_another_hub">使用其他 Hub</string>
+    <string name="refresh">刷新</string>
+    <string name="sign_out">退出登录</string>
+    <string name="no_messages">还没有对话。</string>
+</resources>

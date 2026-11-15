@@ -26,8 +26,8 @@ connect_timeout_seconds = 10
 # ---- Hub ----
 # Other machines can connect to this one as their hub with `amux join`. They
 # open the connection, so only the hub needs an address they can reach. This
-# listener serves pairing and device connections only, never the management
-# API. Create join commands with `amux hub pair`.
+# listener serves pairing and device connections only, and the management API
+# only with client_api. Create join commands with `amux hub pair`.
 # [hub]
 # addr = "0.0.0.0:8766"
 # tls = "auto"            # auto: the hub's own certificate, pinned by devices
@@ -37,6 +37,9 @@ connect_timeout_seconds = 10
 # public_url = ""         # what devices dial, when it is not addr: a tunnel,
 #                         # a reverse proxy, a forwarded port
 # pin_certificate = false # public_url still presents the hub's own certificate
+# client_api = false      # also serve /api/v1/ here for phone apps; every call
+#                         # needs an account session or the bridge token, and
+#                         # loopback-only endpoints stay closed
 # state_dir = ""          # hub certificate and this machine's own membership
 # lease_secret = ""       # set on two hubs and their relay (`amux hub relay`)
 # lease_secret_file = ""  # to run one as a standby of the other; see

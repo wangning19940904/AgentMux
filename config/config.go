@@ -80,6 +80,11 @@ type HubConfig struct {
 	// certificate, as they do through a plain port forward. It is assumed
 	// when PublicURL is empty and TLS is "auto".
 	PinCertificate bool `toml:"pin_certificate"`
+	// ClientAPI also serves /api/v1/ on Addr, for phones and other clients
+	// away from this machine. Every request there needs an account session
+	// or the bridge token, and loopback-only endpoints stay closed, because
+	// a relay's tunnel makes remote callers look local.
+	ClientAPI bool `toml:"client_api"`
 	// StateDir holds the hub's certificate and this machine's own membership
 	// of a hub. It defaults to the user's AgentMux configuration directory.
 	StateDir string `toml:"state_dir"`

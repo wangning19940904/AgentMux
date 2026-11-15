@@ -86,7 +86,7 @@ func (s *Server) callerPrincipal(r *http.Request) (principal *core.Principal, an
 	if principal := s.resolvePrincipal(r); principal != nil {
 		return principal, false
 	}
-	if !hasExplicitCredential(r) && !s.cfg.Bridge.Enabled {
+	if !hasExplicitCredential(r) && !s.cfg.Bridge.Enabled && !isHubClient(r) {
 		return core.AdminPrincipal(), true
 	}
 	return nil, false
