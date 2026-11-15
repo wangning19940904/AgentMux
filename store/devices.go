@@ -252,6 +252,7 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 	for _, query := range []string{
 		`DELETE FROM device_resources WHERE device_id=?`,
 		`DELETE FROM device_collections WHERE device_id=?`,
+		`DELETE FROM device_passive_links WHERE device_id=?`,
 		`DELETE FROM devices WHERE id=?`,
 	} {
 		if _, err := tx.ExecContext(ctx, query, id); err != nil {

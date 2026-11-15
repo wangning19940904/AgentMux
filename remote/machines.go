@@ -32,7 +32,15 @@ const (
 	PathSSH   = "ssh"
 	PathLink  = "link"
 	PathRelay = "relay"
+	// PathPassive is a paired device the hub dials, because the device
+	// listens (link.PassiveNode). Once connected it is reached as a linked
+	// device is; only who dialed differs.
+	PathPassive = "passive"
 )
+
+// devicePath reports whether a path is a device paired with this hub, which
+// ever way its connection was made.
+func devicePath(via string) bool { return via == PathLink || via == PathPassive }
 
 const (
 	machineIndexTTL = 5 * time.Second
@@ -122,7 +130,7 @@ func (e pathEntry) name() string {
 	switch e.via {
 	case PathSSH:
 		return e.host.Name
-	case PathLink:
+	case PathLink, PathPassive:
 		return e.device.Name
 	case PathRelay:
 		return e.relay.Name
@@ -194,7 +202,7 @@ func groupMachines(entries []pathEntry) *machineIndex {
 			// A device the hub relays to is the same record as the paired
 			// device with that id, as on a standby hub.
 			switch entry.via {
-			case PathLink, PathRelay:
+			case PathLink, PathPassive, PathRelay:
 				key = "device:" + entry.id
 			default:
 				key = entry.key()
@@ -211,14 +219,14 @@ func groupMachines(entries []pathEntry) *machineIndex {
 	for _, group := range order {
 		listed := false
 		for _, entry := range group.entries {
-			listed = listed || entry.via == PathSSH || entry.via == PathLink
+			listed = listed || entry.via == PathSSH || devicePath(entry.via)
 		}
 		if !listed {
 			continue
 		}
 		// The listed entry comes first, ahead of a relay or this machine.
 		for index, entry := range group.entries {
-			if entry.via == PathSSH || entry.via == PathLink {
+			if entry.via == PathSSH || devicePath(entry.via) {
 				group.entries[0], group.entries[index] = group.entries[index], group.entries[0]
 				break
 			}
@@ -246,7 +254,11 @@ func (m *Manager) collectEntries(ctx context.Context, devices []LinkedDevice) []
 		entries = append(entries, pathEntry{via: PathSSH, id: host.ID, uid: host.MachineUID, host: host})
 	}
 	for _, device := range devices {
-		entries = append(entries, pathEntry{via: PathLink, id: device.ID, uid: core.NormalizeMachineUID(device.MachineUID), device: device})
+		via := PathLink
+		if device.LinkMode == core.DeviceLinkPassive {
+			via = PathPassive
+		}
+		entries = append(entries, pathEntry{via: via, id: device.ID, uid: core.NormalizeMachineUID(device.MachineUID), device: device})
 	}
 	if relay := m.relayBackend(); relay != nil {
 		relayed, err := relay.RelayDevices(ctx)
@@ -363,7 +375,7 @@ func (m *Manager) pathAvailable(ctx context.Context, entry pathEntry) string {
 		if entry.host.HostKeyFingerprint == "" {
 			return "SSH host key is not trusted; test the connection first"
 		}
-	case PathLink:
+	case PathLink, PathPassive:
 		// The connection comes and goes faster than the list is grouped.
 		device, ok := m.linked(ctx, entry.id)
 		if !ok || !device.Online {

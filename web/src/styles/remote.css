@@ -179,14 +179,21 @@
 }
 
 .remote-pairing header div,
-.remote-pairing-result {
+.remote-pairing-result,
+.remote-pairing-passive {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.remote-pairing header strong {
+.remote-pairing header strong,
+.remote-pairing-passive strong {
   font-size: 13px;
+}
+
+.remote-pairing-passive {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .remote-pairing span {

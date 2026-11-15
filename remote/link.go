@@ -45,6 +45,9 @@ type LinkedDevice struct {
 	// MachineUID is the computer the device said it is when it last
 	// connected; empty for a node too old to say.
 	MachineUID string
+	// LinkMode is core.DeviceLinkPassive for a device the hub dials; empty
+	// for one that dials the hub.
+	LinkMode string
 }
 
 // LinkBackend supplies the devices paired with this hub.
@@ -78,7 +81,7 @@ func (d LinkedDevice) view() HostView {
 	return HostView{
 		ID: d.ID, Name: d.Name, Kind: KindLink, RemoteAddr: linkedRemoteAddr,
 		Trusted: true, Online: &online, Version: d.Version, LastSeenAt: d.LastSeenAt, ReportedAt: d.ReportedAt,
-		HubRole: d.HubRole, MachineUID: d.MachineUID,
+		HubRole: d.HubRole, MachineUID: d.MachineUID, LinkMode: d.LinkMode,
 	}
 }
 

@@ -12,7 +12,8 @@ import (
 // SSH, over its own link to this hub, or through the hub this machine is
 // linked to. pathChooser picks one per machine and keeps it:
 //
-//   - Classes come first: local, then direct (SSH or the machine's link),
+//   - Classes come first: local, then direct (SSH, or the machine's link
+//     whichever side dialed it),
 //     then through the hub. Within a class, the lower round-trip time wins.
 //   - A healthy active path is kept. When it fails, the next usable path is
 //     used at once.
@@ -39,7 +40,7 @@ func pathClass(via string) int {
 	switch via {
 	case PathLocal:
 		return 0
-	case PathSSH, PathLink:
+	case PathSSH, PathLink, PathPassive:
 		return 1
 	default:
 		return 2

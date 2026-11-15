@@ -43,55 +43,69 @@ func Fingerprint(der []byte) string {
 // it on first use. Nodes pin its fingerprint, so it is never replaced while it
 // can still be read: a new certificate would lock every paired node out.
 func LoadOrCreateCertificate(dir string) (tls.Certificate, string, error) {
-	certPath, keyPath := filepath.Join(dir, hubCertFile), filepath.Join(dir, hubKeyFile)
-	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-		return cert, Fingerprint(cert.Certificate[0]), nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	cert, err := loadOrCreateIdentity(dir, hubCertFile, hubKeyFile, &x509.Certificate{
+		Subject:     pkix.Name{CommonName: "AgentMux hub"},
+		DNSNames:    []string{"localhost"},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	})
+	if err != nil {
 		return tls.Certificate{}, "", fmt.Errorf("read hub certificate in %s: %w", dir, err)
+	}
+	return cert, Fingerprint(cert.Certificate[0]), nil
+}
+
+// loadOrCreateIdentity reads a key pair from dir, or creates a self-signed one
+// from template on first use. The key is written owner-only.
+func loadOrCreateIdentity(dir, certFile, keyFile string, template *x509.Certificate) (tls.Certificate, error) {
+	certPath, keyPath := filepath.Join(dir, certFile), filepath.Join(dir, keyFile)
+	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
+		return cert, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return tls.Certificate{}, err
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "AgentMux hub"},
-		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.AddDate(20, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
+	template.SerialNumber = serial
+	template.NotBefore = now.Add(-time.Hour)
+	template.NotAfter = now.AddDate(20, 0, 0)
+	template.KeyUsage = x509.KeyUsageDigitalSignature
+	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	// The key is written first: a certificate without its key would be kept
 	// forever by the check above and never work.
 	if err := writePrivate(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})); err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
 	if err := writePrivate(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})); err != nil {
-		return tls.Certificate{}, "", err
+		return tls.Certificate{}, err
 	}
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return tls.Certificate{}, "", err
-	}
-	return cert, Fingerprint(der), nil
+	return tls.LoadX509KeyPair(certPath, keyPath)
+}
+
+// SPKIFingerprint is the SHA-256 of a certificate's public key (its
+// SubjectPublicKeyInfo), in hex. Unlike Fingerprint it stays the same when a
+// certificate is reissued for the same key, so it is what a hub pins for a
+// node that listens.
+func SPKIFingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:])
 }
 
 func writePrivate(path string, data []byte) error {

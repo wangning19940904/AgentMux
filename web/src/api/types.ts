@@ -201,12 +201,14 @@ export interface RemoteHost {
   // are listed once, as the first of them, with every way of reaching it.
   machine_uid?: string;
   paths?: MachinePath[];
+  // "passive" for a linked machine this hub dials because it listens.
+  link_mode?: "passive";
 }
 
 // One way of reaching a machine: this machine itself, SSH, the machine's own
 // link to this hub, or the relay of the hub this machine is linked to.
 export interface MachinePath {
-  via: "local" | "ssh" | "link" | "relay";
+  via: "local" | "ssh" | "link" | "passive" | "relay";
   // The entry the path uses; empty for this machine itself.
   host_id?: string;
   name?: string;
@@ -224,6 +226,14 @@ export interface DevicePairingCode {
   join_token: string;
   command: string;
   warning?: string;
+}
+
+// A machine that listens, added from its invite (passive link).
+export interface PassiveDeviceAdded {
+  device: { id: string; name: string };
+  replaced: boolean;
+  online: boolean;
+  passive: { addrs: string[]; fingerprint: string; state?: string; last_error?: string };
 }
 
 export type MachineScope = "all" | "local" | string;

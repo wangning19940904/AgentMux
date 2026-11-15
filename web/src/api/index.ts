@@ -44,6 +44,7 @@ import type {
   ChannelInteraction,
   ChannelTask,
   DevicePairingCode,
+  PassiveDeviceAdded,
   DiscoveredRemoteHost,
   FeishuSetupBeginResponse,
   FeishuSetupPollResponse,
@@ -335,6 +336,8 @@ export const api = {
   importRemoteHost,
   createDevicePairingCode: (name: string) =>
     postChecked<DevicePairingCode>("/api/v1/devices/pairing-codes", { name }, { local: true }),
+  addPassiveDevice: (invite: string, name: string) =>
+    postChecked<PassiveDeviceAdded>("/api/v1/devices/passive", { invite, name }, { local: true }),
   deleteRemoteHost: (id: string) =>
     del<{ ok: boolean }>(`/api/v1/remote/hosts?id=${encodeURIComponent(id)}`),
   testRemoteHost,

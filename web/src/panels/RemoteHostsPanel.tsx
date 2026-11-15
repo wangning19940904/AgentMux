@@ -78,6 +78,8 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [pairing, setPairing] = useState<DevicePairingCode | null>(null);
   const [pairingBusy, setPairingBusy] = useState(false);
   const [pairingError, setPairingError] = useState("");
+  const [passiveInvite, setPassiveInvite] = useState("");
+  const [passiveBusy, setPassiveBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const deleteInFlight = useRef(false);
@@ -507,10 +509,31 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     }
   };
 
+  // A machine that listens: this hub dials it, from the invite it printed.
+  const addPassiveDevice = async () => {
+    setPassiveBusy(true);
+    setPairingError("");
+    try {
+      const added = await api.addPassiveDevice(passiveInvite.trim(), pairingName.trim());
+      setMessage(added.online
+        ? t("remote.passiveAdded", { name: added.device.name })
+        : t("remote.passiveAddedOffline", { name: added.device.name, error: added.passive.last_error || "…" }));
+      setPassiveInvite("");
+      setPairingOpen(false);
+      setPairingName("");
+      await load();
+    } catch (cause) {
+      setPairingError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPassiveBusy(false);
+    }
+  };
+
   const closePairing = () => {
     setPairingOpen(false);
     setPairing(null);
     setPairingName("");
+    setPassiveInvite("");
     setPairingError("");
     // The machine may have joined while the command was on screen.
     void load();
@@ -913,6 +936,28 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                 {pairing.warning && <span className="remote-pairing-warning">{pairing.warning}</span>}
               </div>
             )}
+            {!pairing && (
+              <div className="remote-pairing-passive">
+                <strong>{t("remote.passiveTitle")}</strong>
+                <span>{t("remote.passiveHint")}</span>
+                <div className="remote-pairing-form">
+                  <input
+                    aria-label={t("remote.passiveInvite")}
+                    placeholder={t("remote.passiveInvite")}
+                    value={passiveInvite}
+                    onChange={(event) => setPassiveInvite(event.target.value)}
+                  />
+                  <button
+                    className="action"
+                    type="button"
+                    disabled={passiveBusy || !passiveInvite.trim().startsWith("amxi_")}
+                    onClick={() => void addPassiveDevice()}
+                  >
+                    {passiveBusy ? t("common.loading") : t("remote.passiveAdd")}
+                  </button>
+                </div>
+              </div>
+            )}
             {pairingError && <div className="remote-feedback error" role="alert">{pairingError}</div>}
           </div>
         )}
@@ -987,7 +1032,9 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                     <div>
                       <strong>{host.name}</strong>
                       <span>
-                        {linked ? t("remote.linkSubtitle") : `${host.user}@${host.host}:${host.port}`}
+                        {linked
+                          ? t(host.link_mode === "passive" ? "remote.linkPassiveSubtitle" : "remote.linkSubtitle")
+                          : `${host.user}@${host.host}:${host.port}`}
                         {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
                       </span>
                       {!linked && host.ssh_alias && host.ssh_alias !== host.name && (

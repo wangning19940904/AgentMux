@@ -75,6 +75,8 @@ func (s *Server) setupHubStandby(uplink http.Handler) http.Handler {
 		OnPromote: func() {
 			// The devices now reconnect to this hub.
 			s.linkHub.MarkStarted()
+			// Devices that listen are dialed by this hub now.
+			s.refreshPassiveLink()
 			s.stopHubPeerLink()
 			// Only the primary writes hub data, so a record left from an
 			// earlier version is renamed now.

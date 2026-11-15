@@ -41,6 +41,9 @@ connect_timeout_seconds = 10
 # lease_secret = ""       # set on two hubs and their relay (`amux hub relay`)
 # lease_secret_file = ""  # to run one as a standby of the other; see
 #                         # docs/architecture/hub-and-super-agents.md §4.2
+# passive_listen = ""     # as a node: listen here for the hub to dial in
+#                         # (passive link), e.g. ":8767"; off by default
+# passive_addrs = []      # what invites tell the hub to dial, best first
 
 # ---- Runtime resources ----
 # Agents, Channels, Triggers, Skills, MCP, Memory, and Guard policies are stored

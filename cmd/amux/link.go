@@ -68,6 +68,8 @@ func joinCmd() *cobra.Command {
 		name       string
 		replace    bool
 		foreground bool
+		listen     string
+		addrs      []string
 	)
 	cmd := &cobra.Command{
 		Use:   "join [join-token]",
@@ -78,12 +80,22 @@ func joinCmd() *cobra.Command {
 			"use this machine's AgentMux as its administrator does.\n\n" +
 			"The running AgentMux keeps the connection. With --foreground this command " +
 			"keeps it instead, for a machine whose AgentMux predates the hub link; run " +
-			"it without a token to reconnect a machine that has already joined.",
+			"it without a token to reconnect a machine that has already joined.\n\n" +
+			"With --listen this machine instead listens for the hub to dial it (a passive " +
+			"link), for a machine the hub can reach when the hub cannot be reached from " +
+			"here. It prints an invite for the hub's administrator: `amux hub add <invite>` " +
+			"on the hub, or Add a listening machine in its Console.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, _, err := loadConfig(false)
 			if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("listen") {
+				if len(args) > 0 || foreground {
+					return errors.New("--listen takes no join token and runs in the running AgentMux")
+				}
+				return listenForHub(cmd, cfg, listen, addrs)
 			}
 			token := ""
 			if len(args) == 1 {
@@ -114,7 +126,38 @@ func joinCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "what the hub calls this machine (default: its hostname, or the name chosen on the hub)")
 	cmd.Flags().BoolVar(&replace, "replace", false, "leave the hub this machine already belongs to")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "keep the connection from this command instead of the running AgentMux")
+	cmd.Flags().StringVar(&listen, "listen", "", "listen for the hub to dial this machine, on host:port (default [hub] passive_listen, the last one used, or :8767)")
+	cmd.Flags().Lookup("listen").NoOptDefVal = " "
+	cmd.Flags().StringArrayVar(&addrs, "addr", nil, "with --listen: host:port the hub dials, best first (repeatable; default this machine's addresses)")
 	return cmd
+}
+
+// listenForHub makes the running AgentMux listen for its hub and prints the
+// invite. The invite alone goes to stdout, so it can be piped.
+func listenForHub(cmd *cobra.Command, cfg *config.Config, listen string, addrs []string) error {
+	var invited struct {
+		Invite      string    `json:"invite"`
+		Addrs       []string  `json:"addrs"`
+		Fingerprint string    `json:"fingerprint"`
+		Listen      string    `json:"listen"`
+		ExpiresAt   time.Time `json:"expires_at"`
+	}
+	err := daemonJSON(cmd.Context(), cfg, http.MethodPost, "/api/v1/link/passive",
+		map[string]any{"listen": strings.TrimSpace(listen), "addrs": addrs}, &invited)
+	if errors.Is(err, errNoDaemon) {
+		return fmt.Errorf("%w; start it first: the running AgentMux listens for the hub", err)
+	}
+	if err != nil {
+		return err
+	}
+	stderr := cmd.ErrOrStderr()
+	fmt.Fprintf(stderr, "Listening for the hub on %s. Key fingerprint (SHA-256 SPKI): %s\n", invited.Listen, invited.Fingerprint)
+	fmt.Fprintf(stderr, "The hub will dial %s.\n", strings.Join(invited.Addrs, ", "))
+	fmt.Fprintf(stderr, "On the hub, within %d minutes, run `amux hub add <invite>` with this invite (or paste it in the Console):\n",
+		int(time.Until(invited.ExpiresAt).Round(time.Minute).Minutes()))
+	fmt.Fprintln(cmd.OutOrStdout(), invited.Invite)
+	fmt.Fprintln(stderr, "Open this port to the hub's address only. The invite pairs whoever uses it first; keep it private.")
+	return nil
 }
 
 func joinForeground(cmd *cobra.Command, cfg *config.Config, token, name string, replace bool) error {
@@ -173,7 +216,8 @@ func joinForeground(cmd *cobra.Command, cfg *config.Config, token, name string, 
 }
 
 func leaveCmd() *cobra.Command {
-	return &cobra.Command{
+	var passive bool
+	cmd := &cobra.Command{
 		Use:   "leave",
 		Short: "Disconnect this machine from its AgentMux hub",
 		Args:  cobra.NoArgs,
@@ -181,6 +225,21 @@ func leaveCmd() *cobra.Command {
 			cfg, _, err := loadConfig(false)
 			if err != nil {
 				return err
+			}
+			if passive {
+				err := daemonJSON(cmd.Context(), cfg, http.MethodDelete, "/api/v1/link/passive", nil, nil)
+				if errors.Is(err, errNoDaemon) {
+					path, pathErr := linkpkg.PassiveStatePath(cfg.Hub.StateDir)
+					if pathErr != nil {
+						return pathErr
+					}
+					err = linkpkg.RemoveState(path)
+				}
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "Stopped listening for the hub. It still lists this machine, offline, until it is removed there.")
+				return nil
 			}
 			err = daemonJSON(cmd.Context(), cfg, http.MethodPost, "/api/v1/link/leave", nil, nil)
 			if errors.Is(err, errNoDaemon) {
@@ -197,6 +256,8 @@ func leaveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&passive, "passive", false, "stop listening for a hub that dials this machine, and forget it")
+	return cmd
 }
 
 func hubCmd() *cobra.Command {
@@ -261,6 +322,7 @@ func hubCmd() *cobra.Command {
 					Version    string     `json:"version"`
 					Online     bool       `json:"online"`
 					LastSeenAt *time.Time `json:"last_seen_at"`
+					LinkMode   string     `json:"link_mode"`
 				} `json:"devices"`
 			}
 			if err := daemonJSON(cmd.Context(), cfg, http.MethodGet, "/api/v1/devices", nil, &listed); err != nil {
@@ -278,12 +340,67 @@ func hubCmd() *cobra.Command {
 				case device.LastSeenAt != nil:
 					state = "offline since " + device.LastSeenAt.Local().Format("2006-01-02 15:04")
 				}
+				if device.LinkMode == "passive" {
+					state += " (this hub dials it)"
+				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%s  %-24s %-28s %s\n", device.ID, device.Name,
 					strings.TrimSpace(device.OS+"/"+device.Arch+" "+device.Version), state)
 			}
 			return nil
 		},
 	}
+
+	var (
+		addName  string
+		addAddrs []string
+	)
+	add := &cobra.Command{
+		Use:   "add <invite>",
+		Short: "Add a machine that listens, from its invite; this hub dials it",
+		Long: "Add a machine that cannot reach this hub but that this hub can reach. On that " +
+			"machine, `amux join --listen` prints an invite: its addresses, the fingerprint of " +
+			"its key, and a one-time secret. This hub dials it, trusts only that key, pairs, " +
+			"and keeps the connection up. A machine that already dials this hub is refused: " +
+			"remove it first.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, err := loadConfig(false)
+			if err != nil {
+				return err
+			}
+			var added struct {
+				Device struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"device"`
+				Replaced bool `json:"replaced"`
+				Online   bool `json:"online"`
+				Passive  struct {
+					Addrs     []string `json:"addrs"`
+					LastError string   `json:"last_error"`
+				} `json:"passive"`
+			}
+			body := map[string]any{"invite": args[0], "name": addName, "addrs": addAddrs}
+			if err := daemonJSON(cmd.Context(), cfg, http.MethodPost, "/api/v1/devices/passive", body, &added); err != nil {
+				return err
+			}
+			verb := "Added"
+			if added.Replaced {
+				verb = "Updated"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s %q; this hub dials it at %s.\n", verb, added.Device.ID, added.Device.Name, strings.Join(added.Passive.Addrs, ", "))
+			if !added.Online {
+				reason := added.Passive.LastError
+				if reason == "" {
+					reason = "still dialing"
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "It is not connected yet: %s\n", reason)
+			}
+			return nil
+		},
+	}
+	add.Flags().StringVar(&addName, "name", "", "what to call the machine (default: its hostname)")
+	add.Flags().StringArrayVar(&addAddrs, "addr", nil, "host:port to dial instead of the invite's addresses (repeatable, best first)")
 
 	remove := &cobra.Command{
 		Use:   "remove <device-id>",
@@ -297,7 +414,7 @@ func hubCmd() *cobra.Command {
 			return daemonJSON(cmd.Context(), cfg, http.MethodDelete, "/api/v1/devices?id="+args[0], nil, nil)
 		},
 	}
-	cmd.AddCommand(pair, devices, remove)
+	cmd.AddCommand(pair, add, devices, remove)
 	cmd.AddCommand(hubStandbyCmds()...)
 	return cmd
 }

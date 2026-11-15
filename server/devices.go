@@ -41,6 +41,8 @@ type deviceBackend struct {
 	// hubRoles labels the devices that are hubs ("hub" or "standby"), or
 	// returns nil when this hub has no standby.
 	hubRoles func(ctx context.Context) map[string]string
+	// passiveRefresh tells the hub's dialer the listening devices changed.
+	passiveRefresh func()
 }
 
 func (b *deviceBackend) isSelf(id string) bool {
@@ -54,10 +56,14 @@ func (b *deviceBackend) roles(ctx context.Context) map[string]string {
 	return b.hubRoles(ctx)
 }
 
-func (b *deviceBackend) linked(device core.Device, roles map[string]string) remotepkg.LinkedDevice {
+func (b *deviceBackend) linked(device core.Device, roles map[string]string, passive map[string]bool) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
-	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
+	linked := remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
 		HubRole: roles[device.ID], MachineUID: device.MachineUID}
+	if passive[device.ID] {
+		linked.LinkMode = core.DeviceLinkPassive
+	}
+	return linked
 }
 
 // lastReports is when each device last sent the hub its data.
@@ -82,12 +88,13 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 	}
 	latest := b.lastReports(ctx)
 	roles := b.roles(ctx)
+	passive := b.passiveSet(ctx)
 	out := make([]remotepkg.LinkedDevice, 0, len(devices))
 	for _, device := range devices {
 		if b.isSelf(device.ID) {
 			continue
 		}
-		linked := b.linked(device, roles)
+		linked := b.linked(device, roles, passive)
 		if at, ok := latest[device.ID]; ok {
 			linked.ReportedAt = &at
 		}
@@ -104,7 +111,8 @@ func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.Linked
 	if err != nil || device == nil {
 		return remotepkg.LinkedDevice{}, false
 	}
-	return b.linked(*device, b.roles(ctx)), true
+	link, _ := b.st.PassiveLink(ctx, id)
+	return b.linked(*device, b.roles(ctx), map[string]bool{id: link != nil}), true
 }
 
 const (
@@ -164,6 +172,9 @@ func (b *deviceBackend) Remove(ctx context.Context, id string) error {
 	}
 	b.hub.Disconnect(id)
 	b.push.ForgetDevice(id)
+	if b.passiveRefresh != nil {
+		b.passiveRefresh()
+	}
 	return nil
 }
 
@@ -189,6 +200,7 @@ func (s *Server) setupLink() {
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
 	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels}
+	s.setupPassiveLink()
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
 	}
@@ -204,6 +216,7 @@ func (s *Server) registerDeviceRoutes() {
 	s.mux.HandleFunc("GET /api/v1/link", s.handleLinkStatus)
 	s.mux.HandleFunc("POST /api/v1/link/join", s.handleLinkJoin)
 	s.mux.HandleFunc("POST /api/v1/link/leave", s.handleLinkLeave)
+	s.registerPassiveLinkRoutes()
 	s.registerHubStandbyRoutes()
 	if s.linkHub != nil {
 		// Devices that can reach the management port may pair through it. The
@@ -220,6 +233,10 @@ type deviceView struct {
 	RemoteAddr     string     `json:"remote_addr,omitempty"`
 	// ReportedAt is when the device last sent the hub its data.
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
+	// LinkMode is "passive" for a device the hub dials; Passive says where
+	// and how that stands.
+	LinkMode string             `json:"link_mode,omitempty"`
+	Passive  *passiveDeviceView `json:"passive,omitempty"`
 }
 
 // Device ownership. A device belongs to the account that created its pairing
@@ -341,9 +358,13 @@ func (s *Server) handleDevicesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	latest := s.devices.lastReports(r.Context())
+	passive := s.passiveDevices(r.Context())
 	views := make([]deviceView, 0, len(devices))
 	for _, device := range devices {
 		view := deviceView{Device: device}
+		if link, ok := passive[device.ID]; ok {
+			view.LinkMode, view.Passive = core.DeviceLinkPassive, &link
+		}
 		if at, ok := latest[device.ID]; ok {
 			view.ReportedAt = &at
 		}
@@ -698,6 +719,9 @@ type nodeLink struct {
 	// pathsStarted is set once the remote Manager knows this machine's
 	// own paths (startMachinePaths).
 	pathsStarted bool
+	// passive listens for a hub that dials this machine (passive link),
+	// once it was told to; nil before.
+	passive *linkpkg.PassiveNode
 }
 
 // machineUID is this machine's UID, or "" when the server has not started.
@@ -748,6 +772,7 @@ func (n *nodeLink) run(ctx context.Context) {
 	if ok {
 		n.start(state)
 	}
+	n.openPassive()
 }
 
 func (n *nodeLink) start(state linkpkg.State) {
@@ -790,9 +815,14 @@ func (n *nodeLink) stop() {
 // one.
 func (n *nodeLink) uplink() *http.Client {
 	n.mu.Lock()
-	client := n.client
+	client, passive := n.client, n.passive
 	n.mu.Unlock()
 	if client == nil {
+		if passive != nil && passive.Status().Paired {
+			// A machine is linked one way at a time: the hub that dials
+			// it carries its uplink.
+			return passive.Uplink()
+		}
 		return nil
 	}
 	return client.Uplink()
@@ -811,12 +841,15 @@ func (n *nodeLink) status() (linkpkg.ClientStatus, bool) {
 type linkStatusResponse struct {
 	Joined bool `json:"joined"`
 	linkpkg.ClientStatus
+	// Passive is this machine listening for a hub that dials it, when it
+	// was told to.
+	Passive *linkpkg.PassiveStatus `json:"passive,omitempty"`
 }
 
 func (s *Server) handleLinkStatus(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	status, joined := s.node.status()
-	writeJSON(w, http.StatusOK, linkStatusResponse{Joined: joined, ClientStatus: status})
+	writeJSON(w, http.StatusOK, linkStatusResponse{Joined: joined, ClientStatus: status, Passive: s.node.passiveStatus()})
 }
 
 // handleLinkJoin makes this machine a device of a hub. Whoever runs that hub
@@ -843,6 +876,11 @@ func (s *Server) handleLinkJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing, ok, _ := linkpkg.LoadState(path); ok && !req.Replace {
 		writeErr(w, http.StatusConflict, "this machine already belongs to the hub at "+existing.HubURL+"; leave it first")
+		return
+	}
+	// A machine is linked one way at a time.
+	if s.node.passiveActive() {
+		writeErr(w, http.StatusConflict, "this machine listens for a hub that dials it (passive link); stop that first (amux leave --passive)")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)

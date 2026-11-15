@@ -390,6 +390,9 @@ CREATE INDEX IF NOT EXISTS idx_super_agent_timers_agent ON super_agent_timers(su
 		// by a primary that has not upgraded yet, and a standby at the other
 		// schema version stops applying changes until both have this one.
 		{version: 31, name: "machine_identity", sql: deviceMachineUIDMigration},
+		// Devices the hub dials (passive link). A hub table: its trigger
+		// logs it for a standby and fences it on a fenced primary.
+		{version: 36, name: "device_passive_links", sql: devicePassiveLinkSchema + hubCaptureSQL("device_passive_links")},
 	}
 }
 
