@@ -285,6 +285,7 @@ amux usage [daily|weekly|monthly|session|blocks] [--since 7d] [--json] [--ssh]
 amux usage statusline            # compact one-liner for status bars/hooks
 amux frameworks models|test <kind> [--model <model>]
 amux send --channel-id <id> --conversation-key <key> --text "..."
+amux dispatch start|read --token <ticket token> ...  # a Ticket's worker starts and reads helpers
 amux hub pair|devices|remove     # manage machines connected to this hub
 amux accounts list|create|disable|enable|set-role|reset-password|assign-device
 amux join <token> | amux leave   # connect this machine to a hub, or leave it

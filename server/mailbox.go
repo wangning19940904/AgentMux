@@ -294,6 +294,7 @@ func (s *Server) mailUplink(reports http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", reports)
 	s.registerWorkerRelay(mux)
+	s.registerDispatchUplink(mux)
 	mux.HandleFunc("POST "+mailUplinkMessagesPath, func(w http.ResponseWriter, r *http.Request) {
 		deviceID := linkpkg.DeviceID(r.Context())
 		if deviceID == "" || s.mail == nil {

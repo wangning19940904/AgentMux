@@ -48,6 +48,8 @@ var publicRouteManifest = []PublicRouteSpec{
 	{http.MethodDelete, "/api/v1/triggers", RouteBeta},
 	{http.MethodPost, "/api/v1/triggers/run", RouteBeta},
 	{http.MethodGet, "/api/v1/usage", RouteBeta},
+	{http.MethodPost, "/api/v1/super-agents/dispatch/start", RouteBeta},
+	{http.MethodPost, "/api/v1/super-agents/dispatch/read", RouteBeta},
 	{http.MethodGet, "/api/v1/frameworks/health", RouteBeta},
 	{http.MethodPost, "/api/v1/frameworks/health/recheck", RouteBeta},
 	{http.MethodGet, "/api/v1/frameworks/health/settings", RouteBeta},

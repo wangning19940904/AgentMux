@@ -1519,6 +1519,8 @@ export interface SuperAgent {
   // When work needs the requester's approval before it starts: off (empty),
   // always, or above a cost tier.
   plan_approval?: "" | "off" | "always" | "above_low" | "above_medium";
+  // Lets a Ticket's worker start helpers on other workers of the roster.
+  dispatch?: boolean;
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1627,6 +1629,8 @@ export interface SuperAgentTicket {
   // The directory the worker writes in; held_since is set while the Ticket
   // holds it. An isolated worker has its own copy and holds nothing.
   workspace?: { host_id?: string; dir?: string; isolated?: boolean; held_since?: string };
+  // Sub-tasks its worker handed to other workers, oldest first.
+  helpers?: SuperAgentHelper[];
   updated_at: string;
 }
 
@@ -1700,6 +1704,19 @@ export interface SuperAgentRuntimeHealth {
   state: "ok" | "failing" | "usage_limit" | "unknown";
   reason?: string;
   resets_at?: string;
+}
+
+export interface SuperAgentHelper {
+  id: string;
+  worker_id: string;
+  title?: string;
+  instructions: string;
+  status: "running" | "done" | "failed" | "stopped";
+  // The helper's final answer, once done.
+  result?: string;
+  error?: string;
+  created_at: string;
+  finished_at?: string;
 }
 
 export interface SuperAgentTicketSignal {

@@ -48,6 +48,8 @@ func RelayAllowed(method, path string) bool {
 		"POST " + hostedWorkersPath,
 		"POST " + hostedWorkersRemovePath,
 		"POST " + steerPath,
+		"POST " + DispatchStartPath,
+		"POST " + DispatchReadPath,
 		"POST /api/v1/invocations/stream":
 		return true
 	}

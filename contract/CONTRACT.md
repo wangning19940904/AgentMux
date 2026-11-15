@@ -95,6 +95,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `GET /api/v1/usage` | Token 用量报表 |
 | `GET /api/v1/frameworks/health`、`POST /api/v1/frameworks/health/recheck`、`GET/PUT /api/v1/frameworks/health/settings` | 本机 Agent 框架健康记录（`ok`/`failing`/`usage_limit`/`unknown`）、立即复查与定时检查开关（默认关闭，间隔默认 30 分钟） |
 | `GET /api/v1/super-agents/plans`、`POST /api/v1/super-agents/plans/approve`、`POST /api/v1/super-agents/plans/decline`、`GET/DELETE /api/v1/super-agents/trust` | 智能体提出的计划（`plan` 动作）的查看、批准（启动其工单，可记住发起人对该成本档位的批准）与拒绝，以及已记住批准的查看与撤销；见 `contract/SUPER_AGENTS.md`「Plans, cost tiers and remembered approvals」 |
+| `POST /api/v1/super-agents/dispatch/start`、`POST /api/v1/super-agents/dispatch/read` | Ticket 的 worker 启动并读取 helper（agent 的 `dispatch` 设置默认关闭；以 Ticket 的 dispatch token 鉴权，见 [SUPER_AGENTS.md](SUPER_AGENTS.md#helpers)） |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
 
 ### OpenAI 兼容层
@@ -129,6 +130,9 @@ mcp、guard、devices、accounts 等）是 Console 专用管理面。第三方
   `POST /api/v1/console/sessions`（服务端间调用，只接受 bridge token）签发，
   得到管理员 Console。
 - `POST /hook/{id}` 使用触发器自带 token，不走 bridge。
+- `POST /api/v1/super-agents/dispatch/start`、`/read` 不走 bridge：请求体里的 Ticket
+  dispatch token 就是凭证，只对该 Ticket 及其 agent 有效，且仅在 agent 开启 `dispatch`
+  时可用。
 - 账号（Console 专用）：账号登录、登出与管理端点（`/api/v1/auth/*`、
   `/api/v1/accounts*`）属于 Console 管理面，不在稳定性分级内。成员可见的路由见
   [`server/auth_policy.go`](../server/auth_policy.go) 的 `memberRoutePolicy`；

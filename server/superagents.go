@@ -28,6 +28,9 @@ func (s *Server) SetSuperAgents(service *superagent.Service, directory superagen
 		s.mail.SetAgents(service)
 		service.SetMailbox(s.mail)
 	}
+	if service != nil {
+		service.SetDispatchHost(s.dispatchHost())
+	}
 }
 
 // RemoteHosts exposes the SSH host manager to the Super Agent worker fleet. It
@@ -82,6 +85,7 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("DELETE /api/v1/super-agents/routers", s.handleSuperAgentRouterDelete)
 	s.mux.HandleFunc("GET /api/v1/super-agents/activity", s.handleSuperAgentActivity)
 	s.mux.HandleFunc("GET /api/v1/super-agents/tickets", s.handleSuperAgentTickets)
+	s.registerDispatchRoutes()
 	// Workers this machine keeps for agents that live on another machine.
 	s.mux.HandleFunc("POST /api/v1/super-agents/workers/launch", s.handleHostedWorkerLaunch)
 	s.mux.HandleFunc("POST /api/v1/super-agents/workers/release", s.handleHostedWorkerRelease)

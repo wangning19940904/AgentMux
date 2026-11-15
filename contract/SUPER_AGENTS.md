@@ -426,6 +426,59 @@ by `remembered trust`. The Console lists remembered approvals on the agent's pag
 can revoke each. Plans and remembered approvals are stored as settings of this machine
 (`super_agent_plans:<agent>`, `super_agent_trust:<agent>`), never in the agent's home,
 which its brain can write, and are deleted with the agent.
+## Helpers
+
+Optional, and off unless the agent's `dispatch` setting is on. A worker running a Ticket
+may then hand a self-contained sub-task to another of the agent's workers, a **helper**,
+and read its result, so the brain is not the only thing that can split work.
+
+- **Being told.** When the setting is on, a new Ticket gets a dispatch token, and its
+  worker's first input ends with a `HELPERS` paragraph: the two calls with the token,
+  the workers it may name and the limits below. When it is off, the input says nothing
+  of them and no token exists. The paragraph is fixed text, not a prompt part. A worker on
+  another machine is offered helpers only when this machine has a hub to reach it through.
+- **Starting one.** `amux dispatch start --token <token> --worker <id> --title "…"
+  --instructions "…"` (or `--instructions-file`, `--runtime <framework>` for
+  `auto:<framework>`) prints the helper's id. It runs one turn, in a conversation of its
+  own (`superagent-hlp_…`), on that worker in the worker's own directory, and is told
+  only that it helps another worker of this agent on the Ticket's title, and the
+  instructions. Its final message is its result.
+- **Reading one.** `amux dispatch read --token <token> [--wait 10m] <helper id>` prints its
+  state (`running`, `done`, `failed`, `stopped`) and, once done, its result.
+- **The route.** Both commands call the worker's own machine:
+  `POST /api/v1/super-agents/dispatch/start` and `/read`, with the token in the body.
+  The routes take no account credential; the token is the credential. A worker on this
+  machine whose `amux` cannot be found is given the same calls as `curl` lines. A machine
+  that does not hold the Ticket passes the call up its hub link: through the worker relay
+  to the agent's machine, or to `POST /uplink/v1/dispatch/start` and `/read` on the hub
+  when the agent lives there.
+- **Recorded.** Helpers are kept on their parent Ticket (`helpers`: `id`, `worker_id`,
+  `worker`, `title`, `instructions`, `status`, `result`, `error`, `created_at`,
+  `finished_at`). The Console shows them under the Ticket with their state and result,
+  and OPEN TICKETS lists the helpers still running under `helpers`. The Ticket keeps only
+  the SHA-256 of its token (`dispatch_key`).
+
+The host enforces, whatever the worker asks for:
+
+| Limit | Where |
+| --- | --- |
+| The agent's `dispatch` setting is on | Every call; turning it off refuses the next call (`403`) |
+| The token is the Ticket's own; it names one Ticket, whose agent's setting and roster apply | Every call: an unknown or altered token is `401`; another Ticket's helper is `404` |
+| One level: a helper is never given a token, and a token never names a helper | Token check (`401`) |
+| The Ticket's turn is running | Start (`409`) |
+| At most 3 helpers run at once for a Ticket | Start (`409`) |
+| At most 12 helpers are started for a Ticket in all | Start (`409`) |
+| The worker is on the agent's roster, or an `auto:` worker it may launch | Start (`403`) |
+| Instructions are required, at most 20,000 characters | Start (`400`) |
+| Helpers still running stop when the Ticket's turn ends, however it ends: finished, failed, stopped, or the daemon stopping | Recorded as `stopped` with the reason |
+
+- A helper's result is cut at 60,000 characters. A read waits at most 30 seconds per call;
+  `--wait` repeats it.
+- Helpers do not count toward `max_concurrency`, are not reviewed, and do not wake the
+  brain; the Ticket's worker reports what it used.
+- **Not yet:** a worker on a machine reached only over SSH cannot reach the agent's
+  machine, so it is not offered helpers. After a hub failover, a Ticket on the old
+  primary is no longer `hub` to the new one.
 
 ## What the host enforces
 
@@ -435,6 +488,8 @@ The router reads untrusted text. What limits the harm a crafted event can do:
   list admits nobody. `*` is accepted only for Feishu messages. This is the only hard
   limit on who can reach the router. Channel sources have no list: whoever the
   channel lets reach the bot reaches the brain, as with any bound channel.
+- **A helper** a worker starts is held to the same roster, its Ticket's token and the
+  limits under [Helpers](#helpers).
 - **An action** can only name a worker on this Super Agent's roster, `auto:<framework>`
   or `auto:<framework>@<path id>` for one of its worker frameworks, and a Ticket already
   on the event's thread.
@@ -791,9 +846,10 @@ description.
 
 Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings,
 with supervision (record only, record and tell the agent, or off; see
-[Supervision](#supervision)) and the framework for [independent review](#independent-review).
+[Supervision](#supervision)), the framework for [independent review](#independent-review),
+and whether workers may start [helpers](#helpers) (`dispatch`, off by default).
 The Tickets list shows each Ticket's `done_when`, its open signals, its latest review with
-its checks, and its independent review's findings.
+its checks, its independent review's findings, and its helpers with their state and result.
 
 ## Prompt parts
 
@@ -870,6 +926,7 @@ These routes are for Console administrators and are closed to member accounts.
 | `POST /api/v1/super-agents/plans/approve` | Beta. `{agent_id, plan_id, remember}`: start a pending plan's Tickets; `remember` keeps the requester's approval up to its tier; `400` with the reason when they cannot start now, `409` when the plan is no longer pending |
 | `POST /api/v1/super-agents/plans/decline` | Beta. `{agent_id, plan_id, note}`: decline a pending plan and tell the brain |
 | `GET`, `DELETE /api/v1/super-agents/trust?agent_id=[&requester=]` | Beta. List remembered approvals, or revoke a requester's |
+| `POST /api/v1/super-agents/dispatch/start`, `/read` | A Ticket's worker starts and reads [helpers](#helpers). Not for the Console: the Ticket's token is the credential. |
 
 ## DeepSeek Harness runtime
 

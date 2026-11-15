@@ -19,6 +19,12 @@ GET /uplink/v1/mail/directory
 GET /uplink/v1/relay-devices
 /uplink/v1/relay/{id}/{path...}
 
+# A worker's helper calls for an agent that lives on the hub
+# (server/superagent_dispatch.go). Calls for an agent on another machine take
+# the worker relay instead; see relay_allowed.txt.
+POST /uplink/v1/dispatch/start
+POST /uplink/v1/dispatch/read
+
 # The standby hub's feed (hubha/feed.go), mounted by prefix in
 # server/hubstandby.go.
 prefix /uplink/v1/hub/

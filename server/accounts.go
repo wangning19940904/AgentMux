@@ -43,6 +43,10 @@ var authOpenPaths = map[string]bool{
 	"/api/v1/auth/session":  true,
 	"/api/v1/auth/sign-in":  true,
 	"/api/v1/auth/sign-out": true,
+	// A worker's helper calls carry their Ticket's token instead
+	// (superagent_dispatch.go).
+	"/api/v1/super-agents/dispatch/start": true,
+	"/api/v1/super-agents/dispatch/read":  true,
 }
 
 func (s *Server) registerAccountRoutes() {
