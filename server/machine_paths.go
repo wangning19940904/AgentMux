@@ -4,27 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
+	linkpkg "github.com/wangning19940904/AgentMux/link"
 	remotepkg "github.com/wangning19940904/AgentMux/remote"
 	"github.com/wangning19940904/AgentMux/superagent"
 )
 
 // Paths to machines.
 //
-// The remote Manager lists each computer once, with every way of reaching it
-// (remote/machines.go). This file gives it the path only the server knows:
-// the relay of the hub this machine is linked to.
+// The remote Manager lists each computer once and picks how to reach it
+// (remote/machines.go). This file gives it the two paths only the server
+// knows: this machine itself, and the relay of the hub this machine is
+// linked to.
 
 const relayPathsTTL = 30 * time.Second
 
-// startMachinePaths gives the remote Manager the relay of the hub this
-// machine is linked to, as another path to the machines it reaches. It runs
-// once, when the server starts.
-func (n *nodeLink) startMachinePaths(context.Context) {
+// startMachinePaths tells the remote Manager which machine this is, gives it
+// the local and relay paths, and checks machines with several paths until ctx
+// ends. It runs once, when the server starts.
+func (n *nodeLink) startMachinePaths(ctx context.Context) {
 	s := n.server
 	if s.remote == nil {
 		return
@@ -32,12 +35,76 @@ func (n *nodeLink) startMachinePaths(context.Context) {
 	n.mu.Lock()
 	started := n.pathsStarted
 	n.pathsStarted = true
+	uid := n.uid
 	n.mu.Unlock()
 	if started {
 		return
 	}
+	token := ""
+	if s.cfg.Bridge.Enabled {
+		token = s.cfg.Bridge.Token
+	}
+	// A request reaching this machine by its local path is answered as one
+	// arriving over its hub link: by its own API, with its own token.
+	listener := newPipeListener()
+	local := &http.Server{
+		Handler:           linkpkg.LocalAPIHandler(linkpkg.LoopbackAddr(s.cfg.Server.Addr), token),
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	go func() { _ = local.Serve(listener) }()
+	context.AfterFunc(ctx, func() { _ = local.Close() })
+	s.remote.SetLocal(uid, listener.dial)
 	s.remote.SetRelayBackend(&hubRelayPaths{node: n})
+	go s.remote.RunPathProbes(ctx, remotepkg.PathProbeInterval)
 }
+
+// pipeListener hands in-memory connections to a server.
+type pipeListener struct {
+	conns  chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newPipeListener() *pipeListener {
+	return &pipeListener{conns: make(chan net.Conn), closed: make(chan struct{})}
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-l.conns:
+		return conn, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
+
+func (l *pipeListener) dial(ctx context.Context) (net.Conn, error) {
+	client, server := net.Pipe()
+	select {
+	case l.conns <- server:
+		return client, nil
+	case <-l.closed:
+	case <-ctx.Done():
+	}
+	_ = client.Close()
+	_ = server.Close()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, errors.New("this machine's API has stopped")
+}
+
+type pipeAddr struct{}
+
+func (pipeAddr) Network() string { return "pipe" }
+func (pipeAddr) String() string  { return "local" }
 
 // relayedDevice is a device as the hub's relay list describes it. Hubs
 // before machine UIDs leave out machine_uid and online.

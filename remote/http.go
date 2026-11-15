@@ -21,6 +21,10 @@ func (m *Manager) DoHTTP(id string, request *http.Request, responseLimit int64) 
 	if responseLimit <= 0 {
 		return 0, nil, fmt.Errorf("response limit must be positive")
 	}
+	if group, ok := m.multiPath(request.Context(), id); ok {
+		return m.doMachineHTTP(group, request, responseLimit)
+	}
+	id = m.resolveID(request.Context(), id)
 	host, ok := m.store.Get(id)
 	if !ok {
 		if device, linked := m.linked(request.Context(), id); linked {
@@ -102,6 +106,34 @@ func (m *Manager) doLinkedHTTP(device LinkedDevice, request *http.Request, respo
 	}
 	if int64(len(payload)) > responseLimit {
 		return 0, nil, fmt.Errorf("remote %s: response exceeds %d bytes", device.Name, responseLimit)
+	}
+	return response.StatusCode, payload, nil
+}
+
+// doMachineHTTP reads a bounded response from a machine reached more than one
+// way, through the path the chooser picks. A path that cannot be connected to
+// gives way to the next before anything is sent.
+func (m *Manager) doMachineHTTP(group *machineGroup, request *http.Request, responseLimit int64) (int, []byte, error) {
+	name := group.primary().name()
+	conn, entry, err := m.dialMachineVia(request.Context(), group, "tcp", group.dialable())
+	if err != nil {
+		closeBody(request)
+		return 0, nil, fmt.Errorf("remote %s: %w", name, err)
+	}
+	response, err := connTransport(conn).RoundTrip(request)
+	if err != nil {
+		if request.Context().Err() == nil {
+			m.paths.failed(entry.key(), err)
+		}
+		return 0, nil, fmt.Errorf("remote %s: receive HTTP response: %w", name, err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(response.Body, responseLimit+1))
+	if err != nil {
+		return 0, nil, fmt.Errorf("remote %s: read HTTP response body: %w", name, err)
+	}
+	if int64(len(payload)) > responseLimit {
+		return 0, nil, fmt.Errorf("remote %s: response exceeds %d bytes", name, responseLimit)
 	}
 	return response.StatusCode, payload, nil
 }

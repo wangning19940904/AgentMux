@@ -335,6 +335,24 @@ is unknown, such as an SSH host never contacted or a node too old to report
 one, is never merged. An entry that later reports another UID moves to the
 machine it reaches.
 
+Dialing any entry of a machine, or its UID, picks the path in one place
+([remote/paths.go](../../remote/paths.go)): local first, then direct (SSH or
+the machine's own link), then through the hub; within a class the lower
+round-trip time. A healthy active path is kept. When it fails, the next usable
+path is used at once. The chooser moves back only to a path that is clearly
+better (a better class, or the same class with a round-trip time over 30% and
+at least 5 ms lower) and has stayed so for 60 seconds. A failed path is not
+tried again for 2 seconds, doubling up to a minute. Every 30 seconds the paths
+of each machine with more than one are checked with the status endpoint. The
+relay carries only the worker API, so `DialContext` never uses it; the
+request-level `Manager.Transport` does. A machine known one way is reached
+exactly as before, without the chooser.
+
+The local path answers through this machine's own API with its own token, as a
+request over its hub link would be. A request built for one entry may travel
+another path, so `Manager.Get` lends a merged device the API token of its SSH
+host; the link and local paths replace it with the node's own.
+
 ### 4.4 What is stored where
 
 | Data | Hub | Node |

@@ -103,7 +103,13 @@ func (s *Server) handleWorkerRelay(w http.ResponseWriter, r *http.Request) {
 			request.SetURL(&url.URL{Scheme: "http", Host: host.RemoteAddr})
 			request.Out.URL.Path, request.Out.URL.RawPath = targetPath, ""
 			request.Out.Host = host.RemoteAddr
+			// Over the device's link, the device puts its own token here. The
+			// machine may also be reached over SSH, which needs the token of
+			// its SSH host (remote.Manager.Get lends it).
 			request.Out.Header.Del("Authorization")
+			if host.APIToken != "" {
+				request.Out.Header.Set("Authorization", "Bearer "+host.APIToken)
+			}
 			request.Out.Header.Set("X-AgentMux-Relayed-From", source.Name)
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {

@@ -3,6 +3,8 @@ package remote
 import (
 	"context"
 	"errors"
+	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,8 +22,9 @@ import (
 // to report one, is a machine of its own.
 //
 // The machine list shows each machine once, as its first entry (SSH hosts
-// before devices), with all of its paths. Any of its entries' ids, or its
-// UID, finds it.
+// before devices), with all of its paths. Dialing any of its entries, or its
+// UID, then picks the path (pathChooser). A machine with a single path is
+// reached exactly as before, without the chooser.
 
 // Ways of reaching a machine.
 const (
@@ -31,7 +34,13 @@ const (
 	PathRelay = "relay"
 )
 
-const machineIndexTTL = 5 * time.Second
+const (
+	machineIndexTTL = 5 * time.Second
+	// PathProbeInterval is how often the paths of machines with more than
+	// one are checked, so the chooser knows which work and how fast.
+	PathProbeInterval = 30 * time.Second
+	pathProbeTimeout  = 10 * time.Second
+)
 
 // MachinePath is one way of reaching a machine, as the machine list shows it.
 type MachinePath struct {
@@ -75,10 +84,26 @@ func (m *Manager) SetRelayBackend(backend RelayBackend) {
 	m.invalidateMachines()
 }
 
+// SetLocal tells the Manager which machine it runs on, and how to reach this
+// machine's own API. An entry that reaches this machine then has a local
+// path, preferred to every other.
+func (m *Manager) SetLocal(uid string, dial func(ctx context.Context) (net.Conn, error)) {
+	m.mu.Lock()
+	m.localUID, m.localDial = core.NormalizeMachineUID(uid), dial
+	m.mu.Unlock()
+	m.invalidateMachines()
+}
+
 func (m *Manager) relayBackend() RelayBackend {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.relays
+}
+
+func (m *Manager) local() (string, func(ctx context.Context) (net.Conn, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.localUID, m.localDial
 }
 
 // pathEntry is one way of reaching a machine.
@@ -115,6 +140,39 @@ type machineGroup struct {
 
 // primary is the entry the machine is listed as.
 func (g *machineGroup) primary() pathEntry { return g.entries[0] }
+
+// dialable are the paths that open connections; the relay carries requests
+// only.
+func (g *machineGroup) dialable() []pathEntry {
+	var out []pathEntry
+	for _, entry := range g.entries {
+		if entry.via != PathRelay {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func (g *machineGroup) entry(key string) (pathEntry, bool) {
+	for _, entry := range g.entries {
+		if entry.key() == key {
+			return entry, true
+		}
+	}
+	return pathEntry{}, false
+}
+
+// sshToken is the API token of the machine's SSH entry. A request built for
+// another of its entries may travel over SSH, where it needs one; the link
+// and local paths put the node's own token in its place.
+func (g *machineGroup) sshToken() string {
+	for _, entry := range g.entries {
+		if entry.via == PathSSH && entry.host.APIToken != "" {
+			return entry.host.APIToken
+		}
+	}
+	return ""
+}
 
 type machineIndex struct {
 	groups []*machineGroup
@@ -199,6 +257,9 @@ func (m *Manager) collectEntries(ctx context.Context, devices []LinkedDevice) []
 			entries = append(entries, pathEntry{via: PathRelay, id: device.ID, uid: core.NormalizeMachineUID(device.MachineUID), relay: device})
 		}
 	}
+	if uid, dial := m.local(); uid != "" && dial != nil {
+		entries = append(entries, pathEntry{via: PathLocal, uid: uid})
+	}
 	return entries
 }
 
@@ -258,6 +319,16 @@ func (m *Manager) machine(ctx context.Context, id string) (*machineGroup, bool) 
 	return group, ok
 }
 
+// multiPath returns the machine id belongs to when it can be dialed more than
+// one way. Everything else is reached as it always was.
+func (m *Manager) multiPath(ctx context.Context, id string) (*machineGroup, bool) {
+	group, ok := m.machine(ctx, id)
+	if !ok || len(group.dialable()) < 2 {
+		return nil, false
+	}
+	return group, true
+}
+
 // resolveID turns a machine UID into the id of the entry it is listed as;
 // any other id is returned as it is.
 func (m *Manager) resolveID(ctx context.Context, id string) string {
@@ -302,6 +373,10 @@ func (m *Manager) pathAvailable(ctx context.Context, entry pathEntry) string {
 		if m.relayBackend() == nil || !entry.relay.Online {
 			return "offline at the hub"
 		}
+	case PathLocal:
+		if _, dial := m.local(); dial == nil {
+			return "this machine's API is not available"
+		}
 	}
 	return ""
 }
@@ -310,13 +385,22 @@ func (m *Manager) pathAvailable(ctx context.Context, entry pathEntry) string {
 var ErrDeviceOffline = errors.New("device is offline")
 
 func (m *Manager) pathViews(ctx context.Context, group *machineGroup) []MachinePath {
+	active := m.paths.activePath(group.key)
 	out := make([]MachinePath, 0, len(group.entries))
 	for _, entry := range group.entries {
-		path := MachinePath{Via: entry.via, HostID: entry.id, Name: entry.name()}
-		switch unavailable := m.pathAvailable(ctx, entry); {
+		report := m.paths.report(entry.key())
+		path := MachinePath{Via: entry.via, HostID: entry.id, Name: entry.name(), Active: entry.key() == active}
+		if report.rtt > 0 {
+			// Tenths of a millisecond; a measured round trip never reads as none.
+			path.RTTMS = max(math.Round(float64(report.rtt)/float64(time.Millisecond)*10)/10, 0.1)
+		}
+		unavailable := m.pathAvailable(ctx, entry)
+		switch {
 		case unavailable != "":
 			path.Error = unavailable
-		case entry.via == PathSSH:
+		case report.backingOff || (report.checked && !report.ok):
+			path.Error = report.err
+		case entry.via == PathSSH && !report.checked:
 			path.Error = "not checked yet"
 		default:
 			path.OK = true

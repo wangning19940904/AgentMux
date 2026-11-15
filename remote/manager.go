@@ -38,8 +38,11 @@ type Manager struct {
 	attemptGates sync.Map
 	updateMu     sync.Mutex
 
-	// Machines known more than one way (machines.go).
+	// Machines with more than one path (machines.go).
 	relays     RelayBackend
+	localUID   string
+	localDial  func(ctx context.Context) (net.Conn, error)
+	paths      *pathChooser
 	machinesMu sync.Mutex
 	machines   *machineIndex
 }
@@ -105,6 +108,7 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 		store: store, log: log, timeout: timeout, install: installRemoteAgentMux,
 		update:  updateRemoteAgentMux,
 		clients: map[string]*cachedClient{},
+		paths:   newPathChooser(time.Now, defaultPathHold),
 	}, nil
 }
 
@@ -161,17 +165,26 @@ func (m *Manager) SyncSSHConfig(candidates []DiscoveredHost) (SSHConfigSyncResul
 }
 
 // Get returns an entry by its id, or the entry a machine UID is listed as.
+// A request built from it may travel any path of its machine, so an entry
+// without an API token borrows the token of its machine's SSH host.
 func (m *Manager) Get(id string) (Host, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
 	defer cancel()
 	id = m.resolveID(ctx, id)
-	if host, ok := m.store.Get(id); ok {
-		return host, true
+	host, ok := m.store.Get(id)
+	if !ok {
+		device, linked := m.linked(ctx, id)
+		if !linked {
+			return Host{}, false
+		}
+		host, ok = device.host(), true
 	}
-	if device, ok := m.linked(ctx, id); ok {
-		return device.host(), true
+	if host.APIToken == "" {
+		if group, merged := m.multiPath(ctx, id); merged {
+			host.APIToken = group.sshToken()
+		}
 	}
-	return Host{}, false
+	return host, true
 }
 
 func (m *Manager) Upsert(host Host, clearAPIToken bool) (HostView, error) {
@@ -361,6 +374,10 @@ func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse, in
 // restarting anything. The Console uses it to show live versions in the host
 // list as soon as the page opens.
 func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
+	// A machine reached several ways is checked along each of them.
+	if group, ok := m.multiPath(ctx, id); ok {
+		return m.machineStatus(ctx, group)
+	}
 	id = m.resolveID(ctx, id)
 	host, ok := m.store.Get(id)
 	if !ok {
@@ -653,8 +670,13 @@ func (m *Manager) cache(host Host, client remoteClient) {
 // AgentMux loopback address. The caller-supplied address is intentionally
 // ignored to keep the proxy scoped to that one service.
 //
-// id names an entry or a machine UID.
+// id names an entry or a machine UID. A machine reached more than one way is
+// dialed through the path the chooser picks (machines.go); the hub's relay
+// is not among them, as it carries requests rather than connections.
 func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn, error) {
+	if group, ok := m.multiPath(ctx, id); ok {
+		return m.dialMachine(ctx, group, network)
+	}
 	id = m.resolveID(ctx, id)
 	host, ok := m.store.Get(id)
 	if !ok {

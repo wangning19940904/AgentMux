@@ -198,14 +198,16 @@ func statusHandler(uid string) http.Handler {
 	})
 }
 
-func newMachineManager(t *testing.T) *Manager {
+func newMachineManager(t *testing.T) (*Manager, *fakeClock) {
 	t.Helper()
 	manager, err := NewManager(filepath.Join(t.TempDir(), "hosts.json"), 2*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(manager.Close)
-	return manager
+	clock := &fakeClock{at: time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)}
+	manager.paths = newPathChooser(clock.now, 0)
+	return manager, clock
 }
 
 func addSSHHost(t *testing.T, manager *Manager, name, uid string) Host {
@@ -233,7 +235,7 @@ func listedIDs(views []HostView) []string {
 }
 
 func TestListShowsAMachineKnownSeveralWaysOnce(t *testing.T) {
-	manager := newMachineManager(t)
+	manager, _ := newMachineManager(t)
 	devices := newFakeDevices(statusHandler(uidA))
 	manager.SetLinkBackend(devices)
 
@@ -267,16 +269,22 @@ func TestListShowsAMachineKnownSeveralWaysOnce(t *testing.T) {
 		t.Fatalf("old device = %+v\nwant %+v", views[2], old.view())
 	}
 
-	// Every entry of the machine still finds it, and so does its UID.
-	for id, want := range map[string]string{shared.ID: shared.ID, "dev-builder": "dev-builder", uidA: shared.ID} {
-		if host, ok := manager.Get(id); !ok || host.ID != want {
+	// Every entry of the machine, and its UID, still finds it; a request
+	// built for the device borrows the SSH host's token, since it may
+	// travel over SSH.
+	for _, id := range []string{shared.ID, "dev-builder", uidA} {
+		host, ok := manager.Get(id)
+		if !ok || host.APIToken != shared.APIToken {
 			t.Fatalf("Get(%s) = %+v, %v", id, host, ok)
 		}
+	}
+	if host, ok := manager.Get("dev-old"); !ok || host.APIToken != "" {
+		t.Fatalf("an unmerged device borrowed a token: %+v", host)
 	}
 }
 
 func TestMachineRegroupsWhenAnEntryReportsAnotherUID(t *testing.T) {
-	manager := newMachineManager(t)
+	manager, _ := newMachineManager(t)
 	devices := newFakeDevices(statusHandler(uidA))
 	manager.SetLinkBackend(devices)
 	host := addSSHHost(t, manager, "vm", uidA)
@@ -311,7 +319,7 @@ func TestMachineRegroupsWhenAnEntryReportsAnotherUID(t *testing.T) {
 }
 
 func TestSSHHostKeepsItsUIDOnlyWhileItsAddressStays(t *testing.T) {
-	manager := newMachineManager(t)
+	manager, _ := newMachineManager(t)
 	host := addSSHHost(t, manager, "box", uidA)
 	host.Name, host.User = "box renamed", "admin"
 	if _, err := manager.Upsert(host, false); err != nil {
