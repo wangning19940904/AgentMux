@@ -1,0 +1,22 @@
+# Line-count ceilings for the business logic still in server/, kept by
+# TestServerSizeRatchet (server_size_test.go). "<glob> <lines>": a file name
+# or glob inside server/ (non-test files) and the lines its files hold. Each
+# count must equal the code: it may only go down. See
+# docs/architecture/guards.md "server/ size ratchet".
+
+# Fleet query, execute and sync fan out over SSH tunnels; they become hub
+# services when the node link replaces SSH (hub-and-super-agents.md §1, §8).
+fleet_sync.go 1041
+fleet.go 395
+
+# Feishu Open Platform automation: a platform service, not transport (§8).
+feishu_setup_automation.go 706
+
+# The OpenAI Responses implementation (§8: openai_* logic → services).
+openai_*.go 2222
+
+# macOS power assertions and activity simulation behind three handlers.
+keep_awake.go 463
+
+# Every file above, each counted once.
+total 4827

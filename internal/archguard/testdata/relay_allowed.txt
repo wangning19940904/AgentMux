@@ -1,0 +1,18 @@
+# The worker API calls the hub's worker relay carries between one owner's
+# machines: the cases of superagent.RelayAllowed (superagent/relay.go). Kept by
+# TestWorkerRelayCalls (hub_surface_test.go), compared both ways with the
+# source and checked against the function. "METHOD /path", one a line; see
+# docs/architecture/guards.md "The hub's surface".
+
+# What a router reads to pick a worker.
+GET /api/v1/agents
+GET /api/v1/agent-instances
+GET /api/v1/super-agents/workers/tools
+
+# Hosted workers on the other machine.
+POST /api/v1/super-agents/workers/launch
+POST /api/v1/super-agents/workers/release
+
+# Running and steering a worker's invocation.
+POST /api/v1/invocations/stream
+POST /api/v1/invocations/steer
