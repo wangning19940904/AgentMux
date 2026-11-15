@@ -1512,6 +1512,8 @@ export interface SuperAgent {
   // What AgentMux does with the signals it derives from running Tickets:
   // observe (empty) records them, act also wakes the brain, off does neither.
   supervision?: "" | "observe" | "act" | "off";
+  // Lets a Ticket's worker start helpers on other workers of the roster.
+  dispatch?: boolean;
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1614,7 +1616,22 @@ export interface SuperAgentTicket {
   rework_rounds?: number;
   // The latest independent review of the Ticket's work.
   auto_review?: SuperAgentAutoReview;
+  // Sub-tasks its worker handed to other workers, oldest first.
+  helpers?: SuperAgentHelper[];
   updated_at: string;
+}
+
+export interface SuperAgentHelper {
+  id: string;
+  worker_id: string;
+  title?: string;
+  instructions: string;
+  status: "running" | "done" | "failed" | "stopped";
+  // The helper's final answer, once done.
+  result?: string;
+  error?: string;
+  created_at: string;
+  finished_at?: string;
 }
 
 export interface SuperAgentTicketSignal {

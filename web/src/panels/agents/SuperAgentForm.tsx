@@ -412,6 +412,10 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
                   </select>
                   <small>{t("superAgentForm.reviewRuntimeHelp")}</small>
                 </label>
+                <label className="field"><span>{t("superAgentForm.dispatch")}</span>
+                  <span className="super-agent-check"><input type="checkbox" checked={draft.dispatch ?? false} onChange={(event) => onChange({ ...draft, dispatch: event.target.checked })} /> {t("superAgentForm.dispatchOn")}</span>
+                  <small>{t("superAgentForm.dispatchHelp")}</small>
+                </label>
                 {(promptParts.data ?? []).length > 0 && (
                   <div className="field" role="group" aria-labelledby="saf-worker-prompts">
                     <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>

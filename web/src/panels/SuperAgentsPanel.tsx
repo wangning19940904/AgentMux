@@ -204,6 +204,21 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                           <pre>{ticket.auto_review.error || ticket.auto_review.findings}</pre>
                         </details>
                       )}
+                      {(ticket.helpers ?? []).length > 0 && (
+                        <div className="super-agent-ticket-review super-agent-ticket-helpers">
+                          <small><strong>{t("superAgents.helpers.title")}:</strong> {t("superAgents.helpers.count", { running: (ticket.helpers ?? []).filter((helper) => helper.status === "running").length, total: (ticket.helpers ?? []).length })}</small>
+                          <ul>{(ticket.helpers ?? []).map((helper) => (
+                            <li key={helper.id}>
+                              <details>
+                                <summary><small>{t(`superAgents.helper.${helper.status}`)} · {helper.title || helper.id} · {helper.worker_id}</small></summary>
+                                <small>{helper.instructions}</small>
+                                {helper.error && <div className="error">{helper.error}</div>}
+                                {helper.result && <pre>{helper.result}</pre>}
+                              </details>
+                            </li>
+                          ))}</ul>
+                        </div>
+                      )}
                       {ticket.output && <pre>{ticket.output}</pre>}
                       {ticket.error && <div className="error">{ticket.error}</div>}
                       {ticket.reply_error && <div className="error">{t("superAgents.replyFailed")}: {ticket.reply_error}</div>}

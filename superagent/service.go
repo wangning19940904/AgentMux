@@ -160,6 +160,9 @@ type Service struct {
 	directory   Directory
 	scopes      FeishuScopeChecker
 	mailbox     Mailbox
+
+	// dispatch keeps the helpers Tickets' workers started; see dispatch.go.
+	dispatch dispatcher
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -821,6 +824,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
 		CreatedAt: now, UpdatedAt: now,
 	}
+	s.offerDispatch(agent, &ticket)
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
 		return "", err
 	}
@@ -991,6 +995,7 @@ func (s *Service) startQueued(ctx context.Context) error {
 				delete(s.turnStarts, ticketID)
 				s.mu.Unlock()
 				cancel()
+				s.endHelpers(ticketID)
 				s.notify()
 			}()
 			s.runTicket(runCtx, ctx, agent, ticketID)

@@ -67,6 +67,10 @@ type ticketView struct {
 	Updated  string `json:"updated"`
 	Activity string `json:"last_activity,omitempty"`
 	Folder   string `json:"folder,omitempty"`
+
+	// Helpers are the sub-tasks its worker handed to other workers that
+	// still run.
+	Helpers []string `json:"helpers,omitempty"`
 }
 
 type threadLink struct {
@@ -202,6 +206,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			entry.Signals = signalLines(ticket)
 		}
 		entry.Review = reviewSummary(ticket)
+		entry.Helpers = helperLines(ticket)
 		if s.existingTicketDir(ticket) != "" {
 			entry.Folder = ticketsDirName + "/" + ticket.ID
 		}

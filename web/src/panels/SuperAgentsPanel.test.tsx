@@ -261,6 +261,43 @@ describe("SuperAgentsPanel", () => {
     expect(hasText("no progress since 10:00 UTC")).toBe(false);
   });
 
+  it("shows a ticket's helpers with their state and result", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      tickets: [{
+        id: "t5", title: "Split the work", status: "running", worker: saved.workers[0], updated_at: "2026-11-03T00:00:00Z",
+        helpers: [
+          { id: "hlp_1", worker_id: "auto:codex", title: "find the config", instructions: "Find where the config is read.", status: "done", result: "config/config.go:323", created_at: "2026-11-03T00:00:00Z" },
+          { id: "hlp_2", worker_id: "w2", instructions: "Run the GPU tests.", status: "running", created_at: "2026-11-03T00:01:00Z" },
+          { id: "hlp_3", worker_id: "w1", title: "lint", instructions: "Run the linter.", status: "stopped", error: "the parent Ticket's turn ended", created_at: "2026-11-03T00:02:00Z" },
+        ],
+      }],
+    });
+    renderPanel();
+    await until(() => hasText("Split the work"));
+    for (const text of ["Helpers: 1 running, 3 in all", "Done · find the config · auto:codex", "config/config.go:323",
+      "Running · hlp_2 · w2", "Run the GPU tests.", "Stopped · lint · w1", "the parent Ticket's turn ended"]) {
+      expect(hasText(text), text).toBe(true);
+    }
+  });
+
+  it("turns helpers on in advanced settings, off by default", async () => {
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Fix build"));
+    expect(hasText("Helpers:")).toBe(false);
+    click(button(/^Edit$/));
+    await until(() => valueOf(/^Helpers/) !== undefined);
+    const toggle = control(/^Helpers/) as HTMLInputElement;
+    expect(toggle.type).toBe("checkbox");
+    expect(toggle.checked).toBe(false);
+    expect(toggle.closest("details")).toBeTruthy();
+    click(toggle);
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({ id: "sa_1", dispatch: true });
+  });
+
   it("shows no follow-ups section for an agent that set none", async () => {
     renderPanel();
     await until(() => hasText("Fix build"));

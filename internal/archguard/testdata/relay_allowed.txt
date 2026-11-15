@@ -13,6 +13,11 @@ GET /api/v1/super-agents/workers/tools
 POST /api/v1/super-agents/workers/launch
 POST /api/v1/super-agents/workers/release
 
+# A worker's helpers (superagent/dispatch.go): a worker on one machine starts
+# and reads helpers for its Ticket on the agent's machine.
+POST /api/v1/super-agents/dispatch/start
+POST /api/v1/super-agents/dispatch/read
+
 # Running and steering a worker's invocation.
 POST /api/v1/invocations/stream
 POST /api/v1/invocations/steer

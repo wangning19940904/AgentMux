@@ -39,6 +39,8 @@ tags:
     description: Token usage reporting (beta)
   - name: frameworks
     description: Health of the agent frameworks on this machine (beta)
+  - name: dispatch
+    description: A Ticket's worker starting and reading helpers (beta)
 
 paths:
   /api/v1/event-sources:
@@ -870,6 +872,115 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/super-agents/dispatch/start:
+    post:
+      tags: [dispatch]
+      operationId: startHelper
+      summary: Start a helper for the calling worker's Ticket
+      description: >
+        Called by a worker running a Ticket of an agent whose `dispatch`
+        setting is on, usually through `amux dispatch start`. The route takes
+        no account credential: the Ticket's dispatch token in the body is the
+        credential, and it acts for that Ticket and its agent only. The helper
+        runs one turn on a worker the agent's roster allows (`worker`, or
+        `runtime` for `auto:<runtime>`) with only the given instructions. At
+        most 3 helpers run at once per Ticket and 12 are started in all; the
+        Ticket's turn must be running; a helper is given no token. Helpers
+        still running when the Ticket's turn ends are stopped. A machine that
+        does not hold the Ticket passes the call up its hub link to the
+        machine that does, and returns that machine's answer.
+      x-stability: beta
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, instructions]
+              properties:
+                token: { type: string, description: "The Ticket's dispatch token, from the worker's first input" }
+                worker: { type: string, description: "A worker id the Ticket's brief lists, such as local or auto:codex@dev_1" }
+                runtime: { type: string, description: "Short for worker auto:<runtime>" }
+                title: { type: string, description: "A few words naming the sub-task; cut at 200 characters" }
+                instructions: { type: string, maxLength: 20000 }
+      responses:
+        "200":
+          description: The helper, running (or failed when its worker could not be launched)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DispatchHelper"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Dispatch is off for the agent, or the worker is not one its roster allows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The Ticket's turn is not running, or a helper limit is reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: The Ticket is on another machine that could not be reached through the hub
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/super-agents/dispatch/read:
+    post:
+      tags: [dispatch]
+      operationId: readHelper
+      summary: Read one of the calling worker's helpers
+      description: >
+        Returns the helper's state and, once it finished, its final answer as
+        `result`. `wait_seconds` (at most 30) waits for a running helper to
+        finish. The token must be the helper's parent Ticket's. A finished
+        helper stays readable while the agent's `dispatch` setting is on.
+      x-stability: beta
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, id]
+              properties:
+                token: { type: string }
+                id: { type: string, description: "The helper id start returned" }
+                wait_seconds: { type: integer, minimum: 0, maximum: 30 }
+      responses:
+        "200":
+          description: The helper
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DispatchHelper"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Dispatch is off for the agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          description: The Ticket is on another machine that could not be reached through the hub
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   securitySchemes:
     bridgeToken:
@@ -918,6 +1029,20 @@ components:
       properties:
         error:
           type: string
+
+    DispatchHelper:
+      type: object
+      required: [id, status, worker_id, created_at, running]
+      properties:
+        id: { type: string, description: "hlp_…" }
+        status: { type: string, enum: [running, done, failed, stopped] }
+        worker_id: { type: string }
+        title: { type: string }
+        result: { type: string, description: "The helper's final answer once done; cut at 60,000 characters" }
+        error: { type: string, description: "Why it failed or was stopped" }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        running: { type: integer, description: "How many of the Ticket's helpers run now" }
 
     Capabilities:
       type: object

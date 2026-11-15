@@ -46,6 +46,7 @@ func (s *Service) Tickets(ctx context.Context, limit int) ([]TicketSummary, erro
 		for _, ticket := range tickets {
 			summary := TicketSummary{SuperAgentTicket: ticket, SuperAgentName: agent.Name, PendingInputs: len(ticket.Inputs)}
 			summary.Inputs, summary.Reply, summary.Links = nil, nil, nil
+			summary.DispatchKey, summary.Helpers = "", cutHelpers(summary.Helpers, ticketSummaryOutput)
 			summary.Output = truncateRunes(summary.Output, ticketSummaryOutput)
 			summary.Instructions = truncateRunes(summary.Instructions, ticketSummaryOutput)
 			if review := summary.AutoReview; review != nil {

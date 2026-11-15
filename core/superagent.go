@@ -137,6 +137,10 @@ type SuperAgent struct {
 	Enabled     bool               `json:"enabled"`
 	CreatedAt   time.Time          `json:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at"`
+
+	// Dispatch lets a Ticket's worker hand sub-tasks to other workers on the
+	// roster and read their results, within the host's limits. Off by default.
+	Dispatch bool `json:"dispatch,omitempty"`
 }
 
 // SuperAgentPrompt is an operator's text for one built-in prompt part. Base
@@ -290,6 +294,12 @@ type SuperAgentTicket struct {
 	StartedAt  time.Time              `json:"started_at,omitempty"`
 	FinishedAt time.Time              `json:"finished_at,omitempty"`
 	UpdatedAt  time.Time              `json:"updated_at"`
+
+	// Helpers are the sub-tasks the Ticket's worker handed to other workers,
+	// oldest first. DispatchKey is the SHA-256 of the token the worker was
+	// given for that; empty when the agent did not allow dispatch.
+	Helpers     []SuperAgentHelper `json:"helpers,omitempty"`
+	DispatchKey string             `json:"dispatch_key,omitempty"`
 }
 
 // SuperAgentTicketSignal is one stretch of time in which a supervision
@@ -329,6 +339,32 @@ type SuperAgentAutoReview struct {
 	Error    string    `json:"error,omitempty"`
 	At       time.Time `json:"at"`
 }
+
+// SuperAgentHelper is one sub-task a Ticket's worker handed to another worker
+// of the same agent. It runs only while its parent's turn runs, and its result
+// is the helper's final answer.
+type SuperAgentHelper struct {
+	ID             string           `json:"id"`
+	WorkerID       string           `json:"worker_id"`
+	Worker         SuperAgentWorker `json:"worker"`
+	Title          string           `json:"title,omitempty"`
+	Instructions   string           `json:"instructions"`
+	ConversationID string           `json:"conversation_id"`
+	// Status is running, done, failed or stopped.
+	Status     string    `json:"status"`
+	Result     string    `json:"result,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
+}
+
+// Helper states.
+const (
+	SuperAgentHelperRunning = "running"
+	SuperAgentHelperDone    = "done"
+	SuperAgentHelperFailed  = "failed"
+	SuperAgentHelperStopped = "stopped"
+)
 
 // SuperAgentReviewCheck is the brain's judgement of one acceptance criterion.
 type SuperAgentReviewCheck struct {
