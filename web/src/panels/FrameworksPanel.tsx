@@ -19,6 +19,7 @@ import { FrameworkBusyAction, FrameworkGroupRow, FrameworkInstallingRow, Framewo
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
 import { latestHealthResult, useFrameworkHealth } from "./frameworks/useFrameworkHealth";
+import { FrameworkHealthChecksControl } from "./frameworks/FrameworkHealthRecord";
 import { FrameworkModelsDialog } from "./frameworks/FrameworkModelsDialog";
 import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
 import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
@@ -341,6 +342,13 @@ export function FrameworksPanel() {
             <span className="pill on">{installedGroups.length}</span>
           </div>
           <div className="catalog-bulk-actions">
+            {activeMachineScope() !== "all" && (
+              <FrameworkHealthChecksControl
+                settings={health.checks[""]}
+                machine={currentMachine}
+                onSave={(settings) => health.saveChecks("", settings)}
+              />
+            )}
             <button
               className="ghost-action"
               disabled={health.testingAll || testCandidates.length === 0 || Boolean(bulkProgress)}
@@ -417,6 +425,7 @@ export function FrameworksPanel() {
                         currentMachine={machineLabel(item)}
                         disabled={!item.spec.supported || Boolean(bulkProgress)}
                         health={latestHealthResult(health.results[key])}
+                        record={health.records[key]}
                         testing={Object.keys(health.testing[key] ?? {}).length > 0}
                         onTest={() => void health.test(item)}
                         onModels={() => setModelsFor(item)}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/framework"
+	"github.com/wangning19940904/AgentMux/framework/health"
 )
 
 type endpointSmokeAgent struct{ cfg map[string]any }
@@ -124,7 +125,66 @@ func TestFrameworkTestEndpoint(t *testing.T) {
 		t.Fatalf("health = %+v", health.Results)
 	}
 	rec = doJSON(t, s, http.MethodGet, "/api/v1/frameworks/health?kind=other", nil)
-	if !strings.Contains(rec.Body.String(), `"results":[]`) {
+	if !strings.Contains(rec.Body.String(), `"results":[]`) || !strings.Contains(rec.Body.String(), `"state":"unknown"`) {
 		t.Fatalf("filtered health = %s", rec.Body.String())
+	}
+}
+
+func TestFrameworkHealthRecordsRecheckAndSettings(t *testing.T) {
+	registerEndpointSmokeAgent()
+	s, _ := newTestServer(t)
+
+	// A passing test marks the framework ok.
+	doJSON(t, s, http.MethodPost, "/api/v1/frameworks/test", frameworkTestRequest{Kind: "endpoint-smoke"})
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/frameworks/health?kind=endpoint-smoke", nil)
+	var got frameworkHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Records) != 1 || got.Records[0].State != health.StateOK || got.Records[0].Source != health.SourceTest || got.Records[0].CheckedAt.IsZero() {
+		t.Fatalf("records = %+v", got.Records)
+	}
+	if got.Checks.Enabled || got.Checks.IntervalMinutes != health.DefaultIntervalMinutes {
+		t.Fatalf("checks = %+v", got.Checks)
+	}
+
+	// Recheck runs a check; one within 30 seconds returns that record.
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/frameworks/health/recheck", map[string]string{"kind": "endpoint-smoke"})
+	var record health.Record
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &record) != nil || record.State != health.StateOK || record.Source != health.SourceRecheck {
+		t.Fatalf("recheck: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s, http.MethodPost, "/api/v1/frameworks/health/recheck", map[string]string{"kind": "endpoint-smoke"})
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &record) != nil || record.Source != health.SourceRecheck {
+		t.Fatalf("throttled recheck: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, s, http.MethodPost, "/api/v1/frameworks/health/recheck", map[string]string{"kind": "no-such-framework"}); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown recheck: code=%d", rec.Code)
+	}
+	if rec := doJSON(t, s, http.MethodPost, "/api/v1/frameworks/health/recheck", map[string]string{}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty recheck: code=%d", rec.Code)
+	}
+
+	// Settings: off by default, saved per machine, the interval validated.
+	if rec := doJSON(t, s, http.MethodPut, "/api/v1/frameworks/health/settings", health.Settings{Enabled: true, IntervalMinutes: 2}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("short interval: code=%d", rec.Code)
+	}
+	rec = doJSON(t, s, http.MethodPut, "/api/v1/frameworks/health/settings", health.Settings{Enabled: true, IntervalMinutes: 60})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save settings: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, s, http.MethodGet, "/api/v1/frameworks/health/settings", nil)
+	var settings health.Settings
+	if json.Unmarshal(rec.Body.Bytes(), &settings) != nil || !settings.Enabled || settings.IntervalMinutes != 60 {
+		t.Fatalf("settings = %s", rec.Body.String())
+	}
+
+	// Other machines read it through a fleet query, like GET /api/v1/frameworks.
+	if !fleetOperationAllowed(http.MethodGet, "/api/v1/frameworks/health", true) {
+		t.Fatalf("fleet query cannot read framework health")
+	}
+	if !fleetOperationAllowed(http.MethodPost, "/api/v1/frameworks/health/recheck", false) ||
+		!fleetOperationAllowed(http.MethodPut, "/api/v1/frameworks/health/settings", false) {
+		t.Fatalf("fleet execute cannot recheck or change settings")
 	}
 }

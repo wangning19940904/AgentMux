@@ -401,7 +401,9 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	sess, conv, created, err := pr.session(ctx, msg.ChatID, msg.ChatType, msg.ConversationKey)
 	if err != nil {
 		e.log.Error("start session", "err", err)
-		e.emit(ctx, HookError, withError(data, err))
+		failed := withError(data, err)
+		failed["runtime_id"] = pr.workspace.RuntimeID
+		e.emit(ctx, HookError, failed)
 		e.replyAll(ctx, pr, msg, "failed to start agent session: "+err.Error())
 		return
 	}

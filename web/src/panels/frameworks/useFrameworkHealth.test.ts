@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { latestHealthResult, mergeHealthResults } from "./useFrameworkHealth";
+import { latestHealthResult, mergeHealthRecords, mergeHealthResults } from "./useFrameworkHealth";
 
 const result = (model: string, minute: number, ok = true) => ({
   kind: "codex", model, ok, latency_ms: 100, checked_at: `2026-11-14T03:${String(minute).padStart(2, "0")}:00Z`,
@@ -15,5 +15,13 @@ describe("framework health results", () => {
     expect(Object.keys(merged)).toEqual(["local::codex", "h1::codex"]);
     expect(latestHealthResult(merged["local::codex"])?.model).toBe("");
     expect(latestHealthResult(undefined)).toBeUndefined();
+  });
+
+  it("keeps one health record per machine and framework", () => {
+    let records = mergeHealthRecords({}, undefined, [{ kind: "codex", state: "failing" }]);
+    records = mergeHealthRecords(records, "h1", [{ kind: "codex", state: "ok" }]);
+    records = mergeHealthRecords(records, undefined, [{ kind: "codex", state: "usage_limit" }]);
+    expect(records["local::codex"].state).toBe("usage_limit");
+    expect(records["h1::codex"].state).toBe("ok");
   });
 });

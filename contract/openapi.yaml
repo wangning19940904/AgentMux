@@ -37,6 +37,8 @@ tags:
     description: Cron / webhook / lifecycle triggers (beta)
   - name: usage
     description: Token usage reporting (beta)
+  - name: frameworks
+    description: Health of the agent frameworks on this machine (beta)
 
 paths:
   /api/v1/event-sources:
@@ -753,6 +755,111 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/frameworks/health:
+    get:
+      tags: [frameworks]
+      operationId: getFrameworkHealth
+      summary: Health of the agent frameworks on this machine
+      description: >
+        One record per framework this machine can run or has a record of,
+        the latest test or check result per framework and model, and the
+        periodic check settings. Another machine reads it through a fleet
+        query (`POST /api/v1/fleet/query`), as it reads `GET
+        /api/v1/frameworks`.
+      x-stability: beta
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Narrow to one framework. An unknown kind returns one `unknown` record.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Framework health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrameworkHealth"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/frameworks/health/recheck:
+    post:
+      tags: [frameworks]
+      operationId: recheckFramework
+      summary: Check one framework now
+      description: >
+        Runs the same "reply ok" check as a periodic round, with the
+        framework's default model. Concurrent calls for one framework share
+        one check; a call within 30 seconds of the last check returns that
+        check's record without running another; a `usage_limit` record with a
+        known `resets_at` still ahead is returned unchecked. A check that
+        times out is asked once more; only a second timeout is recorded.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, description: "Framework runtime, such as claudecode or codex" }
+      responses:
+        "200":
+          description: The framework's record after the recheck
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrameworkHealthRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/frameworks/health/settings:
+    get:
+      tags: [frameworks]
+      operationId: getFrameworkHealthSettings
+      summary: Periodic framework check settings of this machine
+      x-stability: beta
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrameworkHealthSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [frameworks]
+      operationId: setFrameworkHealthSettings
+      summary: Turn periodic framework checks on or off
+      description: >
+        Saved per machine (setting `framework_health_checks`). Turning checks
+        on runs a round of the checks that are due.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FrameworkHealthSettings"
+      responses:
+        "200":
+          description: The saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrameworkHealthSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
 components:
   securitySchemes:
     bridgeToken:
@@ -1222,3 +1329,82 @@ components:
         limit: {"type": "integer"}
         offset: {"type": "integer"}
         has_more: {"type": "boolean"}
+
+    FrameworkHealth:
+      type: object
+      required: [results, records, checks]
+      properties:
+        results:
+          type: array
+          description: Latest test or check per framework and model, newest first (unchanged from before records existed).
+          items: { $ref: "#/components/schemas/FrameworkSmokeResult" }
+        records:
+          type: array
+          description: One record per framework, sorted by kind.
+          items: { $ref: "#/components/schemas/FrameworkHealthRecord" }
+        checks:
+          $ref: "#/components/schemas/FrameworkHealthSettings"
+
+    FrameworkHealthRecord:
+      type: object
+      required: [kind, state]
+      properties:
+        kind: { type: string, description: "Framework runtime, such as claudecode or codex" }
+        state:
+          type: string
+          enum: [ok, failing, usage_limit, unknown]
+          description: >
+            `unknown`: never checked, or a usage limit whose `resets_at` has
+            passed and that has not been checked since.
+        reason: { type: string, description: "Why it is not ok: a short label and the framework's own message, secrets redacted" }
+        error_kind: { $ref: "#/components/schemas/FrameworkErrorKind" }
+        source:
+          type: string
+          enum: [test, periodic, recheck, run]
+          description: >
+            `test`: the Console's Test (`POST /api/v1/frameworks/test`);
+            `periodic`: a periodic check; `recheck`: a recheck, including the
+            one that confirms a failed run; `run`: a real invocation that
+            failed for a framework-level reason (not signed in, CLI missing or
+            too old, model rejected, usage limit).
+        model: { type: string, description: "Model the evidence used; empty is the framework default" }
+        checked_at: { type: string, format: date-time, description: "When the evidence was produced; absent when never checked" }
+        probed_at: { type: string, format: date-time, description: "When a check last ran; failed runs do not move it" }
+        resets_at: { type: string, format: date-time, description: "When a usage limit ends, when the framework said so" }
+        consecutive_failures: { type: integer, description: "Failing or usage_limit records in a row" }
+        last_ok_at: { type: string, format: date-time }
+
+    FrameworkHealthSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+          description: >
+            Periodic checks and learning from real runs. Off by default; off,
+            nothing runs on its own and records change only through tests and
+            rechecks.
+        interval_minutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          default: 30
+          description: How old a framework's last check may get before the next. 0 or absent means 30.
+
+    FrameworkErrorKind:
+      type: string
+      enum: [not_installed, unauthenticated, model_not_found, usage_limit, rate_limited, network, timeout, unexpected_reply, cli_outdated, unknown]
+
+    FrameworkSmokeResult:
+      type: object
+      required: [kind, ok, latency_ms, checked_at]
+      properties:
+        kind: { type: string }
+        model: { type: string }
+        resolved_model: { type: string }
+        ok: { type: boolean }
+        latency_ms: { type: integer }
+        reply: { type: string }
+        error_kind: { $ref: "#/components/schemas/FrameworkErrorKind" }
+        error_detail: { type: string }
+        checked_at: { type: string, format: date-time }

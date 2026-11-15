@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
-import type { Framework, FrameworkSmokeResult } from "../../api";
+import type { Framework, FrameworkHealthRecord, FrameworkHealthSettings, FrameworkSmokeResult } from "../../api";
 import { targetKey } from "../../components/TargetBadge";
 
 // Results per framework instance (targetKey), then per model ("" is the
@@ -22,6 +22,16 @@ export function mergeHealthResults(current: FrameworkHealthResults, targetID: st
   return next;
 }
 
+// Health records per framework instance (targetKey).
+export type FrameworkHealthRecords = Record<string, FrameworkHealthRecord>;
+
+// mergeHealthRecords replaces the records of one machine.
+export function mergeHealthRecords(current: FrameworkHealthRecords, targetID: string | undefined, records: FrameworkHealthRecord[]): FrameworkHealthRecords {
+  const next = { ...current };
+  for (const record of records) next[targetKey(targetID, record.kind)] = record;
+  return next;
+}
+
 // latestHealthResult is the most recent test of a framework, whatever its model.
 export function latestHealthResult(results?: Record<string, FrameworkSmokeResult>) {
   let latest: FrameworkSmokeResult | undefined;
@@ -33,21 +43,34 @@ export function latestHealthResult(results?: Record<string, FrameworkSmokeResult
 
 export function useFrameworkHealth(items: Framework[]) {
   const [results, setResults] = useState<FrameworkHealthResults>({});
+  const [records, setRecords] = useState<FrameworkHealthRecords>({});
+  // Periodic check settings per machine ("" is the machine in view).
+  const [checks, setChecks] = useState<Record<string, FrameworkHealthSettings>>({});
   const [testing, setTesting] = useState<Record<string, Record<string, boolean>>>({});
   const [testingAll, setTestingAll] = useState(false);
   const testingAllRef = useRef(false);
   const targets = useMemo(() => [...new Set(items.map((item) => item.target_id ?? ""))].sort(), [items]);
-  const targetsKey = targets.join("\n");
+  // JSON, not join: [] and [""] (this machine) must differ.
+  const targetsKey = JSON.stringify(targets);
+
+  const load = useCallback(async (target: string, isActive: () => boolean = () => true) => {
+    try {
+      const health = await api.frameworkHealth(target || undefined);
+      if (!isActive()) return;
+      setResults((current) => mergeHealthResults(current, target || undefined, health.results));
+      setRecords((current) => mergeHealthRecords(current, target || undefined, health.records ?? []));
+      const settings = health.checks;
+      if (settings) setChecks((current) => ({ ...current, [target]: settings }));
+    } catch {
+      // older machines have no stored results
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
-    for (const target of targets) {
-      api.frameworkHealth(target || undefined)
-        .then((list) => { if (active) setResults((current) => mergeHealthResults(current, target || undefined, list)); })
-        .catch(() => undefined); // older machines have no stored results
-    }
+    for (const target of targets) void load(target, () => active);
     return () => { active = false; };
-  }, [targetsKey]);
+  }, [targetsKey, load]);
 
   const setModelTesting = (key: string, model: string, value: boolean) => setTesting((current) => {
     const models = { ...current[key] };
@@ -62,6 +85,8 @@ export function useFrameworkHealth(items: Framework[]) {
     try {
       const result = await api.frameworkTest({ kind: item.spec.kind, ...(model ? { model } : {}) }, item.target_id);
       setResults((current) => mergeHealthResults(current, item.target_id, [{ ...result, model: result.model ?? model }]));
+      // The test may have changed the framework's record.
+      void load(item.target_id ?? "");
     } catch (error) {
       const failure: FrameworkSmokeResult = {
         kind: item.spec.kind, model, ok: false, latency_ms: 0, error_kind: "unknown",
@@ -71,6 +96,12 @@ export function useFrameworkHealth(items: Framework[]) {
     } finally {
       setModelTesting(key, model, false);
     }
+  }, [load]);
+
+  const saveChecks = useCallback(async (target: string, settings: FrameworkHealthSettings) => {
+    const saved = await api.saveFrameworkHealthSettings(settings, target || undefined);
+    setChecks((current) => ({ ...current, [target]: saved }));
+    return saved;
   }, []);
 
   const testAll = useCallback(async (candidates: Framework[]) => {
@@ -89,5 +120,5 @@ export function useFrameworkHealth(items: Framework[]) {
     }
   }, [test]);
 
-  return { results, testing, testingAll, test, testAll };
+  return { results, records, checks, testing, testingAll, test, testAll, saveChecks };
 }
