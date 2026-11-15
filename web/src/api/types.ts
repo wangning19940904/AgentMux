@@ -1456,6 +1456,12 @@ export interface SuperAgent {
   auto_worker_dir?: string;
   auto_worker_approval_mode?: string;
   worker_machines?: SuperAgentMachine[];
+  // A framework whose fresh worker reviews each finished turn of a local
+  // worker in a git worktree; empty is off.
+  review_runtime?: string;
+  // What AgentMux does with the signals it derives from running Tickets:
+  // observe (empty) records them, act also wakes the brain, off does neither.
+  supervision?: "" | "observe" | "act" | "off";
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1548,7 +1554,46 @@ export interface SuperAgentTicket {
   output?: string;
   error?: string;
   reply_error?: string;
+  // What the brain said done means, and how long it expected a turn to take.
+  done_when?: string[];
+  expect_minutes?: number;
+  // What supervision noticed; one without cleared_at still holds.
+  signals?: SuperAgentTicketSignal[];
+  // The brain's verdicts, oldest first, and how often it sent the work back.
+  reviews?: SuperAgentTicketReview[];
+  rework_rounds?: number;
+  // The latest independent review of the Ticket's work.
+  auto_review?: SuperAgentAutoReview;
   updated_at: string;
+}
+
+export interface SuperAgentTicketSignal {
+  kind: "stalled" | "orphaned";
+  detail: string;
+  since: string;
+  at: string;
+  woke_at?: string;
+  cleared_at?: string;
+}
+
+export interface SuperAgentTicketReview {
+  verdict: "accepted" | "rework" | "needs_user";
+  checks?: Array<{ criterion: string; met: boolean; evidence?: string }>;
+  note?: string;
+  round?: number;
+  // Why AgentMux did not carry the review out, such as a rework past the limit.
+  refused?: string;
+  at: string;
+}
+
+export interface SuperAgentAutoReview {
+  runtime: string;
+  findings?: string;
+  // The reviewer's own counts; -1 when it gave none.
+  count: number;
+  blocking: number;
+  error?: string;
+  at: string;
 }
 
 export interface FeishuChat {

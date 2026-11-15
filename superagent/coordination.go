@@ -46,19 +46,27 @@ const (
 
 // ticketView is one Ticket as the router is shown it.
 type ticketView struct {
-	ID         string       `json:"id"`
-	Title      string       `json:"title"`
-	Status     string       `json:"status"`
-	Worker     string       `json:"worker_id"`
-	Thread     string       `json:"thread"`
-	WaitingFor []string     `json:"waiting_for,omitempty"`
-	DependsOn  []string     `json:"depends_on,omitempty"`
-	BaseTicket string       `json:"base_ticket,omitempty"`
-	Linked     []threadLink `json:"linked_threads,omitempty"`
-	Started    string       `json:"started,omitempty"`
-	Updated    string       `json:"updated"`
-	Activity   string       `json:"last_activity,omitempty"`
-	Folder     string       `json:"folder,omitempty"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Status     string   `json:"status"`
+	Worker     string   `json:"worker_id"`
+	Thread     string   `json:"thread"`
+	WaitingFor []string `json:"waiting_for,omitempty"`
+	DependsOn  []string `json:"depends_on,omitempty"`
+	BaseTicket string   `json:"base_ticket,omitempty"`
+	// DoneWhen and ExpectMinutes are what the brain asked for when it
+	// accepted the work.
+	DoneWhen      []string     `json:"done_when,omitempty"`
+	ExpectMinutes int          `json:"expect_minutes,omitempty"`
+	Linked        []threadLink `json:"linked_threads,omitempty"`
+	// Signals are what supervision noticed that still holds, in act mode.
+	Signals []string `json:"signals,omitempty"`
+	// Review is the latest review's verdict, and how much rework is left.
+	Review   string `json:"review,omitempty"`
+	Started  string `json:"started,omitempty"`
+	Updated  string `json:"updated"`
+	Activity string `json:"last_activity,omitempty"`
+	Folder   string `json:"folder,omitempty"`
 }
 
 type threadLink struct {
@@ -168,6 +176,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 		entry := ticketView{
 			ID: ticket.ID, Title: ticket.Title, Status: ticket.Status, Worker: ticket.Worker.ID,
 			Thread: "this thread", DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
+			DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
 			Updated: ago(now, ticket.UpdatedAt),
 		}
 		if !onThread {
@@ -189,6 +198,10 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 				entry.Activity = ago(now, latest.at) + ": " + latest.text
 			}
 		}
+		if supervisionMode(agent) == core.SuperAgentSupervisionAct {
+			entry.Signals = signalLines(ticket)
+		}
+		entry.Review = reviewSummary(ticket)
 		if s.existingTicketDir(ticket) != "" {
 			entry.Folder = ticketsDirName + "/" + ticket.ID
 		}
@@ -527,8 +540,7 @@ func (s *Service) ticketBackground(ctx context.Context, agentID string, dependsO
 
 // wakeRouter tells the router a Ticket's worker finished a turn, on the
 // Ticket's thread, so it can tell people and move dependent work along.
-func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, replyTo []byte, report string, failed bool) error {
-	now := s.now().UTC()
+func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, replyTo []byte, report string, failed bool, review string) error {
 	var text strings.Builder
 	if failed {
 		fmt.Fprintf(&text, "Ticket %s %q failed: %s\n", ticket.ID, ticket.Title, report)
@@ -547,12 +559,25 @@ func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket 
 	}
 	if !failed {
 		fmt.Fprintf(&text, "\nWorker's report:\n%s\n", truncateRunes(strings.TrimSpace(report), maxReportRunes))
+		if review != "" {
+			fmt.Fprintf(&text, "\n%s\n", review)
+		}
+		if len(ticket.DoneWhen) > 0 {
+			fmt.Fprintf(&text, "\nCheck the report against its done_when, and its files where you can, then answer with a review action. Rework rounds used: %d of %d.\n", ticket.ReworkRounds, maxReworkRounds)
+		}
 	}
+	return s.insertAgentMuxEvent(ctx, agent, ticket, core.SuperAgentTriggerTicketUpdate, "Ticket update: "+ticket.Title, text.String(), replyTo, "ticket:"+ticket.ID+":"+uuid.NewString())
+}
+
+// insertAgentMuxEvent stores an event from AgentMux itself about a Ticket, on
+// the Ticket's thread, for the router to take like any other.
+func (s *Service) insertAgentMuxEvent(ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, kind, title, text string, replyTo []byte, dedupeKey string) error {
+	now := s.now().UTC()
 	trigger := core.SuperAgentTrigger{
 		ID: "sat_" + uuid.NewString(), SuperAgentID: agent.ID, SourceID: ticket.SourceID, SourceKind: ticket.SourceKind,
-		DedupeKey: "ticket:" + ticket.ID + ":" + uuid.NewString(), ThreadKey: ticket.ThreadKey,
-		Actor: "agentmux", ActorName: "AgentMux", Addressed: true, Kind: core.SuperAgentTriggerTicketUpdate,
-		TicketID: ticket.ID, Title: "Ticket update: " + ticket.Title, Text: text.String(), Reply: replyTo,
+		DedupeKey: dedupeKey, ThreadKey: ticket.ThreadKey,
+		Actor: "agentmux", ActorName: "AgentMux", Addressed: true, Kind: kind,
+		TicketID: ticket.ID, Title: title, Text: text, Reply: replyTo,
 		Disposition: core.SuperAgentDispositionPending, ReceivedAt: now, UpdatedAt: now,
 	}
 	if _, err := s.store.InsertSuperAgentTrigger(ctx, trigger); err != nil {

@@ -316,6 +316,8 @@ type workerStub struct {
 	mu    sync.Mutex
 	calls []workerCall
 	run   func(context.Context, workerCall) (string, error)
+	// down lists the machines whose workers cannot be reached.
+	down map[string]bool
 }
 
 func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv, input string, options RunOptions) (string, error) {
@@ -329,7 +331,12 @@ func (w *workerStub) Run(ctx context.Context, worker core.SuperAgentWorker, conv
 	}
 	return run(ctx, call)
 }
-func (w *workerStub) Status(context.Context, core.SuperAgentWorker) core.SuperAgentWorkerStatus {
+func (w *workerStub) Status(_ context.Context, worker core.SuperAgentWorker) core.SuperAgentWorkerStatus {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.down[worker.HostID] {
+		return core.SuperAgentWorkerStatus{Detail: "tunnel closed"}
+	}
 	return core.SuperAgentWorkerStatus{Available: true}
 }
 func (w *workerStub) callCount() int {

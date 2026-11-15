@@ -414,6 +414,11 @@ router, it opens a Ticket and streams that Ticket's events.
   resumable Ticket waits for the same node (session continuity, as in Agent
   Relay §8.2). Otherwise the router is woken to decide whether to retry
   elsewhere. This removes the "one daemon owns a Super Agent's Tickets" limit.
+  Within one daemon, supervision already does the local half: it derives
+  `orphaned` (marked running with nothing running it, or a worker machine that
+  does not answer) and `stalled` signals from the daemon's own records and, in
+  act mode, wakes the router once per signal (contract: "Owning a Ticket"). A
+  hub lease would add the case where the owning daemon itself is gone.
 - **The router runs on the Agent's home node**, which the owner chooses. Router
   and workers do not need to share a machine.
 - **Context bundle.** Each worker turn receives, assembled by the hub:
@@ -637,7 +642,10 @@ Ordered by value relative to effort, given what already exists.
 7. **Playbooks: enforceable workflows** (the idea behind Agent Relay Flows).
    Required steps and gates, such as tests must pass or a person must review,
    attached to an Agent's Tickets. They are built on the Ticket graph and checked
-   by the host, not just prompted.
+   by the host, not just prompted. The first pieces exist: an `accept` can carry
+   `done_when` criteria, the router judges each finished turn with a `review`
+   whose rework the host bounds, and an optional independent reviewer sees only
+   the Ticket and its diff.
 8. **Shared memory and a decision log**, kept on the hub and versioned, with
    scopes (agent, account, team). The router writes decisions; people can edit
    them.

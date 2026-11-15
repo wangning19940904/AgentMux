@@ -40,6 +40,37 @@ const SuperAgentTriggerTicketUpdate = "ticket_update"
 // ticket update it comes from AgentMux, on the thread the timer was set on.
 const SuperAgentTriggerTimer = "timer"
 
+// SuperAgentTriggerSupervision tells the router what AgentMux noticed about
+// its open Tickets from its own records, such as a Ticket that stopped making
+// progress. Like a ticket update it comes from AgentMux, on the Tickets' thread.
+const SuperAgentTriggerSupervision = "supervision"
+
+// Supervision modes say what AgentMux does with the signals it derives from
+// an agent's open Tickets. Empty is observe.
+const (
+	SuperAgentSupervisionObserve = "observe"
+	SuperAgentSupervisionAct     = "act"
+	SuperAgentSupervisionOff     = "off"
+)
+
+// Supervision signal kinds.
+const (
+	// SuperAgentSignalStalled is a running Ticket whose worker has shown no
+	// progress for longer than its limit.
+	SuperAgentSignalStalled = "stalled"
+	// SuperAgentSignalOrphaned is a Ticket marked running that nothing runs,
+	// or whose worker's machine cannot be reached.
+	SuperAgentSignalOrphaned = "orphaned"
+)
+
+// Review verdicts: the brain's judgement of a Ticket after its worker
+// finished a turn.
+const (
+	SuperAgentReviewAccepted  = "accepted"
+	SuperAgentReviewRework    = "rework"
+	SuperAgentReviewNeedsUser = "needs_user"
+)
+
 // SuperAgentTimerFollowUp is a one-off wake-up the router set for itself.
 const SuperAgentTimerFollowUp = "follow_up"
 
@@ -94,10 +125,18 @@ type SuperAgent struct {
 	// other machines. Like the rest of the auto worker settings they are the
 	// operator's: a router decision picks among them and cannot add one.
 	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
-	Sources        []SuperAgentSource  `json:"sources"`
-	Enabled        bool                `json:"enabled"`
-	CreatedAt      time.Time           `json:"created_at"`
-	UpdatedAt      time.Time           `json:"updated_at"`
+	// ReviewRuntime names a framework whose fresh worker reviews the change
+	// of a local worker in a git worktree after each finished turn, before the
+	// brain hears about it. Empty turns independent review off.
+	ReviewRuntime string `json:"review_runtime,omitempty"`
+	// Supervision is observe (empty), act or off: whether AgentMux records
+	// the signals it derives from open Tickets, and whether it also wakes the
+	// brain with them.
+	Supervision string             `json:"supervision,omitempty"`
+	Sources     []SuperAgentSource `json:"sources"`
+	Enabled     bool               `json:"enabled"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 }
 
 // SuperAgentPrompt is an operator's text for one built-in prompt part. Base
@@ -226,6 +265,23 @@ type SuperAgentTicket struct {
 	// worktree starts from BaseTicket's latest commit instead of the default.
 	DependsOn  []string `json:"depends_on,omitempty"`
 	BaseTicket string   `json:"base_ticket,omitempty"`
+	// Instructions are what the brain asked the worker to achieve when it
+	// accepted the work.
+	Instructions string `json:"instructions,omitempty"`
+	// DoneWhen are the brain's acceptance criteria, and ExpectMinutes how long
+	// it expects a turn to take. Both are optional: a Ticket without them is
+	// done when its worker says so.
+	DoneWhen      []string `json:"done_when,omitempty"`
+	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// Signals are what supervision noticed about the Ticket, oldest first.
+	// One without ClearedAt still holds.
+	Signals []SuperAgentTicketSignal `json:"signals,omitempty"`
+	// Reviews are the brain's verdicts on the Ticket, oldest first, and
+	// ReworkRounds how many times it was sent back to its worker.
+	Reviews      []SuperAgentTicketReview `json:"reviews,omitempty"`
+	ReworkRounds int                      `json:"rework_rounds,omitempty"`
+	// AutoReview is the latest independent review of the Ticket's work.
+	AutoReview *SuperAgentAutoReview `json:"auto_review,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -234,6 +290,51 @@ type SuperAgentTicket struct {
 	StartedAt  time.Time              `json:"started_at,omitempty"`
 	FinishedAt time.Time              `json:"finished_at,omitempty"`
 	UpdatedAt  time.Time              `json:"updated_at"`
+}
+
+// SuperAgentTicketSignal is one stretch of time in which a supervision
+// condition held for a Ticket. Since is when the condition began, as far as
+// AgentMux can tell; WokeAt is when the brain was told, and stays zero in
+// observe mode or while a wake-up waits for its turn.
+type SuperAgentTicketSignal struct {
+	Kind      string    `json:"kind"`
+	Detail    string    `json:"detail"`
+	Since     time.Time `json:"since"`
+	At        time.Time `json:"at"`
+	WokeAt    time.Time `json:"woke_at,omitzero"`
+	ClearedAt time.Time `json:"cleared_at,omitzero"`
+}
+
+// SuperAgentTicketReview is one review of a Ticket. Round is the rework round
+// a rework started; Refused says why AgentMux did not carry the review out.
+type SuperAgentTicketReview struct {
+	Verdict   string                  `json:"verdict"`
+	Checks    []SuperAgentReviewCheck `json:"checks,omitempty"`
+	Note      string                  `json:"note,omitempty"`
+	Round     int                     `json:"round,omitempty"`
+	Refused   string                  `json:"refused,omitempty"`
+	TriggerID string                  `json:"trigger_id,omitempty"`
+	At        time.Time               `json:"at"`
+}
+
+// SuperAgentAutoReview is what an independent reviewer found in a Ticket's
+// work. Count and Blocking are the reviewer's own counts of its findings and
+// of the P0 and P1 ones among them, -1 when it gave none. Error says why the
+// review could not run.
+type SuperAgentAutoReview struct {
+	Runtime  string    `json:"runtime"`
+	Findings string    `json:"findings,omitempty"`
+	Count    int       `json:"count"`
+	Blocking int       `json:"blocking"`
+	Error    string    `json:"error,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// SuperAgentReviewCheck is the brain's judgement of one acceptance criterion.
+type SuperAgentReviewCheck struct {
+	Criterion string `json:"criterion"`
+	Met       bool   `json:"met"`
+	Evidence  string `json:"evidence,omitempty"`
 }
 
 // SuperAgentTicketLink is a thread other than a Ticket's own that cares about

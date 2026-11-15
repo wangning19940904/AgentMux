@@ -87,7 +87,9 @@ When no available worker can do the work, the router tells the sender. An action
   ```
 
   `accept` starts a Ticket, `attach` passes the event to a Ticket on the thread with the
-  router's optional note, and `stop` stops one. `follow_up` and `cancel_timer` set
+  router's optional note, and `stop` stops one. An `accept` may say what done means, and
+  `review` judges a Ticket whose worker finished a turn; see
+  [Owning a Ticket](#owning-a-ticket). `follow_up` and `cancel_timer` set
   and withdraw a wake-up; see [Follow-ups](#follow-ups). `reason` goes to the audit
   log. A JSON-only answer in the form routers used before is still read as an action.
 - **Memory** is files in `memory/`, indexed by `memory/MEMORY.md`, which the router
@@ -146,6 +148,133 @@ The host limits them, whatever the router asks for:
 
 A follow-up may set another, which is how "check every hour until it merges"
 works. The 24-hour limit is what bounds such a chain.
+
+## Owning a Ticket
+
+The brain owns the completion and quality of the Tickets it starts, instead of only
+relaying a worker's last answer.
+
+### Acceptance criteria
+
+```
+<agentmux-action>
+{"action":"accept","worker_id":"auto:codex","title":"Decimal pricing","instructions":"…",
+ "done_when":["go test ./pricing/... passes","no float64 left in pricing/"],"expect_minutes":30}
+</agentmux-action>
+```
+
+- `done_when` is optional: up to 6 criteria, each one line of at most 300 characters,
+  none repeated. `expect_minutes` is optional: how long the brain expects a turn to take,
+  from 1 to 360 (the longest a worker's turn may run).
+- Malformed values are refused before anything is carried out, like any other action the
+  host rejects: the router is told why and answers again.
+- The Ticket keeps them (`done_when`, `expect_minutes`, with the `instructions` it was
+  accepted with), and `ticket.json` records them. The worker's first input lists them
+  under `DONE WHEN`, with a request to end its report with one line per criterion:
+  whether it is met, and the evidence. The brain sees them with the Ticket in OPEN TICKETS.
+- An `accept` without them starts a Ticket exactly as before.
+
+### Supervision
+
+About every 30 seconds AgentMux looks at the running Tickets of every enabled agent and
+derives **signals** from records it already has. It calls no model.
+
+| Signal | When |
+| --- | --- |
+| `stalled` | The worker showed no progress (a tool call, or output, as `progress.md` records it) since its turn began or its last step, for longer than max(20 minutes, 1.5 × `expect_minutes`). |
+| `orphaned` | The Ticket is marked running but nothing on this machine runs it, or its worker's machine does not answer a status check. Either must hold for a minute before it counts. |
+
+- **Once per stretch.** A signal is recorded on the Ticket (`signals`: `kind`, `detail`,
+  `since`, `at`, `woke_at`, `cleared_at`, and in `ticket.json`) when its condition begins,
+  and closed when it ends: progress ends a stall, and whatever stops the Ticket running
+  ends all of its signals. While it lasts it is told once. A retry of the same turn that
+  finds the same condition reopens the same signal. The record is the dedupe state, so a
+  daemon that restarts finds the signals it already told and does not tell them again.
+  Recording a signal does not change the Ticket's `updated_at`.
+- **Modes.** The agent's `supervision` setting: `observe` (the default, also when empty)
+  records signals on the Ticket and wakes nothing, so an agent that does not choose a mode
+  behaves as before; `act` also wakes the brain; `off` records nothing.
+- **Waking the brain** (act). Signals are an event of kind `supervision` on the Tickets'
+  thread, stored like a ticket update and taken by the router like any other event, in
+  order with the thread's other events. All untold signals on a thread go in one event,
+  and a thread gets at most one such event every 10 minutes; signals that come up in
+  between wait and go together. The event's dedupe key names its signals, so a daemon
+  that stops between storing it and marking them told stores no second one. In act mode
+  OPEN TICKETS also lists each Ticket's open signals under `signals`.
+- The brain decides what to do: ask the worker how it stands with `attach`, stop the
+  Ticket and accept the work again, tell the people waiting, or nothing; an empty reply
+  sends nothing. When the router fails on a supervision event after its retries, the
+  event is recorded as failed and nothing is sent.
+
+### Review
+
+After a worker finishes a turn, the brain gives its verdict with a `review`:
+
+```
+<agentmux-action>
+{"action":"review","ticket_id":"tkt_…","verdict":"rework",
+ "checks":[{"criterion":"go test ./pricing/... passes","met":false,"evidence":"TestTax fails"},
+           {"criterion":"no float64 left in pricing/","met":true,"evidence":"grep finds none"}],
+ "note":"Also keep the old rounding behind a flag."}
+</agentmux-action>
+```
+
+| Verdict | What the host does |
+| --- | --- |
+| `accepted` | Records it. The Ticket stays ready: its work is done. Refused while a check is unmet. |
+| `rework` | Sends the itemized gaps (unmet checks with their evidence, then the note) to the same worker conversation and counts a round. Needs an unmet check or a note. A third `rework` of a Ticket is refused: it is recorded with `refused`, and the people on the thread are told, in AgentMux's words, that the Ticket needs a decision, with what is still open. |
+| `needs_user` | Needs a `note` saying what must be decided. Records it, and tells the people on the thread, in AgentMux's words: "“<title>” needs a decision from you: <note>". |
+
+- The host enforces it like any other action: the Ticket must be this agent's and on the
+  event's thread, its worker must have finished a turn (the Ticket is ready; `needs_user`
+  also takes a failed one), and an answer reviews each Ticket at most once. Otherwise the
+  decision is refused before anything is carried out and the router is told why.
+- At most 12 checks, each naming its criterion (at most 300 characters); evidence is cut
+  at 1,000 characters and the note at 2,000.
+- Every review is recorded on the Ticket (`reviews`: `verdict`, `checks`, `note`, `round`,
+  `refused`, `trigger_id`, `at`; `rework_rounds` counts the rounds) and in `ticket.json`.
+  OPEN TICKETS shows the latest under `review`.
+- AgentMux's own message goes after the brain's reply, as a message of its own.
+- A ticket update for a Ticket with `done_when` asks the brain to check the report against
+  them and answer with a review, and says how many rework rounds are used. A Ticket
+  without them is reported as before, and nothing requires a review.
+
+| Limit | Value |
+| --- | --- |
+| Rework rounds per Ticket | 2 |
+| Checks per review | 12 |
+
+### Independent review
+
+Optional, and off unless the agent's `review_runtime` names a framework. It must be
+installed on the agent's machine and offer the read-only `plan` approval mode.
+
+- **When.** A local worker whose Ticket has its own git worktree (a worker in worktree
+  mode, or an auto worker in a repository) finishes a turn without failing. The review
+  runs before the brain's ticket update, while the Ticket still holds its place among
+  the running ones. Stopping the Ticket stops the review and sends no update.
+- **The copy.** AgentMux stages the worker's files, uncommitted and untracked ones
+  included (ignored ones not), into a separate index, commits that tree on top of the
+  worker's `HEAD` as an unreferenced commit, and checks it out, detached, at
+  `tickets/<id>/.review`. The worker's own index, branch and files are untouched. The
+  copy is removed with `git worktree remove` when the review ends, whatever its outcome,
+  and one left by a daemon that stopped mid-review is removed before the next.
+- **The reviewer** is a fresh conversation of the Agent instance
+  `saw_<agent id>_<framework>_review`, in `plan` mode, working in the copy. Like an auto
+  worker, it takes the brain's model and environment when it shares its framework, and is
+  removed with the agent. It is told only the Ticket's title, `instructions`, `done_when`
+  and the diff from the base to the copy (cut at 60,000 characters; it can run `git diff`
+  for the rest), never the worker's transcript or answer. The base is where the worker's
+  branch left its base Ticket's work, or else the repository checkout it was cut from.
+- **Findings** are one per line with a severity (P0 blocks, P1 likely wrong or untested,
+  P2 minor) and `path:line` evidence, followed by a counts line that AgentMux reads and
+  removes. They go with the ticket update, after the worker's report, cut at 6,000
+  characters, and are recorded on the Ticket as `auto_review` (`runtime`, `findings`,
+  `count`, `blocking`, `error`, `at`). A review that cannot run says why in the same place,
+  and the update still goes out. The review is advice for the brain: AgentMux does not act
+  on it.
+- **Not yet:** remote workers, whose files are on another machine, and workers that share
+  a directory with other Tickets are not reviewed. A review takes at most 30 minutes.
 
 ## What the host enforces
 
@@ -509,7 +638,11 @@ description.
 | Workers | Worker frameworks for auto workers, Agents already on the roster, or both. |
 | Triggers | Where requests come from. |
 
-Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings.
+Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings,
+with supervision (record only, record and tell the agent, or off; see
+[Supervision](#supervision)) and the framework for [independent review](#independent-review).
+The Tickets list shows each Ticket's `done_when`, its open signals, its latest review with
+its checks, and its independent review's findings.
 
 ## Prompt parts
 

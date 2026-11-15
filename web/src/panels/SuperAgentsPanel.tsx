@@ -170,6 +170,40 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         </span>
                       </header>
                       <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.worker.host_id)?.name ?? t("superAgents.remote")) : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
+                      {(ticket.done_when ?? []).length > 0 && (
+                        <div className="super-agent-ticket-criteria">
+                          <small>{t("superAgents.ticketDoneWhen")}{ticket.expect_minutes ? ` · ${t("superAgents.ticketExpect", { minutes: ticket.expect_minutes })}` : ""}</small>
+                          <ul>{(ticket.done_when ?? []).map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
+                        </div>
+                      )}
+                      {(ticket.signals ?? []).filter((signal) => !signal.cleared_at).map((signal) => (
+                        <div key={`${signal.kind}-${signal.since}`} className="warning super-agent-source-warning" role="status">
+                          {t(`superAgents.signal.${signal.kind}`)}: {signal.detail}
+                        </div>
+                      ))}
+                      {(() => {
+                        const review = ticket.reviews?.[ticket.reviews.length - 1];
+                        if (!review) return null;
+                        const label = review.refused ? t("superAgents.review.refused")
+                          : review.verdict === "rework" ? t("superAgents.review.reworkRound", { round: review.round ?? 0, limit: 2 })
+                          : t(`superAgents.review.${review.verdict}`);
+                        return (
+                          <div className="super-agent-ticket-review">
+                            <small><strong>{t("superAgents.review.title")}:</strong> {label}{review.note ? ` · ${review.note}` : ""}</small>
+                            {(review.checks ?? []).length > 0 && (
+                              <ul>{(review.checks ?? []).map((check) => <li key={check.criterion}>{check.met ? "✓" : "✗"} {check.criterion}{check.evidence ? ` (${check.evidence})` : ""}</li>)}</ul>
+                            )}
+                          </div>
+                        );
+                      })()}
+                      {ticket.auto_review && (
+                        <details className="super-agent-ticket-auto-review">
+                          <summary><small>{ticket.auto_review.error ? t("superAgents.autoReview.failed", { runtime: ticket.auto_review.runtime })
+                            : ticket.auto_review.count >= 0 ? t("superAgents.autoReview.summary", { runtime: ticket.auto_review.runtime, count: ticket.auto_review.count, blocking: ticket.auto_review.blocking })
+                            : t("superAgents.autoReview.summaryUncounted", { runtime: ticket.auto_review.runtime })}</small></summary>
+                          <pre>{ticket.auto_review.error || ticket.auto_review.findings}</pre>
+                        </details>
+                      )}
                       {ticket.output && <pre>{ticket.output}</pre>}
                       {ticket.error && <div className="error">{ticket.error}</div>}
                       {ticket.reply_error && <div className="error">{t("superAgents.replyFailed")}: {ticket.reply_error}</div>}

@@ -135,6 +135,10 @@ type Service struct {
 	places         map[string]feishuPlaces
 	scopeChecks    map[string]scopeState
 	activities     map[string]activity
+	// turnStarts says when each running turn began, and suspects when each
+	// supervision condition was first seen holding; see supervision.go.
+	turnStarts map[string]time.Time
+	suspects   map[string]time.Time
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -196,6 +200,7 @@ func New(options Options) *Service {
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
 		routerAttempts: map[string]int{}, routerFeedback: map[string]string{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
+		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes,
@@ -216,6 +221,7 @@ func (s *Service) Start(parent context.Context) error {
 		ticket.Status = core.SuperAgentTicketQueued
 		ticket.Inputs = append([]string{recoveryNote}, ticket.Inputs...)
 		ticket.UpdatedAt = s.now().UTC()
+		closeSignals(&ticket, ticket.UpdatedAt)
 		if err := s.store.UpsertSuperAgentTicket(ctx, ticket); err != nil {
 			cancel()
 			return fmt.Errorf("recover super agent ticket %s: %w", ticket.ID, err)
@@ -249,6 +255,11 @@ func (s *Service) Start(parent context.Context) error {
 			case <-s.wake:
 			}
 		}
+	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runSupervision(ctx)
 	}()
 	return nil
 }
@@ -470,9 +481,9 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
-	if trigger.Kind == core.SuperAgentTriggerTimer {
-		// Nobody is waiting for an answer to a follow-up, and its note is for
-		// the router, not for a worker.
+	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision {
+		// Nobody is waiting for an answer to a follow-up or a supervision
+		// signal, and either is for the router, not for a worker or a person.
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), trigger.TicketID)
 		return
 	}
@@ -511,6 +522,7 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 // same decision.
 func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
 	refs := map[string]string{}
+	reviewed := map[string]bool{}
 	// The thread's and the agent's follow-ups, read when an action first
 	// needs them.
 	var timers *timerLedger
@@ -537,6 +549,9 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 		switch action.Action {
 		case actionAccept:
 			if err := s.checkWorker(agent, action.WorkerID); err != nil {
+				return err
+			}
+			if err := checkCriteria(action.DoneWhen, action.ExpectMinutes); err != nil {
 				return err
 			}
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
@@ -599,6 +614,10 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 				return err
 			}
 			counts.cancel(timer.ID)
+		case actionReview:
+			if err := s.preflightReview(ctx, agent, trigger, action, reviewed); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -637,8 +656,8 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 		return id
 	}
-	var accepted, attached, stopped, posted bool
-	var ticketIDs, problems, reasons []string
+	var accepted, attached, stopped, posted, reviewed bool
+	var ticketIDs, problems, reasons, notices []string
 	if decision.Reason != "" {
 		reasons = append(reasons, decision.Reason)
 	}
@@ -718,6 +737,22 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if cancelled, err = s.cancelTimer(ctx, strings.TrimSpace(action.TimerID)); cancelled {
 				reasons = append(reasons, "cancelled follow-up "+strings.TrimSpace(action.TimerID))
 			}
+		case actionReview:
+			id := strings.TrimSpace(action.TicketID)
+			var outcome reviewOutcome
+			if outcome, err = s.review(ctx, trigger, id, action); err == nil {
+				reviewed = true
+				attached = attached || outcome.rework
+				ticketIDs = append(ticketIDs, id)
+				if outcome.notice != "" {
+					notices = append(notices, outcome.notice)
+				}
+				if outcome.refused != "" {
+					reasons = append(reasons, "refused a rework of "+id+": "+outcome.refused)
+				} else {
+					reasons = append(reasons, "reviewed "+id+": "+reviewVerdict(action))
+				}
+			}
 		}
 		if err != nil {
 			s.log.Error("apply router action", "trigger", trigger.ID, "action", action.Action, "err", err)
@@ -725,6 +760,13 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 	}
 	sendReply()
+	// What AgentMux itself must tell the thread, such as a ticket that needs
+	// a decision, goes after the brain's reply, in a message of its own.
+	for _, notice := range notices {
+		if err := s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, notice); err != nil {
+			problems = append(problems, "notice: "+err.Error())
+		}
+	}
 	disposition := core.SuperAgentDispositionIgnored
 	switch {
 	case accepted:
@@ -733,7 +775,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		disposition = core.SuperAgentDispositionFollowUp
 	case stopped:
 		disposition = core.SuperAgentDispositionStopped
-	case reply != "" || posted:
+	case reply != "" || posted || reviewed:
 		disposition = core.SuperAgentDispositionAnswered
 	case len(problems) > 0:
 		disposition = core.SuperAgentDispositionFailed
@@ -775,6 +817,8 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		Inputs:    []string{workerAssignment(agent, trigger, action, background)},
 		Reply:     trigger.Reply,
 		DependsOn: action.DependsOn, BaseTicket: base,
+		Instructions: strings.TrimSpace(action.Instructions),
+		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
@@ -899,6 +943,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 		return err
 	}
 	ticket.UpdatedAt = s.now().UTC()
+	closeSignals(ticket, ticket.UpdatedAt)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -943,6 +988,7 @@ func (s *Service) startQueued(ctx context.Context) error {
 				s.mu.Lock()
 				delete(s.running, agent.ID+"|"+ticketID)
 				delete(s.stopping, ticketID)
+				delete(s.turnStarts, ticketID)
 				s.mu.Unlock()
 				cancel()
 				s.notify()
@@ -969,6 +1015,7 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		if current.StartedAt.IsZero() {
 			current.StartedAt = s.now().UTC()
 		}
+		s.turnStarts[ticketID] = s.now().UTC()
 		delivered = len(current.Inputs)
 		input = strings.Join(current.Inputs, "\n\n---\n\n")
 		ticket = *current
@@ -1056,7 +1103,18 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	if failed {
 		report = runErr.Error()
 	}
-	if wakeErr := s.wakeRouter(ctx, agent, saved, replyTo, report, failed); wakeErr == nil {
+	// An independent reviewer looks at the work before the brain hears of it.
+	review := ""
+	if !failed && reviewable(ctx, agent, saved, placement) {
+		review = s.independentReview(runCtx, agent, saved, placement.ConversationDir)
+		s.mu.Lock()
+		stopped := s.stopping[ticketID]
+		s.mu.Unlock()
+		if stopped || ctx.Err() != nil {
+			return
+		}
+	}
+	if wakeErr := s.wakeRouter(ctx, agent, saved, replyTo, report, failed, review); wakeErr == nil {
 		return
 	} else if ctx.Err() == nil {
 		s.log.Error("wake super agent router", "ticket", ticketID, "err", wakeErr)
@@ -1089,6 +1147,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	ticket.Status = core.SuperAgentTicketStopped
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
+	closeSignals(ticket, now)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
