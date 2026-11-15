@@ -375,11 +375,17 @@ func isSelfAuthenticatingPath(path string) bool {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	status := map[string]any{
 		"ok":               true,
 		"version":          s.version,
 		"contract_version": contract.Version,
-	})
+	}
+	// A controller probing this machine over SSH learns which computer it
+	// reached, so it can tell when it reaches one it knows another way.
+	if uid := s.node.machineUID(); uid != "" {
+		status["machine_uid"] = uid
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handlePlatforms(w http.ResponseWriter, r *http.Request) {

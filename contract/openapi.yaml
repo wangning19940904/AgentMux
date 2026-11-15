@@ -275,6 +275,16 @@ paths:
                     type: string
                   contract_version:
                     type: string
+                  machine_uid:
+                    type: string
+                    format: uuid
+                    description: >
+                      This computer's identity, a UUIDv4 kept in the daemon's
+                      state directory. It is the same however the machine is
+                      reached (SSH, its hub link, or the hub's relay), so a
+                      controller that knows it more than one way lists it
+                      once. Absent before the daemon has started and on
+                      versions that predate it.
         "401":
           $ref: "#/components/responses/Unauthorized"
 

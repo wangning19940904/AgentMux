@@ -46,6 +46,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(accountsCmd())
 	root.AddCommand(joinCmd())
 	root.AddCommand(leaveCmd())
+	root.AddCommand(machineUIDCmd())
 	root.AddCommand(hubCmd())
 	root.AddCommand(versionCmd())
 	return root

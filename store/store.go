@@ -448,6 +448,9 @@ func (s *Store) migrateSQLite() error {
 			return err
 		}
 	}
+	if err := s.ensureColumn("devices", "machine_uid", "TEXT"); err != nil {
+		return err
+	}
 	// Multi-tenancy is retired: drop its tables from legacy SQLite stores so
 	// stale tenant credentials cannot remain usable.
 	for _, table := range []string{"resource_grants", "tenant_tokens", "tenant_enrollments", "tenants"} {

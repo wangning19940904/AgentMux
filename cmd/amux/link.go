@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 )
 
@@ -144,7 +145,7 @@ func joinForeground(cmd *cobra.Command, cfg *config.Config, token, name string, 
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 45*time.Second)
-		state, err = linkpkg.Pair(ctx, join, linkpkg.LocalDeviceInfo(name, version))
+		state, err = linkpkg.Pair(ctx, join, localDeviceInfo(cfg, name))
 		cancel()
 		if err != nil {
 			return err
@@ -159,7 +160,7 @@ func joinForeground(cmd *cobra.Command, cfg *config.Config, token, name string, 
 		apiToken = cfg.Bridge.Token
 	}
 	client := &linkpkg.Client{
-		State: state, Info: linkpkg.LocalDeviceInfo(state.Name, version),
+		State: state, Info: localDeviceInfo(cfg, state.Name),
 		Handler: linkpkg.LocalAPIHandler(linkpkg.LoopbackAddr(cfg.Server.Addr), apiToken), Log: logger,
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
@@ -298,5 +299,62 @@ func hubCmd() *cobra.Command {
 	}
 	cmd.AddCommand(pair, devices, remove)
 	cmd.AddCommand(hubStandbyCmds()...)
+	return cmd
+}
+
+// localDeviceInfo describes this machine to a hub, with its machine UID when
+// it can be read.
+func localDeviceInfo(cfg *config.Config, name string) core.DeviceInfo {
+	info := linkpkg.LocalDeviceInfo(name, version)
+	if uid, err := linkpkg.LoadOrCreateMachineUID(cfg.Hub.StateDir); err == nil {
+		info.MachineUID = uid
+	} else {
+		logger.Warn("machine UID unavailable", "err", err)
+	}
+	return info
+}
+
+func machineUIDCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "machine-uid",
+		Short: "Print the identity this machine reports to other machines",
+		Long: "Print this machine's UID. Every way of reaching a machine (SSH, its own hub " +
+			"link, or the hub's relay) reports it, so a hub or controller that knows the " +
+			"machine more than one way lists it once. It is created on first run in the " +
+			"hub state directory.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadConfig(false)
+			if err != nil {
+				return err
+			}
+			uid, err := linkpkg.LoadOrCreateMachineUID(cfg.Hub.StateDir)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), uid)
+			return nil
+		},
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "reset",
+		Short: "Give this machine a new UID, as for a cloned VM",
+		Long: "Replace this machine's UID with a new one. A VM cloned from another keeps its " +
+			"state directory and so reports the same UID, which makes the two look like one " +
+			"machine. Run this on the clone, then restart its AgentMux.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadConfig(false)
+			if err != nil {
+				return err
+			}
+			uid, err := linkpkg.ResetMachineUID(cfg.Hub.StateDir)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "This machine's UID is now %s. Restart AgentMux to report it.\n", uid)
+			return nil
+		},
+	})
 	return cmd
 }

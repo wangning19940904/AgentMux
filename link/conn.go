@@ -100,7 +100,8 @@ func muxConfig() *yamux.Config {
 	return config
 }
 
-// LocalDeviceInfo describes this machine to a hub.
+// LocalDeviceInfo describes this machine to a hub. The caller adds the
+// machine UID (LoadOrCreateMachineUID), which lives in the state directory.
 func LocalDeviceInfo(name, version string) core.DeviceInfo {
 	hostname, _ := os.Hostname()
 	name = strings.TrimSpace(name)
@@ -140,5 +141,6 @@ func cleanInfo(info core.DeviceInfo) core.DeviceInfo {
 	return core.DeviceInfo{
 		Name: trim(info.Name, 120), Hostname: trim(info.Hostname, 255),
 		OS: trim(info.OS, 32), Arch: trim(info.Arch, 32), Version: trim(info.Version, 64),
+		MachineUID: NormalizeMachineUID(info.MachineUID),
 	}
 }

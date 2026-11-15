@@ -136,3 +136,44 @@ func TestDevicePairingCodeExpiresAndIsSingleUseUnderRace(t *testing.T) {
 		t.Fatalf("devices = %+v", devices)
 	}
 }
+
+func TestDeviceMachineUIDFollowsWhatTheDeviceReports(t *testing.T) {
+	st := newDeviceStore(t)
+	ctx := context.Background()
+	const first, second = "0f8fad5b-d9cb-469f-a165-70867728950e", "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+
+	code, err := st.CreateDevicePairingCode(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, token, err := st.RedeemDevicePairingCode(ctx, code.Code, core.DeviceInfo{Hostname: "box", MachineUID: first})
+	if err != nil || device == nil || device.MachineUID != first {
+		t.Fatalf("paired %+v, %v", device, err)
+	}
+	if found, _ := st.AuthenticateDevice(ctx, token); found == nil || found.MachineUID != first {
+		t.Fatalf("authenticated %+v", found)
+	}
+
+	check := func(want string) {
+		t.Helper()
+		got, err := st.GetDevice(ctx, device.ID)
+		if err != nil || got == nil || got.MachineUID != want {
+			t.Fatalf("machine UID = %+v, %v; want %q", got, err, want)
+		}
+	}
+	// A heartbeat without info keeps it.
+	if err := st.TouchDevice(ctx, device.ID, core.DeviceInfo{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	check(first)
+	// A connection that reports another computer moves the device to it.
+	if err := st.TouchDevice(ctx, device.ID, core.DeviceInfo{Hostname: "box", MachineUID: second}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	check(second)
+	// A node downgraded to one that reports none is no longer merged.
+	if err := st.TouchDevice(ctx, device.ID, core.DeviceInfo{Hostname: "box"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	check("")
+}
