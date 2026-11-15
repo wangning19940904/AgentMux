@@ -173,6 +173,38 @@ relaying a worker's last answer.
   whether it is met, and the evidence. The brain sees them with the Ticket in OPEN TICKETS.
 - An `accept` without them starts a Ticket exactly as before.
 
+### Supervision
+
+About every 30 seconds AgentMux looks at the running Tickets of every enabled agent and
+derives **signals** from records it already has. It calls no model.
+
+| Signal | When |
+| --- | --- |
+| `stalled` | The worker showed no progress (a tool call, or output, as `progress.md` records it) since its turn began or its last step, for longer than max(20 minutes, 1.5 × `expect_minutes`). |
+| `orphaned` | The Ticket is marked running but nothing on this machine runs it, or its worker's machine does not answer a status check. Either must hold for a minute before it counts. |
+
+- **Once per stretch.** A signal is recorded on the Ticket (`signals`: `kind`, `detail`,
+  `since`, `at`, `woke_at`, `cleared_at`, and in `ticket.json`) when its condition begins,
+  and closed when it ends: progress ends a stall, and whatever stops the Ticket running
+  ends all of its signals. While it lasts it is told once. A retry of the same turn that
+  finds the same condition reopens the same signal. The record is the dedupe state, so a
+  daemon that restarts finds the signals it already told and does not tell them again.
+  Recording a signal does not change the Ticket's `updated_at`.
+- **Modes.** The agent's `supervision` setting: `observe` (the default, also when empty)
+  records signals on the Ticket and wakes nothing, so an agent that does not choose a mode
+  behaves as before; `act` also wakes the brain; `off` records nothing.
+- **Waking the brain** (act). Signals are an event of kind `supervision` on the Tickets'
+  thread, stored like a ticket update and taken by the router like any other event, in
+  order with the thread's other events. All untold signals on a thread go in one event,
+  and a thread gets at most one such event every 10 minutes; signals that come up in
+  between wait and go together. The event's dedupe key names its signals, so a daemon
+  that stops between storing it and marking them told stores no second one. In act mode
+  OPEN TICKETS also lists each Ticket's open signals under `signals`.
+- The brain decides what to do: ask the worker how it stands with `attach`, stop the
+  Ticket and accept the work again, tell the people waiting, or nothing; an empty reply
+  sends nothing. When the router fails on a supervision event after its retries, the
+  event is recorded as failed and nothing is sent.
+
 ## What the host enforces
 
 The router reads untrusted text. What limits the harm a crafted event can do:

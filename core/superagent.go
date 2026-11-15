@@ -40,6 +40,29 @@ const SuperAgentTriggerTicketUpdate = "ticket_update"
 // ticket update it comes from AgentMux, on the thread the timer was set on.
 const SuperAgentTriggerTimer = "timer"
 
+// SuperAgentTriggerSupervision tells the router what AgentMux noticed about
+// its open Tickets from its own records, such as a Ticket that stopped making
+// progress. Like a ticket update it comes from AgentMux, on the Tickets' thread.
+const SuperAgentTriggerSupervision = "supervision"
+
+// Supervision modes say what AgentMux does with the signals it derives from
+// an agent's open Tickets. Empty is observe.
+const (
+	SuperAgentSupervisionObserve = "observe"
+	SuperAgentSupervisionAct     = "act"
+	SuperAgentSupervisionOff     = "off"
+)
+
+// Supervision signal kinds.
+const (
+	// SuperAgentSignalStalled is a running Ticket whose worker has shown no
+	// progress for longer than its limit.
+	SuperAgentSignalStalled = "stalled"
+	// SuperAgentSignalOrphaned is a Ticket marked running that nothing runs,
+	// or whose worker's machine cannot be reached.
+	SuperAgentSignalOrphaned = "orphaned"
+)
+
 // SuperAgentTimerFollowUp is a one-off wake-up the router set for itself.
 const SuperAgentTimerFollowUp = "follow_up"
 
@@ -94,10 +117,14 @@ type SuperAgent struct {
 	// other machines. Like the rest of the auto worker settings they are the
 	// operator's: a router decision picks among them and cannot add one.
 	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
-	Sources        []SuperAgentSource  `json:"sources"`
-	Enabled        bool                `json:"enabled"`
-	CreatedAt      time.Time           `json:"created_at"`
-	UpdatedAt      time.Time           `json:"updated_at"`
+	// Supervision is observe (empty), act or off: whether AgentMux records
+	// the signals it derives from open Tickets, and whether it also wakes the
+	// brain with them.
+	Supervision string             `json:"supervision,omitempty"`
+	Sources     []SuperAgentSource `json:"sources"`
+	Enabled     bool               `json:"enabled"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
 }
 
 // SuperAgentPrompt is an operator's text for one built-in prompt part. Base
@@ -234,6 +261,9 @@ type SuperAgentTicket struct {
 	// done when its worker says so.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// Signals are what supervision noticed about the Ticket, oldest first.
+	// One without ClearedAt still holds.
+	Signals []SuperAgentTicketSignal `json:"signals,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -242,6 +272,19 @@ type SuperAgentTicket struct {
 	StartedAt  time.Time              `json:"started_at,omitempty"`
 	FinishedAt time.Time              `json:"finished_at,omitempty"`
 	UpdatedAt  time.Time              `json:"updated_at"`
+}
+
+// SuperAgentTicketSignal is one stretch of time in which a supervision
+// condition held for a Ticket. Since is when the condition began, as far as
+// AgentMux can tell; WokeAt is when the brain was told, and stays zero in
+// observe mode or while a wake-up waits for its turn.
+type SuperAgentTicketSignal struct {
+	Kind      string    `json:"kind"`
+	Detail    string    `json:"detail"`
+	Since     time.Time `json:"since"`
+	At        time.Time `json:"at"`
+	WokeAt    time.Time `json:"woke_at,omitzero"`
+	ClearedAt time.Time `json:"cleared_at,omitzero"`
 }
 
 // SuperAgentTicketLink is a thread other than a Ticket's own that cares about

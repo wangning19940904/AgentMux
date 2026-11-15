@@ -135,6 +135,10 @@ type Service struct {
 	places         map[string]feishuPlaces
 	scopeChecks    map[string]scopeState
 	activities     map[string]activity
+	// turnStarts says when each running turn began, and suspects when each
+	// supervision condition was first seen holding; see supervision.go.
+	turnStarts map[string]time.Time
+	suspects   map[string]time.Time
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -196,6 +200,7 @@ func New(options Options) *Service {
 		running: map[string]context.CancelFunc{}, stopping: map[string]bool{}, evaluating: map[string]bool{},
 		routerAttempts: map[string]int{}, routerFeedback: map[string]string{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
+		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes,
@@ -216,6 +221,7 @@ func (s *Service) Start(parent context.Context) error {
 		ticket.Status = core.SuperAgentTicketQueued
 		ticket.Inputs = append([]string{recoveryNote}, ticket.Inputs...)
 		ticket.UpdatedAt = s.now().UTC()
+		closeSignals(&ticket, ticket.UpdatedAt)
 		if err := s.store.UpsertSuperAgentTicket(ctx, ticket); err != nil {
 			cancel()
 			return fmt.Errorf("recover super agent ticket %s: %w", ticket.ID, err)
@@ -249,6 +255,11 @@ func (s *Service) Start(parent context.Context) error {
 			case <-s.wake:
 			}
 		}
+	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runSupervision(ctx)
 	}()
 	return nil
 }
@@ -470,9 +481,9 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
-	if trigger.Kind == core.SuperAgentTriggerTimer {
-		// Nobody is waiting for an answer to a follow-up, and its note is for
-		// the router, not for a worker.
+	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision {
+		// Nobody is waiting for an answer to a follow-up or a supervision
+		// signal, and either is for the router, not for a worker or a person.
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), trigger.TicketID)
 		return
 	}
@@ -904,6 +915,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 		return err
 	}
 	ticket.UpdatedAt = s.now().UTC()
+	closeSignals(ticket, ticket.UpdatedAt)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -948,6 +960,7 @@ func (s *Service) startQueued(ctx context.Context) error {
 				s.mu.Lock()
 				delete(s.running, agent.ID+"|"+ticketID)
 				delete(s.stopping, ticketID)
+				delete(s.turnStarts, ticketID)
 				s.mu.Unlock()
 				cancel()
 				s.notify()
@@ -974,6 +987,7 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		if current.StartedAt.IsZero() {
 			current.StartedAt = s.now().UTC()
 		}
+		s.turnStarts[ticketID] = s.now().UTC()
 		delivered = len(current.Inputs)
 		input = strings.Join(current.Inputs, "\n\n---\n\n")
 		ticket = *current
@@ -1094,6 +1108,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	ticket.Status = core.SuperAgentTicketStopped
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
+	closeSignals(ticket, now)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
