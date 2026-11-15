@@ -1103,7 +1103,18 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	if failed {
 		report = runErr.Error()
 	}
-	if wakeErr := s.wakeRouter(ctx, agent, saved, replyTo, report, failed); wakeErr == nil {
+	// An independent reviewer looks at the work before the brain hears of it.
+	review := ""
+	if !failed && reviewable(ctx, agent, saved, placement) {
+		review = s.independentReview(runCtx, agent, saved, placement.ConversationDir)
+		s.mu.Lock()
+		stopped := s.stopping[ticketID]
+		s.mu.Unlock()
+		if stopped || ctx.Err() != nil {
+			return
+		}
+	}
+	if wakeErr := s.wakeRouter(ctx, agent, saved, replyTo, report, failed, review); wakeErr == nil {
 		return
 	} else if ctx.Err() == nil {
 		s.log.Error("wake super agent router", "ticket", ticketID, "err", wakeErr)

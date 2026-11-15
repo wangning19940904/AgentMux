@@ -161,6 +161,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if err := normalizeSupervision(agent); err != nil {
 		return err
 	}
+	if err := s.normalizeReviewRuntime(agent); err != nil {
+		return err
+	}
 	return normalizeSources(agent, existing)
 }
 

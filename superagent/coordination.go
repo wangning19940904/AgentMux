@@ -540,7 +540,7 @@ func (s *Service) ticketBackground(ctx context.Context, agentID string, dependsO
 
 // wakeRouter tells the router a Ticket's worker finished a turn, on the
 // Ticket's thread, so it can tell people and move dependent work along.
-func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, replyTo []byte, report string, failed bool) error {
+func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, replyTo []byte, report string, failed bool, review string) error {
 	var text strings.Builder
 	if failed {
 		fmt.Fprintf(&text, "Ticket %s %q failed: %s\n", ticket.ID, ticket.Title, report)
@@ -559,6 +559,9 @@ func (s *Service) wakeRouter(ctx context.Context, agent core.SuperAgent, ticket 
 	}
 	if !failed {
 		fmt.Fprintf(&text, "\nWorker's report:\n%s\n", truncateRunes(strings.TrimSpace(report), maxReportRunes))
+		if review != "" {
+			fmt.Fprintf(&text, "\n%s\n", review)
+		}
 		if len(ticket.DoneWhen) > 0 {
 			fmt.Fprintf(&text, "\nCheck the report against its done_when, and its files where you can, then answer with a review action. Rework rounds used: %d of %d.\n", ticket.ReworkRounds, maxReworkRounds)
 		}

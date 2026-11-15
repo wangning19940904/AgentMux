@@ -125,6 +125,10 @@ type SuperAgent struct {
 	// other machines. Like the rest of the auto worker settings they are the
 	// operator's: a router decision picks among them and cannot add one.
 	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
+	// ReviewRuntime names a framework whose fresh worker reviews the change
+	// of a local worker in a git worktree after each finished turn, before the
+	// brain hears about it. Empty turns independent review off.
+	ReviewRuntime string `json:"review_runtime,omitempty"`
 	// Supervision is observe (empty), act or off: whether AgentMux records
 	// the signals it derives from open Tickets, and whether it also wakes the
 	// brain with them.
@@ -276,6 +280,8 @@ type SuperAgentTicket struct {
 	// ReworkRounds how many times it was sent back to its worker.
 	Reviews      []SuperAgentTicketReview `json:"reviews,omitempty"`
 	ReworkRounds int                      `json:"rework_rounds,omitempty"`
+	// AutoReview is the latest independent review of the Ticket's work.
+	AutoReview *SuperAgentAutoReview `json:"auto_review,omitempty"`
 	// Links are the other threads that steered or asked about this Ticket, so
 	// the router can tell them when it moves.
 	Links      []SuperAgentTicketLink `json:"links,omitempty"`
@@ -309,6 +315,19 @@ type SuperAgentTicketReview struct {
 	Refused   string                  `json:"refused,omitempty"`
 	TriggerID string                  `json:"trigger_id,omitempty"`
 	At        time.Time               `json:"at"`
+}
+
+// SuperAgentAutoReview is what an independent reviewer found in a Ticket's
+// work. Count and Blocking are the reviewer's own counts of its findings and
+// of the P0 and P1 ones among them, -1 when it gave none. Error says why the
+// review could not run.
+type SuperAgentAutoReview struct {
+	Runtime  string    `json:"runtime"`
+	Findings string    `json:"findings,omitempty"`
+	Count    int       `json:"count"`
+	Blocking int       `json:"blocking"`
+	Error    string    `json:"error,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // SuperAgentReviewCheck is the brain's judgement of one acceptance criterion.

@@ -244,6 +244,38 @@ After a worker finishes a turn, the brain gives its verdict with a `review`:
 | Rework rounds per Ticket | 2 |
 | Checks per review | 12 |
 
+### Independent review
+
+Optional, and off unless the agent's `review_runtime` names a framework. It must be
+installed on the agent's machine and offer the read-only `plan` approval mode.
+
+- **When.** A local worker whose Ticket has its own git worktree (a worker in worktree
+  mode, or an auto worker in a repository) finishes a turn without failing. The review
+  runs before the brain's ticket update, while the Ticket still holds its place among
+  the running ones. Stopping the Ticket stops the review and sends no update.
+- **The copy.** AgentMux stages the worker's files, uncommitted and untracked ones
+  included (ignored ones not), into a separate index, commits that tree on top of the
+  worker's `HEAD` as an unreferenced commit, and checks it out, detached, at
+  `tickets/<id>/.review`. The worker's own index, branch and files are untouched. The
+  copy is removed with `git worktree remove` when the review ends, whatever its outcome,
+  and one left by a daemon that stopped mid-review is removed before the next.
+- **The reviewer** is a fresh conversation of the Agent instance
+  `saw_<agent id>_<framework>_review`, in `plan` mode, working in the copy. Like an auto
+  worker, it takes the brain's model and environment when it shares its framework, and is
+  removed with the agent. It is told only the Ticket's title, `instructions`, `done_when`
+  and the diff from the base to the copy (cut at 60,000 characters; it can run `git diff`
+  for the rest), never the worker's transcript or answer. The base is where the worker's
+  branch left its base Ticket's work, or else the repository checkout it was cut from.
+- **Findings** are one per line with a severity (P0 blocks, P1 likely wrong or untested,
+  P2 minor) and `path:line` evidence, followed by a counts line that AgentMux reads and
+  removes. They go with the ticket update, after the worker's report, cut at 6,000
+  characters, and are recorded on the Ticket as `auto_review` (`runtime`, `findings`,
+  `count`, `blocking`, `error`, `at`). A review that cannot run says why in the same place,
+  and the update still goes out. The review is advice for the brain: AgentMux does not act
+  on it.
+- **Not yet:** remote workers, whose files are on another machine, and workers that share
+  a directory with other Tickets are not reviewed. A review takes at most 30 minutes.
+
 ## What the host enforces
 
 The router reads untrusted text. What limits the harm a crafted event can do:
