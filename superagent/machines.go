@@ -289,7 +289,7 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 	return statuses
 }
 
-// checkMachineWorker is launchMachineWorker without launching anything.
+// checkMachineWorker is launchMachineWorkerMode without launching anything.
 func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID string) error {
 	if !agent.AutoWorkers {
 		return errors.New("this Super Agent cannot launch workers; choose one from the roster")
@@ -300,18 +300,12 @@ func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID strin
 	return nil
 }
 
-// launchMachineWorker gives a new Ticket a worker in one of the listed
+// launchMachineWorkerMode gives a new Ticket a worker in one of the listed
 // directories. On this machine it is an auto worker kept for that directory.
 // On another, the operator's settings are sent as they are; the machine
 // applies its own checks to them and answers with the Agent it keeps for this
-// agent.
-func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, error) {
-	worker, _, err := s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
-	return worker, err
-}
-
-// launchMachineWorkerMode is launchMachineWorker that also returns how
-// another machine isolates the worker's conversations ("" on this machine).
+// agent. It also returns how another machine isolates the worker's
+// conversations ("" on this machine).
 func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, string, error) {
 	workerID := machineWorkerRosterID(runtimeID, pathID)
 	if err := checkMachineWorker(agent, workerID, runtimeID, pathID); err != nil {
