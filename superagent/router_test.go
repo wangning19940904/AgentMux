@@ -21,8 +21,8 @@ func TestRouterAnswersDirectly(t *testing.T) {
 	if got := h.replies.sent(); !slices.Equal(got, []string{"The last build passed; tickets/tkt_1/result.md has the log."}) {
 		t.Fatalf("replies = %v", got)
 	}
-	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionAnswered {
-		t.Fatalf("trigger = %+v", trigger)
+	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionAnswered || trigger.Answer != "The last build passed; tickets/tkt_1/result.md has the log." {
+		t.Fatalf("the trigger must keep what the agent answered: %+v", trigger)
 	}
 	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
 		t.Fatal("an answered event must not start work")

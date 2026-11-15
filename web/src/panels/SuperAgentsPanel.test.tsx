@@ -183,6 +183,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  localStorage.removeItem("agentmux.agentWork.view");
   act(() => root?.unmount());
   root = null;
   container.remove();
@@ -1208,6 +1209,7 @@ describe("superAgentModel", () => {
     vi.mocked(api.superAgents).mockResolvedValue([saved, own]);
     const save = vi.spyOn(api, "saveSuperAgent").mockImplementation(async (agent) => agent);
     renderPanel({ agentID: "coder" });
+    click(await until(() => button(/^Form$/)));
     await until(() => hasText("Chats only"));
     expect(hasText("Repo keeper")).toBe(false);
     expect(hasText("Bound channel · Team bot")).toBe(true);
@@ -1220,6 +1222,46 @@ describe("superAgentModel", () => {
     click(button(/Save/));
     await until(() => save.mock.calls.length > 0);
     expect(save.mock.calls[0][0]).toMatchObject({ id: "coder", router_agent_id: "coder", auto_workers: true, worker_runtimes: ["codex"] });
+  });
+
+  it("shows an agent's history as chats, one contact per Feishu group, and switches to the form", async () => {
+    const team = "feishu:c1:oc_team";
+    vi.mocked(api.superAgentActivity).mockResolvedValue({
+      workers: [], sources: {},
+      triggers: [
+        { id: "e1", source_kind: "feishu_message", source_id: "src_f", thread_key: `${team}:om_1`, actor_name: "Alice", text: "review the pending orders", answer: "On it.", disposition: "accepted", ticket_id: "k1", received_at: "2026-11-15T09:00:00Z" },
+        { id: "e2", source_kind: "feishu_message", source_id: "src_f", thread_key: `${team}:om_1`, kind: "ticket_update", text: "worker output", answer: "All three orders are reviewed.", disposition: "answered", received_at: "2026-11-15T09:10:00Z" },
+        { id: "e3", source_kind: "feishu_message", source_id: "src_f", thread_key: "feishu:c1:oc_ops:om_9", actor_name: "Carol", text: "restart staging", disposition: "ignored", reason: "not my repository", received_at: "2026-11-15T08:00:00Z" },
+      ],
+      tickets: [{ id: "k1", title: "Review pending work orders", status: "ready", thread_key: `${team}:om_1`, worker: { id: "auto", agent_id: "auto", label: "Auto worker" }, output: "| Order | Decision |\n|---|---|\n| WO-101 | Approve |", created_at: "2026-11-15T09:00:01Z", updated_at: "2026-11-15T09:09:00Z" }],
+    });
+    const trigger = vi.spyOn(api, "triggerSuperAgent").mockResolvedValue({} as never);
+    renderPanel({ agentID: "sa_1" });
+    await until(() => hasText("review the pending orders"));
+    const contacts = () => [...container.querySelectorAll(".super-agent-chat-contact strong")].map((item) => item.textContent);
+    await until(() => contacts().includes("Team"));
+    expect(contacts()).toEqual(["Console", "Team", "Ops"]);
+    expect(hasText("On it.")).toBe(true);
+    expect(hasText("All three orders are reviewed.")).toBe(true);
+    expect(container.querySelector(".super-agent-chat-card table")?.textContent).toContain("WO-101");
+    expect(hasText("worker output")).toBe(false);
+    expect(hasText("Workers")).toBe(false);
+    // Another group is another contact, with why the agent let it be.
+    click([...container.querySelectorAll(".super-agent-chat-contact")].find((item) => item.textContent?.includes("Ops")));
+    expect(hasText("restart staging")).toBe(true);
+    expect(hasText("not my repository")).toBe(true);
+    expect(container.querySelector(".super-agent-chat-composer")).toBeNull();
+    // The console is where a request starts.
+    click(button(/Open console/));
+    const box = control(/Send a request/) as HTMLTextAreaElement;
+    setValue(box, "check the build");
+    press(box, "Enter");
+    await until(() => trigger.mock.calls.length > 0);
+    expect(trigger).toHaveBeenCalledWith("sa_1", "check the build");
+    click(button(/^Form$/));
+    await until(() => hasText("Review pending work orders") && hasText("Workers"));
+    expect(container.querySelector(".super-agent-chat")).toBeNull();
+    expect(localStorage.getItem("agentmux.agentWork.view")).toBe("form");
   });
 
   it("parses sender lists", () => {

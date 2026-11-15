@@ -863,6 +863,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 	if len(problems) > 0 {
 		reason = strings.TrimPrefix(reason+"; failed: "+strings.Join(problems, "; "), "; ")
 	}
+	trigger.Answer = joinAnswer(append([]string{trigger.Answer, reply}, notices...))
 	s.finishTrigger(ctx, trigger, disposition, reason, ticketID)
 }
 
@@ -1022,6 +1023,18 @@ func addLink(ticket *core.SuperAgentTicket, trigger core.SuperAgentTrigger) {
 		return
 	}
 	ticket.Links = append(ticket.Links, link)
+}
+
+// joinAnswer is the non-empty parts of what an agent said to a thread, as one
+// message per paragraph.
+func joinAnswer(parts []string) string {
+	var kept []string
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "\n\n")
 }
 
 func (s *Service) finishTrigger(ctx context.Context, trigger core.SuperAgentTrigger, disposition, reason, ticketID string) {

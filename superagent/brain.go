@@ -67,6 +67,8 @@ func (s *Service) BrainFinished(ctx context.Context, brainID string, msg *core.M
 	// Not pending: the brain already answered, so the router never takes it.
 	trigger.Disposition = core.SuperAgentDispositionAnswered
 	decision, parseErr := parseRouterDecision(answer)
+	// The chat shows what the brain said; the Trigger keeps it for the history.
+	trigger.Answer = strings.TrimSpace(decision.Reply)
 	inserted, err := s.store.InsertSuperAgentTrigger(ctx, trigger)
 	if err != nil {
 		s.log.Error("record brain actions", "agent", agent.ID, "err", err)

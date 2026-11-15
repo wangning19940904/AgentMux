@@ -628,7 +628,7 @@ func TestIgnoreDeliversTheRoutersReply(t *testing.T) {
 	if got := h.replies.sent(); !slices.Equal(got, []string{"no worker can do this right now"}) {
 		t.Fatalf("replies = %v", got)
 	}
-	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionAnswered || trigger.Reason != "no suitable worker" {
+	if trigger := h.disposition(0); trigger.Disposition != core.SuperAgentDispositionAnswered || trigger.Reason != "no suitable worker" || trigger.Answer != "no worker can do this right now" {
 		t.Fatalf("trigger = %+v", trigger)
 	}
 	if h.workers.callCount() != 0 || len(h.store.allTickets()) != 0 {
