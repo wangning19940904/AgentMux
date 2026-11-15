@@ -19,6 +19,7 @@ import (
 	"github.com/wangning19940904/AgentMux/contract"
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/eventrelay"
+	"github.com/wangning19940904/AgentMux/framework/health"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	"github.com/wangning19940904/AgentMux/mailbox"
@@ -62,6 +63,7 @@ type Server struct {
 	node               *nodeLink
 	hubHA              *hubStandby
 	superAgents        *superagent.Service
+	frameworkHealth    *health.Service
 	mail               *mailbox.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory
@@ -178,6 +180,7 @@ func New(deps Dependencies) *Server {
 		s.channelPeers = peer
 		s.meetingPeers = peer
 	}
+	s.frameworkHealth = newFrameworkHealth(s)
 	s.setupPush(deps.PushSender)
 	s.setupLink()
 	s.setupMailbox()
@@ -277,6 +280,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	if s.mail != nil {
 		go s.mail.Run(ctx)
 	}
+	// Periodic framework checks; with them off (the default) it runs nothing.
+	go s.frameworkHealth.Run(ctx)
 	go func() {
 		select {
 		case <-ctx.Done():

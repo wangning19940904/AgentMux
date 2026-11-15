@@ -164,6 +164,8 @@ know which router produced it.
 Store the latest result per (machine, framework, model) in `settings` or in a
 small `framework_health` table. This is display state only. It never blocks
 running an agent.
+(Since superseded: results now live beside per-framework health records in
+`framework/health`; see [framework-health.md](framework-health.md).)
 
 ### 4.4 When it runs
 

@@ -93,6 +93,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `POST /api/v1/event-subscriptions/test`、`POST /api/v1/event-subscriptions/rotate-secret` | 回调测试与密钥轮换 |
 | `GET /api/v1/event-deliveries`、`POST /api/v1/event-deliveries/retry` | 投递历史与重试 |
 | `GET /api/v1/usage` | Token 用量报表 |
+| `GET /api/v1/frameworks/health`、`POST /api/v1/frameworks/health/recheck`、`GET/PUT /api/v1/frameworks/health/settings` | 本机 Agent 框架健康记录（`ok`/`failing`/`usage_limit`/`unknown`）、立即复查与定时检查开关（默认关闭，间隔默认 30 分钟） |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
 
 ### OpenAI 兼容层
@@ -105,7 +106,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 ### internal — 不对外承诺，随时可变
 
 其余全部 `/api/v1/*` 路由（observability、remote proxy、tools、
-frameworks、sessions、meetings、setup 自动化、tts、menubar、memory、skills、
+frameworks（上表的健康端点除外）、sessions、meetings、setup 自动化、tts、menubar、memory、skills、
 mcp、guard、devices、accounts 等）是 Console 专用管理面。第三方
 **不应**依赖它们；如确有需要，请提 issue 将其提升到 beta/stable。
 `/api/v1/usage/sources*` 同样属于 Console internal API，不出现在公开 OpenAPI。

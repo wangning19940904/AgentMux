@@ -248,7 +248,11 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 
 	sess, conversation, created, err := runtime.session(turnCtx, msg.ChatID, msg.ChatType, conversationKey)
 	if err != nil {
-		e.emit(turnCtx, HookError, withError(data, err))
+		// Name the runtime so a failed start (a missing CLI) reaches
+		// framework health.
+		failed := withError(data, err)
+		failed["runtime_id"] = runtime.workspace.RuntimeID
+		e.emit(turnCtx, HookError, failed)
 		result.DurationMS = time.Since(startedAt).Milliseconds()
 		if emitErr := emitStream(InvocationStreamEvent{Type: "error", Error: err.Error(), DurationMS: result.DurationMS}); emitErr != nil {
 			return result, emitErr

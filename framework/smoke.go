@@ -33,11 +33,15 @@ const (
 	SmokeNotInstalled    SmokeErrorKind = "not_installed"
 	SmokeUnauthenticated SmokeErrorKind = "unauthenticated"
 	SmokeModelNotFound   SmokeErrorKind = "model_not_found"
+	SmokeUsageLimit      SmokeErrorKind = "usage_limit"
 	SmokeRateLimited     SmokeErrorKind = "rate_limited"
 	SmokeNetwork         SmokeErrorKind = "network"
 	SmokeTimeout         SmokeErrorKind = "timeout"
 	SmokeUnexpectedReply SmokeErrorKind = "unexpected_reply"
-	SmokeUnknown         SmokeErrorKind = "unknown"
+	// SmokeCLIOutdated is a CLI too old for the options AgentMux passes. The
+	// smoke test itself does not report it; real runs do (framework/health).
+	SmokeCLIOutdated SmokeErrorKind = "cli_outdated"
+	SmokeUnknown     SmokeErrorKind = "unknown"
 )
 
 // SmokeOptions selects what to test. Model, ReasoningEffort and ServiceTier
@@ -270,6 +274,10 @@ var smokePatterns = []smokePattern{
 }
 
 func classifySmokeError(text string) SmokeErrorKind {
+	// Checked first: a usage limit's message can also say "429" or "quota".
+	if IsUsageLimit(text) {
+		return SmokeUsageLimit
+	}
 	for _, pattern := range smokePatterns {
 		if pattern.re.MatchString(text) {
 			return pattern.kind
@@ -283,6 +291,10 @@ var smokeSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/\-]{8,}=*`),
 	regexp.MustCompile(`(?i)\b((x-)?api[_-]?key|token|secret|password)(["'\s]*[:=]\s*["']?)[^\s"',}]{6,}`),
 }
+
+// RedactSecrets removes API keys, bearer tokens and secret-looking values
+// from text before it is stored or shown.
+func RedactSecrets(text string) string { return redactSecrets(text) }
 
 func redactSecrets(text string) string {
 	for i, re := range smokeSecretPatterns {

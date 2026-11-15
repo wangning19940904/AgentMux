@@ -327,3 +327,41 @@ func TestInvokeStreamForwardsAgentEventsAndCompletion(t *testing.T) {
 		t.Fatalf("completed event = %+v", events[len(events)-1])
 	}
 }
+
+type failingStartAgent struct{}
+
+func (failingStartAgent) Name() string { return "failing-start" }
+func (failingStartAgent) StartSession(context.Context, string) (AgentSession, error) {
+	return nil, errors.New(`exec: "claude": executable file not found in $PATH`)
+}
+func (failingStartAgent) ListSessions(context.Context) ([]string, error) { return nil, nil }
+func (failingStartAgent) Stop(context.Context) error                     { return nil }
+
+// A session that cannot start names its runtime in the error event, so
+// framework health can tell which framework failed.
+func TestInvokeSessionStartErrorNamesRuntime(t *testing.T) {
+	const runtimeID = "invocation-failing-start-test"
+	RegisterAgent(runtimeID, func(map[string]any) (Agent, error) { return failingStartAgent{}, nil })
+	store := &fakeStore{agents: map[string]AgentInstance{
+		"agent-1": {ID: "agent-1", Name: "Managed", RuntimeID: runtimeID, WorkDir: t.TempDir(), Enabled: true},
+	}}
+	engine := NewEngine(nil, NewHookRunner(nil, nil))
+	var mu sync.Mutex
+	var errorsSeen []map[string]string
+	engine.SubscribeEventSink(func(event HookEvent, data map[string]string) {
+		if event == HookError {
+			mu.Lock()
+			errorsSeen = append(errorsSeen, data)
+			mu.Unlock()
+		}
+	})
+	service := NewConnectService(nil, engine, store)
+	if _, err := service.Invoke(context.Background(), InvocationRequest{AgentID: "agent-1", Input: "hi"}); err == nil {
+		t.Fatal("invoke succeeded with a session that cannot start")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errorsSeen) == 0 || errorsSeen[0]["runtime_id"] != runtimeID || !strings.Contains(errorsSeen[0]["error"], "executable file not found") {
+		t.Fatalf("error events = %+v", errorsSeen)
+	}
+}

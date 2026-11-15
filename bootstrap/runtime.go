@@ -130,6 +130,9 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			"guard":  {RuntimeActive: true, Enforced: true},
 		},
 	})
+	// Failures of real runs feed framework health (only while its periodic
+	// checks are on).
+	engine.SubscribeEventSink(srv.FrameworkHealth().EngineSink())
 	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel, Grants: st}
 	// Push notifications: agents waiting for a person, and Tickets that
 	// finished or failed. A nil push service passes both through unchanged.

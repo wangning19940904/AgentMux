@@ -156,7 +156,9 @@ func (s *Server) handleFrameworkTest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.recordFrameworkHealth(r.Context(), result); err != nil {
+	// A test in an Agent's environment does not speak for the framework as
+	// this machine runs it, so only its pass updates the framework's record.
+	if err := s.frameworkHealth.RecordTest(r.Context(), result, strings.TrimSpace(req.AgentID) == ""); err != nil {
 		s.log.Warn("record framework health", "kind", result.Kind, "err", err)
 	}
 	w.Header().Set("Cache-Control", "no-store")
