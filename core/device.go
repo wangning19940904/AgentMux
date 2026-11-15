@@ -60,6 +60,28 @@ type Device struct {
 	OwnerAccountName string `json:"owner_account_name,omitempty"`
 }
 
+// Device link modes. A device dials the hub (outbound, the default), or
+// listens and the hub dials it (passive). A machine is paired one way at a
+// time.
+const (
+	DeviceLinkOutbound = "outbound"
+	DeviceLinkPassive  = "passive"
+)
+
+// PassiveLink is what a hub needs to dial a device that listens: where (best
+// address first), the SPKI fingerprint of the key the device must present,
+// and the credential the hub presents. The device keeps only the
+// credential's hash; the hub keeps the credential itself, since it has to
+// present it, and it travels to a standby hub with the rest of hub data.
+type PassiveLink struct {
+	DeviceID    string    `json:"device_id"`
+	Addrs       []string  `json:"addrs"`
+	Fingerprint string    `json:"fingerprint"`
+	Credential  string    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // DevicePairingCode lets one node pair with the hub once. Code carries the
 // plaintext on the create response only.
 type DevicePairingCode struct {

@@ -57,7 +57,7 @@ type Hub struct {
 
 	mu       sync.Mutex
 	sessions map[string]*hubSession
-	attempts map[string][]time.Time
+	pairs    *attemptLimiter
 	uplink   http.Handler
 	presence func(deviceID string, online bool)
 	gate     func() error
@@ -177,7 +177,7 @@ func NewHub(registry Registry, log *slog.Logger) *Hub {
 		// WebSocket, so the origin says nothing more.
 		upgrader: websocket.Upgrader{HandshakeTimeout: 15 * time.Second, CheckOrigin: func(*http.Request) bool { return true }},
 		sessions: map[string]*hubSession{},
-		attempts: map[string][]time.Time{},
+		pairs:    newAttemptLimiter(pairAttempts, pairAttemptSpan),
 		started:  time.Now(),
 		attached: make(chan struct{}),
 	}
@@ -220,6 +220,15 @@ func (h *Hub) handlePair(w http.ResponseWriter, r *http.Request) {
 	var request pairRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, pairBodyLimit)).Decode(&request); err != nil {
 		writeLinkError(w, http.StatusBadRequest, "invalid pairing request")
+		return
+	}
+	// A machine the hub dials (passive link) cannot also dial in.
+	if conflict, err := h.passiveConflict(r.Context(), cleanInfo(request.Info)); err != nil {
+		h.log.Warn("device pairing failed", "err", err)
+		writeLinkError(w, http.StatusInternalServerError, "the hub could not pair this device")
+		return
+	} else if conflict != "" {
+		writeLinkError(w, http.StatusConflict, conflict)
 		return
 	}
 	device, token, err := h.registry.RedeemDevicePairingCode(r.Context(), request.Code, cleanInfo(request.Info))
@@ -268,12 +277,21 @@ func (h *Hub) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	h.serveSession(device, ws, remoteIP(r), decodeInfo(r.Header.Get(headerInfo)))
+}
+
+// serveSession runs a device's connection until it ends. From here on it does
+// not matter who dialed: the device connecting to the hub (handleConnect) or
+// the hub connecting to a device that listens (PassiveDialer). Either way the
+// hub is the multiplexer's client and opens streams to the node's API, and
+// the node opens streams to the hub's uplink.
+func (h *Hub) serveSession(device *core.Device, ws *websocket.Conn, addr string, info core.DeviceInfo) {
 	mux, err := yamux.Client(&wsStream{ws: ws}, muxConfig())
 	if err != nil {
 		_ = ws.Close()
 		return
 	}
-	session := &hubSession{mux: mux, since: time.Now(), addr: remoteIP(r)}
+	session := &hubSession{mux: mux, since: time.Now(), addr: addr}
 	h.attach(device.ID, session)
 	go h.serveUplink(device.ID, mux)
 	h.log.Info("device connected", "device", device.ID, "name", device.Name, "addr", session.addr)
@@ -286,7 +304,7 @@ func (h *Hub) handleConnect(w http.ResponseWriter, r *http.Request) {
 			h.log.Warn("record device activity failed", "device", device.ID, "err", err)
 		}
 	}
-	touch(decodeInfo(r.Header.Get(headerInfo)))
+	touch(info)
 	ticker := time.NewTicker(lastSeenInterval)
 	defer ticker.Stop()
 	for {
@@ -400,27 +418,7 @@ func (h *Hub) Close() {
 
 // allowPairAttempt limits guesses at a pairing code from one address.
 func (h *Hub) allowPairAttempt(addr string, now time.Time) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	recent := h.attempts[addr][:0]
-	for _, at := range h.attempts[addr] {
-		if now.Sub(at) < pairAttemptSpan {
-			recent = append(recent, at)
-		}
-	}
-	if len(recent) >= pairAttempts {
-		h.attempts[addr] = recent
-		return false
-	}
-	h.attempts[addr] = append(recent, now)
-	if len(h.attempts) > 4096 {
-		for key, times := range h.attempts {
-			if len(times) == 0 || now.Sub(times[len(times)-1]) >= pairAttemptSpan {
-				delete(h.attempts, key)
-			}
-		}
-	}
-	return true
+	return h.pairs.allow(addr, now)
 }
 
 func remoteIP(r *http.Request) string {

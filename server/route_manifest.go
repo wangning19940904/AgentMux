@@ -59,4 +59,7 @@ var publicRouteManifest = []PublicRouteSpec{
 	{http.MethodPost, "/api/v1/super-agents/plans/decline", RouteBeta},
 	{http.MethodGet, "/api/v1/super-agents/trust", RouteBeta},
 	{http.MethodDelete, "/api/v1/super-agents/trust", RouteBeta},
+	{http.MethodPost, "/api/v1/devices/passive", RouteBeta},
+	{http.MethodPost, "/api/v1/link/passive", RouteBeta},
+	{http.MethodDelete, "/api/v1/link/passive", RouteBeta},
 }

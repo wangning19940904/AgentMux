@@ -47,7 +47,7 @@ func (m *Manager) dialPath(ctx context.Context, entry pathEntry, network string)
 		// than this one again.
 		conn, _, err := m.dialOnce(ctx, entry.host, network)
 		return conn, err
-	case PathLink:
+	case PathLink, PathPassive:
 		return m.dialLinked(ctx, entry.device)
 	}
 	return nil, fmt.Errorf("a %s path carries requests, not connections", entry.via)

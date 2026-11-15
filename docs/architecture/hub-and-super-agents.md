@@ -123,8 +123,11 @@ on day one (§4.3).
 | **C. Private network only** | Everything is on Tailscale, Headscale, ZeroTier or a corporate VPN | The hub binds to the tailnet address and phones join the tailnet. Optionally, embed `tsnet` so the binary joins the tailnet itself (decision D2). |
 | **D. Embedded, single machine** | A single user | This is the default. Nothing is exposed. |
 
-A node only ever needs *outbound* HTTPS to the hub URL, and it honors the proxy
-variables AgentMux already imports from the login shell.
+A node normally needs only *outbound* HTTPS to the hub URL, and it honors the
+proxy variables AgentMux already imports from the login shell. When the node
+has an address the hub can reach but cannot reach the hub (a hub at home
+behind NAT, say, and a node on a server), the direction can be reversed for
+that node: it listens and the hub dials it (the passive link, §4.3).
 
 ### 4.2 Hub storage and a standby hub
 
@@ -137,7 +140,8 @@ network. The code is in [store/hubsync.go](../../store/hubsync.go),
 **One PostgreSQL instance per machine.** Every machine, hub or not, runs exactly
 one PostgreSQL instance holding its own data. Hub data is a fixed list of
 ordinary tables in that same database (`store.HubTables`): accounts and their sessions, devices, pairing codes, what devices
-report, and Web Push keys and subscriptions. Every other table is the machine's
+report, what the hub needs to dial devices that listen (`device_passive_links`),
+and Web Push keys and subscriptions. Every other table is the machine's
 own and is never copied. Hub data does not get its own instance or schema,
 because on a hub the Console already reads these tables where they are.
 
@@ -329,7 +333,7 @@ Entries with the same UID are one machine
 ([remote/machines.go](../../remote/machines.go)). The machine list
 (`GET /api/v1/remote/hosts`, and everything built on it such as fleet targets)
 shows it once, as its first entry (SSH hosts before devices), with `paths`:
-for each `via` (`local`, `ssh`, `link`, `relay`), the entry it uses, whether it
+for each `via` (`local`, `ssh`, `link`, `passive`, `relay`), the entry it uses, whether it
 works, its round-trip time and whether it is the one in use. An entry whose UID
 is unknown, such as an SSH host never contacted or a node too old to report
 one, is never merged. An entry that later reports another UID moves to the
@@ -337,7 +341,7 @@ machine it reaches.
 
 Dialing any entry of a machine, or its UID, picks the path in one place
 ([remote/paths.go](../../remote/paths.go)): local first, then direct (SSH or
-the machine's own link), then through the hub; within a class the lower
+the machine's own link, whichever side dialed it), then through the hub; within a class the lower
 round-trip time. A healthy active path is kept. When it fails, the next usable
 path is used at once. The chooser moves back only to a path that is clearly
 better (a better class, or the same class with a round-trip time over 30% and
@@ -352,6 +356,100 @@ The local path answers through this machine's own API with its own token, as a
 request over its hub link would be. A request built for one entry may travel
 another path, so `Manager.Get` lends a merged device the API token of its SSH
 host; the link and local paths replace it with the node's own.
+
+**The hub dials a node that listens (passive link)**
+
+By default a node dials its hub. A node the hub can reach, but which cannot
+reach the hub, can listen instead and let the hub dial it. The code is in
+[link/passive.go](../../link/passive.go),
+[link/passive_node.go](../../link/passive_node.go),
+[link/passive_hub.go](../../link/passive_hub.go) and
+[server/passive_link.go](../../server/passive_link.go). It is off unless a
+node is told to listen; the outbound link is unchanged on the wire.
+
+Setting it up:
+
+1. On the node: `amux join --listen [host:port] [--addr host:port …]` (or
+   `[hub] passive_listen` in its config). The running AgentMux listens on
+   that port (default `:8767`) with TLS, using a key of its own
+   (`passive-key.pem` and `passive-cert.pem` in the hub state directory,
+   mode 0600, created once and kept). It prints an invite, `amxi_…`: the
+   addresses to dial (the `--addr` values, `[hub] passive_addrs`, or this
+   machine's own addresses, private IPv4 first), the SHA-256 fingerprint of
+   the key's SubjectPublicKeyInfo, and a one-time secret valid for 30
+   minutes. Only the invite goes to stdout. Open the port to the hub's
+   address only.
+2. On the hub: `amux hub add <invite> [--name …] [--addr …]`, or **Connect a
+   machine › Or add a machine that listens** in the Console's machines page
+   (`POST /api/v1/devices/passive`, administrators only).
+3. The hub asks the node who it is (`GET /link/v1/passive/info`, with the
+   secret, which this does not use up), refuses a machine that already dials
+   it (below), hands the node a credential it made
+   (`POST /link/v1/passive/pair`, which uses the secret up), records the
+   device and dials `GET /link/v1/passive/connect`, a WebSocket carrying the
+   same yamux session as the outbound link.
+
+Trust, both ways:
+
+- The hub trusts the node by the pinned SPKI fingerprint alone: not the
+  certificate's name, issuer or dates. A node presenting another key is never
+  connected. While pairing, that fails the add at once. Afterwards, a dial
+  whose every address presents another key stops the hub dialing that node
+  (`stopped`, with the message "the node at … presented key …, not the pinned
+  …"); an address with the wrong key is skipped, never trusted another way.
+- The node admits the invite's secret (once, before it expires) and then only
+  the credential of the hub that used it. It keeps both as SHA-256 hashes in
+  `passive-link.json` (0600). A new invite replaces the old secret; the hub
+  already paired keeps working until another hub uses the new invite, whose
+  pairing then revokes the old credential and closes its connection. A hub
+  whose credential is refused stops dialing.
+- Failed secrets and credentials are counted per source address (an IPv6
+  source per /64): ten in a minute hold the source off for the rest of that
+  minute with `429`, even with the right credential, as the hub limits
+  pairing attempts. The listening port answers nothing else (`404`).
+
+Once the session is up the two modes are the same code: the hub is the yamux
+client (`Hub.serveSession`), the node its server (`Client.serveSession`), so
+`Hub.Dial`, the node's uplink calls (reports, mail, the worker relay),
+presence, `machine_uid` (the node sends its `core.DeviceInfo` in the upgrade
+response) and the device list do not know who dialed. The device is an
+ordinary row in `devices`; a row in `device_passive_links` (addresses,
+fingerprint, credential) marks it passive. A passive device has no token to
+dial in with. The device list shows `link_mode: "passive"` with the dial state
+(`connecting`, `connected`, `waiting`, `standby`, `stopped`), and the machine
+list shows its path as `passive`, a direct path like `link`.
+
+The hub redials a dropped connection with the node's own backoff (1 second
+doubling to a minute, with jitter, reset after 30 stable seconds) and reads
+the list of listening devices every 30 seconds and whenever one is added or
+removed. It dials directly, not through a proxy.
+
+**One mode at a time.** A machine is paired with a hub one way. The hub
+refuses to add a listening node whose `machine_uid` already belongs to a
+device that dials it (`409`, checked before the invite is used up), and a node
+that dials in to pair is refused (`409`, before its pairing code is used up)
+when its `machine_uid` belongs to a device the hub dials. Adding the same
+listening machine again replaces its addresses, key and credential and keeps
+its device id. A node refuses to listen while it has joined a hub outbound,
+and to join one while it listens; `amux leave` or `amux leave --passive`
+first. A machine too old to report a `machine_uid` cannot be checked this way.
+
+**Standby hub.** `device_passive_links` is a hub table: its rows, credential
+included, reach the standby in snapshots and changes like the rest of hub
+data, and a fenced primary cannot change them. Every hub keeps the list of
+listening devices, but only the hub that admits devices (the one holding the
+lease) dials: a standby or fenced hub waits, polling its gate every 2
+seconds. On failover the old primary's connections are closed by fencing, the
+new primary dials within seconds of being promoted, and the node takes the
+new connection in place of any old one. The node needs no change: it trusts a
+credential, not a hub address.
+
+What it does not protect: the hub keeps the credential as it is (it has to
+present it), so whoever reads the hub's database, or a standby's, can connect
+to the node as its hub; the invite, until used, pairs whoever uses it first;
+the hub's identity is not checked by the node beyond the credential; and the
+listening port reveals the node's certificate (which names nothing) to anyone
+who reaches it.
 
 ### 4.4 What is stored where
 

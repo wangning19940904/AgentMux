@@ -12,6 +12,8 @@ devices
 device_pairing_codes
 device_collections
 device_resources
+# What the hub needs to dial a device that listens (passive link).
+device_passive_links
 
 # Web Push.
 push_vapid_keys

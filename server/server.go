@@ -58,6 +58,7 @@ type Server struct {
 	remote             *remotepkg.Manager
 	remoteStatusChecks singleflight.Group
 	linkHub            *linkpkg.Hub
+	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service
 	devices            *deviceBackend
 	node               *nodeLink
@@ -274,6 +275,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	s.node.run(ctx)
+	s.startPassiveLink(ctx)
 	if err := s.startHubStandby(ctx); err != nil {
 		return err
 	}

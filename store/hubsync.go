@@ -33,6 +33,18 @@ var HubTables = []string{
 	"accounts", "account_sessions",
 	"devices", "device_pairing_codes", "device_collections", "device_resources",
 	"push_vapid_keys", "push_subscriptions",
+	// What the hub needs to dial a device that listens (devices_passive.go),
+	// so a standby that takes over can dial it too.
+	"device_passive_links",
+}
+
+// hubTablesAtReplication are the hub tables that existed when replication
+// was added (migration 27), which installs their triggers. A table added
+// later installs its own trigger in its migration (hubCaptureSQL).
+var hubTablesAtReplication = []string{
+	"accounts", "account_sessions",
+	"devices", "device_pairing_codes", "device_collections", "device_resources",
+	"push_vapid_keys", "push_subscriptions",
 }
 
 // HubRole is this machine's part in hub replication.
@@ -108,7 +120,15 @@ $$;
 func hubTriggerSQL() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, hubReplicationSchema, hubChangeLock)
-	for _, table := range HubTables {
+	b.WriteString(hubCaptureSQL(hubTablesAtReplication...))
+	return b.String()
+}
+
+// hubCaptureSQL logs and fences the writes to hub tables, as every hub table
+// must be.
+func hubCaptureSQL(tables ...string) string {
+	var b strings.Builder
+	for _, table := range tables {
 		fmt.Fprintf(&b, "DROP TRIGGER IF EXISTS agentmux_hub_capture ON %s;\n", table)
 		fmt.Fprintf(&b, "CREATE TRIGGER agentmux_hub_capture AFTER INSERT OR UPDATE OR DELETE ON %s FOR EACH ROW EXECUTE FUNCTION agentmux_hub_capture();\n", table)
 	}

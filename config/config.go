@@ -89,6 +89,15 @@ type HubConfig struct {
 	// on its own, as before.
 	LeaseSecret     string `toml:"lease_secret"`
 	LeaseSecretFile string `toml:"lease_secret_file"`
+	// PassiveListen makes this machine, as a node, listen for its hub on
+	// host:port instead of dialing it (a passive link; see `amux join
+	// --listen`). Empty, the default, listens only where `amux join
+	// --listen` asked, and not at all before that.
+	PassiveListen string `toml:"passive_listen"`
+	// PassiveAddrs are the host:port addresses invites tell the hub to
+	// dial, best first, when this machine's own addresses are not what the
+	// hub reaches (a forwarded port, a DNS name).
+	PassiveAddrs []string `toml:"passive_addrs"`
 }
 
 // Hub TLS modes.
@@ -293,6 +302,16 @@ func (c *Config) validateHub() error {
 			return fmt.Errorf("hub.addr %q must be host:port: %w", c.Hub.Addr, err)
 		}
 	}
+	if c.Hub.PassiveListen != "" {
+		if _, _, err := net.SplitHostPort(c.Hub.PassiveListen); err != nil {
+			return fmt.Errorf("hub.passive_listen %q must be host:port: %w", c.Hub.PassiveListen, err)
+		}
+	}
+	for _, addr := range c.Hub.PassiveAddrs {
+		if host, _, err := net.SplitHostPort(strings.TrimSpace(addr)); err != nil || host == "" {
+			return fmt.Errorf("hub.passive_addrs entry %q must be host:port", addr)
+		}
+	}
 	if c.Hub.PublicURL != "" {
 		parsed, err := url.Parse(c.Hub.PublicURL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -307,6 +326,7 @@ func (c *Config) applyDefaults() {
 		c.Server.Addr = "127.0.0.1:8765"
 	}
 	c.Hub.Addr = strings.TrimSpace(c.Hub.Addr)
+	c.Hub.PassiveListen = strings.TrimSpace(c.Hub.PassiveListen)
 	c.Hub.TLS = strings.ToLower(strings.TrimSpace(c.Hub.TLS))
 	if c.Hub.TLS == "" {
 		c.Hub.TLS = HubTLSAuto

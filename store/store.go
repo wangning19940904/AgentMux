@@ -388,6 +388,9 @@ func (s *Store) migrateSQLite() error {
 	if _, err := s.writer.Exec(deviceSchema); err != nil {
 		return err
 	}
+	if _, err := s.writer.Exec(devicePassiveLinkSchema); err != nil {
+		return err
+	}
 	if _, err := s.writer.Exec(deviceReportSchema); err != nil {
 		return err
 	}

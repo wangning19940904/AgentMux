@@ -204,6 +204,18 @@ func (c *Client) connect(ctx context.Context) error {
 		}
 		return err
 	}
+	return c.serveSession(ctx, ws)
+}
+
+// serveSession serves the hub over one connection until it ends. From here on
+// it does not matter who dialed: this node (connect) or the hub, reaching a
+// node that listens (PassiveNode). Either way the node is the multiplexer's
+// server: it answers the streams the hub opens and opens its own uplink
+// streams to the hub.
+func (c *Client) serveSession(ctx context.Context, ws *websocket.Conn) error {
+	if c.Log == nil {
+		c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	session, err := yamux.Server(&wsStream{ws: ws}, muxConfig())
 	if err != nil {
 		_ = ws.Close()

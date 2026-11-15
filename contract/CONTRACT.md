@@ -96,6 +96,8 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `GET /api/v1/frameworks/health`、`POST /api/v1/frameworks/health/recheck`、`GET/PUT /api/v1/frameworks/health/settings` | 本机 Agent 框架健康记录（`ok`/`failing`/`usage_limit`/`unknown`）、立即复查与定时检查开关（默认关闭，间隔默认 30 分钟） |
 | `GET /api/v1/super-agents/plans`、`POST /api/v1/super-agents/plans/approve`、`POST /api/v1/super-agents/plans/decline`、`GET/DELETE /api/v1/super-agents/trust` | 智能体提出的计划（`plan` 动作）的查看、批准（启动其工单，可记住发起人对该成本档位的批准）与拒绝，以及已记住批准的查看与撤销；见 `contract/SUPER_AGENTS.md`「Plans, cost tiers and remembered approvals」 |
 | `POST /api/v1/super-agents/dispatch/start`、`POST /api/v1/super-agents/dispatch/read` | Ticket 的 worker 启动并读取 helper（agent 的 `dispatch` 设置默认关闭；以 Ticket 的 dispatch token 鉴权，见 [SUPER_AGENTS.md](SUPER_AGENTS.md#helpers)） |
+| `POST /api/v1/devices/passive` | Hub 端：用节点的邀请（`amxi_…`）添加一台监听中的节点（被动链路），Hub 主动拨号；只认邀请里的 SPKI 指纹，指纹不符即失败、不回退；同一 `machine_uid` 已以主动方式配对时返回 `409`；仅管理员，备用 Hub 返回 `503` |
+| `POST/DELETE /api/v1/link/passive` | 节点端：开始监听并生成一次性邀请（30 分钟有效），或停止监听并忘记该 Hub；本机已主动加入某 Hub 时返回 `409`；仅管理员。`GET /api/v1/link` 的响应新增可选字段 `passive` |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
 
 ### OpenAI 兼容层

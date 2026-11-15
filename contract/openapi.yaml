@@ -43,6 +43,8 @@ tags:
     description: Plans an agent proposed for approval, and remembered approvals (beta)
   - name: dispatch
     description: A Ticket's worker starting and reading helpers (beta)
+  - name: link
+    description: Passive hub link, where the hub dials a node that listens (beta)
 
 paths:
   /api/v1/event-sources:
@@ -1131,6 +1133,142 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/devices/passive:
+    post:
+      tags: [link]
+      operationId: addPassiveDevice
+      summary: Add a node that listens, from its invite (hub side)
+      description: >
+        The hub asks the node named by the invite who it is, trusting only
+        the key whose SHA-256 SPKI fingerprint the invite carries (a
+        mismatch fails, with no fallback), refuses a machine that already
+        dials this hub (`409`; a machine is paired one way at a time),
+        hands the node a credential in exchange for the invite's one-time
+        secret, records the device and keeps a connection to it with
+        redial and backoff. Adding the same machine (same `machine_uid`)
+        again replaces its addresses, key and credential and keeps its
+        device id. Administrators only; a standby hub answers `503`.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite]
+              properties:
+                invite: { type: string, description: "The node's invite (`amxi_…`), from `amux join --listen`" }
+                name: { type: string, description: "What the hub calls the node (default: its hostname)" }
+                addrs:
+                  type: array
+                  items: { type: string }
+                  description: host:port addresses to dial instead of the invite's, best first
+      responses:
+        "200":
+          description: The device, and whether the hub reached it within 10 seconds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device: { type: object }
+                  replaced: { type: boolean }
+                  online: { type: boolean }
+                  passive:
+                    type: object
+                    properties:
+                      addrs: { type: array, items: { type: string } }
+                      fingerprint: { type: string }
+                      state: { type: string, enum: [connecting, connected, waiting, standby, stopped] }
+                      addr: { type: string }
+                      last_error: { type: string }
+                      next_dial_at: { type: string, format: date-time }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The machine already dials this hub
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: The node could not be reached, presented another key, or refused the secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: This hub is a standby or has no database for devices
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/link/passive:
+    post:
+      tags: [link]
+      operationId: listenForHub
+      summary: Listen for a hub to dial this machine, and make an invite (node side)
+      description: >
+        Starts (or keeps) a TLS listener with this machine's own link key and
+        returns a new invite: the addresses to dial, the key's SHA-256 SPKI
+        fingerprint and a one-time secret valid for 30 minutes. A new invite
+        replaces the previous secret; the hub already paired keeps working
+        until another hub uses the invite. A machine that dials a hub is
+        refused (`409`): leave that hub first. Administrators only.
+      x-stability: beta
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                listen: { type: string, description: "host:port to listen on (default: [hub] passive_listen, the last one used, or :8767)" }
+                addrs:
+                  type: array
+                  items: { type: string }
+                  description: host:port addresses the invite names (default [hub] passive_addrs, or this machine's own)
+      responses:
+        "200":
+          description: The invite
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invite: { type: string }
+                  addrs: { type: array, items: { type: string } }
+                  fingerprint: { type: string }
+                  listen: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  command: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: This machine dials a hub
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [link]
+      operationId: stopListeningForHub
+      summary: Stop listening and forget the hub that paired this way (node side)
+      description: >
+        The link key is kept, so a later invite carries the same fingerprint.
+        The hub keeps the device, offline, until it is removed there.
+        Administrators only.
+      x-stability: beta
+      responses:
+        "200":
+          $ref: "#/components/responses/OK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
 components:
   securitySchemes:

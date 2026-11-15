@@ -17,6 +17,7 @@ vi.mock("../api", () => ({
     discoveredRemoteHosts: vi.fn(),
     importRemoteHost: vi.fn(),
     createDevicePairingCode: vi.fn(),
+    addPassiveDevice: vi.fn(),
   },
   activeRemoteID: vi.fn(),
   setActiveMachineScope: vi.fn(),
@@ -288,6 +289,42 @@ describe("machines that connect to the hub themselves", () => {
     await click(button(card, "关闭"));
     expect(container.querySelector(".remote-pairing")).toBeNull();
     expect(vi.mocked(api.remoteHosts).mock.calls.length).toBe(before + 1);
+  });
+});
+
+describe("machines this hub dials", () => {
+  beforeEach(async () => {
+    await act(async () => { root.render(<I18nProvider language="en"><RemoteHostsPanel key="passive" /></I18nProvider>); });
+  });
+
+  it("adds a machine that listens from its invite", async () => {
+    vi.mocked(api.addPassiveDevice).mockResolvedValue({
+      device: { id: "dev_p", name: "build server" }, replaced: false, online: true,
+      passive: { addrs: ["192.0.2.5:8767"], fingerprint: "ab".repeat(32), state: "connected" },
+    });
+    await click(button(container, "Connect a machine"));
+    const card = container.querySelector<HTMLElement>(".remote-pairing")!;
+    const add = button(card, "Add and dial");
+    // Only an invite can be added.
+    expect(add.disabled).toBe(true);
+    const input = card.querySelector<HTMLInputElement>('input[aria-label="Invite (amxi_…)"]')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(input, " amxi_invite ");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(add.disabled).toBe(false);
+    await click(add);
+    expect(api.addPassiveDevice).toHaveBeenCalledWith("amxi_invite", "");
+    expect(container.querySelector(".remote-pairing")).toBeNull();
+    expect(container.textContent).toContain("build server was added; this hub dials it.");
+  });
+
+  it("shows a machine reached only this way as one the hub dials", async () => {
+    vi.mocked(api.remoteHosts).mockResolvedValue([{ ...hosts[0], id: "dev_p", name: "listener", kind: "link", online: true, link_mode: "passive" }]);
+    await act(async () => { root.render(<I18nProvider language="en"><RemoteHostsPanel key="passive-list" /></I18nProvider>); });
+    const row = Array.from(container.querySelectorAll("article")).find((item) => item.textContent?.includes("listener"))!;
+    expect(row.textContent).toContain("Listens; this hub dials it");
   });
 });
 

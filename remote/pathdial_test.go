@@ -229,3 +229,49 @@ func TestMachineKnownOneWayIsDialedAsBefore(t *testing.T) {
 		t.Fatalf("views = %+v", views)
 	}
 }
+
+// TestPassiveDeviceIsAPathOfItsOwnKind checks that a device the hub dials is
+// listed with its path kind beside the machine's other paths, is a direct
+// path like a device that dials in, and takes part in path choice.
+func TestPassiveDeviceIsAPathOfItsOwnKind(t *testing.T) {
+	manager, _ := newMachineManager(t)
+	devices := newFakeDevices(statusHandler(uidA))
+	manager.SetLinkBackend(devices)
+	host := addSSHHost(t, manager, "server", uidA)
+	devices.add(LinkedDevice{ID: "dev-p", Name: "server (listens)", Online: true, MachineUID: uidA, LinkMode: "passive"})
+	devices.add(LinkedDevice{ID: "dev-alone", Name: "alone", Online: true, LinkMode: "passive"})
+	local := &localPath{handler: statusHandler(uidB)}
+	manager.SetLocal(uidB, local.dial)
+
+	views := manager.List()
+	if got := listedIDs(views); len(got) != 2 || got[0] != host.ID || got[1] != "dev-alone" {
+		t.Fatalf("listed %v", got)
+	}
+	if len(views[0].Paths) != 2 || views[0].Paths[1].Via != PathPassive || views[0].Paths[1].HostID != "dev-p" || !views[0].Paths[1].OK {
+		t.Fatalf("paths = %+v", views[0].Paths)
+	}
+	// A machine reached only this way is listed as a linked device whose
+	// mode says the hub dials it.
+	if views[1].Kind != KindLink || views[1].LinkMode != "passive" || views[1].Paths != nil {
+		t.Fatalf("passive-only machine = %+v", views[1])
+	}
+	if pathClass(PathPassive) != pathClass(PathLink) || pathClass(PathPassive) != pathClass(PathSSH) {
+		t.Fatal("a passive path is not a direct path")
+	}
+
+	// The SSH host is unreachable (no such name): the passive path carries
+	// the request in the same call, and is then the machine's active path.
+	if via, _ := get(t, manager, host.ID, "/api/v1/status"); via != "link:dev-p" {
+		t.Fatalf("request went through %q", via)
+	}
+	views = manager.List()
+	if !views[0].Paths[1].Active {
+		t.Fatalf("passive path not active: %+v", views[0].Paths)
+	}
+	// It drops: the machine's paths say so.
+	devices.set("dev-p", func(device *LinkedDevice) { device.Online = false })
+	views = manager.List()
+	if path := views[0].Paths[1]; path.OK || path.Error != ErrDeviceOffline.Error() {
+		t.Fatalf("offline passive path = %+v", path)
+	}
+}

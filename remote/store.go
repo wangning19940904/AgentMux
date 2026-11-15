@@ -68,6 +68,9 @@ type HostView struct {
 	HubRole string `json:"hub_role,omitempty"`
 	// MachineUID is the computer this entry reaches, once known.
 	MachineUID string `json:"machine_uid,omitempty"`
+	// LinkMode is "passive" for a linked device the hub dials because the
+	// device listens; empty when the device dials the hub.
+	LinkMode string `json:"link_mode,omitempty"`
 	// Paths lists every way of reaching the machine when there is more than
 	// one: this entry's own and those of the entries that reach the same
 	// computer, which are not listed separately.
