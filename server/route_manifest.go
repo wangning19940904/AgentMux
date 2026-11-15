@@ -52,4 +52,9 @@ var publicRouteManifest = []PublicRouteSpec{
 	{http.MethodPost, "/api/v1/frameworks/health/recheck", RouteBeta},
 	{http.MethodGet, "/api/v1/frameworks/health/settings", RouteBeta},
 	{http.MethodPut, "/api/v1/frameworks/health/settings", RouteBeta},
+	{http.MethodGet, "/api/v1/super-agents/plans", RouteBeta},
+	{http.MethodPost, "/api/v1/super-agents/plans/approve", RouteBeta},
+	{http.MethodPost, "/api/v1/super-agents/plans/decline", RouteBeta},
+	{http.MethodGet, "/api/v1/super-agents/trust", RouteBeta},
+	{http.MethodDelete, "/api/v1/super-agents/trust", RouteBeta},
 }

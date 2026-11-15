@@ -1406,7 +1406,11 @@ export interface SuperAgentWorker {
   host_id?: string;
   agent_id: string;
   capabilities?: string;
+  // Overrides the tier derived from the worker's framework and model.
+  cost_tier?: CostTier;
 }
+
+export type CostTier = "low" | "medium" | "high";
 
 // A machine an agent may launch workers on, besides the one it lives on.
 // SuperAgentMachine is a working directory for an agent's workers besides
@@ -1512,6 +1516,9 @@ export interface SuperAgent {
   // What AgentMux does with the signals it derives from running Tickets:
   // observe (empty) records them, act also wakes the brain, off does neither.
   supervision?: "" | "observe" | "act" | "off";
+  // When work needs the requester's approval before it starts: off (empty),
+  // always, or above a cost tier.
+  plan_approval?: "" | "off" | "always" | "above_low" | "above_medium";
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
@@ -1614,7 +1621,85 @@ export interface SuperAgentTicket {
   rework_rounds?: number;
   // The latest independent review of the Ticket's work.
   auto_review?: SuperAgentAutoReview;
+  // Set when AgentMux ran the Ticket somewhere other than where the brain
+  // named (machine_policy flexible).
+  placement?: SuperAgentTicketPlacement;
+  // The directory the worker writes in; held_since is set while the Ticket
+  // holds it. An isolated worker has its own copy and holds nothing.
+  workspace?: { host_id?: string; dir?: string; isolated?: boolean; held_since?: string };
   updated_at: string;
+}
+
+// Tickets the brain proposed together, waiting for the requester's approval.
+export interface SuperAgentPlan {
+  id: string;
+  super_agent_id: string;
+  title: string;
+  summary?: string;
+  requester?: string;
+  requester_name?: string;
+  thread_key: string;
+  tickets: SuperAgentPlanItem[];
+  tier: CostTier;
+  status: "pending" | "approved" | "declined" | "expired";
+  decided_by?: string;
+  note?: string;
+  ticket_ids?: string[];
+  created_at: string;
+  decided_at?: string;
+}
+
+export interface SuperAgentPlanItem {
+  ref?: string;
+  title: string;
+  worker_id: string;
+  instructions?: string;
+  done_when?: string[];
+  depends_on?: string[];
+  machine_policy?: string;
+  tier: CostTier;
+  where: string;
+  placed_worker_id?: string;
+}
+
+// A requester's remembered approval: their work up to tier starts without a plan.
+export interface SuperAgentTrust {
+  requester: string;
+  requester_name?: string;
+  tier: CostTier;
+  approved_by?: string;
+  at: string;
+}
+
+// A directory a running Ticket holds, on a machine this agent's workers use.
+export interface SuperAgentWorkspaceClaim {
+  ticket_id: string;
+  title: string;
+  agent_id: string;
+  host_id?: string;
+  machine: string;
+  dir: string;
+  since: string;
+}
+
+export interface SuperAgentTicketPlacement {
+  policy: string;
+  requested_worker_id: string;
+  worker_id: string;
+  host_id?: string;
+  machine?: string;
+  reason: string;
+  at: string;
+}
+
+// The health record of one framework on one machine of an agent's roster;
+// an empty host_id is this machine.
+export interface SuperAgentRuntimeHealth {
+  host_id?: string;
+  runtime: string;
+  state: "ok" | "failing" | "usage_limit" | "unknown";
+  reason?: string;
+  resets_at?: string;
 }
 
 export interface SuperAgentTicketSignal {
@@ -1745,8 +1830,18 @@ export interface SuperAgentTimer {
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];
-  workers: Array<{ worker_id: string; available: boolean; detail?: string }>;
+  workers: Array<{ worker_id: string; available: boolean; detail?: string; runtime_id?: string }>;
   machines?: SuperAgentMachineStatus[];
+  // Each roster framework's health, per machine.
+  runtime_health?: SuperAgentRuntimeHealth[];
+  // Directories Tickets hold now: this agent's first, then other agents' on
+  // the same machines.
+  workspace_claims?: SuperAgentWorkspaceClaim[];
+  // Each roster entry's cost tier by roster id, the agent's plans (newest
+  // first) and its remembered approvals.
+  cost_tiers?: Record<string, CostTier>;
+  plans?: SuperAgentPlan[];
+  trust?: SuperAgentTrust[];
   sources: Record<string, { last_event_at?: string; last_error?: string; last_error_at?: string; warning?: string }>;
   // Timers still set come first, then those that fired or were cancelled
   // lately. timer_warning says when the daily limit is holding due ones back.

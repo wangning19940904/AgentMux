@@ -7,8 +7,11 @@ on its first message. `framework/health` keeps one record per framework on
 each machine so the rest of AgentMux can find out before it sends work.
 
 The package owns the stored state. `server/framework_health.go` only serves
-it. Worker placement and the brain's roster will read these records in a
-later change; nothing blocks on them yet.
+it. Worker placement and the agent's roster read these records (see
+"Placement" in `contract/SUPER_AGENTS.md`): an accept for a framework that is
+`failing` or `usage_limit` is refused or moved, and `unknown` blocks nothing.
+Another machine's records are read through its `GET /api/v1/frameworks/health`,
+which the hub's worker relay carries.
 
 ## Records
 

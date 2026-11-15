@@ -153,6 +153,8 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		RuntimeAvailable: server.AgentRuntimeAvailable,
 		DetectTools:      superagent.DetectWorkerTools,
 		MCP:              mcpRegistry,
+		Health:           srv.FrameworkHealth(),
+		MachineUIDs:      srv.MachineUID,
 		ChannelHasAgent: func(ctx context.Context, id string) bool {
 			channel, err := st.GetChannel(ctx, id)
 			return err != nil || (channel != nil && channel.AgentID != "")

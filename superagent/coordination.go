@@ -62,7 +62,12 @@ type ticketView struct {
 	// Signals are what supervision noticed that still holds, in act mode.
 	Signals []string `json:"signals,omitempty"`
 	// Review is the latest review's verdict, and how much rework is left.
-	Review   string `json:"review,omitempty"`
+	Review string `json:"review,omitempty"`
+	// Moved says where AgentMux ran the Ticket instead of where it was
+	// accepted, and why.
+	Moved string `json:"moved,omitempty"`
+	// Holds is the directory the Ticket holds now.
+	Holds    string `json:"holds,omitempty"`
 	Started  string `json:"started,omitempty"`
 	Updated  string `json:"updated"`
 	Activity string `json:"last_activity,omitempty"`
@@ -118,7 +123,10 @@ type activity struct {
 
 // routerView assembles everything the router is shown with an event.
 func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, tickets []core.SuperAgentTicket) routerContext {
-	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent)}
+	view := routerContext{Memory: s.memoryIndex(agent.ID), Machines: s.machineStatuses(ctx, agent), Statuses: s.workerStatuses(ctx, agent)}
+	view.Health = s.rosterHealth(ctx, agent, view.Statuses)
+	view.Workspaces = s.workspaceViews(ctx, agent)
+	view.Tiers = s.rosterTiers(ctx, agent, view.Statuses)
 	if agent.AutoWorkers {
 		view.LocalTools = s.localTools(agent.WorkerRuntimes)
 	}
@@ -159,6 +167,14 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 	view.Places = append(view.Places, s.mailPlaces(ctx, agent)...)
 	view.Where = describeThread(trigger.ThreadKey, trigger.DedupeKey, names)
 	view.Asks = s.asksIn(agent.ID, trigger.ThreadKey, names)
+	view.Plans = s.pendingPlanViews(ctx, agent.ID, trigger.ThreadKey, names)
+	if agent.PlanApproval != "" {
+		trusted := ""
+		if requester, _ := s.requester(ctx, agent.ID, trigger); requester != "" {
+			trusted = s.trustedTier(ctx, agent.ID, requester)
+		}
+		view.PlanNote = planNote(agent, trusted)
+	}
 	view.Timers = s.timerViews(ctx, agent.ID, trigger.ThreadKey)
 	now := s.now()
 	view.Now = now.Format(time.RFC3339) + " (" + now.Weekday().String() + ")"
@@ -202,6 +218,12 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			entry.Signals = signalLines(ticket)
 		}
 		entry.Review = reviewSummary(ticket)
+		if holdsWorkspace(ticket) {
+			entry.Holds = ticket.Workspace.Dir + " on " + s.machineLabel(ticket.Workspace.HostID)
+		}
+		if moved := ticket.Placement; moved != nil {
+			entry.Moved = fmt.Sprintf("from %s to %s on %s: %s", moved.RequestedWorkerID, moved.WorkerID, firstNonEmpty(moved.Machine, "this machine"), moved.Reason)
+		}
 		if s.existingTicketDir(ticket) != "" {
 			entry.Folder = ticketsDirName + "/" + ticket.ID
 		}

@@ -39,6 +39,8 @@ tags:
     description: Token usage reporting (beta)
   - name: frameworks
     description: Health of the agent frameworks on this machine (beta)
+  - name: agent-plans
+    description: Plans an agent proposed for approval, and remembered approvals (beta)
 
 paths:
   /api/v1/event-sources:
@@ -870,6 +872,156 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/super-agents/plans:
+    get:
+      tags: [agent-plans]
+      operationId: listAgentPlans
+      summary: An agent's plans and remembered approvals
+      description: >
+        Plans the agent's brain proposed with a `plan` action, newest first
+        (pending ones older than 7 days read as `expired`; the latest 50 are
+        kept), and the requesters whose approval is remembered.
+      x-stability: beta
+      parameters:
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Plans and trust
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plans, trust]
+                properties:
+                  plans:
+                    type: array
+                    items: { $ref: "#/components/schemas/AgentPlan" }
+                  trust:
+                    type: array
+                    items: { $ref: "#/components/schemas/AgentTrust" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/super-agents/plans/approve:
+    post:
+      tags: [agent-plans]
+      operationId: approveAgentPlan
+      summary: Approve a pending plan and start its Tickets
+      description: >
+        Starts the plan's Tickets through the normal accept path, with the
+        same checks (roster, placement, workspace claims). When they cannot
+        start now the plan stays pending and the answer is 400 with the
+        reason. With `remember`, the requester's approval of work up to the
+        plan's tier is kept for this agent, so later work at or under it
+        starts without a plan.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, plan_id]
+              properties:
+                agent_id: { type: string }
+                plan_id: { type: string }
+                remember: { type: boolean, default: false }
+      responses:
+        "200":
+          description: The approved plan, with the Tickets it started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentPlan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The plan is no longer pending
+
+  /api/v1/super-agents/plans/decline:
+    post:
+      tags: [agent-plans]
+      operationId: declineAgentPlan
+      summary: Decline a pending plan
+      description: >
+        Nothing starts. The brain is told on the plan's thread, with the
+        note, so it can answer the requester.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent_id, plan_id]
+              properties:
+                agent_id: { type: string }
+                plan_id: { type: string }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        "200":
+          description: The declined plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentPlan"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The plan is no longer pending
+
+  /api/v1/super-agents/trust:
+    get:
+      tags: [agent-plans]
+      operationId: listAgentTrust
+      summary: An agent's remembered approvals
+      x-stability: beta
+      parameters:
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Remembered approvals
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AgentTrust" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [agent-plans]
+      operationId: revokeAgentTrust
+      summary: Forget a requester's remembered approval
+      x-stability: beta
+      parameters:
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: requester
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Forgotten
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     bridgeToken:
@@ -1418,3 +1570,57 @@ components:
         error_kind: { $ref: "#/components/schemas/FrameworkErrorKind" }
         error_detail: { type: string }
         checked_at: { type: string, format: date-time }
+
+    CostTier:
+      type: string
+      enum: [low, medium, high]
+
+    AgentPlan:
+      type: object
+      required: [id, super_agent_id, title, thread_key, tickets, tier, status, created_at]
+      properties:
+        id: { type: string, description: "pln_…" }
+        super_agent_id: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        requester: { type: string, description: "Who asked for the work: the event's sender" }
+        requester_name: { type: string }
+        thread_key: { type: string }
+        trigger_id: { type: string }
+        tickets:
+          type: array
+          items: { $ref: "#/components/schemas/AgentPlanTicket" }
+        tier: { $ref: "#/components/schemas/CostTier" }
+        status: { type: string, enum: [pending, approved, declined, expired] }
+        decided_by: { type: string, description: "Who decided, or \"remembered trust\"" }
+        note: { type: string }
+        ticket_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: string, format: date-time }
+
+    AgentPlanTicket:
+      type: object
+      required: [title, worker_id, tier, where]
+      properties:
+        ref: { type: string }
+        title: { type: string }
+        worker_id: { type: string }
+        instructions: { type: string }
+        done_when: { type: array, items: { type: string } }
+        expect_minutes: { type: integer }
+        depends_on: { type: array, items: { type: string } }
+        base_ticket: { type: string }
+        machine_policy: { type: string, enum: [fixed, flexible] }
+        tier: { $ref: "#/components/schemas/CostTier" }
+        where: { type: string, description: "The machine placement would run it on when it was proposed" }
+        placed_worker_id: { type: string, description: "Set when placement would use another roster entry" }
+
+    AgentTrust:
+      type: object
+      required: [requester, tier, at]
+      properties:
+        requester: { type: string }
+        requester_name: { type: string }
+        tier: { $ref: "#/components/schemas/CostTier" }
+        approved_by: { type: string }
+        at: { type: string, format: date-time }

@@ -45,7 +45,7 @@ func (s *Service) BrainBrief(ctx context.Context, brainID string, msg *core.Mess
 	var brief strings.Builder
 	brief.WriteString(brainHeader + "\n")
 	brief.WriteString(promptFor(*agent, promptRoleChat, "{name}", agent.Name, "{home}", home))
-	writeRouterContext(&brief, *agent, s.workerStatuses(ctx, *agent), view)
+	writeRouterContext(&brief, *agent, view.Statuses, view)
 	return brief.String()
 }
 

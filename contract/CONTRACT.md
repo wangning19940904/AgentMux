@@ -94,6 +94,7 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 | `GET /api/v1/event-deliveries`、`POST /api/v1/event-deliveries/retry` | 投递历史与重试 |
 | `GET /api/v1/usage` | Token 用量报表 |
 | `GET /api/v1/frameworks/health`、`POST /api/v1/frameworks/health/recheck`、`GET/PUT /api/v1/frameworks/health/settings` | 本机 Agent 框架健康记录（`ok`/`failing`/`usage_limit`/`unknown`）、立即复查与定时检查开关（默认关闭，间隔默认 30 分钟） |
+| `GET /api/v1/super-agents/plans`、`POST /api/v1/super-agents/plans/approve`、`POST /api/v1/super-agents/plans/decline`、`GET/DELETE /api/v1/super-agents/trust` | 智能体提出的计划（`plan` 动作）的查看、批准（启动其工单，可记住发起人对该成本档位的批准）与拒绝，以及已记住批准的查看与撤销；见 `contract/SUPER_AGENTS.md`「Plans, cost tiers and remembered approvals」 |
 | `POST /hook/{id}` | 入站 Webhook（独立 token 鉴权） |
 
 ### OpenAI 兼容层

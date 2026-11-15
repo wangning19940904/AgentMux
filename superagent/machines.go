@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/framework/health"
 )
 
 // An agent can launch a worker in a directory the operator listed, on this
@@ -33,6 +34,7 @@ const (
 	hostedWorkersPath       = "/api/v1/super-agents/workers/launch"
 	hostedWorkersRemovePath = "/api/v1/super-agents/workers/release"
 	steerPath               = "/api/v1/invocations/steer"
+	frameworkHealthPath     = "/api/v1/frameworks/health"
 
 	machineGuidance    = "Launches a new %s worker on %s with its own session and directory there."
 	machineDirGuidance = "Launches a new %s worker on %s, working in %s there."
@@ -268,12 +270,13 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 			defer wg.Done()
 			statusCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			runtimes, err := fleet.Runtimes(statusCtx, machine.HostID)
-			if err != nil {
-				statuses[index].Detail = err.Error()
+			// Asking also refreshes what placement knows of the machine.
+			info := s.refreshMachine(statusCtx, machine.HostID)
+			if info.err != nil {
+				statuses[index].Detail = info.err.Error()
 				return
 			}
-			statuses[index].Available, statuses[index].Runtimes = true, runtimes
+			statuses[index].Available, statuses[index].Runtimes = true, info.runtimes
 			if tooled, ok := fleet.(MachineToolsFleet); ok {
 				// A machine too old to say leaves its tools unknown.
 				if tools, err := tooled.Tools(statusCtx, machine.HostID); err == nil {
@@ -303,23 +306,30 @@ func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID strin
 // applies its own checks to them and answers with the Agent it keeps for this
 // agent.
 func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, error) {
+	worker, _, err := s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
+	return worker, err
+}
+
+// launchMachineWorkerMode is launchMachineWorker that also returns how
+// another machine isolates the worker's conversations ("" on this machine).
+func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, string, error) {
 	workerID := machineWorkerRosterID(runtimeID, pathID)
 	if err := checkMachineWorker(agent, workerID, runtimeID, pathID); err != nil {
-		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q: %w", workerID, err)
+		return core.SuperAgentWorker{}, "", fmt.Errorf("router chose worker %q: %w", workerID, err)
 	}
 	machine, _ := agentMachine(agent, pathID)
 	if machine.HostID == "" {
 		dir, err := expandHome(machine.Dir)
 		if err != nil {
-			return core.SuperAgentWorker{}, err
+			return core.SuperAgentWorker{}, "", err
 		}
 		worker, err := s.launchLocalWorker(ctx, agent, runtimeID, pathID, dir)
 		worker.ID = workerID
-		return worker, err
+		return worker, "", err
 	}
 	fleet := s.machineFleet()
 	if fleet == nil {
-		return core.SuperAgentWorker{}, errors.New("this AgentMux has no other machines to launch workers on")
+		return core.SuperAgentWorker{}, "", errors.New("this AgentMux has no other machines to launch workers on")
 	}
 	request := core.HostedWorkerRequest{
 		OwnerID: agent.ID, OwnerName: agent.Name, RuntimeID: runtimeID,
@@ -334,9 +344,9 @@ func (s *Service) launchMachineWorker(ctx context.Context, agent core.SuperAgent
 	defer cancel()
 	hosted, err := fleet.Launch(launchCtx, machine.HostID, request)
 	if err != nil {
-		return core.SuperAgentWorker{}, err
+		return core.SuperAgentWorker{}, "", err
 	}
-	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, nil
+	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, hosted.WorkspaceMode, nil
 }
 
 // releaseMachineWorkers has machines drop the workers they keep for an agent.
@@ -545,6 +555,18 @@ func (f *Fleet) Runtimes(ctx context.Context, hostID string) ([]string, error) {
 		return nil, err
 	}
 	return runtimes, nil
+}
+
+// Health reads the machine's framework health records.
+func (f *Fleet) Health(ctx context.Context, hostID string) ([]health.Record, error) {
+	var answer struct {
+		Records []health.Record `json:"records"`
+	}
+	status, err := f.remoteJSON(ctx, hostID, http.MethodGet, frameworkHealthPath, nil, &answer)
+	if err == nil && status >= http.StatusBadRequest {
+		err = fmt.Errorf("framework health: %d", status)
+	}
+	return answer.Records, err
 }
 
 func (f *Fleet) Tools(ctx context.Context, hostID string) (WorkerTools, error) {

@@ -77,6 +77,9 @@ type Store interface {
 	DeleteAgentInstance(context.Context, string) error
 	ListAgentInstances(context.Context) ([]core.AgentInstance, error)
 	ListChannels(context.Context) ([]core.Channel, error)
+	// Plans and remembered approvals are kept as settings (plans.go).
+	GetSetting(ctx context.Context, key string) (string, bool, error)
+	SetSetting(ctx context.Context, key, value string) error
 }
 
 // Options holds the service's collaborators.
@@ -107,6 +110,13 @@ type Options struct {
 	MCP core.MCPRegistry
 	// StateDir holds directories the service creates. Empty means ~/.agentmux.
 	StateDir string
+	// Health is this machine's framework health; nil leaves every framework
+	// here unknown, which holds nothing back.
+	Health LocalHealth
+	// MachineUIDs returns a machine's UID by host id ("" is this machine),
+	// or "" when unknown. Workspace claims use it so one computer reached
+	// several ways counts once; nil keys claims by host id.
+	MachineUIDs func(hostID string) string
 }
 
 // Service owns intake, routing and execution for every Super Agent.
@@ -121,6 +131,8 @@ type Service struct {
 
 	mu     sync.Mutex
 	asksMu sync.Mutex
+	// plansMu makes each change to an agent's plans and trust one step.
+	plansMu sync.Mutex
 	// timersMu makes each change to a timer one step. It is taken after mu,
 	// never before it.
 	timersMu       sync.Mutex
@@ -160,6 +172,11 @@ type Service struct {
 	directory   Directory
 	scopes      FeishuScopeChecker
 	mailbox     Mailbox
+	// healthRecords and placement decide where new Tickets run; see
+	// placement.go.
+	healthRecords LocalHealth
+	placement     placementCache
+	machineUIDs   func(hostID string) string
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -183,6 +200,17 @@ type Activity struct {
 	// those that fired or were cancelled lately.
 	Timers       []core.SuperAgentTimer `json:"timers"`
 	TimerWarning string                 `json:"timer_warning,omitempty"`
+	// RuntimeHealth is the health of each framework on the roster, per
+	// machine.
+	RuntimeHealth []core.SuperAgentRuntimeHealth `json:"runtime_health,omitempty"`
+	// WorkspaceClaims are the directories Tickets hold now on the machines
+	// this agent's workers use.
+	WorkspaceClaims []WorkspaceClaim `json:"workspace_claims,omitempty"`
+	// CostTiers are the roster entries' cost tiers by roster id; Plans the
+	// agent's plans, newest first; Trust its remembered approvals.
+	CostTiers map[string]string      `json:"cost_tiers,omitempty"`
+	Plans     []core.SuperAgentPlan  `json:"plans,omitempty"`
+	Trust     []core.SuperAgentTrust `json:"trust,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -203,7 +231,8 @@ func New(options Options) *Service {
 		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
-		directory: options.Directory, scopes: options.Scopes,
+		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
+		machineUIDs: options.MachineUIDs,
 	}
 }
 
@@ -481,7 +510,7 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
-	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision {
+	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision || trigger.Kind == core.SuperAgentTriggerPlan {
 		// Nobody is waiting for an answer to a follow-up or a supervision
 		// signal, and either is for the router, not for a worker or a person.
 		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error(), trigger.TicketID)
@@ -523,6 +552,8 @@ func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
 func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, decision routerDecision) error {
 	refs := map[string]string{}
 	reviewed := map[string]bool{}
+	// Directories held now, read when an accept first needs them.
+	claims := &claimCheck{s: s, agent: agent}
 	// The thread's and the agent's follow-ups, read when an action first
 	// needs them.
 	var timers *timerLedger
@@ -545,7 +576,7 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 		}
 		return ticket.Status, nil
 	}
-	for _, action := range decision.Actions {
+	for index, action := range decision.Actions {
 		switch action.Action {
 		case actionAccept:
 			if err := s.checkWorker(agent, action.WorkerID); err != nil {
@@ -553,6 +584,23 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			}
 			if err := checkCriteria(action.DoneWhen, action.ExpectMinutes); err != nil {
 				return err
+			}
+			// Where it runs is decided here, so a place that cannot take it
+			// is refused before anything is carried out. decision.Actions
+			// shares its array with the caller's, which apply then reads.
+			placed, err := s.place(ctx, agent, action, func(place workerPlace) string {
+				return claims.conflict(ctx, action, place)
+			})
+			if err != nil {
+				return err
+			}
+			decision.Actions[index].placed = &placed
+			claims.claim(ctx, action, placed.place)
+			if !action.approved {
+				requester, _ := s.requester(ctx, agent.ID, trigger)
+				if problem := s.approvalProblem(ctx, agent, requester, s.placeTier(ctx, agent, placed.place)); problem != "" {
+					return errors.New(problem)
+				}
 			}
 			for _, id := range append(slices.Clone(action.DependsOn), action.BaseTicket) {
 				if strings.TrimSpace(id) == "" {
@@ -618,6 +666,12 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			if err := s.preflightReview(ctx, agent, trigger, action, reviewed); err != nil {
 				return err
 			}
+		case actionPlan:
+			items, tier, err := s.preflightPlan(ctx, agent, action, claims, resolve)
+			if err != nil {
+				return err
+			}
+			decision.Actions[index].planItems, decision.Actions[index].planTier = items, tier
 		}
 	}
 	return nil
@@ -656,7 +710,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		}
 		return id
 	}
-	var accepted, attached, stopped, posted, reviewed bool
+	var accepted, attached, stopped, posted, reviewed, planned bool
 	var ticketIDs, problems, reasons, notices []string
 	if decision.Reason != "" {
 		reasons = append(reasons, decision.Reason)
@@ -694,6 +748,10 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if id, err = s.accept(ctx, agent, trigger, action); err == nil {
 				accepted = true
 				ticketIDs = append(ticketIDs, id)
+				if action.placed != nil && action.placed.moved != nil {
+					moved := action.placed.moved
+					reasons = append(reasons, fmt.Sprintf("moved %s from %s to %s (%s): %s", id, moved.RequestedWorkerID, moved.WorkerID, moved.Machine, moved.Reason))
+				}
 				if ref := strings.TrimSpace(action.Ref); ref != "" {
 					refs[ref] = id
 				}
@@ -737,6 +795,20 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if cancelled, err = s.cancelTimer(ctx, strings.TrimSpace(action.TimerID)); cancelled {
 				reasons = append(reasons, "cancelled follow-up "+strings.TrimSpace(action.TimerID))
 			}
+		case actionPlan:
+			var plan core.SuperAgentPlan
+			var notice string
+			if plan, notice, err = s.proposePlan(ctx, agent, trigger, action); err == nil {
+				planned = true
+				notices = append(notices, notice)
+				if plan.Status == core.SuperAgentPlanApproved {
+					accepted = true
+					ticketIDs = append(ticketIDs, plan.TicketIDs...)
+					reasons = append(reasons, "started plan "+plan.ID+" (remembered approval)")
+				} else {
+					reasons = append(reasons, "proposed plan "+plan.ID+" for approval")
+				}
+			}
 		case actionReview:
 			id := strings.TrimSpace(action.TicketID)
 			var outcome reviewOutcome
@@ -775,7 +847,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		disposition = core.SuperAgentDispositionFollowUp
 	case stopped:
 		disposition = core.SuperAgentDispositionStopped
-	case reply != "" || posted || reviewed:
+	case reply != "" || posted || reviewed || planned:
 		disposition = core.SuperAgentDispositionAnswered
 	case len(problems) > 0:
 		disposition = core.SuperAgentDispositionFailed
@@ -792,9 +864,23 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 }
 
 func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, action routerAction) (string, error) {
-	worker, err := s.assignedWorker(ctx, agent, action.WorkerID)
+	var moved *core.SuperAgentTicketPlacement
+	if action.placed != nil && action.placed.moved != nil {
+		moved = action.placed.moved
+		action.WorkerID = moved.WorkerID
+	}
+	worker, workspaceMode, err := s.launchAssigned(ctx, agent, action.WorkerID)
 	if err != nil {
 		return "", err
+	}
+	var workspace *core.SuperAgentTicketWorkspace
+	if place, err := s.placeOf(ctx, agent, action.WorkerID); err == nil {
+		if found, ok := s.workspaceOf(ctx, agent, place); ok {
+			if workspaceMode != "" {
+				found.Isolated = strings.EqualFold(workspaceMode, "worktree")
+			}
+			workspace = &found
+		}
 	}
 	base := strings.TrimSpace(action.BaseTicket)
 	if base == "" && len(action.DependsOn) == 1 {
@@ -819,6 +905,7 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 		DependsOn: action.DependsOn, BaseTicket: base,
 		Instructions: strings.TrimSpace(action.Instructions),
 		DoneWhen:     cleanCriteria(action.DoneWhen), ExpectMinutes: action.ExpectMinutes,
+		Placement: moved, Workspace: workspace,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.openTicketFolder(agent.ID, id); err != nil {
@@ -833,12 +920,25 @@ func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger cor
 }
 
 func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
+	worker, _, err := s.launchAssigned(ctx, agent, workerID)
+	return worker, err
+}
+
+// launchAssigned is assignedWorker that also says, for a worker launched on
+// another machine, how that machine isolates its conversations.
+func (s *Service) launchAssigned(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, string, error) {
 	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
 		if pathID != "" {
-			return s.launchMachineWorker(ctx, agent, runtimeID, pathID)
+			return s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
 		}
-		return s.launchAutoWorker(ctx, agent, runtimeID)
+		worker, err := s.launchAutoWorker(ctx, agent, runtimeID)
+		return worker, "", err
 	}
+	worker, err := s.rosterWorker(agent, workerID)
+	return worker, "", err
+}
+
+func (s *Service) rosterWorker(agent core.SuperAgent, workerID string) (core.SuperAgentWorker, error) {
 	index := slices.IndexFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID })
 	if index < 0 {
 		return core.SuperAgentWorker{}, fmt.Errorf("router chose worker %q, which is not on the roster", workerID)
@@ -944,6 +1044,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 	}
 	ticket.UpdatedAt = s.now().UTC()
 	closeSignals(ticket, ticket.UpdatedAt)
+	releaseWorkspace(ticket)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -957,7 +1058,21 @@ func (s *Service) startQueued(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// A Ticket whose directory another one holds waits for it. Claims taken
+	// in this pass count too, before their Tickets record them.
+	var holders map[string]core.SuperAgentTicket
+	if slices.ContainsFunc(queued, needsWorkspace) {
+		if holders, err = s.workspaceHolders(ctx); err != nil {
+			return err
+		}
+	}
 	for _, ticket := range queued {
+		if needsWorkspace(ticket) && ticket.Workspace.HeldSince.IsZero() {
+			key := s.workspaceKey(*ticket.Workspace)
+			if holder, held := holders[key]; held && holder.ID != ticket.ID {
+				continue
+			}
+		}
 		agent, err := s.store.GetSuperAgent(ctx, ticket.SuperAgentID)
 		if err != nil {
 			return err
@@ -981,6 +1096,9 @@ func (s *Service) startQueued(ctx context.Context) error {
 		runCtx, cancel := context.WithTimeout(ctx, workerTimeout)
 		s.running[agent.ID+"|"+ticket.ID] = cancel
 		s.mu.Unlock()
+		if needsWorkspace(ticket) {
+			holders[s.workspaceKey(*ticket.Workspace)] = ticket
+		}
 		s.wg.Add(1)
 		go func(agent core.SuperAgent, ticketID string) {
 			defer s.wg.Done()
@@ -1014,6 +1132,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		current.Attempts++
 		if current.StartedAt.IsZero() {
 			current.StartedAt = s.now().UTC()
+		}
+		if needsWorkspace(*current) && current.Workspace.HeldSince.IsZero() {
+			current.Workspace.HeldSince = s.now().UTC()
 		}
 		s.turnStarts[ticketID] = s.now().UTC()
 		delivered = len(current.Inputs)
@@ -1090,6 +1211,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		s.log.Error("finish super agent ticket", "ticket", ticketID, "err", mutateErr)
 		return
 	}
+	if runErr != nil {
+		s.noteRunFailure(ctx, agent, ticket.Worker, runErr)
+	}
 	if runErr == nil {
 		s.appendTicketLog(ticket, ticketResultFile, answer)
 	}
@@ -1148,6 +1272,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
 	closeSignals(ticket, now)
+	releaseWorkspace(ticket)
 	if err := s.store.UpsertSuperAgentTicket(ctx, *ticket); err != nil {
 		return err
 	}
@@ -1227,9 +1352,19 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	if err != nil {
 		return nil, err
 	}
+	workers := s.workerStatuses(ctx, *agent)
 	activity := &Activity{
-		Tickets: tickets, Triggers: triggers, Workers: s.workerStatuses(ctx, *agent), Machines: s.machineStatuses(ctx, *agent),
+		Tickets: tickets, Triggers: triggers, Workers: workers, Machines: s.machineStatuses(ctx, *agent),
 		Sources: map[string]SourceHealth{}, Timers: timers, TimerWarning: timerWarning,
+	}
+	activity.RuntimeHealth = s.rosterHealth(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
+	activity.WorkspaceClaims = s.workspaceClaims(ctx, *agent)
+	activity.CostTiers = s.rosterTiers(ctx, s.withWorkerRuntimes(ctx, *agent), workers)
+	if activity.Plans, err = s.Plans(ctx, id); err != nil {
+		return nil, err
+	}
+	if activity.Trust, err = s.Trust(ctx, id); err != nil {
+		return nil, err
 	}
 	s.mu.Lock()
 	for _, source := range agent.Sources {
