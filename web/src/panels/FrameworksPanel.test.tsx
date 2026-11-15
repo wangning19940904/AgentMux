@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
     checkFrameworkUpdate: vi.fn(),
     frameworkAuth: vi.fn(),
     frameworkHealth: vi.fn(),
+    saveFrameworkHealthSettings: vi.fn(),
     installFramework: vi.fn(),
     frameworkInstallSettings: vi.fn(),
     saveFrameworkInstallSettings: vi.fn(),
@@ -71,7 +72,7 @@ beforeEach(async () => {
   vi.mocked(activeRemoteID).mockReturnValue("");
   vi.mocked(api.frameworks).mockResolvedValue(frameworksResponse(false));
   vi.mocked(api.remoteHosts).mockResolvedValue([]);
-  vi.mocked(api.frameworkHealth).mockResolvedValue([]);
+  vi.mocked(api.frameworkHealth).mockResolvedValue({ results: [] });
   vi.mocked(api.checkFrameworkUpdate).mockResolvedValue({ kind: "dsh", installed: true, update_available: false });
   vi.mocked(api.frameworkAuth).mockResolvedValue({ kind: "dsh", state: "unknown" } as Awaited<ReturnType<typeof api.frameworkAuth>>);
   container = document.createElement("div");
@@ -260,5 +261,38 @@ describe("install settings", () => {
     await click(button(header, "更新 1 台"));
     expect(api.installFramework).toHaveBeenCalledTimes(1);
     expect(vi.mocked(api.installFramework).mock.calls[0][4]).toBe("home");
+  });
+
+  it("shows each framework's health record and turns periodic checks on for this machine", async () => {
+    vi.mocked(api.frameworks).mockResolvedValue(frameworksResponse(true));
+    vi.mocked(api.frameworkHealth).mockResolvedValue({
+      results: [],
+      records: [{
+        kind: "dsh", state: "failing", error_kind: "unauthenticated", source: "run",
+        reason: "not signed in: Not logged in · Please run /login", checked_at: "2026-11-15T08:00:00Z",
+      }],
+      checks: { enabled: false, interval_minutes: 30 },
+    });
+    vi.mocked(api.saveFrameworkHealthSettings).mockImplementation(async (settings) => settings);
+    await act(async () => { root.unmount(); });
+    await mountPanel();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+    expect(container.textContent).toContain("异常");
+    expect(container.textContent).toContain("not signed in: Not logged in");
+    expect(container.textContent).toContain("Agent 运行");
+
+    const toggle = container.querySelector<HTMLInputElement>(".framework-health-checks input[type=checkbox]");
+    expect(toggle?.checked).toBe(false);
+    await click(toggle!);
+    expect(api.saveFrameworkHealthSettings).toHaveBeenCalledWith({ enabled: true, interval_minutes: 30 }, undefined);
+    expect(container.querySelector(".framework-health-checks select")).not.toBeNull();
+  });
+
+  it("hides the periodic check setting when every machine is in view", async () => {
+    vi.mocked(activeMachineScope).mockReturnValue("all" as ReturnType<typeof activeMachineScope>);
+    await act(async () => { root.unmount(); });
+    await mountPanel();
+    expect(container.querySelector(".framework-health-checks")).toBeNull();
   });
 });

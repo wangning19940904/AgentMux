@@ -62,6 +62,9 @@ import type {
   FrameworkAuthStatus,
   FrameworkRuntimeSettings,
   FrameworkSmokeResult,
+  FrameworkHealthRecord,
+  FrameworkHealthResponse,
+  FrameworkHealthSettings,
   FrameworkTestRequest,
   FrameworkInstallResult,
   FrameworkInstallSettings,
@@ -505,7 +508,17 @@ export const api = {
     ? fleetCall<FrameworkSmokeResult>({ key: "test", method: "POST", path: "/api/v1/frameworks/test", body: request }, [targetID], { confirm: false }).then((result) => result.first)
     : postChecked<FrameworkSmokeResult>("/api/v1/frameworks/test", request),
   frameworkHealth: (targetID?: string) =>
-    interactiveFleetGet<{ results: FrameworkSmokeResult[] }>("/api/v1/frameworks/health", targetID).then((value) => value?.results ?? []),
+    interactiveFleetGet<FrameworkHealthResponse>("/api/v1/frameworks/health", targetID)
+      .then((value): FrameworkHealthResponse => ({ ...value, results: value?.results ?? [] })),
+  // Checks one framework now. The machine shares concurrent rechecks, skips
+  // one within 30 seconds of the last check and a usage limit before its reset.
+  recheckFramework: (kind: string, targetID?: string) => targetID && targetID !== "local"
+    ? fleetCall<FrameworkHealthRecord>({ key: "recheck", method: "POST", path: "/api/v1/frameworks/health/recheck", body: { kind } }, [targetID], { confirm: false }).then((result) => result.first)
+    : postChecked<FrameworkHealthRecord>("/api/v1/frameworks/health/recheck", { kind }),
+  // Periodic checks are set per machine.
+  saveFrameworkHealthSettings: (settings: FrameworkHealthSettings, targetID?: string) => targetID && targetID !== "local"
+    ? fleetCall<FrameworkHealthSettings>({ key: "health-settings", method: "PUT", path: "/api/v1/frameworks/health/settings", body: settings }, [targetID], { confirm: false }).then((result) => result.first)
+    : putChecked<FrameworkHealthSettings>("/api/v1/frameworks/health/settings", settings),
   // The latest test results of every framework on the machines in view.
   frameworkHealthOverview: async (): Promise<Targeted<FrameworkSmokeResult>[]> => {
     if (activeMachineScope() !== "all") {

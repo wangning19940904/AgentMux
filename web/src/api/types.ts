@@ -956,10 +956,12 @@ export type FrameworkSmokeErrorKind =
   | "not_installed"
   | "unauthenticated"
   | "model_not_found"
+  | "usage_limit"
   | "rate_limited"
   | "network"
   | "timeout"
   | "unexpected_reply"
+  | "cli_outdated"
   | "unknown";
 
 // FrameworkSmokeResult is one "reply ok" test of a framework with a model.
@@ -973,6 +975,37 @@ export interface FrameworkSmokeResult {
   error_kind?: FrameworkSmokeErrorKind;
   error_detail?: string;
   checked_at: string;
+}
+
+export type FrameworkHealthStateName = "ok" | "failing" | "usage_limit" | "unknown";
+export type FrameworkHealthSource = "test" | "periodic" | "recheck" | "run";
+
+// FrameworkHealthRecord is the health of one framework on one machine.
+export interface FrameworkHealthRecord {
+  kind: string;
+  state: FrameworkHealthStateName;
+  reason?: string;
+  error_kind?: FrameworkSmokeErrorKind;
+  source?: FrameworkHealthSource;
+  model?: string;
+  checked_at?: string;
+  probed_at?: string;
+  resets_at?: string;
+  consecutive_failures?: number;
+  last_ok_at?: string;
+}
+
+// FrameworkHealthSettings controls a machine's periodic framework checks.
+export interface FrameworkHealthSettings {
+  enabled: boolean;
+  interval_minutes: number;
+}
+
+export interface FrameworkHealthResponse {
+  results: FrameworkSmokeResult[];
+  // Absent on machines that predate health records.
+  records?: FrameworkHealthRecord[];
+  checks?: FrameworkHealthSettings;
 }
 
 export interface FrameworkTestRequest {

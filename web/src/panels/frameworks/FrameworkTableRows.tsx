@@ -2,6 +2,7 @@ import { CheckCircle2, Copy, Download, ExternalLink, List, LogIn, LogOut, Packag
 import type {
   Framework,
   FrameworkAuthStatus,
+  FrameworkHealthRecord,
   FrameworkSmokeResult,
   FrameworkUpdateCheck,
   OperationProgress,
@@ -12,6 +13,7 @@ import { useI18n } from "../../i18n";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
 import { TargetBadge } from "../../components/TargetBadge";
 import { FrameworkSmokeResultView } from "./FrameworkSmokeResult";
+import { FrameworkHealthRecordView } from "./FrameworkHealthRecord";
 import { frameworkAccountSummary, frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
 import type { FrameworkAccountFieldKey, FrameworkAccountSummary } from "./frameworkPresentation";
 
@@ -80,6 +82,7 @@ export function FrameworkTableRows({
   currentMachine,
   disabled,
   health,
+  record,
   testing,
   onTest,
   onModels,
@@ -105,6 +108,7 @@ export function FrameworkTableRows({
   currentMachine: string;
   disabled: boolean;
   health?: FrameworkSmokeResult;
+  record?: FrameworkHealthRecord;
   testing?: boolean;
   onTest?: () => void;
   onModels?: () => void;
@@ -163,6 +167,7 @@ export function FrameworkTableRows({
         <td data-label={t("frameworks.availability")}>
           <div className="framework-health-cell">
             <FrameworkSmokeResultView result={health} busy={testing} showModel />
+            <FrameworkHealthRecordView record={record} />
             {item.registered && (
               <div className="framework-row-actions">
                 <button className="ghost-action" disabled={disabled || testing || authActive} onClick={onTest}
