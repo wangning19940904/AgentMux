@@ -49,13 +49,20 @@ func (s *Server) handleWorkerRelayDevices(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	listed := make([]superagent.RelayDevice, 0, len(devices))
+	listed := make([]relayedDevice, 0, len(devices))
 	for _, device := range devices {
 		if host, known := s.remote.Get(device.ID); !known || host.Kind != remotepkg.KindLink {
 			continue // Not a machine this hub reaches, such as the hub itself.
 		}
 		if device.ID != source.ID && device.OwnerAccountID == source.OwnerAccountID {
-			listed = append(listed, superagent.RelayDevice{ID: device.ID, Name: device.Name})
+			// The machine UID and whether it is connected let the asking
+			// machine use the relay as one path among others to it.
+			entry := relayedDevice{RelayDevice: superagent.RelayDevice{ID: device.ID, Name: device.Name}, MachineUID: device.MachineUID}
+			if s.linkHub != nil {
+				_, online := s.linkHub.Connection(device.ID)
+				entry.Online = &online
+			}
+			listed = append(listed, entry)
 		}
 	}
 	writeJSON(w, http.StatusOK, listed)

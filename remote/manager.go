@@ -37,6 +37,11 @@ type Manager struct {
 	connLocks    sync.Map
 	attemptGates sync.Map
 	updateMu     sync.Mutex
+
+	// Machines known more than one way (machines.go).
+	relays     RelayBackend
+	machinesMu sync.Mutex
+	machines   *machineIndex
 }
 
 type TestResult struct {
@@ -103,23 +108,16 @@ func NewManager(hostsFile string, timeout time.Duration, log *slog.Logger) (*Man
 	}, nil
 }
 
-// List returns the SSH hosts followed by the devices paired with this hub.
+// List returns the machines: the SSH hosts followed by the devices paired
+// with this hub, each computer once. A computer known more than one way is
+// listed as its first entry, with every path to it (machines.go).
 func (m *Manager) List() []HostView {
-	hosts := m.store.List()
-	out := make([]HostView, 0, len(hosts))
-	for _, host := range hosts {
-		out = append(out, host.View())
-	}
-	if backend := m.linkBackend(); backend != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
-		defer cancel()
-		devices, err := backend.Devices(ctx)
-		if err != nil && m.log != nil {
-			m.log.Warn("list paired devices failed", "err", err)
-		}
-		for _, device := range devices {
-			out = append(out, device.view())
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+	defer cancel()
+	index := m.buildMachines(ctx)
+	out := make([]HostView, 0, len(index.groups))
+	for _, group := range index.groups {
+		out = append(out, m.machineView(ctx, group))
 	}
 	return out
 }
@@ -162,12 +160,14 @@ func (m *Manager) SyncSSHConfig(candidates []DiscoveredHost) (SSHConfigSyncResul
 	return result, nil
 }
 
+// Get returns an entry by its id, or the entry a machine UID is listed as.
 func (m *Manager) Get(id string) (Host, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+	defer cancel()
+	id = m.resolveID(ctx, id)
 	if host, ok := m.store.Get(id); ok {
 		return host, true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
-	defer cancel()
 	if device, ok := m.linked(ctx, id); ok {
 		return device.host(), true
 	}
@@ -187,6 +187,7 @@ func (m *Manager) Upsert(host Host, clearAPIToken bool) (HostView, error) {
 		return HostView{}, err
 	}
 	m.invalidate(saved.ID)
+	m.invalidateMachines()
 	return saved.View(), nil
 }
 
@@ -196,10 +197,12 @@ func (m *Manager) Delete(id string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
 		defer cancel()
 		if device, ok := m.linked(ctx, id); ok {
+			m.invalidateMachines()
 			return m.linkBackend().Remove(ctx, device.ID)
 		}
 	}
 	m.invalidate(id)
+	m.invalidateMachines()
 	return m.store.Delete(id)
 }
 
@@ -266,6 +269,10 @@ func (m *Manager) Import(ctx context.Context, candidate Host, trustOnFirstUse bo
 		return ImportResult{}, err
 	}
 	m.cache(saved, client)
+	m.learnMachineUID(saved.ID, status)
+	if updated, ok := m.store.Get(saved.ID); ok {
+		saved = updated
+	}
 	result := TestResult{
 		OK: true, Name: saved.Name, LatencyMS: time.Since(started).Milliseconds(),
 		HostKeyFingerprint: saved.HostKeyFingerprint, Status: status, Installed: installed,
@@ -297,6 +304,7 @@ func (m *Manager) Test(ctx context.Context, id string, trustOnFirstUse bool) (Te
 		}
 	}
 	m.cache(host, client)
+	m.learnMachineUID(id, status)
 	return TestResult{
 		OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(),
 		HostKeyFingerprint: host.HostKeyFingerprint, Status: status, Installed: installed,
@@ -353,6 +361,7 @@ func (m *Manager) verifyHost(ctx context.Context, host Host, trustOnFirstUse, in
 // restarting anything. The Console uses it to show live versions in the host
 // list as soon as the page opens.
 func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
+	id = m.resolveID(ctx, id)
 	host, ok := m.store.Get(id)
 	if !ok {
 		if device, linked := m.linked(ctx, id); linked {
@@ -392,6 +401,7 @@ func (m *Manager) Status(ctx context.Context, id string) (TestResult, error) {
 	if err != nil {
 		return TestResult{}, err
 	}
+	m.learnMachineUID(id, status)
 	return TestResult{OK: true, Name: host.Name, LatencyMS: time.Since(started).Milliseconds(), HostKeyFingerprint: host.HostKeyFingerprint, Status: status}, nil
 }
 
@@ -642,7 +652,10 @@ func (m *Manager) cache(host Host, client remoteClient) {
 // DialContext opens a TCP connection from the SSH host to the configured
 // AgentMux loopback address. The caller-supplied address is intentionally
 // ignored to keep the proxy scoped to that one service.
+//
+// id names an entry or a machine UID.
 func (m *Manager) DialContext(ctx context.Context, id, network string) (net.Conn, error) {
+	id = m.resolveID(ctx, id)
 	host, ok := m.store.Get(id)
 	if !ok {
 		if device, linked := m.linked(ctx, id); linked {

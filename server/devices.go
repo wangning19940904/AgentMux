@@ -57,7 +57,7 @@ func (b *deviceBackend) roles(ctx context.Context) map[string]string {
 func (b *deviceBackend) linked(device core.Device, roles map[string]string) remotepkg.LinkedDevice {
 	_, online := b.hub.Connection(device.ID)
 	return remotepkg.LinkedDevice{ID: device.ID, Name: device.Name, Version: device.Version, Online: online, LastSeenAt: device.LastSeenAt,
-		HubRole: roles[device.ID]}
+		HubRole: roles[device.ID], MachineUID: device.MachineUID}
 }
 
 // lastReports is when each device last sent the hub its data.
@@ -695,6 +695,9 @@ type nodeLink struct {
 	// uid is this machine's UID, read from the state directory when the
 	// server starts; empty before that, as in tests that never run it.
 	uid string
+	// pathsStarted is set once the remote Manager knows this machine's
+	// own paths (startMachinePaths).
+	pathsStarted bool
 }
 
 // machineUID is this machine's UID, or "" when the server has not started.
@@ -729,6 +732,7 @@ func (n *nodeLink) statePath() (string, error) {
 // and stops it when ctx ends.
 func (n *nodeLink) run(ctx context.Context) {
 	n.loadMachineUID()
+	n.startMachinePaths(ctx)
 	n.mu.Lock()
 	n.ctx = ctx
 	n.mu.Unlock()

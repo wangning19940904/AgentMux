@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 func TestMachineUIDLifecycle(t *testing.T) {
@@ -16,7 +18,7 @@ func TestMachineUIDLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ValidMachineUID(first) {
+	if !core.ValidMachineUID(first) {
 		t.Fatalf("created %q, not a UUIDv4", first)
 	}
 	info, err := os.Stat(path)
@@ -50,7 +52,7 @@ func TestMachineUIDLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		replaced, err := LoadOrCreateMachineUID(dir)
-		if err != nil || !ValidMachineUID(replaced) || replaced == first {
+		if err != nil || !core.ValidMachineUID(replaced) || replaced == first {
 			t.Fatalf("corrupt %q replaced with %q, %v", corrupt, replaced, err)
 		}
 		data, _ := os.ReadFile(path)
@@ -62,7 +64,7 @@ func TestMachineUIDLifecycle(t *testing.T) {
 
 	// Reset gives a new UID that later runs keep.
 	reset, err := ResetMachineUID(dir)
-	if err != nil || !ValidMachineUID(reset) || reset == first {
+	if err != nil || !core.ValidMachineUID(reset) || reset == first {
 		t.Fatalf("reset = %q, %v", reset, err)
 	}
 	if again, err := LoadOrCreateMachineUID(dir); err != nil || again != reset {
@@ -76,7 +78,7 @@ func TestMachineUIDLifecycle(t *testing.T) {
 func TestMachineUIDCreatesStateDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state")
 	uid, err := LoadOrCreateMachineUID(dir)
-	if err != nil || !ValidMachineUID(uid) {
+	if err != nil || !core.ValidMachineUID(uid) {
 		t.Fatalf("uid = %q, %v", uid, err)
 	}
 	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {

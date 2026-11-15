@@ -141,6 +141,6 @@ func cleanInfo(info core.DeviceInfo) core.DeviceInfo {
 	return core.DeviceInfo{
 		Name: trim(info.Name, 120), Hostname: trim(info.Hostname, 255),
 		OS: trim(info.OS, 32), Arch: trim(info.Arch, 32), Version: trim(info.Version, 64),
-		MachineUID: NormalizeMachineUID(info.MachineUID),
+		MachineUID: core.NormalizeMachineUID(info.MachineUID),
 	}
 }

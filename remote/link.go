@@ -42,6 +42,9 @@ type LinkedDevice struct {
 	// HubRole is "hub" for the machine serving as the hub and "standby" for
 	// one ready to take over from it; empty for other machines.
 	HubRole string
+	// MachineUID is the computer the device said it is when it last
+	// connected; empty for a node too old to say.
+	MachineUID string
 }
 
 // LinkBackend supplies the devices paired with this hub.
@@ -75,7 +78,7 @@ func (d LinkedDevice) view() HostView {
 	return HostView{
 		ID: d.ID, Name: d.Name, Kind: KindLink, RemoteAddr: linkedRemoteAddr,
 		Trusted: true, Online: &online, Version: d.Version, LastSeenAt: d.LastSeenAt, ReportedAt: d.ReportedAt,
-		HubRole: d.HubRole,
+		HubRole: d.HubRole, MachineUID: d.MachineUID,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wangning19940904/AgentMux/config"
+	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 )
 
@@ -29,7 +30,7 @@ func TestNodeReportsItsMachineUID(t *testing.T) {
 
 	node.node.run(context.Background())
 	uid := node.node.machineUID()
-	if !linkpkg.ValidMachineUID(uid) {
+	if !core.ValidMachineUID(uid) {
 		t.Fatalf("machine UID = %q", uid)
 	}
 	if stored, err := linkpkg.LoadOrCreateMachineUID(node.cfg.Hub.StateDir); err != nil || stored != uid {

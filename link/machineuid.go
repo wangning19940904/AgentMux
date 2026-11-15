@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/wangning19940904/AgentMux/core"
 )
 
 // MachineUIDFileName holds this machine's identity in the state directory.
@@ -17,22 +18,6 @@ import (
 // is reached, so the machines that know it more than one way list it once.
 // The UID is not a credential: it only says which entries are one computer.
 const MachineUIDFileName = "machine-uid"
-
-// ValidMachineUID reports whether value is a machine UID: a UUIDv4 in its
-// canonical lower-case form.
-func ValidMachineUID(value string) bool {
-	parsed, err := uuid.Parse(value)
-	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 && parsed.String() == value
-}
-
-// NormalizeMachineUID returns value as a machine UID, or "" when it is not one.
-func NormalizeMachineUID(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if !ValidMachineUID(value) {
-		return ""
-	}
-	return value
-}
 
 // MachineUIDPath is where the machine UID lives for a state directory (see
 // StateDir).
@@ -55,7 +40,7 @@ func LoadOrCreateMachineUID(dir string) (string, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if uid := NormalizeMachineUID(string(data)); uid != "" {
+		if uid := core.NormalizeMachineUID(string(data)); uid != "" {
 			// The file is this machine's alone, as when it was written.
 			if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() != 0o600 {
 				_ = os.Chmod(path, 0o600)
