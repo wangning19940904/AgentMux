@@ -6,9 +6,13 @@ the hub has `[hub] client_api = true`.
 
 ## How it connects
 
-1. On a computer, a signed-in person opens `GET /api/v1/hub/client-link` (the
-   Console will show it as a QR code). It returns
-   `agentmux://hub?url=<hub address>&fp=<certificate SHA-256>`.
+1. On a computer, a signed-in person opens the Console's **Settings → Phone
+   app**, which shows `GET /api/v1/hub/client-link` as a QR code:
+   `agentmux://hub?url=<hub address>&fp=<certificate SHA-256>`. The hub needs
+   no public IP of its own: the address is `[hub] public_url` when set, so a
+   relay, tunnel or forwarded port works. A loopback or `http://` address is
+   refused with what to change; a LAN or VPN address works with a note that
+   the phone must be on that network.
 2. The app scans that code, or opens the link from the camera app, or takes it
    pasted. Only `https://` hub addresses are accepted.
 3. Every connection is checked against `fp`: the hub's certificate is
@@ -29,8 +33,7 @@ the hub has `[hub] client_api = true`.
 | Stored hub and session | `hub/HubStore.kt` |
 | Screens: connect, sign in, inbox | `ui/AppViewModel.kt`, `ui/Screens.kt` |
 
-Not yet: push notifications, approvals, sending messages, the Console's QR
-code, and wrapping the stored session with a Keystore key.
+Not yet: push notifications, approvals, sending messages, and wrapping the stored session with a Keystore key.
 
 ## Build
 

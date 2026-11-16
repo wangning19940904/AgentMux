@@ -15,6 +15,7 @@ import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } 
 import { selectSystemDirectory } from "./desktop";
 import type {
   FleetView,
+  HubClientLink,
   HubReplicationInfo,
   FeishuAddBotResult,
   FeishuChatList,
@@ -359,6 +360,7 @@ export const api = {
   status: () => get<Status>("/api/v1/status"),
   localStatus: () => getLocal<Status>("/api/v1/status"),
   hubReplication: () => getLocal<HubReplicationInfo>("/api/v1/hub/replication"),
+  hubClientLink: () => getChecked<HubClientLink>("/api/v1/hub/client-link", { local: true }),
   fleet: () => getLocal<FleetView>("/api/v1/fleet"),
   keepAwakeStatus: () => get<KeepAwakeStatus>("/api/v1/system/keep-awake"),
   setKeepAwake: (request: KeepAwakeRequest) =>

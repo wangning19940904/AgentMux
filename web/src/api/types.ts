@@ -2319,6 +2319,20 @@ export interface FleetView {
   machines: FleetMachine[];
 }
 
+// Where a phone app reaches this hub, from GET /api/v1/hub/client-link.
+export interface HubClientLink {
+  hub_url: string;
+  fingerprint?: string;
+  // agentmux://hub?url=…&fp=…, shown as a QR code.
+  link: string;
+  // "private": only a phone on the hub's network or VPN can dial hub_url.
+  reach: "public" | "private";
+  warning?: string;
+}
+
+// Why the hub refused to make a phone link.
+export type HubClientLinkRefusal = "disabled" | "loopback" | "insecure";
+
 export interface HubReplicationInfo {
   enabled: boolean;
   // Whether this machine serves as a hub, and its name.

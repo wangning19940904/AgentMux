@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -131,5 +132,49 @@ func TestHubClientLink(t *testing.T) {
 	}
 	if !memberRouteAllowed(http.MethodGet, "/api/v1/hub/client-link") || strings.Contains(response.Link, "token") {
 		t.Fatal("the client link must be open to members and carry no secret")
+	}
+	if response.Reach != "public" || response.Warning != "" {
+		t.Fatalf("a public relay address = %q, %q", response.Reach, response.Warning)
+	}
+
+	// A hub without a public IP of its own still gets a link through a
+	// relay; a LAN or VPN address works but says where.
+	cfg.Hub.PublicURL = "https://192.168.1.20:8766"
+	response = hubClientLinkResponse{}
+	admin.mustOK(http.MethodGet, "/api/v1/hub/client-link", nil, &response)
+	if response.Reach != "private" || !strings.Contains(response.Warning, "same network") {
+		t.Fatalf("a LAN address = %+v", response)
+	}
+
+	// Addresses a phone can never use are refused, with a reason.
+	for _, tc := range []struct {
+		publicURL string
+		tls       string
+		reason    string
+	}{
+		{"https://127.0.0.1:8766", config.HubTLSAuto, hubClientLinkLoopback},
+		{"http://203.0.113.7:8766", config.HubTLSOff, hubClientLinkInsecure},
+	} {
+		cfg.Hub.PublicURL, cfg.Hub.TLS = tc.publicURL, tc.tls
+		cfg.Hub.PinCertificate = tc.tls == config.HubTLSAuto
+		recorder := httptest.NewRecorder()
+		local.srv.handleHubClientLink(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/hub/client-link", nil))
+		var refusal map[string]string
+		_ = json.Unmarshal(recorder.Body.Bytes(), &refusal)
+		if recorder.Code != http.StatusConflict || refusal["reason"] != tc.reason {
+			t.Fatalf("%s = %d %v", tc.publicURL, recorder.Code, refusal)
+		}
+	}
+}
+
+func TestPrivateHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"10.0.0.5": true, "172.20.1.1": true, "192.168.1.20": true, "100.101.102.103": true,
+		"169.254.1.1": true, "fd7a:115c:a1e0::1": true, "studio.local": true,
+		"101.200.234.220": false, "hub.example.com": false, "2001:db8::1": false,
+	} {
+		if got := privateHost(host); got != want {
+			t.Errorf("privateHost(%q) = %v, want %v", host, got, want)
+		}
 	}
 }
