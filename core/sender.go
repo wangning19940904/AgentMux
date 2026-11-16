@@ -76,6 +76,27 @@ func (e *Engine) SetInboundInterceptor(interceptor InboundInterceptor) {
 	e.inboundInterceptor = interceptor
 }
 
+// AddChatReaction marks a message on a running channel with the channel's ack
+// reaction, for work that runs outside a channel turn, such as a Super Agent's
+// router. It returns "" when the channel is not running, has ack reactions
+// turned off or cannot react; a failure is logged.
+func (e *Engine) AddChatReaction(ctx context.Context, channelID, messageID string) string {
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return ""
+	}
+	return e.addChannelAckReaction(ctx, rt, &Message{ID: messageID, SourceMessageID: messageID, ChannelID: channelID})
+}
+
+// RemoveChatReaction removes a mark AddChatReaction added.
+func (e *Engine) RemoveChatReaction(ctx context.Context, channelID, messageID, reactionID string) {
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return
+	}
+	e.deleteChannelAckReaction(ctx, rt, &Message{ID: messageID, SourceMessageID: messageID, ChannelID: channelID}, reactionID)
+}
+
 // ReplyToChat posts to any chat of a running channel, with no active turn. With
 // a messageID the text replies in that message's thread, falling back to a
 // plain post when the platform refuses, for example because the message was

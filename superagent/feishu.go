@@ -40,7 +40,18 @@ func (s *Service) InterceptMessage(ctx context.Context, msg *core.Message) (bool
 			continue
 		}
 		trigger := feishuMessageTrigger(claim.source, msg)
+		// A mention or a direct message is marked as soon as it is taken, as
+		// a channel turn marks it, until the router has answered. It is
+		// marked before it is stored, so the router never finishes first.
+		key := ""
+		if (msg.MentionedBot || msg.ChatType == "p2p") && claim.agent.Enabled && claim.source.Enabled && actorAllowed(claim.source, trigger.Actor) {
+			key = reactionKey(claim.agent.ID, claim.source.ID, trigger.DedupeKey)
+			s.react(ctx, key, trigger.Reply)
+		}
 		inserted, err := s.Ingest(ctx, claim.agent, claim.source, trigger)
+		if key != "" && (err != nil || !inserted) {
+			s.unreact(ctx, key)
+		}
 		if err != nil {
 			return true, err
 		}
