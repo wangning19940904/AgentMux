@@ -99,6 +99,9 @@ func TestBrainActionsStartATicketThatReportsToTheChat(t *testing.T) {
 	if sent := h.replies.sent(); len(sent) != 0 {
 		t.Fatalf("the chat already has the brain's reply, but AgentMux sent %q", sent)
 	}
+	if trigger := h.disposition(0); trigger.Answer != "on it" {
+		t.Fatalf("the trigger must keep what the brain said in the chat: %+v", trigger)
+	}
 	h.settle()
 	target := `{"channel_id":"c1","chat_id":"oc_1","message_id":"om_1"}`
 	if got := h.replies.sentTo(target); len(got) != 1 || got[0] != "fixed on branch fix-login" {

@@ -1603,7 +1603,16 @@ export interface SuperAgentSetupResult {
 
 export interface SuperAgentTrigger {
   id: string;
+  source_id?: string;
   source_kind: string;
+  // The conversation the event belongs to, such as feishu:<channel>:<chat>:<root>.
+  thread_key?: string;
+  // Set for events AgentMux raised itself: ticket_update, timer, supervision, plan.
+  kind?: string;
+  // Where replies go; Feishu and channel events name their chat.
+  reply?: { channel_id?: string; chat_id?: string; message_id?: string } & Record<string, unknown>;
+  // What the agent said back to the thread about this event.
+  answer?: string;
   actor?: string;
   actor_name?: string;
   title?: string;
@@ -1612,12 +1621,19 @@ export interface SuperAgentTrigger {
   reason?: string;
   ticket_id?: string;
   received_at: string;
+  updated_at?: string;
 }
 
 export interface SuperAgentTicket {
   id: string;
+  source_id?: string;
+  source_kind?: string;
+  thread_key?: string;
+  trigger_id?: string;
+  reply?: { channel_id?: string; chat_id?: string; message_id?: string } & Record<string, unknown>;
   title: string;
   actor?: string;
+  instructions?: string;
   worker: SuperAgentWorker;
   status: "queued" | "running" | "ready" | "failed" | "stopped";
   output?: string;
@@ -1641,6 +1657,9 @@ export interface SuperAgentTicket {
   workspace?: { host_id?: string; dir?: string; isolated?: boolean; held_since?: string };
   // Sub-tasks its worker handed to other workers, oldest first.
   helpers?: SuperAgentHelper[];
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
   updated_at: string;
 }
 

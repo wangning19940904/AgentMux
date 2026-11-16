@@ -256,6 +256,9 @@ type SuperAgentTrigger struct {
 	TicketID     string          `json:"ticket_id,omitempty"`
 	ReceivedAt   time.Time       `json:"received_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`
+	// Answer is what the agent said back to the thread about this event: its
+	// reply and any notice AgentMux added. Empty when it said nothing.
+	Answer string `json:"answer,omitempty"`
 }
 
 // SuperAgentTicket is one unit of authorized work and its current Assignment.

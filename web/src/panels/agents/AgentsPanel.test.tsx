@@ -136,6 +136,14 @@ it("shows every kind of agent on one page, with its workers and activity", async
     await act(async () => open.click());
     const drawer = container.querySelector('[aria-labelledby="agent-work-title"]')!;
     expect(drawer.textContent).toContain("Workers and activity");
+    // It opens on the agent's chats; the form is one click away.
+    await vi.waitFor(async () => {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+      expect(drawer.querySelector(".super-agent-chat")?.textContent).toContain("Console");
+    }, { timeout: 5000 });
+    const form = [...drawer.querySelectorAll("button")].find((button) => button.textContent === "Form")!;
+    await act(async () => form.click());
+    localStorage.removeItem("agentmux.agentWork.view");
     await vi.waitFor(async () => {
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
       expect(drawer.textContent).toContain("Chats only: it starts no workers.");

@@ -1,4 +1,5 @@
-import { Bot, Check, Play, Plus, RefreshCw, RotateCcw, Square, Trash2, X } from "lucide-react";
+import { Bot, ListChecks, MessagesSquare, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { SuperAgent, SuperAgentRuntimeHealth } from "../api";
@@ -9,6 +10,30 @@ import { sourceHookAddress } from "./superAgentSetup";
 import { githubPolls, isChannelSource, newSuperAgent } from "./superAgentModel";
 import { SuperAgentDrawer } from "./agents/SuperAgentForm";
 import { confirmAction } from "../components/ConfirmDialog";
+import { PlanCard, TicketCard, timerStatusClass, triggerStatusClass } from "./superAgentCards";
+import type { CardContext } from "./superAgentCards";
+import { SuperAgentChat } from "./SuperAgentChat";
+
+type WorkView = "chat" | "form";
+const workViewKey = "agentmux.agentWork.view";
+
+// The Agents page remembers whether each viewer reads an agent's history as
+// a chat or as the form; storage may be unavailable, and chat is the default.
+function savedWorkView(): WorkView {
+  try {
+    return window.localStorage.getItem(workViewKey) === "form" ? "form" : "chat";
+  } catch {
+    return "chat";
+  }
+}
+
+function saveWorkView(view: WorkView) {
+  try {
+    window.localStorage.setItem(workViewKey, view);
+  } catch {
+    // The choice simply is not remembered.
+  }
+}
 
 export type SuperAgentsPanelProps = {
   createRequested?: boolean;
@@ -18,9 +43,11 @@ export type SuperAgentsPanelProps = {
   agentID?: string;
   // onChanged runs after a save, so the page around it can reload.
   onChanged?: () => void;
+  // avatar is the agent's portrait for its messages in the chat view.
+  avatar?: ReactNode;
 };
 
-export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandled, agentID, onChanged }: SuperAgentsPanelProps = {}) {
+export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandled, agentID, onChanged, avatar }: SuperAgentsPanelProps = {}) {
   const { t, language } = useI18n();
   const embedded = Boolean(agentID);
   const list = useAsync(() => api.superAgents().then((items) => agentID ? items.filter((item) => item.id === agentID) : items), [agentID]);
@@ -31,6 +58,13 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
   const [request, setRequest] = useState("");
   const [declineNotes, setDeclineNotes] = useState<Record<string, string>>({});
   const handledCreate = useRef(false);
+  // An agent opened from the Agents page reads as a chat by default; the
+  // full page keeps the form it has always shown.
+  const [view, setView] = useState<WorkView>(() => agentID ? savedWorkView() : "form");
+  const chooseView = (next: WorkView) => {
+    setView(next);
+    if (embedded) saveWorkView(next);
+  };
   const items = list.data ?? [];
   const selected = items.find((item) => item.id === selectedID) ?? items[0];
   const activity = useAsync(() => selected ? api.superAgentActivity(selected.id) : Promise.resolve(null), [selected?.id]);
@@ -62,6 +96,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
   }
 
   const time = (value?: string) => value ? new Date(value).toLocaleString(language === "zh" ? "zh-CN" : "en-US") : "";
+  const cardContext: CardContext = { agentID: selected?.id ?? "", activity: activity.data, busy, run: (label, action) => void run(label, action), time };
   const tierLabel = (rosterID: string) => {
     const tier = activity.data?.cost_tiers?.[rosterID];
     return tier ? t(`superAgents.costTier.${tier}`) : "";
@@ -89,7 +124,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
         </div>}
         {notice && !draft && <div className="surface-body session-notice error" role="alert">{notice}</div>}
         {list.error && <div className="surface-body session-notice error" role="alert">{String(list.error)}</div>}
-        <div className={embedded ? "orchestration-layout agent-work-layout" : "orchestration-layout"}>
+        <div className={embedded ? `orchestration-layout agent-work-layout view-${view}` : "orchestration-layout"}>
           {!embedded && <div className="orchestration-list">
             {items.map((item) => (
               <button key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => setSelectedID(item.id)}>
@@ -104,8 +139,17 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
             {selected ? (
               <>
                 <header>
-                  <div><h3>{selected.name}</h3><p className="muted">{selected.description || t("superAgents.defaultDescription")}</p></div>
+                  {/* The drawer around an embedded agent already shows its name. */}
+                  <div>{!embedded && <h3>{selected.name}</h3>}<p className="muted">{selected.description || t("superAgents.defaultDescription")}</p></div>
                   <div className="control-row">
+                    <div className="segmented super-agent-view-toggle" role="tablist" aria-label={t("superAgents.view.label")}>
+                      <button type="button" role="tab" aria-selected={view === "chat"} className={view === "chat" ? "active" : ""} onClick={() => chooseView("chat")}>
+                        <MessagesSquare size={14} /><span>{t("superAgents.view.chat")}</span>
+                      </button>
+                      <button type="button" role="tab" aria-selected={view === "form"} className={view === "form" ? "active" : ""} onClick={() => chooseView("form")}>
+                        <ListChecks size={14} /><span>{t("superAgents.view.form")}</span>
+                      </button>
+                    </div>
                     <button className="ghost-action" onClick={() => setDraft(structuredClone(selected))}>{embedded ? t("agents.work.edit") : t("common.edit")}</button>
                     {!embedded && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={async () => {
                       if (await confirmAction(t("superAgents.deleteConfirm", { name: selected.name }), { danger: true })) void run("delete", () => api.deleteSuperAgent(selected.id));
@@ -113,6 +157,15 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   </div>
                 </header>
 
+                {view === "chat" ? (
+                  <SuperAgentChat
+                    agent={selected}
+                    context={cardContext}
+                    declineNotes={declineNotes}
+                    onDeclineNote={(planID, value) => setDeclineNotes((current) => ({ ...current, [planID]: value }))}
+                    avatar={avatar}
+                  />
+                ) : <>
                 <h4>{t("superAgents.workers")}</h4>
                 {!selected.auto_workers && selected.workers.length === 0 && <p className="muted">{t("agents.work.chatOnly")}</p>}
                 <div className="super-agent-chips">
@@ -178,40 +231,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     <h4>{t("superAgents.plans")}</h4>
                     <div className="orchestration-task-list super-agent-plans">
                       {(activity.data?.plans ?? []).map((plan) => (
-                        <article key={plan.id} className={`super-agent-plan plan-${plan.status}`}>
-                          <header>
-                            <strong>{plan.title}</strong>
-                            <span className="control-row">
-                              <span className={`super-agent-tier tier-${plan.tier}`}>{t(`superAgents.costTier.${plan.tier}`)}</span>
-                              <span className={`status-badge status-${planStatusClass(plan.status)}`}>{t(`superAgents.plan.${plan.status}`)}</span>
-                            </span>
-                          </header>
-                          {(plan.requester_name || plan.requester) && <small>{t("superAgents.plan.requestedBy", { name: plan.requester_name || plan.requester || "" })}</small>}
-                          {plan.summary && <p>{plan.summary}</p>}
-                          <ol>
-                            {plan.tickets.map((item, index) => (
-                              <li key={item.ref || index}>
-                                <strong>{item.title}</strong>{" "}
-                                <small>
-                                  {[t("superAgents.plan.item", { worker: item.placed_worker_id || item.worker_id, where: item.where }), t(`superAgents.costTier.${item.tier}`),
-                                    (item.depends_on ?? []).length > 0 ? t("superAgents.plan.after", { refs: (item.depends_on ?? []).join(", ") }) : ""].filter(Boolean).join(" · ")}
-                                </small>
-                                {item.instructions && <div className="muted">{item.instructions}</div>}
-                              </li>
-                            ))}
-                          </ol>
-                          {plan.status === "pending" ? (
-                            <div className="control-row">
-                              <button className="action" disabled={Boolean(busy)} onClick={() => void run("approve-plan", () => api.approveSuperAgentPlan(selected.id, plan.id, false))}><Check size={13} /> {t("superAgents.plan.approve")}</button>
-                              {(plan.requester || "") !== "" && <button className="ghost-action" disabled={Boolean(busy)} onClick={() => void run("approve-plan", () => api.approveSuperAgentPlan(selected.id, plan.id, true))}>{t("superAgents.plan.approveRemember", { tier: t(`superAgents.costTier.${plan.tier}`) })}</button>}
-                              <input aria-label={t("superAgents.plan.declineNote")} placeholder={t("superAgents.plan.declineNote")} value={declineNotes[plan.id] ?? ""} onChange={(event) => setDeclineNotes({ ...declineNotes, [plan.id]: event.target.value })} />
-                              <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => void run("decline-plan", () => api.declineSuperAgentPlan(selected.id, plan.id, declineNotes[plan.id] ?? ""))}><X size={13} /> {t("superAgents.plan.decline")}</button>
-                            </div>
-                          ) : (
-                            <small>{plan.decided_by ? t("superAgents.plan.decidedBy", { status: t(`superAgents.plan.${plan.status}`), name: plan.decided_by }) : ""}{plan.note ? ` · ${plan.note}` : ""}</small>
-                          )}
-                          <time>{time(plan.decided_at || plan.created_at)}</time>
-                        </article>
+                        <PlanCard key={plan.id} plan={plan} context={cardContext} declineNote={declineNotes[plan.id] ?? ""} onDeclineNote={(value) => setDeclineNotes({ ...declineNotes, [plan.id]: value })} />
                       ))}
                     </div>
                   </>
@@ -237,80 +257,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                 <h4>{t("superAgents.tickets")}</h4>
                 <div className="orchestration-task-list">
                   {(activity.data?.tickets ?? []).length === 0 && <p className="muted">{t("superAgents.noTickets")}</p>}
-                  {(activity.data?.tickets ?? []).map((ticket) => (
-                    <article key={ticket.id}>
-                      <header>
-                        <strong>{ticket.title}</strong>
-                        <span className="control-row">
-                          <span className={`status-badge status-${ticketStatusClass(ticket.status)}`}>{t(`superAgents.ticket.${ticket.status}`)}</span>
-                          {["queued", "running"].includes(ticket.status) && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => void run("stop", () => api.stopSuperAgentTicket(ticket.id))}><Square size={13} /> {t("superAgents.stop")}</button>}
-                          {ticket.status === "failed" && <button className="ghost-action" disabled={Boolean(busy)} onClick={() => void run("retry", () => api.retrySuperAgentTicket(ticket.id))}><RotateCcw size={13} /> {t("common.retry")}</button>}
-                        </span>
-                      </header>
-                      <small>{ticket.worker.label || ticket.worker.agent_id} · {ticket.worker.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.worker.host_id)?.name ?? t("superAgents.remote")) : t("superAgents.local")}{ticket.actor ? ` · ${ticket.actor}` : ""}</small>
-                      {ticket.workspace?.held_since && ["queued", "running"].includes(ticket.status) && (
-                        <small className="super-agent-ticket-holds">{t("superAgents.ticketHolds", { dir: ticket.workspace.dir ?? "", machine: ticket.workspace.host_id ? (activity.data?.machines?.find((item) => item.host_id === ticket.workspace?.host_id)?.name ?? ticket.workspace.host_id) : t("superAgents.thisMachine") })}</small>
-                      )}
-                      {ticket.placement && (
-                        <small className="super-agent-ticket-moved" title={ticket.placement.reason}>
-                          {t("superAgents.ticketMoved", { from: ticket.placement.requested_worker_id, to: ticket.placement.worker_id, machine: ticket.placement.machine || t("superAgents.thisMachine") })}: {ticket.placement.reason}
-                        </small>
-                      )}
-                      {(ticket.done_when ?? []).length > 0 && (
-                        <div className="super-agent-ticket-criteria">
-                          <small>{t("superAgents.ticketDoneWhen")}{ticket.expect_minutes ? ` · ${t("superAgents.ticketExpect", { minutes: ticket.expect_minutes })}` : ""}</small>
-                          <ul>{(ticket.done_when ?? []).map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
-                        </div>
-                      )}
-                      {(ticket.signals ?? []).filter((signal) => !signal.cleared_at).map((signal) => (
-                        <div key={`${signal.kind}-${signal.since}`} className="warning super-agent-source-warning" role="status">
-                          {t(`superAgents.signal.${signal.kind}`)}: {signal.detail}
-                        </div>
-                      ))}
-                      {(() => {
-                        const review = ticket.reviews?.[ticket.reviews.length - 1];
-                        if (!review) return null;
-                        const label = review.refused ? t("superAgents.review.refused")
-                          : review.verdict === "rework" ? t("superAgents.review.reworkRound", { round: review.round ?? 0, limit: 2 })
-                          : t(`superAgents.review.${review.verdict}`);
-                        return (
-                          <div className="super-agent-ticket-review">
-                            <small><strong>{t("superAgents.review.title")}:</strong> {label}{review.note ? ` · ${review.note}` : ""}</small>
-                            {(review.checks ?? []).length > 0 && (
-                              <ul>{(review.checks ?? []).map((check) => <li key={check.criterion}>{check.met ? "✓" : "✗"} {check.criterion}{check.evidence ? ` (${check.evidence})` : ""}</li>)}</ul>
-                            )}
-                          </div>
-                        );
-                      })()}
-                      {ticket.auto_review && (
-                        <details className="super-agent-ticket-auto-review">
-                          <summary><small>{ticket.auto_review.error ? t("superAgents.autoReview.failed", { runtime: ticket.auto_review.runtime })
-                            : ticket.auto_review.count >= 0 ? t("superAgents.autoReview.summary", { runtime: ticket.auto_review.runtime, count: ticket.auto_review.count, blocking: ticket.auto_review.blocking })
-                            : t("superAgents.autoReview.summaryUncounted", { runtime: ticket.auto_review.runtime })}</small></summary>
-                          <pre>{ticket.auto_review.error || ticket.auto_review.findings}</pre>
-                        </details>
-                      )}
-                      {(ticket.helpers ?? []).length > 0 && (
-                        <div className="super-agent-ticket-review super-agent-ticket-helpers">
-                          <small><strong>{t("superAgents.helpers.title")}:</strong> {t("superAgents.helpers.count", { running: (ticket.helpers ?? []).filter((helper) => helper.status === "running").length, total: (ticket.helpers ?? []).length })}</small>
-                          <ul>{(ticket.helpers ?? []).map((helper) => (
-                            <li key={helper.id}>
-                              <details>
-                                <summary><small>{t(`superAgents.helper.${helper.status}`)} · {helper.title || helper.id} · {helper.worker_id}</small></summary>
-                                <small>{helper.instructions}</small>
-                                {helper.error && <div className="error">{helper.error}</div>}
-                                {helper.result && <pre>{helper.result}</pre>}
-                              </details>
-                            </li>
-                          ))}</ul>
-                        </div>
-                      )}
-                      {ticket.output && <pre>{ticket.output}</pre>}
-                      {ticket.error && <div className="error">{ticket.error}</div>}
-                      {ticket.reply_error && <div className="error">{t("superAgents.replyFailed")}: {ticket.reply_error}</div>}
-                      <time>{time(ticket.updated_at)}</time>
-                    </article>
-                  ))}
+                  {(activity.data?.tickets ?? []).map((ticket) => <TicketCard key={ticket.id} ticket={ticket} context={cardContext} />)}
                 </div>
 
                 {(activity.data?.workspace_claims ?? []).length > 0 && (
@@ -370,6 +317,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     </article>
                   ))}
                 </div>
+                </>}
               </>
             ) : <div className="empty-state">{t("superAgents.select")}</div>}
           </div>
@@ -393,18 +341,3 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
   );
 }
 
-function ticketStatusClass(status: string) {
-  return { queued: "queued", running: "running", ready: "succeeded", failed: "failed", stopped: "cancelled" }[status] ?? status;
-}
-
-function planStatusClass(status: string) {
-  return { pending: "queued", approved: "succeeded", declined: "cancelled", expired: "cancelled" }[status] ?? status;
-}
-
-function timerStatusClass(status: string) {
-  return { active: "queued", done: "succeeded", cancelled: "cancelled" }[status] ?? status;
-}
-
-function triggerStatusClass(disposition: string) {
-  return { pending: "queued", accepted: "succeeded", follow_up: "succeeded", answered: "succeeded", observed: "running", failed: "failed" }[disposition] ?? "cancelled";
-}

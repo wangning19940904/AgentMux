@@ -133,6 +133,8 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     return query ? routedAgents.filter((agent) => [agent.name, agent.id].some((value) => value.toLocaleLowerCase().includes(query))) : routedAgents;
   }, [routedAgents, searchQuery]);
   const workAgent = unifiedItems.find((agent) => agent.id === workAgentID);
+  // The chat shows the agent with the portrait its row has.
+  const workAgentRow = workAgent ? items.find((item) => unifiedAgentFor(item, unifiedItems)?.id === workAgent.id) : undefined;
 
   const startNew = useCallback(() => {
     setSuperDraft(newSuperAgent());
@@ -427,7 +429,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             </div>
             <div className="surface-body provider-builder-body agent-drawer-body">
               <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
-                <AgentWork agentID={workAgent.id} onChanged={() => void Promise.all([unified.reload(), agents.reload(), channels.reload()])} />
+                <AgentWork
+                  agentID={workAgent.id}
+                  avatar={workAgentRow ? <AgentAvatar channels={boundChannelsForAgent(workAgentRow, channelItems)} /> : undefined}
+                  onChanged={() => void Promise.all([unified.reload(), agents.reload(), channels.reload()])}
+                />
               </Suspense>
             </div>
           </aside>
@@ -500,7 +506,18 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 onDoubleClick={() => editAgent(item)}
               >
                 <div className="agent-list-main">
-                  <AgentAvatar channels={itemChannels} />
+                  {itemUnified ? (
+                    <button
+                      type="button"
+                      className="agent-avatar-button"
+                      title={t("agents.work.openChat")}
+                      aria-label={t("agents.work.openChatFor", { name: item.name })}
+                      onClick={() => setWorkAgentID(itemUnified.id)}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      <AgentAvatar channels={itemChannels} />
+                    </button>
+                  ) : <AgentAvatar channels={itemChannels} />}
                   <span>
                     <span className="agent-list-title-row">
                       <strong>{item.name}</strong>
@@ -574,7 +591,16 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             return (
               <article className="agent-registry-row" key={`agent:${agent.id}`} onDoubleClick={() => setWorkAgentID(agent.id)}>
                 <div className="agent-list-main">
-                  <AgentAvatar channels={[]} />
+                  <button
+                    type="button"
+                    className="agent-avatar-button"
+                    title={t("agents.work.openChat")}
+                    aria-label={t("agents.work.openChatFor", { name: agent.name })}
+                    onClick={() => setWorkAgentID(agent.id)}
+                    onDoubleClick={(event) => event.stopPropagation()}
+                  >
+                    <AgentAvatar channels={[]} />
+                  </button>
                   <span>
                     <span className="agent-list-title-row">
                       <strong>{agent.name}</strong>
