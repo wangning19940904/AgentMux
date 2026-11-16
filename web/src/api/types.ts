@@ -1504,7 +1504,7 @@ export interface SuperAgentGitHubSetup {
 // An agent. AgentMux has one kind: router_agent_id is its brain, the Agent
 // instance whose framework, model and approval mode answer. An agent made as
 // one shares its id with its brain.
-export interface SuperAgent {
+export interface SuperAgent extends TargetMetadata {
   id: string;
   name: string;
   description?: string;

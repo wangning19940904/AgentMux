@@ -1,6 +1,6 @@
 import { Network, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type AgentInstance, type SuperAgent } from "../../api";
+import { activeMachineScope, api, setActiveMachineScope, type AgentInstance, type SuperAgent } from "../../api";
 import { useI18n } from "../../i18n";
 import { useCachedResource } from "../../useCachedResource";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
@@ -15,8 +15,10 @@ import {
   cliCatalogForAgent,
   copyAgent,
   isAgentPart,
+  isOnAnotherMachine,
   isReadOnlyAgent,
   readOnlyNoticeKey,
+  resourceTargetID,
   syncAgentConnectBindings,
   toggleID,
   unifiedAgentFor,
@@ -33,6 +35,12 @@ import { confirmAction } from "../../components/ConfirmDialog";
 
 // An agent's workers, triggers and Tickets open over the Agents page.
 const AgentWork = lazy(() => import("../SuperAgentsPanel").then((module) => ({ default: module.SuperAgentsPanel })));
+
+// An agent's form and its activity talk to one machine throughout, so an agent
+// on another machine is opened with that machine selected. Selecting a machine
+// rebuilds the page; this carries what to open across that.
+type AgentView = "edit" | "work";
+let openAfterMachineChange: { machine: string; agentID: string; view: AgentView } | null = null;
 
 export type AgentsPanelProps = {
   createRequested?: boolean;
@@ -116,8 +124,8 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const draftCLICatalog = cliCatalogForAgent(cliCatalog, draftTargetID);
 
   const registryMetrics = useMemo(
-    () => agentRegistryMetrics(items, channelItems),
-    [items, channelItems],
+    () => agentRegistryMetrics(items, channelItems, routedAgents),
+    [items, channelItems, routedAgents],
   );
   const visibleItems = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
@@ -132,7 +140,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     const query = searchQuery.trim().toLocaleLowerCase();
     return query ? routedAgents.filter((agent) => [agent.name, agent.id].some((value) => value.toLocaleLowerCase().includes(query))) : routedAgents;
   }, [routedAgents, searchQuery]);
-  const workAgent = unifiedItems.find((agent) => agent.id === workAgentID);
+  const workAgent = unifiedItems.find((agent) => agent.id === workAgentID && !isOnAnotherMachine(agent));
 
   const startNew = useCallback(() => {
     setSuperDraft(newSuperAgent());
@@ -140,6 +148,36 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     setNotice("");
     setNoticeIsError(false);
   }, []);
+
+  function openAgent(agent: SuperAgent, view: AgentView) {
+    if (isOnAnotherMachine(agent)) {
+      openAfterMachineChange = { machine: agent.target_id ?? "", agentID: agent.id, view };
+      setActiveMachineScope(agent.target_id ?? "");
+      return;
+    }
+    if (view === "work") {
+      setWorkAgentID(agent.id);
+      return;
+    }
+    setSuperDraft(structuredClone(agent));
+    setSuperNotice("");
+    setNotice("");
+    setNoticeIsError(false);
+  }
+
+  useEffect(() => {
+    const pending = openAfterMachineChange;
+    if (!pending) return;
+    if (pending.machine !== activeMachineScope()) {
+      openAfterMachineChange = null;
+      return;
+    }
+    if (!unified.hasValue || unified.loading) return;
+    openAfterMachineChange = null;
+    const agent = unifiedItems.find((item) => item.id === pending.agentID);
+    if (agent) openAgent(agent, pending.view);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unified.hasValue, unified.loading, unifiedItems]);
 
   async function saveSuperAgent(prepare: () => Promise<SuperAgent>) {
     setSuperBusy(true);
@@ -307,11 +345,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   // An agent that answers with a router agent is deleted with its router.
   async function removeRoutedAgent(agent: SuperAgent) {
     if (rowBusy || !(await confirmAction(t("agents.work.deleteConfirm", { name: agent.name }), { danger: true, title: t("agents.deleteTitle", { name: agent.name }), confirmLabel: t("common.delete") }))) return;
-    setRowBusy(`delete:${agent.id}`);
+    setRowBusy(`delete:agent:${targetKey(agent.target_id, agent.id)}`);
     setNotice("");
     setNoticeIsError(false);
     try {
-      await api.deleteSuperAgent(agent.id);
+      await api.deleteSuperAgent(agent.id, agent.target_id);
       await Promise.all([agents.reload(), unified.reload()]);
       setNotice(t("agents.deleted"));
     } catch (err) {
@@ -463,7 +501,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             />
           </label>
           <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
-            <span className="agent-filter-chip active">{t("agents.metricAgents", { count: registryMetrics.agentCount + routedAgents.length })}</span>
+            <span className="agent-filter-chip active">{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
           </div>
@@ -541,7 +579,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 </div>
                 <div className="agent-row-actions">
                   {itemUnified && (
-                    <button className="ghost-action" onClick={() => setWorkAgentID(itemUnified.id)} onDoubleClick={(event) => event.stopPropagation()}>
+                    <button className="ghost-action" onClick={() => openAgent(itemUnified, "work")} onDoubleClick={(event) => event.stopPropagation()}>
                       <Network size={15} />
                       {t("agents.work.open")}
                     </button>
@@ -569,10 +607,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             );
           })}
           {visibleRouted.map((agent) => {
-            const router = allInstances.find((item) => item.id === agent.router_agent_id);
+            const router = allInstances.find((item) => item.id === agent.router_agent_id && resourceTargetID(item) === resourceTargetID(agent));
             const policy = workPolicy(agent);
+            const agentKey = targetKey(agent.target_id, agent.id);
             return (
-              <article className="agent-registry-row" key={`agent:${agent.id}`} onDoubleClick={() => setWorkAgentID(agent.id)}>
+              <article className="agent-registry-row" key={`agent:${agentKey}`} onDoubleClick={() => openAgent(agent, "work")}>
                 <div className="agent-list-main">
                   <AgentAvatar channels={[]} />
                   <span>
@@ -584,16 +623,21 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   </span>
                 </div>
                 <div className="agent-list-meta">
+                  <TargetBadge target_id={agent.target_id} target_name={agent.target_name} />
                   {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
                   <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
                 </div>
                 <div className="agent-row-actions">
-                  <button className="ghost-action" onClick={() => setWorkAgentID(agent.id)} onDoubleClick={(event) => event.stopPropagation()}>
+                  <button className="ghost-action" onClick={() => openAgent(agent, "work")} onDoubleClick={(event) => event.stopPropagation()}>
                     <Network size={15} />
                     {t("agents.work.open")}
                   </button>
+                  <button className="ghost-action" onClick={() => openAgent(agent, "edit")} onDoubleClick={(event) => event.stopPropagation()}>
+                    <Pencil size={15} />
+                    {t("common.edit")}
+                  </button>
                   <button className="ghost-action danger-action" disabled={Boolean(rowBusy)} onClick={() => void removeRoutedAgent(agent)} onDoubleClick={(event) => event.stopPropagation()}>
-                    {rowBusy === `delete:${agent.id}` ? <RefreshCw className="spin" size={15} /> : <Trash2 size={15} />}
+                    {rowBusy === `delete:agent:${agentKey}` ? <RefreshCw className="spin" size={15} /> : <Trash2 size={15} />}
                     {t("common.delete")}
                   </button>
                 </div>

@@ -171,12 +171,15 @@ export function boundChannelsForAgent(agent: AgentInstance, channels: Channel[])
   );
 }
 
+// routed are the agents listed without an Agent row of their own; they count
+// as agents and their machines as machines.
 export function agentRegistryMetrics(
   agents: AgentInstance[],
   channels: Channel[],
+  routed: SuperAgent[] = [],
 ): { agentCount: number; machineCount: number; channelCount: number } {
   const agentKeys = new Set(agents.map((agent) => `${resourceTargetID(agent)}::${agent.id}`));
-  const machineIDs = new Set(agents.map((agent) => resourceTargetID(agent)));
+  const machineIDs = new Set([...agents, ...routed].map((agent) => resourceTargetID(agent)));
   const channelKeys = new Set<string>();
   channels.forEach((channel) => {
     if (!channel.agent_id) return;
@@ -185,7 +188,7 @@ export function agentRegistryMetrics(
   });
 
   return {
-    agentCount: agents.length,
+    agentCount: agents.length + routed.length,
     machineCount: machineIDs.size,
     channelCount: channelKeys.size,
   };
@@ -236,19 +239,25 @@ export function isAgentPart(agent: AgentInstance): boolean {
   return agent.source === "super_agent" || agent.source === "super_agent_router";
 }
 
-// unifiedAgentFor finds the agent whose brain an Agent instance on this
-// machine is. Agents on other machines are managed there.
+// unifiedAgentFor finds the agent whose brain an Agent instance is. An agent
+// and its brain live on the same machine.
 export function unifiedAgentFor(agent: AgentInstance, agents: SuperAgent[]): SuperAgent | undefined {
-  if (agent.target_id && agent.target_id !== "local") return undefined;
-  return agents.find((item) => item.id === agent.id && item.router_agent_id === agent.id)
-    ?? agents.find((item) => item.router_agent_id === agent.id);
+  const sameMachine = agents.filter((item) => resourceTargetID(item) === resourceTargetID(agent));
+  return sameMachine.find((item) => item.id === agent.id && item.router_agent_id === agent.id)
+    ?? sameMachine.find((item) => item.router_agent_id === agent.id);
 }
 
 // agentsWithoutRow are the agents whose brain is not an Agent row of its own:
 // those that answer with a router agent. The Agents page lists them as rows too.
 export function agentsWithoutRow(agents: SuperAgent[], instances: AgentInstance[]): SuperAgent[] {
-  const rows = new Set(instances.filter((item) => !isAgentPart(item) && (!item.target_id || item.target_id === "local")).map((item) => item.id));
-  return agents.filter((agent) => !rows.has(agent.router_agent_id));
+  const rows = new Set(instances.filter((item) => !isAgentPart(item)).map((item) => `${resourceTargetID(item)}::${item.id}`));
+  return agents.filter((agent) => !rows.has(`${resourceTargetID(agent)}::${agent.router_agent_id}`));
+}
+
+// isOnAnotherMachine reports whether an agent listed with all machines
+// selected lives on a machine other than the one this Console talks to.
+export function isOnAnotherMachine(agent: { target_id?: string }): boolean {
+  return Boolean(agent.target_id) && agent.target_id !== "local";
 }
 
 // workPolicy is the short label of what an agent does besides chatting.
