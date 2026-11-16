@@ -15,8 +15,10 @@ export function fleetMode() {
   return activeMachineScope() === "all";
 }
 
-export async function fleetReadArray<T>(path: string, key = "data"): Promise<Targeted<T>[]> {
-  const batch = await fleetQuery<T[]>([{ key, path }]);
+// query is fleetMonitorQuery for a list some machines may not serve, so a
+// machine without it is left out instead of raising a page-level warning.
+export async function fleetReadArray<T>(path: string, key = "data", query: typeof fleetQuery = fleetQuery): Promise<Targeted<T>[]> {
+  const batch = await query<T[]>([{ key, path }]);
 	return fleetArrayFromBatch(batch, key);
 }
 

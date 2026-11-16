@@ -191,3 +191,54 @@ it("creates every new agent as a Super Agent, and keeps the old form for agents 
     await vi.waitFor(() => expect(dialog()).toBeNull());
   } finally { await act(async () => root.unmount()); }
 });
+
+it("lists an agent that lives on another machine and opens it there", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  localStorage.setItem("agentmux:active-remote", "all");
+  const ops = { id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", max_concurrency: 2, workers: [], auto_workers: true, worker_runtimes: ["codex"], sources: [], enabled: true };
+  const router = { ...newAgent(["codex"]), id: "sar_ops", name: "Ops router", source: "super_agent_router" };
+  const onMini = { target_id: "dev_1", target_name: "mini" };
+  vi.spyOn(api, "agentInstances").mockImplementation(async () => localStorage.getItem("agentmux:active-remote") === "all" ? [{ ...router, ...onMini }] : [router]);
+  vi.spyOn(api, "superAgents").mockImplementation(async () => localStorage.getItem("agentmux:active-remote") === "all" ? [{ ...ops, ...onMini }] : [ops]);
+  vi.spyOn(api, "agents").mockResolvedValue(["codex"]);
+  for (const key of ["channels", "triggers", "mcp", "skills", "remoteHosts", "superAgentPrompts"] as const) vi.spyOn(api, key).mockResolvedValue([]);
+  vi.spyOn(api, "tools").mockResolvedValue({ cli: [], bundles: [], frameworks: [], skills: [], mcp: [], marketplace: [], warnings: [] });
+  vi.spyOn(api, "frameworks").mockResolvedValue({ prereqs: { node: true, npm: true }, warnings: [], frameworks: [] } as never);
+  vi.spyOn(api, "superAgentRouters").mockResolvedValue({ routers: [], mcp_servers: [], frameworks: [] });
+  const remove = vi.spyOn(api, "deleteSuperAgent").mockResolvedValue({ ok: true });
+  const container = document.createElement("div");
+  document.body.append(container);
+  let root = createRoot(container);
+  const button = (label: string) => [...container.querySelectorAll<HTMLButtonElement>("article button")].find((item) => item.textContent?.trim() === label)!;
+  try {
+    await act(async () => root.render(<I18nProvider language="en"><AgentsPanel /></I18nProvider>));
+    const row = container.querySelector("article")!;
+    expect(row.querySelector("strong")?.textContent).toBe("Ops");
+    expect(row.querySelector(".target-badge")?.textContent).toBe("mini");
+    expect(row.textContent).toContain("Answers with Ops router");
+    expect(container.textContent).toContain("1 Agents");
+    expect(container.textContent).toContain("1 machines");
+
+    // Editing selects the agent's machine; the app rebuilds the page for it.
+    await act(async () => button("Edit").click());
+    expect(localStorage.getItem("agentmux:active-remote")).toBe("dev_1");
+    expect(container.querySelector('[aria-labelledby="super-agent-drawer-title"]')).toBeNull();
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<I18nProvider language="en"><AgentsPanel /></I18nProvider>));
+    await vi.waitFor(() => expect(container.querySelector("#super-agent-drawer-title")?.textContent).toBe("Ops"));
+
+    // A delete goes to the machine that owns the agent.
+    localStorage.setItem("agentmux:active-remote", "all");
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await act(async () => root.render(<I18nProvider language="en"><AgentsPanel /></I18nProvider>));
+    expect(container.querySelector('[aria-labelledby="super-agent-drawer-title"]')).toBeNull();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await act(async () => button("Delete").click());
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith("sa_ops", "dev_1"));
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});

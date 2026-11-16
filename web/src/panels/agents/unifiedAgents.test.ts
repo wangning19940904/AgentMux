@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SuperAgent } from "../../api";
 import { canStartWorkers, ownsBrain, superAgentProblems } from "../superAgentModel";
-import { agentsWithoutRow, isAgentPart, newAgent, unifiedAgentFor, workPolicy } from "./agentUtils";
+import { agentRegistryMetrics, agentsWithoutRow, isAgentPart, isOnAnotherMachine, newAgent, unifiedAgentFor, workPolicy } from "./agentUtils";
 
 function agent(patch: Partial<SuperAgent>): SuperAgent {
   return { id: "", name: "", router_agent_id: "", max_concurrency: 2, workers: [], sources: [], enabled: true, ...patch };
@@ -11,11 +11,29 @@ describe("unified agents", () => {
   const chat = agent({ id: "ning", name: "宁宝", router_agent_id: "ning" });
   const ops = agent({ id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", auto_workers: true, worker_runtimes: ["codex", "claudecode"] });
 
-  it("finds the agent an Agent row is the brain of, on this machine only", () => {
+  it("finds the agent an Agent row is the brain of, on the same machine only", () => {
     const row = { ...newAgent(["codex"]), id: "ning" };
     expect(unifiedAgentFor(row, [ops, chat])).toBe(chat);
     expect(unifiedAgentFor({ ...row, target_id: "dev_1" }, [chat])).toBeUndefined();
     expect(unifiedAgentFor({ ...row, target_id: "local" }, [chat])).toBe(chat);
+    const remote = { ...chat, target_id: "dev_1" };
+    expect(unifiedAgentFor({ ...row, target_id: "dev_1" }, [chat, remote])).toBe(remote);
+  });
+
+  it("lists a router-answered agent on another machine, next to that machine's rows", () => {
+    const remoteOps = { ...ops, target_id: "dev_1", target_name: "mini" };
+    const remoteChat = { ...chat, target_id: "dev_1", target_name: "mini" };
+    const rows = [
+      // The same id on this machine is not the remote agent's brain.
+      { ...newAgent(["codex"]), id: "sar_ops", target_id: "local" },
+      { ...newAgent(["codex"]), id: "ning", target_id: "dev_1" },
+      { ...newAgent(["codex"]), id: "sar_ops", source: "super_agent_router", target_id: "dev_1" },
+    ];
+    expect(agentsWithoutRow([remoteChat, remoteOps], rows)).toEqual([remoteOps]);
+    expect(isOnAnotherMachine(remoteOps)).toBe(true);
+    expect(isOnAnotherMachine({ target_id: "local" })).toBe(false);
+    expect(isOnAnotherMachine(ops)).toBe(false);
+    expect(agentRegistryMetrics([], [], [remoteOps])).toEqual({ agentCount: 1, machineCount: 1, channelCount: 0 });
   });
 
   it("lists agents that answer with a router agent as rows of their own", () => {

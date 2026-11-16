@@ -133,6 +133,38 @@ describe("fleet array responses", () => {
 
 });
 
+describe("agents across machines", () => {
+  it("lists every machine's agents with the machine each lives on, and skips a machine without them quietly", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      targets: [
+        target("local", "Local", "data", []),
+        target("dev_1", "mini", "data", [{ id: "sa_ops", name: "Ops" }]),
+        { target: { id: "dev_2", name: "old-box", kind: "link", trusted: true, online: true }, responses: [{ key: "data", status: 404, ok: false, error: "404 page not found" }] },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.superAgents()).resolves.toEqual([{ id: "sa_ops", name: "Ops", target_id: "dev_1", target_name: "mini" }]);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/remote/fleet/query");
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("deletes an agent on the machine that owns it and saves without the machine labels", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(
+      String(input).includes("/fleet/") ? { targets: [target("dev_1", "mini", "agent", { ok: true })] } : { id: "sa_ops" },
+    ), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.deleteSuperAgent("sa_ops", "dev_1");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/remote/fleet/execute");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ target_ids: ["dev_1"], requests: [{ method: "DELETE", path: "/api/v1/super-agents?id=sa_ops" }] });
+    await api.deleteSuperAgent("sa_ops");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/super-agents?id=sa_ops");
+    await api.saveSuperAgent({ id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", max_concurrency: 2, workers: [], sources: [], enabled: true, target_id: "local", target_name: "Local" });
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({ id: "sa_ops", name: "Ops", router_agent_id: "sar_ops", max_concurrency: 2, workers: [], sources: [], enabled: true });
+  });
+});
+
 describe("interactive fleet reads", () => {
   it("uses the only target when the selected scope is all machines", async () => {
     vi.stubGlobal("localStorage", { getItem: () => "all", setItem: () => undefined });

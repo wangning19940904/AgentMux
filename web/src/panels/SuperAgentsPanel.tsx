@@ -9,6 +9,7 @@ import { useAsync } from "../useAsync";
 import { sourceHookAddress } from "./superAgentSetup";
 import { githubPolls, isChannelSource, newSuperAgent } from "./superAgentModel";
 import { SuperAgentDrawer } from "./agents/SuperAgentForm";
+import { isOnAnotherMachine } from "./agents/agentUtils";
 import { confirmAction } from "../components/ConfirmDialog";
 import { PlanCard, TicketCard, timerStatusClass, triggerStatusClass } from "./superAgentCards";
 import type { CardContext } from "./superAgentCards";
@@ -50,7 +51,9 @@ export type SuperAgentsPanelProps = {
 export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandled, agentID, onChanged, avatar }: SuperAgentsPanelProps = {}) {
   const { t, language } = useI18n();
   const embedded = Boolean(agentID);
-  const list = useAsync(() => api.superAgents().then((items) => agentID ? items.filter((item) => item.id === agentID) : items), [agentID]);
+  // Activity, Tickets and the form all talk to one machine, so with all
+  // machines selected only this machine's agents are shown here.
+  const list = useAsync(() => api.superAgents().then((items) => items.filter((item) => !isOnAnotherMachine(item) && (!agentID || item.id === agentID))), [agentID]);
   const [selectedID, setSelectedID] = useState("");
   const [draft, setDraft] = useState<SuperAgent | null>(null);
   const [notice, setNotice] = useState("");

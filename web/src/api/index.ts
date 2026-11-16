@@ -936,10 +936,23 @@ export const api = {
     const body = { ...feedback }; delete body.target_id;
     return fleetCall<{ ok: boolean }>({ key: "feedback", method: "POST", path: "/api/v1/feedback/detail", body }, writeTargetIDs(feedback.target_id)).then((result) => result.first);
   },
-  superAgents: () => get<SuperAgent[]>("/api/v1/super-agents"),
+  // With all machines selected, each agent says which machine it lives on; a
+  // machine too old to have agents is left out. Everything else about an agent
+  // (its router, activity and form) talks to the selected machine, or this one
+  // when all are selected.
+  superAgents: () => fleetMode() ? fleetReadArray<SuperAgent>("/api/v1/super-agents", "data", fleetMonitorQuery) : get<SuperAgent[]>("/api/v1/super-agents"),
   superAgentActivity: (id: string) => get<SuperAgentActivity>(`/api/v1/super-agents/activity?id=${encodeURIComponent(id)}`),
-  saveSuperAgent: (agent: SuperAgent) => post<SuperAgent>("/api/v1/super-agents", agent),
-  deleteSuperAgent: (id: string) => del<{ ok: boolean }>(`/api/v1/super-agents?id=${encodeURIComponent(id)}`),
+  saveSuperAgent: (agent: SuperAgent) => {
+    const body = { ...agent };
+    delete body.target_id;
+    delete body.target_name;
+    return post<SuperAgent>("/api/v1/super-agents", body);
+  },
+  deleteSuperAgent: async (id: string, targetID?: string) => {
+    const path = `/api/v1/super-agents?id=${encodeURIComponent(id)}`;
+    if (!targetID || targetID === activeMachineScope()) return del<{ ok: boolean }>(path);
+    return (await fleetCall<{ ok: boolean }>({ key: "agent", method: "DELETE", path }, [targetID])).first;
+  },
   superAgentRouters: () => get<SuperAgentRouterList>("/api/v1/super-agents/routers"),
   superAgentPrompts: () => get<SuperAgentPromptPart[]>("/api/v1/super-agents/prompts"),
   saveSuperAgentRouter: (router: SuperAgentRouter) => post<SuperAgentRouter>("/api/v1/super-agents/routers", router),
