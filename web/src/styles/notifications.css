@@ -117,6 +117,17 @@
   margin-bottom: 14px;
 }
 
+.phone-app-link.inline {
+  margin: 0 18px 18px;
+  font-size: 13px;
+}
+
+.phone-app-link.inline header .table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .phone-app-link-body {
   display: grid;
   gap: 14px;

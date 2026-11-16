@@ -43,7 +43,6 @@ import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
 import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
 import { ConnectionBanner } from "./pwa/ConnectionBanner";
 import { NotificationSettings } from "./pwa/NotificationSettings";
-import { PhoneAppLink } from "./pwa/PhoneAppLink";
 
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
@@ -880,7 +879,7 @@ function Shell({
             </span>
           </div>
 		    <div className="workspace-header-actions">
-		      {adminReady && (
+		      {adminReady && visibleTab !== "accounts" && (
 			    <RemoteTargetSelector
 				  onAddMachine={() => {
                   setRemoteAddRequest((request) => request + 1);
@@ -947,7 +946,7 @@ function Shell({
                 </section>
               ) : (
                 <>
-				  {visibleTab === "settings" && <><PhoneAppLink /><NotificationSettings /></>}
+				  {visibleTab === "settings" && <NotificationSettings />}
 				  <RegisteredPanel
 				    tab={visibleTab}
 				    createRequested={createAgentRequested}

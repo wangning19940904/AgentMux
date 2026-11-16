@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { Check, Copy, RefreshCw } from "lucide-react";
+import { Check, Copy, RefreshCw, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { api, APIError, type HubClientLink, type HubClientLinkRefusal } from "../api";
 
@@ -34,7 +34,10 @@ export async function loadPhoneAppLink(): Promise<State> {
 // PhoneAppLink shows the QR code the AgentMux phone app scans to find this
 // hub. The code holds the hub's address and certificate fingerprint only;
 // the phone still signs in with an account.
-export function PhoneAppLink() {
+//
+// inline renders it as a panel inside the Devices page, opened by its
+// "Connect a phone" action and closed with onClose.
+export function PhoneAppLink({ inline = false, onClose }: { inline?: boolean; onClose?: () => void } = {}) {
   const { t } = useI18n();
   const [state, setState] = useState<State>({ phase: "loading" });
   const [copied, setCopied] = useState(false);
@@ -58,18 +61,14 @@ export function PhoneAppLink() {
     }
   };
 
-  return (
-    <section className="surface phone-app-link" aria-labelledby="phone-app-link-title">
-      <div className="surface-header">
-        <div>
-          <h2 id="phone-app-link-title">{t("phoneApp.title")}</h2>
-          <p className="subtle-copy">{t("phoneApp.subtitle")}</p>
-        </div>
-        <button className="ghost-action" type="button" disabled={state.phase === "loading"} onClick={() => void refresh()}>
-          <RefreshCw size={14} /> {t("common.refresh")}
-        </button>
-      </div>
-      <div className="surface-body phone-app-link-body">
+  const refreshButton = (
+    <button className="ghost-action" type="button" disabled={state.phase === "loading"} onClick={() => void refresh()}>
+      <RefreshCw size={14} /> {t("common.refresh")}
+    </button>
+  );
+
+  const body = (
+      <div className={`${inline ? "" : "surface-body "}phone-app-link-body`}>
         {state.phase === "loading" && <p className="subtle-copy">{t("common.loading")}</p>}
 
         {state.phase === "ready" && (
@@ -120,6 +119,40 @@ export function PhoneAppLink() {
 
         {state.phase === "error" && <p className="notification-error" role="alert">{state.message}</p>}
       </div>
+  );
+
+  if (inline) {
+    return (
+      <div className="remote-pairing phone-app-link inline" role="group" aria-labelledby="phone-app-link-title">
+        <header>
+          <div>
+            <strong id="phone-app-link-title">{t("phoneApp.title")}</strong>
+            <span>{t("phoneApp.subtitle")}</span>
+          </div>
+          <div className="table-actions">
+            {refreshButton}
+            {onClose && (
+              <button className="ghost-action" type="button" onClick={onClose}>
+                <X size={15} /> {t("common.close")}
+              </button>
+            )}
+          </div>
+        </header>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <section className="surface phone-app-link" aria-labelledby="phone-app-link-title">
+      <div className="surface-header">
+        <div>
+          <h2 id="phone-app-link-title">{t("phoneApp.title")}</h2>
+          <p className="subtle-copy">{t("phoneApp.subtitle")}</p>
+        </div>
+        {refreshButton}
+      </div>
+      {body}
     </section>
   );
 }

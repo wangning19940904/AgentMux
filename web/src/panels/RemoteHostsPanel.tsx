@@ -11,12 +11,14 @@ import {
   Save,
   Server,
   ShieldAlert,
+  Smartphone,
   Trash2,
   WifiOff,
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
+  type Account,
   activeRemoteID,
   setActiveMachineScope,
   api,
@@ -24,10 +26,13 @@ import {
   DiscoveredRemoteHost,
   FleetView,
   notifyRemoteHostsChanged,
+  type PairedDevice,
   RemoteConnectionError,
   RemoteHost,
 } from "../api";
 import { useI18n } from "../i18n";
+import { PhoneAppLink } from "../pwa/PhoneAppLink";
+import { accountLabel } from "../signIn";
 import { DeleteRemoteHostDialog } from "./DeleteRemoteHostDialog";
 import {
   fleetOnlyMachines,
@@ -62,6 +67,16 @@ const emptyForm = (): RemoteForm => ({
   clear_api_token: false,
 });
 
+// The paired device behind a machine entry: the entry itself when the
+// machine links to this hub, or its link path when the machine is listed
+// under another entry, such as SSH.
+function pairedDeviceID(host: RemoteHost): string | undefined {
+  if (host.kind === "link") return host.id;
+  return host.paths?.find((path) => (path.via === "link" || path.via === "passive") && path.host_id)?.host_id;
+}
+
+// Devices lists every machine this one reaches and connects new ones: a
+// phone through the hub link it scans, a server over SSH or by pairing.
 export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const { t } = useI18n();
   const [hosts, setHosts] = useState<RemoteHost[]>([]);
@@ -77,6 +92,11 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [deleteCandidate, setDeleteCandidate] = useState<RemoteHost | null>(null);
+  const [phoneOpen, setPhoneOpen] = useState(false);
+  // Paired devices and the accounts that may own them, known only to an
+  // administrator where accounts are on.
+  const [owners, setOwners] = useState<{ devices: PairedDevice[]; accounts: Account[] } | null>(null);
+  const [assigningID, setAssigningID] = useState("");
   const [pairingOpen, setPairingOpen] = useState(false);
   const [pairingName, setPairingName] = useState("");
   const [pairing, setPairing] = useState<DevicePairingCode | null>(null);
@@ -179,8 +199,37 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
     }
   };
 
+  const loadOwners = async () => {
+    try {
+      const session = await api.authSession();
+      if (!session.admin || !session.accounts_enabled) {
+        setOwners(null);
+        return;
+      }
+      const [devices, accounts] = await Promise.all([api.pairedDevices(), api.accounts()]);
+      setOwners({ devices, accounts });
+    } catch {
+      setOwners(null);
+    }
+  };
+
+  const assignOwner = async (deviceID: string, accountID: string) => {
+    setAssigningID(deviceID);
+    setMessage("");
+    setError("");
+    try {
+      await api.assignDeviceOwner(deviceID, accountID);
+      await loadOwners();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAssigningID("");
+    }
+  };
+
   const load = async (): Promise<RemoteHost[] | null> => {
     void loadFleet();
+    void loadOwners();
     const version = ++hostsRequestVersion.current;
     setLoading(true);
     try {
@@ -876,9 +925,13 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             <span className="pill">{hosts.length + (localMachine ? 1 : 0)}</span>
           </div>
           <div className="remote-machines-toolbar">
+            <button className="action" type="button" aria-expanded={phoneOpen} onClick={() => setPhoneOpen((open) => !open)}>
+              <Smartphone size={15} />
+              {t("remote.connectPhone")}
+            </button>
             <button className="action" type="button" onClick={() => openImportDialog()}>
-              <Plus size={15} />
-              {t("remote.add")}
+              <Server size={15} />
+              {t("remote.connectServer")}
             </button>
             <button className="ghost-action" type="button" onClick={() => setPairingOpen(true)} title={t("remote.linkHint")}>
               <Link2 size={14} />
@@ -917,6 +970,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             {error || message}
           </div>
         )}
+        {phoneOpen && <PhoneAppLink inline onClose={() => setPhoneOpen(false)} />}
         {pairingOpen && (
           <div className="remote-pairing" role="group" aria-label={t("remote.linkAdd")}>
             <header>
@@ -1048,6 +1102,8 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
+            const deviceID = pairedDeviceID(host);
+            const device = deviceID ? owners?.devices.find((item) => item.id === deviceID) : undefined;
             const healthTone = snapshot.health === "healthy"
               ? "success"
               : snapshot.health === "error"
@@ -1148,6 +1204,26 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                   )}
                 </div>
                 <div className="remote-host-actions">
+                  {device && owners && (
+                    <select
+                      className="remote-host-owner"
+                      aria-label={t("accounts.assignDevice", { name: host.name })}
+                      title={t("accounts.deviceOwner")}
+                      value={device.owner_account_id ?? ""}
+                      disabled={assigningID === device.id}
+                      onChange={(event) => void assignOwner(device.id, event.target.value)}
+                    >
+                      <option value="">{t("accounts.ownerAdmins")}</option>
+                      {device.owner_account_id && !owners.accounts.some((account) => account.id === device.owner_account_id) && (
+                        <option value={device.owner_account_id}>{device.owner_account_name || device.owner_account_id}</option>
+                      )}
+                      {owners.accounts.filter((account) => account.status !== "pending").map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {accountLabel(account)}{account.status === "disabled" ? ` (${t("accounts.disabled")})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     className="ghost-action"
                     disabled={!host.trusted || checking || updatingID === host.id || updatingAll}

@@ -1,6 +1,6 @@
 import { Check, Copy, KeyRound, Laptop, LogOut, Plus, RefreshCw, Trash2, UserRound, UserPlus, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { api, type Account, type AccountRole, type AuthSession, type DevicePairingCode, type PairedDevice } from "../api";
+import { api, type Account, type AccountRole, type AuthSession, type DevicePairingCode } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged, signInErrorKey } from "../signIn";
@@ -8,8 +8,9 @@ import { confirmAction } from "../components/ConfirmDialog";
 
 // Accounts are the people who sign in to this AgentMux. Everyone signed in
 // sees who they are, can change their password and sign out; administrators
-// manage accounts and decide which account owns each paired device; members
-// see and pair their own devices.
+// manage accounts; members see and pair their own devices here. An
+// administrator sees every device, and decides who owns it, on the Devices
+// page instead.
 
 const fieldStyle = { display: "grid", gap: 4 } as const;
 
@@ -32,7 +33,7 @@ export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () =>
           onAccountsChanged?.();
         }} />
       )}
-      {(state.admin || state.account) && <Devices session={state} />}
+      {!state.admin && state.account && <Devices />}
     </>
   );
 }
@@ -416,19 +417,11 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
   );
 }
 
-// Devices lists the machines paired with this hub and lets the caller pair
-// another. A member sees the devices they own, and a pairing code they create
-// makes the new device theirs. An administrator sees every device with the
-// account that owns it and can hand a device to another account; a device
-// without an owner is reachable by administrators only.
-function Devices({ session }: { session: AuthSession }) {
+// Devices lists the devices a member owns and lets them pair another, which
+// becomes theirs. Administrators see every device on the Devices page.
+function Devices() {
   const { t } = useI18n();
-  const admin = session.admin;
   const devices = useAsync(() => api.pairedDevices(), []);
-  const accounts = useAsync(
-    () => admin && session.accounts_enabled ? api.accounts() : Promise.resolve([] as Account[]),
-    [admin, session.accounts_enabled],
-  );
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [pairing, setPairing] = useState<DevicePairingCode | null>(null);
@@ -447,18 +440,12 @@ function Devices({ session }: { session: AuthSession }) {
   }
 
   const items = devices.data ?? [];
-  const accountOptions = accounts.data ?? [];
-  const ownerName = (device: PairedDevice) => {
-    if (!device.owner_account_id) return t("accounts.ownerAdmins");
-    const owner = accountOptions.find((account) => account.id === device.owner_account_id);
-    return owner ? accountLabel(owner) : device.owner_account_name || device.owner_account_id;
-  };
   return (
     <section className="surface">
       <div className="surface-header">
         <div>
-          <h3>{t(admin ? "accounts.allDevicesTitle" : "accounts.devicesTitle")}</h3>
-          <p>{t(admin ? "accounts.allDevicesSubtitle" : "accounts.devicesSubtitle")}</p>
+          <h3>{t("accounts.devicesTitle")}</h3>
+          <p>{t("accounts.devicesSubtitle")}</p>
         </div>
         <div className="table-actions">
           <button className="ghost-action" onClick={() => void devices.reload()}>
@@ -473,11 +460,7 @@ function Devices({ session }: { session: AuthSession }) {
       </div>
       {notice && <div className="surface-body error">{notice}</div>}
       {pairing && (
-        <OneTimeSecret
-          label={t(admin ? "accounts.pairHintAdmin" : "accounts.pairHint")}
-          value={pairing.command}
-          onClose={() => setPairing(null)}
-        />
+        <OneTimeSecret label={t("accounts.pairHint")} value={pairing.command} onClose={() => setPairing(null)} />
       )}
       {devices.loading && items.length === 0 ? (
         <div className="empty-state">{t("common.loading")}</div>
@@ -498,35 +481,8 @@ function Devices({ session }: { session: AuthSession }) {
                 <span className={`status-badge ${device.online ? "success" : "warning"}`}>
                   <span className="status-dot" /> {t(device.online ? "accounts.online" : "accounts.offline")}
                 </span>
-                {admin && (
-                  <span className="source-badge manual" title={t("accounts.deviceOwner")}>
-                    {ownerName(device)}
-                  </span>
-                )}
               </div>
               <div className="table-actions">
-                {admin && accountOptions.length > 0 && (
-                  <select
-                    aria-label={t("accounts.assignDevice", { name: device.name })}
-                    title={t("accounts.deviceOwner")}
-                    value={device.owner_account_id ?? ""}
-                    disabled={busy}
-                    onChange={(event) => {
-                      const accountID = event.target.value;
-                      void run(() => api.assignDeviceOwner(device.id, accountID));
-                    }}
-                  >
-                    <option value="">{t("accounts.ownerAdmins")}</option>
-                    {device.owner_account_id && !accountOptions.some((account) => account.id === device.owner_account_id) && (
-                      <option value={device.owner_account_id}>{ownerName(device)}</option>
-                    )}
-                    {accountOptions.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {accountLabel(account)}{account.status === "disabled" ? ` (${t("accounts.disabled")})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                )}
                 <button className="ghost-action danger-action" disabled={busy}
                   onClick={async () => {
                     if (await confirmAction(t("accounts.removeDeviceConfirm", { name: device.name }), { danger: true })) {

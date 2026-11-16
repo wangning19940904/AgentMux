@@ -43,7 +43,7 @@ it("marks More as current for pages outside the tab bar", () => {
     <MobileTabBar items={mobileTabItems(ITEMS)} active="settings" drawerOpen={false} isDisabled={() => false} onSelect={onSelect} onOpenMore={onOpenMore} />,
   );
   const buttons = [...container.querySelectorAll("button")];
-  expect(buttons.map((button) => button.textContent)).toEqual(["Overview", "Agents", "Super", "Machines", "More"]);
+  expect(buttons.map((button) => button.textContent)).toEqual(["Overview", "Agents", "Super", "Devices", "More"]);
   expect(buttons[4].className).toContain("active");
   act(() => buttons[1].click());
   expect(onSelect).toHaveBeenCalledWith("agents");
@@ -82,7 +82,7 @@ it("lists every group in the drawer and closes on Escape", () => {
   expect(container.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("true");
   expect(container.querySelector("h2")?.textContent).toBe("System");
   const current = container.querySelector('[aria-current="page"]') as HTMLButtonElement;
-  expect(current.textContent).toBe("Machines");
+  expect(current.textContent).toBe("Devices");
   expect(document.activeElement).toBe(current);
   const settings = [...container.querySelectorAll("button")].find((button) => button.textContent === "Settings")!;
   expect(settings.disabled).toBe(true);
