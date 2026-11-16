@@ -238,8 +238,9 @@ the relay.
   (`hub-peer.json` in the hub state directory). Moving the primary back is
   manual, on the relay's local control port (`POST /relay/v1/switch?to=<name>`).
 - **While a machine is the standby,** hub data on it is read-only. Its Console
-  cannot pair devices, change accounts, or sign in with an account
-  (sign-in writes a session); use the primary for those.
+  cannot pair devices; use the primary for that. Accounts are the exception:
+  the standby sends every account change, sign-in and sign-out to the
+  primary, which applies it (§4.5, "One account on every hub").
 
 Live frames still come from one hub process at a time. Running several active
 hub processes on one database (with `LISTEN/NOTIFY` fan-out and sticky routing)
@@ -490,6 +491,42 @@ Principal = Account (person) | Node (device token) | Agent (acting for its owner
   separate opt-in: `accept_owner_work` (on by default), `accept_shared_agent_work`
   (off by default; teammates' agents cannot run on your machine unless you opt in),
   and `expose_terminal`, `expose_fs_browse` and `max_concurrency`.
+
+**One account on every hub.** Accounts follow Persona's linked hubs
+([nwverse/persona](https://github.com/nwverse/persona), `docs/server/mesh.md`):
+one hub is the authority and the others hold a copy. The code is in
+[server/account_authority.go](../../server/account_authority.go) and
+[store/account_handover.go](../../store/account_handover.go).
+
+- **The primary is the authority.** Accounts and their sessions are hub data,
+  so the standby already holds a copy. A standby never writes them: it sends
+  each account change, sign-in and sign-out up its link
+  (`POST /uplink/v1/accounts`) and the primary applies it. The answer carries
+  the primary's change-log position, and the standby waits until its copy has
+  it, so the browser sees its own change at once. The standby checks who is
+  asking and applies the sign-in rate limits; the primary accepts the call only
+  from the device it made its standby.
+- **Sessions work on either hub.** A sign-in through the standby opens the
+  session on the primary; the standby hands the browser the cookie and then
+  reads the session from its copy, as it will after a failover.
+- **Handover.** Before a hub replaces its hub data with a primary's snapshot,
+  it writes its own accounts to `account-handover.json` in its hub state
+  directory and hands them to the primary. The primary keeps those it lacks:
+  an account it holds under the same ID stays as it is, and a login that is
+  someone else's there stays theirs, so a handover never overwrites, revives
+  or takes over an account. The file stays until the handover goes through
+  (retried every 30 seconds), and a hub that became the primary first keeps
+  the accounts itself. Sessions are not handed over; people sign in again.
+- **Identify first.** Sign-in asks for the login name, then
+  (`POST /api/v1/auth/identify`) goes on to the password for a registered
+  name, or to registration for an unknown one. Registration
+  (`POST /api/v1/auth/register`) creates a *pending* account that cannot sign
+  in until an administrator approves it (status `active`) or turns it down
+  (`POST /api/v1/accounts/reject`, which frees the name). Unknown names and
+  registrations count against the caller's address like failed sign-ins. With
+  no accounts at all there is no registration: the first administrator is
+  created where AgentMux runs. First-run setup with a login and password that
+  already belong to an account at the authority signs in with it.
 
 ---
 

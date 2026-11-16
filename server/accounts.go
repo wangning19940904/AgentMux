@@ -20,17 +20,26 @@ import (
 // session is read on every request, so disabling an account or changing its
 // role takes effect at once.
 //
+// Sign-in asks for the login name first (identify), as Persona does: a
+// registered name goes on to the password, an unknown one to registration,
+// which waits for an administrator's approval. One account works on every hub
+// of a group: the primary hub is the authority for accounts and a standby
+// sends every change there (account_authority.go).
+//
 // With no accounts, nothing here changes how AgentMux behaves. The bridge
 // token stays the administrator whether or not accounts exist.
 //
 //	GET  /api/v1/auth/session   — who is calling and whether sign-in is needed (open)
+//	POST /api/v1/auth/identify  — is this login name registered? (open, rate-limited)
+//	POST /api/v1/auth/register  — ask for an account; an administrator approves it (open, rate-limited)
 //	POST /api/v1/auth/sign-in   — password sign-in (open, rate-limited)
 //	POST /api/v1/auth/sign-out  — end this browser's session (open)
 //	POST /api/v1/auth/setup     — create the first administrator (administrator, once)
 //	POST /api/v1/auth/password  — change one's own password (signed-in account)
 //	GET  /api/v1/accounts       — list accounts (administrator)
-//	POST /api/v1/accounts       — create or update an account (administrator)
+//	POST /api/v1/accounts       — create or update an account; status "active" approves a registration (administrator)
 //	POST /api/v1/accounts/password — reset an account's password (administrator)
+//	POST /api/v1/accounts/reject   — turn a registration down (administrator)
 
 const (
 	accountSessionTTL = 7 * 24 * time.Hour
@@ -38,9 +47,11 @@ const (
 )
 
 // authOpenPaths answer without a credential: a browser has to be able to ask
-// whether it must sign in, and then sign in.
+// whether it must sign in, and then sign in or register.
 var authOpenPaths = map[string]bool{
 	"/api/v1/auth/session":  true,
+	"/api/v1/auth/identify": true,
+	"/api/v1/auth/register": true,
 	"/api/v1/auth/sign-in":  true,
 	"/api/v1/auth/sign-out": true,
 	// A worker's helper calls carry their Ticket's token instead
@@ -51,6 +62,8 @@ var authOpenPaths = map[string]bool{
 
 func (s *Server) registerAccountRoutes() {
 	s.mux.HandleFunc("GET /api/v1/auth/session", s.handleAuthSession)
+	s.mux.HandleFunc("POST /api/v1/auth/identify", s.handleIdentify)
+	s.mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
 	s.mux.HandleFunc("POST /api/v1/auth/sign-in", s.handleSignIn)
 	s.mux.HandleFunc("POST /api/v1/auth/sign-out", s.handleSignOut)
 	s.mux.HandleFunc("POST /api/v1/auth/setup", s.handleAccountSetup)
@@ -58,7 +71,14 @@ func (s *Server) registerAccountRoutes() {
 	s.mux.HandleFunc("GET /api/v1/accounts", s.handleAccountsList)
 	s.mux.HandleFunc("POST /api/v1/accounts", s.handleAccountSave)
 	s.mux.HandleFunc("POST /api/v1/accounts/password", s.handleAccountPasswordReset)
+	s.mux.HandleFunc("POST /api/v1/accounts/reject", s.handleAccountReject)
 }
+
+// Where accounts are kept, as /api/v1/auth/session reports it.
+const (
+	accountsAuthorityLocal   = "local"
+	accountsAuthorityPrimary = "primary"
+)
 
 type authSessionResponse struct {
 	// AccountsEnabled is true once any account exists.
@@ -76,6 +96,15 @@ type authSessionResponse struct {
 	Account *core.AccountIdentity `json:"account,omitempty"`
 	// SignInMethods lists the ways a person can sign in here.
 	SignInMethods []string `json:"sign_in_methods"`
+	// RegistrationOpen is true when a person without an account can ask
+	// for one; an administrator approves it.
+	RegistrationOpen bool `json:"registration_open"`
+	// AccountsAuthority is "primary" when this hub follows a primary hub
+	// that keeps the accounts, "local" otherwise.
+	AccountsAuthority string `json:"accounts_authority"`
+	// PendingRegistrations counts registrations waiting for approval, for
+	// administrators.
+	PendingRegistrations int `json:"pending_registrations,omitempty"`
 }
 
 // callerPrincipal resolves the request's own credential the way withAuth
@@ -94,14 +123,19 @@ func (s *Server) callerPrincipal(r *http.Request) (principal *core.Principal, an
 
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	response := authSessionResponse{SignInMethods: []string{core.SignInMethodPassword}}
+	response := authSessionResponse{SignInMethods: []string{core.SignInMethodPassword}, AccountsAuthority: accountsAuthorityLocal}
+	var accounts []core.Account
 	if s.st != nil {
-		count, err := s.st.CountAccounts(r.Context())
+		var err error
+		accounts, err = s.st.ListAccounts(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		response.AccountsEnabled = count > 0
+		response.AccountsEnabled = len(accounts) > 0
+		if follows, _ := s.followsPrimaryHub(r.Context()); follows {
+			response.AccountsAuthority = accountsAuthorityPrimary
+		}
 	}
 	principal, anonymous := s.callerPrincipal(r)
 	if principal != nil {
@@ -111,6 +145,14 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	}
 	response.SetupAvailable = s.st != nil && !response.AccountsEnabled && principal != nil && principal.Admin
 	response.SignInRequired = response.AccountsEnabled && (principal == nil || anonymous)
+	response.RegistrationOpen = response.AccountsEnabled
+	if response.Admin {
+		for _, account := range accounts {
+			if account.Status == core.AccountStatusPending {
+				response.PendingRegistrations++
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -127,6 +169,102 @@ func clientAddr(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// limitedAuthRequest applies the sign-in limiter to an open auth request and
+// answers 429 when it must wait.
+func (s *Server) limitedAuthRequest(w http.ResponseWriter, login, addr string) bool {
+	if wait := s.signIns.retryAfter(login, addr); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeErr(w, http.StatusTooManyRequests, "too many attempts; try again later")
+		return true
+	}
+	return false
+}
+
+type identifyResponse struct {
+	Login string `json:"login"`
+	// State is "registered", "pending" (registered, waiting for approval)
+	// or "unregistered".
+	State string `json:"state"`
+	// SetupRequired is true when there are no accounts at all: the first
+	// administrator has to be created where AgentMux runs.
+	SetupRequired    bool `json:"setup_required"`
+	RegistrationOpen bool `json:"registration_open"`
+}
+
+// handleIdentify answers the first step of sign-in: whether the name the
+// person typed is registered. Looking up unknown names counts against the
+// caller's address like a failed sign-in, which bounds guessing who has an
+// account.
+func (s *Server) handleIdentify(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !consoleOriginRequest(r) {
+		writeErr(w, http.StatusForbidden, "sign in from the AgentMux Console")
+		return
+	}
+	var req struct {
+		Login string `json:"login"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	login, addr := core.NormalizeLogin(req.Login), clientAddr(r)
+	if err := core.ValidateLogin(login); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.limitedAuthRequest(w, login, addr) {
+		return
+	}
+	result, err := s.runAccountOp(r.Context(), accountOp{Op: accountOpIdentify, Login: login})
+	if err != nil {
+		writeAccountOpError(w, err)
+		return
+	}
+	if result.State == store.LoginUnregistered {
+		s.signIns.failure("identify:"+login, addr)
+	}
+	writeJSON(w, http.StatusOK, identifyResponse{
+		Login: login, State: result.State, SetupRequired: !result.AccountsExist, RegistrationOpen: result.AccountsExist,
+	})
+}
+
+// handleRegister asks for an account. It is created waiting for approval,
+// on the primary hub when this hub follows one, and cannot sign in until an
+// administrator approves it.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !consoleOriginRequest(r) {
+		writeErr(w, http.StatusForbidden, "register from the AgentMux Console")
+		return
+	}
+	var req accountRequest
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	login, addr := core.NormalizeLogin(req.Login), clientAddr(r)
+	if s.limitedAuthRequest(w, login, addr) {
+		return
+	}
+	if err := validateNewAccount(login, req.Password); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Every registration counts, so one address cannot flood the
+	// administrators' approval list.
+	s.signIns.failure("register:"+login, addr)
+	result, err := s.runAccountOp(r.Context(), accountOp{
+		Op: accountOpRegister, Login: login, DisplayName: req.DisplayName, Password: req.Password,
+	})
+	if err != nil {
+		writeAccountOpError(w, err)
+		return
+	}
+	if s.log != nil {
+		s.log.Info("account registration waiting for approval", "login", login, "addr", addr)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"account": result.Account.Identity(), "status": core.AccountStatusPending})
 }
 
 func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
@@ -152,39 +290,35 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, "too many failed sign-ins; try again later")
 		return
 	}
-	var account *core.Account
-	if login != "" && len(req.Password) <= core.MaxPasswordLength {
-		var err error
-		account, err = s.st.VerifyAccountPassword(r.Context(), login, req.Password)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-	}
-	if account == nil {
+	if login == "" || len(req.Password) > core.MaxPasswordLength {
 		s.signIns.failure(login, addr)
-		if s.log != nil {
-			s.log.Warn("sign-in failed", "login", login, "addr", addr)
+		writeAccountOpError(w, accountFailure(http.StatusUnauthorized, accountCodeWrongPassword, "wrong login name or password"))
+		return
+	}
+	result, err := s.runAccountOp(r.Context(), accountOp{
+		Op: accountOpSignIn, Login: login, Password: req.Password, UserAgent: r.UserAgent(), RemoteAddr: addr,
+	})
+	if err != nil {
+		var opErr *accountOpError
+		if errors.As(err, &opErr) && opErr.Code == accountCodeWrongPassword {
+			s.signIns.failure(login, addr)
+			if s.log != nil {
+				s.log.Warn("sign-in failed", "login", login, "addr", addr)
+			}
 		}
-		writeErr(w, http.StatusUnauthorized, "wrong login name or password")
+		writeAccountOpError(w, err)
 		return
 	}
 	s.signIns.success(login, addr)
-	if !s.startAccountSession(w, r, account, core.SignInMethodPassword) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": account.Identity()})
+	// The session the browser held before ends, so a cookie planted before
+	// sign-in is never promoted.
+	s.endBrowserSession(r)
+	s.setAccountCookie(w, r, result.Account, result.Token)
+	writeJSON(w, http.StatusOK, map[string]any{"account": result.Account.Identity()})
 }
 
-// startAccountSession signs a browser in. Any session the browser already
-// held ends first, so a cookie planted before sign-in is never promoted.
-func (s *Server) startAccountSession(w http.ResponseWriter, r *http.Request, account *core.Account, method string) bool {
-	s.endBrowserSession(r)
-	token, _, err := s.st.CreateAccountSession(r.Context(), account.ID, method, r.UserAgent(), clientAddr(r), accountSessionTTL)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return false
-	}
+// setAccountCookie hands the browser a session the authority created.
+func (s *Server) setAccountCookie(w http.ResponseWriter, r *http.Request, account *core.Account, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     consoleSessionCookie,
 		Value:    token,
@@ -194,13 +328,13 @@ func (s *Server) startAccountSession(w http.ResponseWriter, r *http.Request, acc
 		SameSite: http.SameSiteStrictMode,
 		Secure:   requestIsTLS(r),
 	})
-	if s.log != nil {
-		s.log.Info("account signed in", "login", account.Login, "method", method, "addr", clientAddr(r))
+	if s.log != nil && account != nil {
+		s.log.Info("account signed in", "login", account.Login, "addr", clientAddr(r))
 	}
-	return true
 }
 
-// endBrowserSession ends whichever session the request's cookie names.
+// endBrowserSession ends whichever session the request's cookie names. An
+// account session ends at the authority, so it ends on every hub.
 func (s *Server) endBrowserSession(r *http.Request) {
 	cookie, err := r.Cookie(consoleSessionCookie)
 	if err != nil || cookie.Value == "" {
@@ -208,7 +342,9 @@ func (s *Server) endBrowserSession(r *http.Request) {
 	}
 	if strings.HasPrefix(cookie.Value, store.AccountSessionTokenPrefix) {
 		if s.st != nil {
-			_ = s.st.DeleteAccountSession(r.Context(), cookie.Value)
+			if _, err := s.runAccountOp(r.Context(), accountOp{Op: accountOpSignOut, SessionToken: cookie.Value}); err != nil && s.log != nil {
+				s.log.Warn("could not end an account session", "err", err)
+			}
 		}
 		return
 	}
@@ -239,7 +375,9 @@ type accountRequest struct {
 
 // handleAccountSetup creates the first administrator. Only an administrator
 // may: the bridge token, or on a machine without a bridge, the local Console.
-// A browser that does it is signed in as that administrator.
+// A browser that does it is signed in as that administrator. When accounts
+// already exist at the authority (made on another hub of the group) and the
+// login and password match one, that account is signed in instead.
 func (s *Server) handleAccountSetup(w http.ResponseWriter, r *http.Request) {
 	if s.st == nil {
 		serviceUnavailable(w, "accounts")
@@ -254,27 +392,35 @@ func (s *Server) handleAccountSetup(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONInto(w, r, &req) {
 		return
 	}
-	login := core.NormalizeLogin(req.Login)
+	login, addr := core.NormalizeLogin(req.Login), clientAddr(r)
 	if err := validateNewAccount(login, req.Password); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	account, err := s.st.CreateFirstAdmin(r.Context(), store.NewAccount{
-		Login: login, DisplayName: derefString(req.DisplayName), Password: req.Password,
-	})
-	if err != nil {
-		writeAccountError(w, err)
+	if s.limitedAuthRequest(w, login, addr) {
 		return
 	}
-	if s.log != nil {
-		s.log.Info("first administrator account created", "login", account.Login)
-	}
-	if consoleOriginRequest(r) && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
-		if !s.startAccountSession(w, r, account, core.SignInMethodPassword) {
-			return
+	browser := consoleOriginRequest(r) && strings.TrimSpace(r.Header.Get("Authorization")) == ""
+	result, err := s.runAccountOp(r.Context(), accountOp{
+		Op: accountOpSetup, Login: login, DisplayName: req.DisplayName, Password: req.Password,
+		StartSession: browser, UserAgent: r.UserAgent(), RemoteAddr: addr,
+	})
+	if err != nil {
+		var opErr *accountOpError
+		if errors.As(err, &opErr) && opErr.Code == accountCodeAccountsExist {
+			s.signIns.failure(login, addr)
 		}
+		writeAccountOpError(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": account})
+	if s.log != nil && !result.Existing {
+		s.log.Info("first administrator account created", "login", result.Account.Login)
+	}
+	if result.Token != "" {
+		s.endBrowserSession(r)
+		s.setAccountCookie(w, r, result.Account, result.Token)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"account": result.Account, "existing": result.Existing})
 }
 
 func (s *Server) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
@@ -300,22 +446,20 @@ func (s *Server) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	account, err := s.st.VerifyAccountPassword(r.Context(), login, req.CurrentPassword)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if account == nil || account.ID != principal.Account.ID {
-		s.signIns.failure(login, addr)
-		writeErr(w, http.StatusForbidden, "the current password is wrong")
-		return
-	}
 	keep := ""
 	if cookie, err := r.Cookie(consoleSessionCookie); err == nil {
 		keep = cookie.Value
 	}
-	if err := s.st.SetAccountPassword(r.Context(), account.ID, req.NewPassword, keep); err != nil {
-		writeAccountError(w, err)
+	_, err := s.runAccountOp(r.Context(), accountOp{
+		Op: accountOpOwnPassword, Login: login, AccountID: principal.Account.ID,
+		CurrentPassword: req.CurrentPassword, Password: req.NewPassword, SessionToken: keep,
+	})
+	if err != nil {
+		var opErr *accountOpError
+		if errors.As(err, &opErr) && opErr.Code == accountCodeWrongPassword {
+			s.signIns.failure(login, addr)
+		}
+		writeAccountOpError(w, err)
 		return
 	}
 	writeOK(w)
@@ -337,8 +481,9 @@ func (s *Server) handleAccountsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAccountSave creates an account when no id is given and otherwise
-// changes its display name, role or status. A new account without a
-// password gets a generated one, returned once.
+// changes its display name, role or status; setting a pending registration
+// active approves it. A new account without a password gets a generated
+// one, returned once.
 func (s *Server) handleAccountSave(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAccountAdmin(w, r) {
 		return
@@ -347,52 +492,20 @@ func (s *Server) handleAccountSave(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONInto(w, r, &req) {
 		return
 	}
-	if id := strings.TrimSpace(req.ID); id != "" {
-		account, err := s.st.UpdateAccount(r.Context(), id, store.AccountUpdate{
-			DisplayName: req.DisplayName, Role: req.Role, Status: req.Status,
-		})
-		if err != nil {
-			writeAccountError(w, err)
-			return
-		}
-		if s.log != nil {
-			s.log.Info("account updated", "login", account.Login, "role", account.Role, "status", account.Status)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"account": account})
-		return
-	}
-	count, err := s.st.CountAccounts(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if count == 0 {
-		writeErr(w, http.StatusConflict, "create the first administrator first")
-		return
-	}
-	login := core.NormalizeLogin(req.Login)
-	generated := ""
-	if req.Password == "" {
-		generated = store.GeneratePassword()
-		req.Password = generated
-	}
-	if err := validateNewAccount(login, req.Password); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	account, err := s.st.CreateAccount(r.Context(), store.NewAccount{
-		Login: login, DisplayName: derefString(req.DisplayName), Role: derefString(req.Role), Password: req.Password,
+	result, err := s.runAccountOp(r.Context(), accountOp{
+		Op: accountOpSave, AccountID: strings.TrimSpace(req.ID), Login: req.Login,
+		DisplayName: req.DisplayName, Role: req.Role, Status: req.Status, Password: req.Password,
 	})
 	if err != nil {
-		writeAccountError(w, err)
+		writeAccountOpError(w, err)
 		return
 	}
 	if s.log != nil {
-		s.log.Info("account created", "login", account.Login, "role", account.Role)
+		s.log.Info("account saved", "login", result.Account.Login, "role", result.Account.Role, "status", result.Account.Status)
 	}
-	response := map[string]any{"account": account}
-	if generated != "" {
-		response["password"] = generated
+	response := map[string]any{"account": result.Account}
+	if result.Generated != "" {
+		response["password"] = result.Generated
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, response)
@@ -412,25 +525,36 @@ func (s *Server) handleAccountPasswordReset(w http.ResponseWriter, r *http.Reque
 	if !decodeJSONInto(w, r, &req) {
 		return
 	}
-	generated := ""
-	if req.Password == "" {
-		generated = store.GeneratePassword()
-		req.Password = generated
-	}
-	if err := core.ValidatePassword(req.Password); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.st.SetAccountPassword(r.Context(), strings.TrimSpace(req.ID), req.Password, ""); err != nil {
-		writeAccountError(w, err)
+	result, err := s.runAccountOp(r.Context(), accountOp{Op: accountOpResetPassword, AccountID: req.ID, Password: req.Password})
+	if err != nil {
+		writeAccountOpError(w, err)
 		return
 	}
 	response := map[string]any{"ok": true}
-	if generated != "" {
-		response["password"] = generated
+	if result.Generated != "" {
+		response["password"] = result.Generated
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, response)
+}
+
+// handleAccountReject turns a registration down: the pending account is
+// deleted, so its login name is free again.
+func (s *Server) handleAccountReject(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAccountAdmin(w, r) {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if !decodeJSONInto(w, r, &req) {
+		return
+	}
+	if _, err := s.runAccountOp(r.Context(), accountOp{Op: accountOpReject, AccountID: req.ID}); err != nil {
+		writeAccountOpError(w, err)
+		return
+	}
+	writeOK(w)
 }
 
 // requireAccountAdmin admits administrators only, and needs the store.
@@ -450,17 +574,6 @@ func validateNewAccount(login, password string) error {
 		return err
 	}
 	return core.ValidatePassword(password)
-}
-
-func writeAccountError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, store.ErrAccountNotFound):
-		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, store.ErrLoginTaken), errors.Is(err, store.ErrAccountsExist), errors.Is(err, store.ErrLastAdmin):
-		writeErr(w, http.StatusConflict, err.Error())
-	default:
-		writeErr(w, http.StatusInternalServerError, err.Error())
-	}
 }
 
 func derefString(value *string) string {

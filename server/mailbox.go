@@ -296,6 +296,7 @@ func (s *Server) mailUplink(reports http.Handler) http.Handler {
 	s.registerWorkerRelay(mux)
 	s.registerDispatchUplink(mux)
 	mux.HandleFunc("GET "+fleetUplinkPath, s.handleUplinkFleet)
+	mux.HandleFunc("POST "+accountsUplinkPath, s.handleUplinkAccounts)
 	s.registerStandbyTunnel(mux)
 	mux.HandleFunc("POST "+mailUplinkMessagesPath, func(w http.ResponseWriter, r *http.Request) {
 		deviceID := linkpkg.DeviceID(r.Context())

@@ -33,6 +33,10 @@ GET /uplink/v1/fleet
 # (server/standby_tunnel.go), so the standby's pages reach machines live.
 GET /uplink/v1/standby/dial/{id}
 
+# The standby's account changes, sign-ins and handover, applied by the
+# primary as the one account authority (server/account_authority.go).
+POST /uplink/v1/accounts
+
 # The standby hub's feed (hubha/feed.go), mounted by prefix in
 # server/hubstandby.go.
 prefix /uplink/v1/hub/

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AuthSession } from "./api";
+import { APIError, type AuthSession } from "./api";
 import {
+  accountErrorCode,
   accountFormError,
+  identifyUnsupported,
+  nextSignInStep,
   accountLabel,
   resolveSignInGate,
   signInErrorKey,
@@ -122,5 +125,24 @@ describe("sign-in gate", () => {
     expect(signInErrorKey({ status: 401 })).toBe("auth.wrongCredentials");
     expect(signInErrorKey({ status: 429 })).toBe("auth.tooManyAttempts");
     expect(signInErrorKey(new Error("offline"))).toBe("auth.failed");
+  });
+});
+
+describe("identify-first sign-in", () => {
+  it("goes on to the step that fits the name", () => {
+    expect(nextSignInStep({ state: "registered", registration_open: true })).toBe("password");
+    expect(nextSignInStep({ state: "pending", registration_open: true })).toBe("pending");
+    expect(nextSignInStep({ state: "unregistered", registration_open: true })).toBe("register");
+    expect(nextSignInStep({ state: "unregistered", registration_open: false })).toBe("closed");
+  });
+
+  it("reads the account error codes", () => {
+    expect(signInErrorKey(new APIError("x", 403, { code: "pending" }))).toBe("auth.pendingApproval");
+    expect(signInErrorKey(new APIError("x", 409, { code: "registered" }))).toBe("auth.loginTaken");
+    expect(signInErrorKey(new APIError("x", 503, { code: "authority_unreachable" }))).toBe("auth.authorityUnreachable");
+    expect(signInErrorKey(new APIError("x", 401, {}))).toBe("auth.wrongCredentials");
+    expect(accountErrorCode(new Error("plain"))).toBe("");
+    expect(identifyUnsupported(new APIError("x", 404, {}))).toBe(true);
+    expect(identifyUnsupported(new APIError("x", 429, {}))).toBe(false);
   });
 });

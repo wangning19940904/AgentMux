@@ -59,9 +59,11 @@ type Server struct {
 	remoteStatusChecks singleflight.Group
 	fleet              fleetCache
 	// primaryHubForTest and standbyForTest stand in for the hub lease and
-	// the standby's record, which need PostgreSQL.
+	// the standby's record, which need PostgreSQL; followsForTest makes this
+	// server send account operations to its hub, as a standby does.
 	primaryHubForTest  *bool
 	standbyForTest     string
+	followsForTest     bool
 	linkHub            *linkpkg.Hub
 	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service

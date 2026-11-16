@@ -524,9 +524,13 @@ export interface AccountIdentity {
   role: AccountRole;
 }
 
+// AccountStatus: a pending account is a registration waiting for an
+// administrator's approval.
+export type AccountStatus = "active" | "disabled" | "pending";
+
 // Account is one person who signs in to the Console.
 export interface Account extends AccountIdentity {
-  status: "active" | "disabled";
+  status: AccountStatus;
   has_password: boolean;
   created_at: string;
   updated_at: string;
@@ -542,6 +546,27 @@ export interface AuthSession {
   admin: boolean;
   account?: AccountIdentity;
   sign_in_methods: string[];
+  // registration_open: a person without an account can ask for one.
+  registration_open?: boolean;
+  // accounts_authority: "primary" when this hub follows a primary hub that
+  // keeps the accounts (every change is made there), "local" otherwise.
+  // Older daemons leave it out.
+  accounts_authority?: "local" | "primary";
+  // pending_registrations: registrations waiting for approval
+  // (administrators only).
+  pending_registrations?: number;
+}
+
+// LoginState is what the first sign-in step learns about a login name.
+export type LoginState = "registered" | "pending" | "unregistered";
+
+// IdentifyResult answers POST /api/v1/auth/identify.
+export interface IdentifyResult {
+  login: string;
+  state: LoginState;
+  // setup_required: no account exists anywhere yet.
+  setup_required: boolean;
+  registration_open: boolean;
 }
 
 // PairedDevice is a machine paired with this hub, as /api/v1/devices lists
