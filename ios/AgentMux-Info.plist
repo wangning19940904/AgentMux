@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- agentmux://hub?url=…&fp=… from the Console's QR code. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.agentmux.mobile.hub</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>agentmux</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
