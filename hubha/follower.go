@@ -33,7 +33,12 @@ type Follower struct {
 	// SaveIdentity stores the primary's certificate so this machine presents
 	// the same one after it takes over. Nil skips it.
 	SaveIdentity func(Identity) error
-	Log          *slog.Logger
+	// BeforeSnapshot runs before a snapshot replaces this hub's data with
+	// the primary's, so the hub can keep what is its own first (its
+	// accounts, handed to the primary). An error stops the snapshot and is
+	// retried. Nil skips it.
+	BeforeSnapshot func(ctx context.Context) error
+	Log            *slog.Logger
 
 	mu     sync.Mutex
 	status FollowerStatus
@@ -143,6 +148,11 @@ func (f *Follower) step(ctx context.Context, identitySaved *bool) error {
 }
 
 func (f *Follower) snapshot(ctx context.Context, client *http.Client) error {
+	if f.BeforeSnapshot != nil {
+		if err := f.BeforeSnapshot(ctx); err != nil {
+			return fmt.Errorf("before loading a snapshot: %w", err)
+		}
+	}
 	var snapshot store.HubSnapshot
 	if err := getJSON(ctx, client, snapshotPath, &snapshot); err != nil {
 		return fmt.Errorf("fetch a snapshot: %w", err)

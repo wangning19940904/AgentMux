@@ -24,10 +24,13 @@ const (
 )
 
 // Account lifecycle states. A disabled account keeps what it owns but cannot
-// sign in, and its sessions end.
+// sign in, and its sessions end. A pending account is a registration that an
+// administrator has not approved yet: it cannot sign in either, and approving
+// it makes it active.
 const (
 	AccountStatusActive   = "active"
 	AccountStatusDisabled = "disabled"
+	AccountStatusPending  = "pending"
 )
 
 // Sign-in methods recorded on a session.

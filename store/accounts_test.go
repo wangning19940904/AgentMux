@@ -297,3 +297,156 @@ func newAccountStore(t *testing.T) *Store {
 	t.Cleanup(func() { _ = st.Close() })
 	return st
 }
+
+func TestPendingRegistrationsAndLoginStates(t *testing.T) {
+	st := newAccountStore(t)
+	ctx := context.Background()
+	state := func(login string) string {
+		t.Helper()
+		value, err := st.AccountLoginState(ctx, login)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	// The first account is never pending, whatever is asked.
+	root, err := st.CreateFirstAdmin(ctx, NewAccount{Login: "root", Password: "root-password-1", Pending: true})
+	if err != nil || root.Status != core.AccountStatusActive {
+		t.Fatalf("first admin = %+v, %v", root, err)
+	}
+	alice, err := st.CreateAccount(ctx, NewAccount{Login: "alice", Password: "alice-password-1", Pending: true})
+	if err != nil || alice.Status != core.AccountStatusPending {
+		t.Fatalf("registration = %+v, %v", alice, err)
+	}
+	if state("ROOT") != LoginRegistered || state("alice") != LoginPending || state("bob") != LoginUnregistered {
+		t.Fatalf("states = %s %s %s", state("root"), state("alice"), state("bob"))
+	}
+	if account, _ := st.VerifyAccountPassword(ctx, "alice", "alice-password-1"); account != nil {
+		t.Fatal("a pending account signed in")
+	}
+	if account, _ := st.CheckAccountPassword(ctx, "alice", "alice-password-1"); account == nil || account.Status != core.AccountStatusPending {
+		t.Fatalf("check pending = %+v", account)
+	}
+	if account, _ := st.CheckAccountPassword(ctx, "alice", "wrong-password-1"); account != nil {
+		t.Fatal("a wrong password was accepted")
+	}
+	if err := st.RejectPendingAccount(ctx, root.ID); !errors.Is(err, ErrAccountNotPending) {
+		t.Fatalf("reject active = %v", err)
+	}
+	if err := st.RejectPendingAccount(ctx, "acct_missing"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("reject missing = %v", err)
+	}
+	if err := st.RejectPendingAccount(ctx, alice.ID); err != nil {
+		t.Fatal(err)
+	}
+	if state("alice") != LoginUnregistered {
+		t.Fatal("a rejected registration kept its name")
+	}
+}
+
+func TestAccountHandoverKeepsWhatTheReceiverHolds(t *testing.T) {
+	from, to := newAccountStore(t), newAccountStore(t)
+	ctx := context.Background()
+	shared, err := to.CreateFirstAdmin(ctx, NewAccount{Login: "root", Password: "root-password-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := from.CreateFirstAdmin(ctx, NewAccount{Login: "ning", Password: "ning-password-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := from.CreateAccount(ctx, NewAccount{Login: "root", Password: "other-password-1"}); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := from.CreateAccount(ctx, NewAccount{Login: "gone", Password: "gone-password-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := core.AccountStatusDisabled
+	if _, err := from.UpdateAccount(ctx, disabled.ID, AccountUpdate{Status: &status}); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := from.ExportAccountsForHandover(ctx)
+	if err != nil || len(accounts) != 3 || accounts[0].PasswordHash == "" {
+		t.Fatalf("export = %+v, %v", accounts, err)
+	}
+	// The receiver's own account, handed back to it, stays as it is.
+	mine, _ := to.ExportAccountsForHandover(ctx)
+	mine[0].Role = core.AccountRoleMember
+	accounts = append(accounts, mine[0])
+	result, err := to.ImportHandoverAccounts(ctx, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(result.Added, ",") != "ning,gone" || result.Known != 1 || strings.Join(result.Conflicts, ",") != "root" {
+		t.Fatalf("result = %+v", result)
+	}
+	if root, _ := to.GetAccount(ctx, shared.ID); !root.IsAdmin() {
+		t.Fatal("a handover changed an account the receiver holds")
+	}
+	if ning, _ := to.VerifyAccountPassword(ctx, "ning", "ning-password-1"); ning == nil || !ning.IsAdmin() {
+		t.Fatalf("ning = %+v", ning)
+	}
+	if gone, _ := to.GetAccountByLogin(ctx, "gone"); gone == nil || gone.Active() {
+		t.Fatalf("a disabled account came back active: %+v", gone)
+	}
+	// Handing the same accounts over again adds nothing.
+	again, err := to.ImportHandoverAccounts(ctx, accounts)
+	if err != nil || len(again.Added) != 0 || again.Known != 3 {
+		t.Fatalf("again = %+v, %v", again, err)
+	}
+}
+
+// Registration, rejection and handover on PostgreSQL, and what a standby
+// says when it is asked to write accounts itself.
+func TestAccountRegistrationAndHandoverOnPostgres(t *testing.T) {
+	st := openPostgresIntegrationStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateFirstAdmin(ctx, NewAccount{Login: "root", Password: "root-password-1"}); err != nil {
+		t.Fatal(err)
+	}
+	alice, err := st.CreateAccount(ctx, NewAccount{Login: "alice", Password: "alice-password-1", Pending: true})
+	if err != nil || alice.Status != core.AccountStatusPending {
+		t.Fatalf("registration = %+v, %v", alice, err)
+	}
+	if state, err := st.AccountLoginState(ctx, "alice"); err != nil || state != LoginPending {
+		t.Fatalf("state = %q, %v", state, err)
+	}
+	if err := st.RejectPendingAccount(ctx, alice.ID); err != nil {
+		t.Fatal(err)
+	}
+	signIn := time.Now().UTC().Truncate(time.Second)
+	result, err := st.ImportHandoverAccounts(ctx, []HandoverAccount{
+		{ID: "acct_from_standby", Login: "ning", Role: core.AccountRoleAdmin, Status: core.AccountStatusActive,
+			PasswordHash: mustHash(t, "ning-password-1"), CreatedAt: signIn, UpdatedAt: signIn, LastSignInAt: &signIn},
+		{ID: "acct_other_root", Login: "root", Role: core.AccountRoleAdmin, Status: core.AccountStatusActive},
+	})
+	if err != nil || strings.Join(result.Added, ",") != "ning" || strings.Join(result.Conflicts, ",") != "root" {
+		t.Fatalf("import = %+v, %v", result, err)
+	}
+	if ning, _ := st.VerifyAccountPassword(ctx, "ning", "ning-password-1"); ning == nil || ning.LastSignInAt == nil {
+		t.Fatalf("ning = %+v", ning)
+	}
+
+	// A standby's hub tables are fenced: an account write fails with the
+	// read-only error the server turns into "ask the primary".
+	if err := st.SetHubRole(ctx, HubRoleStandby, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.SetHubRole(context.Background(), HubRoleNone, 1) })
+	_, err = st.CreateAccount(ctx, NewAccount{Login: "late", Password: "late-password-1", Pending: true})
+	if err == nil || !strings.Contains(err.Error(), "25006") {
+		t.Fatalf("standby write = %v", err)
+	}
+	if state, err := st.AccountLoginState(ctx, "ning"); err != nil || state != LoginRegistered {
+		t.Fatalf("a standby still reads its copy: %q, %v", state, err)
+	}
+}
+
+func mustHash(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := HashPassword(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash
+}

@@ -1,9 +1,9 @@
-import { Copy, KeyRound, Laptop, LogOut, Plus, RefreshCw, Trash2, UserRound, UserPlus } from "lucide-react";
+import { Check, Copy, KeyRound, Laptop, LogOut, Plus, RefreshCw, Trash2, UserRound, UserPlus, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, type Account, type AccountRole, type AuthSession, type DevicePairingCode, type PairedDevice } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
-import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged } from "../signIn";
+import { accountFormError, accountLabel, MIN_PASSWORD_LENGTH, notifyAuthChanged, signInErrorKey } from "../signIn";
 import { confirmAction } from "../components/ConfirmDialog";
 
 // Accounts are the people who sign in to this AgentMux. Everyone signed in
@@ -24,6 +24,7 @@ export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () =>
   if (!state) return null;
   return (
     <>
+      {state.admin && state.accounts_authority === "primary" && <AuthorityNote />}
       {state.account && <SignedInCard session={state} />}
       {state.admin && (state.accounts_enabled || state.setup_available) && (
         <AccountsAdmin session={state} onChanged={() => {
@@ -33,6 +34,17 @@ export function AccountsPanel({ onAccountsChanged }: { onAccountsChanged?: () =>
       )}
       {(state.admin || state.account) && <Devices session={state} />}
     </>
+  );
+}
+
+// AuthorityNote tells an administrator on a standby hub that accounts are
+// the primary's: every change made here is made there.
+function AuthorityNote() {
+  const { t } = useI18n();
+  return (
+    <section className="surface">
+      <div className="surface-body"><p className="muted" role="note">{t("accounts.authorityPrimary")}</p></div>
+    </section>
   );
 }
 
@@ -155,6 +167,25 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
   const [issued, setIssued] = useState<{ label: string; value: string } | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ login: "", display_name: "", role: "member" as AccountRole, password: "", confirm: "" });
+  // registered: during first-run setup, the login name already has an
+  // account elsewhere in the hub group, so setup signs in with it.
+  const [registered, setRegistered] = useState("");
+
+  // checkRegistered looks the setup login up, so a person who already has
+  // an account on another hub signs in with it instead of making a second.
+  async function checkRegistered() {
+    const login = form.login.trim().toLowerCase();
+    if (!setup || !login || accountFormError({ login, password: "" }, { passwordRequired: false })) {
+      setRegistered("");
+      return;
+    }
+    try {
+      const result = await api.identify(login);
+      setRegistered(result.state === "registered" ? result.login : "");
+    } catch {
+      setRegistered("");
+    }
+  }
 
   async function run(action: () => Promise<unknown>): Promise<boolean> {
     if (busy) return false;
@@ -166,7 +197,8 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
       onChanged();
       return true;
     } catch (error) {
-      setNotice(errorText(error));
+      const key = signInErrorKey(error);
+      setNotice(key === "auth.failed" || key === "auth.wrongCredentials" ? errorText(error) : t(key));
       return false;
     } finally {
       setBusy(false);
@@ -175,8 +207,9 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const signingIn = setup && registered !== "" && registered === form.login.trim().toLowerCase();
     const problem = accountFormError(
-      { login: form.login, password: form.password, confirm: setup ? form.confirm : undefined },
+      { login: form.login, password: form.password, confirm: setup && !signingIn ? form.confirm : undefined },
       { passwordRequired: setup },
     );
     if (problem) {
@@ -187,7 +220,8 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
     const saved = await run(async () => {
       if (setup) {
         await api.setupFirstAdmin({ login, display_name: form.display_name.trim(), password: form.password });
-        // The browser is now signed in as that administrator.
+        // The browser is now signed in as that administrator, or as the
+        // account the person already had.
         notifyAuthChanged();
         return;
       }
@@ -200,17 +234,27 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
     if (saved) setForm({ login: "", display_name: "", role: "member", password: "", confirm: "" });
   }
 
+  const signingInExisting = setup && registered !== "" && registered === form.login.trim().toLowerCase();
   const form_ = (
     <form className="surface-body" style={{ display: "grid", gap: 12, maxWidth: 420 }} onSubmit={(event) => void submit(event)}>
       <label style={fieldStyle}>
         <span>{t("accounts.login")}</span>
-        <input autoCapitalize="none" spellCheck={false} autoComplete="off" value={form.login}
-          onChange={(event) => setForm({ ...form, login: event.target.value })} />
+        <input autoCapitalize="none" spellCheck={false} autoComplete={setup ? "username" : "off"} value={form.login}
+          onBlur={() => void checkRegistered()}
+          onChange={(event) => {
+            setForm({ ...form, login: event.target.value });
+            if (registered) setRegistered("");
+          }} />
       </label>
-      <label style={fieldStyle}>
-        <span>{t("accounts.displayName")}</span>
-        <input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} />
-      </label>
+      {signingInExisting && (
+        <p className="muted" role="status">{t("accounts.setupCheckRegistered", { login: registered })}</p>
+      )}
+      {!signingInExisting && (
+        <label style={fieldStyle}>
+          <span>{t("accounts.displayName")}</span>
+          <input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} />
+        </label>
+      )}
       {!setup && (
         <label style={fieldStyle}>
           <span>{t("accounts.role")}</span>
@@ -222,10 +266,10 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
       )}
       <label style={fieldStyle}>
         <span>{t(setup ? "auth.password" : "accounts.passwordOptional")}</span>
-        <input type="password" autoComplete="new-password" value={form.password}
+        <input type="password" autoComplete={signingInExisting ? "current-password" : "new-password"} value={form.password}
           onChange={(event) => setForm({ ...form, password: event.target.value })} />
       </label>
-      {setup && (
+      {setup && !signingInExisting && (
         <label style={fieldStyle}>
           <span>{t("auth.confirmPassword")}</span>
           <input type="password" autoComplete="new-password" value={form.confirm}
@@ -234,7 +278,7 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
       )}
       <div className="control-row">
         <button className="primary-action" type="submit" disabled={busy || !form.login.trim()}>
-          <UserPlus size={15} /> {t(setup ? "accounts.setupConfirm" : "accounts.create")}
+          <UserPlus size={15} /> {t(signingInExisting ? "auth.signIn" : setup ? "accounts.setupConfirm" : "accounts.create")}
         </button>
         {!setup && (
           <button className="ghost-action" type="button" onClick={() => setCreating(false)}>{t("common.cancel")}</button>
@@ -258,7 +302,9 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
     );
   }
 
-  const items = accounts.data ?? [];
+  const all = accounts.data ?? [];
+  const items = all.filter((account) => account.status !== "pending");
+  const pending = all.filter((account) => account.status === "pending");
   const self = session.account?.id;
   return (
     <section className="surface">
@@ -279,6 +325,41 @@ function AccountsAdmin({ session, onChanged }: { session: AuthSession; onChanged
       {notice && <div className="surface-body error">{notice}</div>}
       {issued && <OneTimeSecret label={issued.label} value={issued.value} onClose={() => setIssued(null)} />}
       {creating && form_}
+      {pending.length > 0 && (
+        <div className="surface-body" aria-label={t("accounts.pendingTitle")}>
+          <h3>{t("accounts.pendingTitle")}</h3>
+          <p className="muted">{t("accounts.pendingSubtitle")}</p>
+          {pending.map((account) => (
+            <article className="agent-registry-row" key={account.id}>
+              <div className="agent-list-main">
+                <span className="provider-icon"><UserPlus size={15} /></span>
+                <span>
+                  <strong>{accountLabel(account)}</strong>
+                  <small>
+                    {account.login} · {t("accounts.requested")} {new Date(account.created_at).toLocaleString()}
+                  </small>
+                </span>
+              </div>
+              <div className="agent-list-meta">
+                <span className="status-badge warning"><span className="status-dot" />{t("accounts.pending")}</span>
+              </div>
+              <div className="table-actions">
+                <button className="primary-action" disabled={busy} onClick={() => void run(() => api.saveAccount({
+                  id: account.id, status: "active",
+                }))}>
+                  <Check size={14} /> {t("accounts.approve")}
+                </button>
+                <button className="ghost-action" disabled={busy} onClick={() => void (async () => {
+                  const confirmed = await confirmAction(t("accounts.rejectConfirm", { login: account.login }), { danger: true });
+                  if (confirmed) await run(() => api.rejectRegistration(account.id));
+                })()}>
+                  <X size={14} /> {t("accounts.reject")}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
       {accounts.loading && items.length === 0 ? (
         <div className="empty-state">{t("common.loading")}</div>
       ) : (

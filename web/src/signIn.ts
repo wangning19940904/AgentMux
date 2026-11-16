@@ -1,4 +1,4 @@
-import type { AccountIdentity, AuthSession } from "./api";
+import type { AccountIdentity, AuthSession, IdentifyResult } from "./api";
 
 // Sign-in and identity helpers. Accounts exist only once an administrator
 // creates the first one; until then the Console opens exactly as before. The
@@ -98,10 +98,54 @@ export function accountFormError(
   return "";
 }
 
-// signInErrorKey turns a failed sign-in into an i18n key.
+function errorStatus(error: unknown): number {
+  return typeof error === "object" && error && "status" in error ? Number((error as { status: unknown }).status) : 0;
+}
+
+// accountErrorCode reads the machine-readable code an account endpoint sends
+// with an error ("pending", "registered", "authority_unreachable", …).
+export function accountErrorCode(error: unknown): string {
+  if (typeof error !== "object" || !error || !("body" in error)) return "";
+  const body = (error as { body: unknown }).body;
+  if (typeof body !== "object" || !body || !("code" in body)) return "";
+  const code = (body as { code: unknown }).code;
+  return typeof code === "string" ? code : "";
+}
+
+// signInErrorKey turns a failed sign-in, registration or setup into an
+// i18n key.
 export function signInErrorKey(error: unknown): string {
-  const status = typeof error === "object" && error && "status" in error ? Number((error as { status: unknown }).status) : 0;
+  const status = errorStatus(error);
+  const code = accountErrorCode(error);
+  if (code === "pending") return "auth.pendingApproval";
+  if (code === "registered") return "auth.loginTaken";
+  if (code === "accounts_exist") return "auth.accountsExist";
+  if (code === "setup_required") return "auth.registrationClosed";
+  if (code === "authority_unreachable") return "auth.authorityUnreachable";
   if (status === 401) return "auth.wrongCredentials";
   if (status === 429) return "auth.tooManyAttempts";
   return "auth.failed";
+}
+
+// The sign-in screen asks for the login name first, then goes on to the
+// step that fits it, as Persona's sign-in does.
+//
+//   identify  → the login name
+//   password  → a registered name signs in
+//   register  → an unknown name asks for an account
+//   pending   → a registration is waiting for an administrator
+//   closed    → no account exists yet; only the administrator can start
+export type SignInStep = "identify" | "password" | "register" | "pending" | "closed";
+
+export function nextSignInStep(result: Pick<IdentifyResult, "state" | "registration_open">): SignInStep {
+  if (result.state === "registered") return "password";
+  if (result.state === "pending") return "pending";
+  return result.registration_open ? "register" : "closed";
+}
+
+// identifyUnsupported: a daemon from before identify answers 404 or 405, and
+// the screen then asks for the password straight away, as it used to.
+export function identifyUnsupported(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status === 404 || status === 405;
 }

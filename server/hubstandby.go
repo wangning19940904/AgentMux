@@ -67,7 +67,8 @@ func (s *Server) setupHubStandby(uplink http.Handler) http.Handler {
 		return uplink
 	}
 	ha := &hubStandby{tracker: hubha.NewTracker()}
-	ha.follower = &hubha.Follower{Sink: s.st, Uplink: s.node.uplink, SaveIdentity: s.saveHubIdentity, Log: s.log}
+	ha.follower = &hubha.Follower{Sink: s.st, Uplink: s.node.uplink, SaveIdentity: s.saveHubIdentity,
+		BeforeSnapshot: s.handOverAccounts, Log: s.log}
 	ha.controller = &hubha.Controller{
 		Store: s.st, Secret: secret, Follower: ha.follower, Log: s.log,
 		OnFence:   s.linkHub.Close,
@@ -116,6 +117,9 @@ func (s *Server) startHubStandby(ctx context.Context) error {
 	if err := s.hubHA.controller.Start(ctx); err != nil {
 		return fmt.Errorf("standby hub: %w", err)
 	}
+	// Accounts this hub kept for its primary go over once it can reach the
+	// authority, or are taken here if this hub became the primary first.
+	go s.runAccountHandover(ctx)
 	if state, err := s.st.HubReplication(ctx); err == nil && state.Role == store.HubRoleStandby {
 		s.ensureHubPeerLink()
 	}

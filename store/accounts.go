@@ -68,6 +68,9 @@ var (
 	ErrLastAdmin = errors.New("at least one active administrator must remain")
 	// ErrAccountNotFound is returned by updates to an unknown account.
 	ErrAccountNotFound = errors.New("account not found")
+	// ErrAccountNotPending is returned when a registration that is no longer
+	// waiting is rejected.
+	ErrAccountNotPending = errors.New("that account is not waiting for approval")
 )
 
 // NewAccount is what creating an account needs. Password may be empty for an
@@ -77,6 +80,9 @@ type NewAccount struct {
 	DisplayName string
 	Role        string
 	Password    string
+	// Pending creates a registration that waits for an administrator's
+	// approval instead of an active account.
+	Pending bool
 }
 
 // AccountUpdate changes the fields that are set.
@@ -123,9 +129,13 @@ func (s *Store) createAccount(ctx context.Context, input NewAccount, first bool)
 		passwordHash = hash
 	}
 	now := time.Now().UTC()
+	status := core.AccountStatusActive
+	if input.Pending && !first {
+		status = core.AccountStatusPending
+	}
 	account := &core.Account{
 		ID: newRecordID("acct"), Login: login, DisplayName: strings.TrimSpace(input.DisplayName),
-		Role: core.NormalizeAccountRole(input.Role), Status: core.AccountStatusActive,
+		Role: core.NormalizeAccountRole(input.Role), Status: status,
 		HasPassword: passwordHash != "", CreatedAt: now, UpdatedAt: now,
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
@@ -311,9 +321,21 @@ func (s *Store) SetAccountPassword(ctx context.Context, id, password, keepSessio
 }
 
 // VerifyAccountPassword checks a login and password. It returns (nil, nil)
-// for an unknown login, a disabled account, an account without a password
-// and a wrong password alike, and takes about as long in each case.
+// for an unknown login, a disabled or pending account, an account without a
+// password and a wrong password alike, and takes about as long in each case.
 func (s *Store) VerifyAccountPassword(ctx context.Context, login, password string) (*core.Account, error) {
+	account, err := s.CheckAccountPassword(ctx, login, password)
+	if err != nil || !account.Active() {
+		return nil, err
+	}
+	return account, nil
+}
+
+// CheckAccountPassword returns the account a login and password prove,
+// whatever its status, so sign-in can tell a person whose registration still
+// waits for approval. It returns (nil, nil) for an unknown login, an account
+// without a password and a wrong password alike.
+func (s *Store) CheckAccountPassword(ctx context.Context, login, password string) (*core.Account, error) {
 	account, hash, err := scanAccount(s.db.QueryRowContext(ctx,
 		`SELECT `+accountColumns+` FROM accounts WHERE login=?`, core.NormalizeLogin(login)))
 	if err == sql.ErrNoRows || (err == nil && hash == "") {
@@ -323,10 +345,57 @@ func (s *Store) VerifyAccountPassword(ctx context.Context, login, password strin
 	if err != nil {
 		return nil, err
 	}
-	if !VerifyPassword(hash, password) || !account.Active() {
+	if !VerifyPassword(hash, password) {
 		return nil, nil
 	}
 	return &account, nil
+}
+
+// Login states AccountLoginState reports.
+const (
+	LoginUnregistered = "unregistered"
+	LoginRegistered   = "registered"
+	LoginPending      = "pending"
+)
+
+// AccountLoginState says whether a login name belongs to an account, so the
+// Console can ask for a password or offer to register. A disabled account
+// reads as registered: it is not free, and sign-in says no as for a wrong
+// password.
+func (s *Store) AccountLoginState(ctx context.Context, login string) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM accounts WHERE login=?`, core.NormalizeLogin(login)).Scan(&status)
+	switch {
+	case err == sql.ErrNoRows:
+		return LoginUnregistered, nil
+	case err != nil:
+		return "", err
+	case status == core.AccountStatusPending:
+		return LoginPending, nil
+	default:
+		return LoginRegistered, nil
+	}
+}
+
+// RejectPendingAccount deletes a registration that waits for approval. An
+// account that was ever active is disabled instead, never deleted, so what it
+// owns keeps an owner.
+func (s *Store) RejectPendingAccount(ctx context.Context, id string) error {
+	result, err := s.writer.ExecContext(ctx, `DELETE FROM accounts WHERE id=? AND status=?`, id, core.AccountStatusPending)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err == nil && count == 0 {
+		account, err := s.GetAccount(ctx, id)
+		if err != nil {
+			return err
+		}
+		if account == nil {
+			return ErrAccountNotFound
+		}
+		return ErrAccountNotPending
+	}
+	return nil
 }
 
 // AccountSession is one signed-in browser.

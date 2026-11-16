@@ -112,6 +112,7 @@ import type {
   AccountIdentity,
   AccountRole,
   AuthSession,
+  IdentifyResult,
   PairedDevice,
   TerminalSessionView,
   ToolsResponse,
@@ -390,11 +391,17 @@ export const api = {
   // Accounts and sign-in always concern this Console's own origin, never the
   // selected remote machine.
   authSession: () => getChecked<AuthSession>("/api/v1/auth/session", { local: true }),
+  identify: (login: string) =>
+    postChecked<IdentifyResult>("/api/v1/auth/identify", { login }, { local: true }),
+  register: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: AccountIdentity; status: "pending" }>("/api/v1/auth/register", payload, { local: true }),
   signIn: (login: string, password: string) =>
     postChecked<{ account: AccountIdentity }>("/api/v1/auth/sign-in", { login, password }, { local: true }),
   signOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/sign-out", {}, { local: true }),
   setupFirstAdmin: (payload: { login: string; display_name?: string; password: string }) =>
-    postChecked<{ account: Account }>("/api/v1/auth/setup", payload, { local: true }),
+    // existing: accounts already existed at the authority (another hub of
+    // the group) and this login and password signed in to one of them.
+    postChecked<{ account: Account; existing?: boolean }>("/api/v1/auth/setup", payload, { local: true }),
   changeOwnPassword: (currentPassword: string, newPassword: string) =>
     postChecked<{ ok: boolean }>("/api/v1/auth/password", { current_password: currentPassword, new_password: newPassword }, { local: true }),
   accounts: () => getChecked<Account[]>("/api/v1/accounts", { local: true }),
@@ -402,6 +409,10 @@ export const api = {
     postChecked<{ account: Account; password?: string }>("/api/v1/accounts", payload, { local: true }),
   resetAccountPassword: (id: string, password?: string) =>
     postChecked<{ ok: boolean; password?: string }>("/api/v1/accounts/password", { id, password }, { local: true }),
+  // rejectRegistration turns a pending registration down; approving one is
+  // saveAccount with status "active".
+  rejectRegistration: (id: string) =>
+    postChecked<{ ok: boolean }>("/api/v1/accounts/reject", { id }, { local: true }),
   pairedDevices: () => getChecked<{ devices: PairedDevice[] }>("/api/v1/devices", { local: true }).then((result) => result.devices ?? []),
   removePairedDevice: (id: string) => delChecked(`/api/v1/devices?id=${encodeURIComponent(id)}`),
   // assignDeviceOwner hands a device to an account; an empty accountID
