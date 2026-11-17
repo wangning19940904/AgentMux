@@ -97,15 +97,15 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "guard", "security", "permission", "permissions", "policy", "approval", "access control", "risk control",
   ],
   machines: [
-    "远程机器", "机器", "主机", "服务器", "电脑", "远端", "SSH 主机",
-    "yuanchengjiqi", "yuan cheng ji qi", "ycjq", "jiqi", "ji qi", "jq",
-    "machine", "machines", "host", "server", "computer", "remote", "remote host", "ssh",
+    "设备", "远程机器", "机器", "主机", "服务器", "电脑", "远端", "SSH 主机", "手机", "配对设备", "连接手机",
+    "shebei", "she bei", "sb", "shouji", "shou ji", "yuanchengjiqi", "yuan cheng ji qi", "ycjq", "jiqi", "ji qi", "jq",
+    "device", "devices", "phone", "phone app", "paired devices", "pairing", "machine", "machines", "host", "server", "computer", "remote", "remote host", "ssh",
   ],
   accounts: [
-    "账号", "账户", "用户", "成员", "管理员", "密码", "登录", "我的设备", "配对设备",
+    "账号", "账户", "用户", "成员", "管理员", "密码", "登录", "我的设备",
     "zhanghao", "zhang hao", "zhh", "yonghu", "yong hu", "yh", "mima", "mi ma", "mm",
     "account", "accounts", "user", "users", "member", "members", "admin", "administrator",
-    "password", "sign in", "login", "my devices", "paired devices", "pairing",
+    "password", "sign in", "login", "my devices",
   ],
   settings: [
     "设置", "偏好设置", "配置", "系统设置", "菜单栏", "开机启动", "保持唤醒",

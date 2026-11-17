@@ -19,7 +19,13 @@ vi.mock("../api", () => ({
     importRemoteHost: vi.fn(),
     createDevicePairingCode: vi.fn(),
     addPassiveDevice: vi.fn(),
+    authSession: vi.fn(),
+    pairedDevices: vi.fn(),
+    accounts: vi.fn(),
+    assignDeviceOwner: vi.fn(),
+    hubClientLink: vi.fn(),
   },
+  APIError: class extends Error {},
   activeRemoteID: vi.fn(),
   setActiveMachineScope: vi.fn(),
   notifyRemoteHostsChanged: vi.fn(),
@@ -102,7 +108,7 @@ describe("SSH proxy imports", () => {
     });
     Object.setPrototypeOf(untrusted, RemoteConnectionError.prototype);
     vi.mocked(api.importRemoteHost).mockRejectedValueOnce(untrusted);
-    await click(button(container, "添加 SSH 机器"));
+    await click(button(container, "连接远程服务器"));
     const row = container.querySelector<HTMLElement>(".remote-discovered-card")!;
     expect(row.textContent).toContain("使用 SSH 代理");
     expect(button(row, "导入").disabled).toBe(false);
@@ -302,7 +308,7 @@ describe("machines that connect to the hub themselves", () => {
       code: "ABCD2345", expires_at: "2026-11-12T12:30:00Z", hub_url: "https://10.0.0.2:8766",
       join_token: "amxj_x", command: "amux join amxj_x", warning: "Use a trusted network.",
     });
-    await click(button(container, "连接一台机器"));
+    await click(button(container, "配对一台机器"));
     await click(button(container, "生成连接命令"));
     expect(api.createDevicePairingCode).toHaveBeenCalledWith("");
     const card = container.querySelector<HTMLElement>(".remote-pairing")!;
@@ -317,6 +323,43 @@ describe("machines that connect to the hub themselves", () => {
   });
 });
 
+describe("device owners", () => {
+  it("lets an administrator hand a paired machine to an account", async () => {
+    const linked: RemoteHost = { id: "dev_mini", name: "mini", host: "", port: 0, user: "", remote_addr: "", kind: "link", trusted: true };
+    vi.mocked(api.remoteHosts).mockResolvedValue([...hosts, linked]);
+    vi.mocked(api.authSession).mockResolvedValue({ admin: true, accounts_enabled: true } as Awaited<ReturnType<typeof api.authSession>>);
+    vi.mocked(api.pairedDevices).mockResolvedValue([{ id: "dev_mini", name: "mini", created_at: "", online: true }]);
+    vi.mocked(api.accounts).mockResolvedValue([
+      { id: "acc_1", login: "ning", display_name: "Ning", role: "member", status: "active" },
+    ] as Awaited<ReturnType<typeof api.accounts>>);
+    vi.mocked(api.assignDeviceOwner).mockResolvedValue({ ok: true });
+    await act(async () => { root.render(<I18nProvider language="zh"><RemoteHostsPanel key="owners" /></I18nProvider>); });
+
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="mini 的所有者"]')!;
+    expect(select.value).toBe("");
+    // SSH machines are not paired devices and have no owner.
+    expect(container.querySelectorAll("select.remote-host-owner")).toHaveLength(1);
+    await act(async () => {
+      select.value = "acc_1";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(api.assignDeviceOwner).toHaveBeenCalledWith("dev_mini", "acc_1");
+  });
+});
+
+describe("connecting a phone", () => {
+  it("opens the phone app's link from the Devices page", async () => {
+    vi.mocked(api.hubClientLink).mockResolvedValue({
+      link: "agentmux://hub?url=https%3A%2F%2F10.0.0.2%3A8766", hub_url: "https://10.0.0.2:8766", reach: "public",
+    } as Awaited<ReturnType<typeof api.hubClientLink>>);
+    await click(button(container, "连接手机"));
+    expect(container.querySelector(".phone-app-link.inline")?.textContent).toContain("https://10.0.0.2:8766");
+    expect(container.querySelector(".phone-app-link.inline")).not.toBeNull();
+    await click(button(container.querySelector<HTMLElement>(".phone-app-link.inline")!, "关闭"));
+    expect(container.querySelector(".phone-app-link.inline")).toBeNull();
+  });
+});
+
 describe("machines this hub dials", () => {
   beforeEach(async () => {
     await act(async () => { root.render(<I18nProvider language="en"><RemoteHostsPanel key="passive" /></I18nProvider>); });
@@ -327,7 +370,7 @@ describe("machines this hub dials", () => {
       device: { id: "dev_p", name: "build server" }, replaced: false, online: true,
       passive: { addrs: ["192.0.2.5:8767"], fingerprint: "ab".repeat(32), state: "connected" },
     });
-    await click(button(container, "Connect a machine"));
+    await click(button(container, "Pair a machine"));
     const card = container.querySelector<HTMLElement>(".remote-pairing")!;
     const add = button(card, "Add and dial");
     // Only an invite can be added.

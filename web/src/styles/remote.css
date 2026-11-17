@@ -389,6 +389,10 @@
   max-width: 290px;
 }
 
+.remote-host-owner {
+  max-width: 100%;
+}
+
 .host-key-confirmation {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
