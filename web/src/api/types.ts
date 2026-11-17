@@ -555,6 +555,22 @@ export interface AuthSession {
   // pending_registrations: registrations waiting for approval
   // (administrators only).
   pending_registrations?: number;
+  // device: this machine's own sign-in, reported to the machine itself (its
+  // desktop app) only. Older daemons leave it out.
+  device?: DeviceAccount;
+}
+
+// DeviceAccount is the one account a machine is signed in to. It lives at
+// the account authority, so it is the same account on every machine.
+export interface DeviceAccount {
+  signed_in: boolean;
+  account?: AccountIdentity;
+  // authority: "local" (this machine keeps the accounts), "primary" (a
+  // standby hub; its primary keeps them) or "hub" (a node; its hub keeps
+  // them).
+  authority: "local" | "primary" | "hub";
+  // setup_allowed: the first administrator may be created from here.
+  setup_allowed: boolean;
 }
 
 // LoginState is what the first sign-in step learns about a login name.

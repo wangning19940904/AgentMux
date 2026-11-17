@@ -392,6 +392,10 @@ func (s *Server) handleRemoteProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			request.Out.Header.Set("X-AgentMux-SSH-Host", host.Name)
+			if !strings.HasPrefix(path, "observability/") {
+				// Only this machine's desktop acts as a device account.
+				request.Out.Header.Del(desktopHeader)
+			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			if s.log != nil {

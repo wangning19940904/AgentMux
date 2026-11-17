@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/wangning19940904/AgentMux/config"
@@ -185,7 +186,8 @@ func TestAStandbyChangesAccountsOnThePrimary(t *testing.T) {
 	if client == nil {
 		t.Fatal("the node has no uplink")
 	}
-	request, _ := http.NewRequest(http.MethodPost, "http://hub"+accountsUplinkPath, nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://hub"+accountsUplinkPath,
+		strings.NewReader(`{"op":"save","account_id":"`+alice.ID+`","role":"admin"}`))
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)

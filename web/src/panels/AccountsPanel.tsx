@@ -55,11 +55,15 @@ function SignedInCard({ session }: { session: AuthSession }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
+  // device: the desktop app shows its machine's account; signing out signs
+  // the machine out, and the app goes back to sign-in.
+  const device = session.device?.signed_in && session.device.account?.id === account.id;
 
   async function signOut() {
+    if (device && !(await confirmAction(t("auth.deviceSignOutConfirm", { name: accountLabel(account) }), { danger: true }))) return;
     setBusy(true);
     try {
-      await api.signOut();
+      await (device ? api.deviceSignOut() : api.signOut());
       notifyAuthChanged();
     } catch (error) {
       setNotice(errorText(error));
@@ -94,9 +98,10 @@ function SignedInCard({ session }: { session: AuthSession }) {
         <div className="agent-list-main">
           <span className="provider-icon"><UserRound size={15} /></span>
           <span>
-            <strong>{t("auth.signedInAs", { name: accountLabel(account) })}</strong>
+            <strong>{t(device ? "auth.deviceSignedInAs" : "auth.signedInAs", { name: accountLabel(account) })}</strong>
             <small>
               {account.login} · {t(account.role === "admin" ? "auth.roleAdmin" : "auth.roleMember")}
+              {device ? ` · ${t("auth.deviceSharedHint")}` : ""}
             </small>
           </span>
         </div>

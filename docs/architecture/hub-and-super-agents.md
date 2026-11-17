@@ -528,6 +528,23 @@ one hub is the authority and the others hold a copy. The code is in
   created where AgentMux runs. First-run setup with a login and password that
   already belong to an account at the authority signs in with it.
 
+**One account per machine.** Each machine is signed in to one account, which
+its own AgentMux keeps in `device-account.json` in its hub state directory
+([server/device_account.go](../../server/device_account.go)); the account
+itself lives at the authority, so it is the same account, with the same data,
+on every machine. A hub and its standby use the authority above; a node, which
+holds no copy of the hub's accounts, asks the hub it is linked to (sign-in,
+registration and the session check are the only account calls the hub accepts
+from a machine that is not its standby). The session is checked at the
+authority every 15 seconds, so signing out elsewhere, disabling the account or
+resetting its password signs the machine out; while the authority cannot be
+reached the machine keeps its last account. The desktop app shows only sign-in
+(or, where no account exists yet, the first administrator's setup) until its
+machine is signed in, and then acts as that account: its native proxy marks
+every request, and the daemon answers a bridge-token request with that mark as
+the device account. The bridge token alone (the CLI, integrations) stays the
+administrator, and requests forwarded to other machines lose the mark.
+
 ---
 
 ## 5. Super Agents as the only agent

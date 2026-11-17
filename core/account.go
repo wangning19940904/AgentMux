@@ -36,6 +36,9 @@ const (
 // Sign-in methods recorded on a session.
 const (
 	SignInMethodPassword = "password"
+	// SignInMethodDevice is a machine's own sign-in: one account per device,
+	// kept by that machine's AgentMux rather than a browser.
+	SignInMethodDevice = "device"
 )
 
 // Account is one person. The password hash never leaves the store.

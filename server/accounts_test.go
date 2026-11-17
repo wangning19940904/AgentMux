@@ -68,6 +68,12 @@ func (h accountHost) bearer(t *testing.T, token string) *browser {
 
 func (b *browser) do(method, path string, body any, out any) int {
 	b.t.Helper()
+	return b.doWith(method, path, body, out, nil)
+}
+
+// doWith is do with extra request headers.
+func (b *browser) doWith(method, path string, body any, out any, headers map[string]string) int {
+	b.t.Helper()
 	var payload io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -85,6 +91,9 @@ func (b *browser) do(method, path string, body any, out any) int {
 	}
 	if b.bearer != "" {
 		request.Header.Set("Authorization", "Bearer "+b.bearer)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	response, err := b.client.Do(request)
 	if err != nil {

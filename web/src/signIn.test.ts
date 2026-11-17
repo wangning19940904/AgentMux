@@ -100,9 +100,14 @@ describe("sign-in gate", () => {
     expect(resolveSignInGate(null, { nativeDesktopAdmin: false, failed: false })).toBe("checking");
   });
 
-  it("never blocks the desktop shell, and leaves check failures to the shell", () => {
-    const required = session({ accounts_enabled: true, sign_in_required: true });
-    expect(resolveSignInGate(required, { nativeDesktopAdmin: true, failed: false })).toBe("open");
+  it("keeps the desktop app on sign-in until its machine is signed in", () => {
+    const device = (signedIn: boolean) => ({ signed_in: signedIn, authority: "local" as const, setup_allowed: true });
+    // No account anywhere yet: still sign-in (or the first administrator's setup).
+    expect(resolveSignInGate(session({ device: device(false) }), { nativeDesktopAdmin: true, failed: false })).toBe("device-sign-in");
+    expect(resolveSignInGate(session({ accounts_enabled: true, device: device(true) }), { nativeDesktopAdmin: true, failed: false })).toBe("open");
+    // A daemon from before device sign-in reports no device: open as before.
+    expect(resolveSignInGate(session({ accounts_enabled: true, sign_in_required: true }), { nativeDesktopAdmin: true, failed: false })).toBe("open");
+    expect(resolveSignInGate(null, { nativeDesktopAdmin: true, failed: false })).toBe("checking");
     expect(resolveSignInGate(null, { nativeDesktopAdmin: false, failed: true })).toBe("open");
   });
 
@@ -134,6 +139,10 @@ describe("identify-first sign-in", () => {
     expect(nextSignInStep({ state: "pending", registration_open: true })).toBe("pending");
     expect(nextSignInStep({ state: "unregistered", registration_open: true })).toBe("register");
     expect(nextSignInStep({ state: "unregistered", registration_open: false })).toBe("closed");
+    // With no account anywhere, a hub's own app creates the first administrator.
+    const empty = { state: "unregistered" as const, registration_open: false, setup_required: true };
+    expect(nextSignInStep(empty, { setupAllowed: true })).toBe("setup");
+    expect(nextSignInStep(empty, { setupAllowed: false })).toBe("closed");
   });
 
   it("reads the account error codes", () => {

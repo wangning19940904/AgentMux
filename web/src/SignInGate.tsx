@@ -1,12 +1,13 @@
 import { ArrowLeft, ArrowRight, LogIn, UserPlus, UserRound } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type AuthSession } from "./api";
+import { api, type AuthSession, type DeviceAccount } from "./api";
 import { useI18n } from "./i18n";
 import {
   accountErrorCode,
   accountFormError,
   AUTH_CHANGED_EVENT,
   identifyUnsupported,
+  loadSessionWithRetry,
   MIN_PASSWORD_LENGTH,
   nextSignInStep,
   notifyAuthChanged,
@@ -18,6 +19,8 @@ import {
 // SignInGate shows the sign-in screen instead of the Console when accounts
 // exist and this browser has no credential of its own. With no accounts it
 // renders the Console straight away, exactly as before accounts existed.
+// The desktop app is its machine's own app: it shows sign-in, or the first
+// administrator's setup, until the machine is signed in to an account.
 export function SignInGate({ children }: { children: ReactNode }) {
   const nativeDesktopAdmin = window.location.protocol === "wails:";
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -30,7 +33,12 @@ export function SignInGate({ children }: { children: ReactNode }) {
 
   const check = useCallback(async () => {
     try {
-      const next = await api.authSession();
+      // The desktop app renders before its in-process API is up (and on first
+      // launch, before PostgreSQL is installed): wait for it rather than
+      // opening the Console unchecked.
+      const next = nativeDesktopAdmin
+        ? await loadSessionWithRetry(() => api.authSession(), { attempts: 1200 })
+        : await api.authSession();
       const accountID = next.account?.id ?? "";
       if (lastAccountID.current !== null && lastAccountID.current !== accountID) {
         setGeneration((value) => value + 1);
@@ -41,10 +49,9 @@ export function SignInGate({ children }: { children: ReactNode }) {
     } catch {
       setFailed(true);
     }
-  }, []);
+  }, [nativeDesktopAdmin]);
 
   useEffect(() => {
-    if (nativeDesktopAdmin) return;
     void check();
     // Look again when the tab returns, so a session that ended elsewhere
     // (signed out, disabled, password reset) shows the sign-in screen.
@@ -57,11 +64,12 @@ export function SignInGate({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener(AUTH_CHANGED_EVENT, check);
     };
-  }, [check, nativeDesktopAdmin]);
+  }, [check]);
 
   const state = resolveSignInGate(session, { nativeDesktopAdmin, failed });
   if (state === "checking") return <SignInFrame><p className="muted">…</p></SignInFrame>;
   if (state === "signed-out") return <SignInScreen />;
+  if (state === "device-sign-in") return <SignInScreen device={session!.device} />;
   return <Fragment key={generation}>{children}</Fragment>;
 }
 
@@ -80,11 +88,30 @@ function SignInFrame({ children }: { children: ReactNode }) {
 
 const fieldStyle = { display: "grid", gap: 4 } as const;
 
+// The calls a sign-in screen makes: a browser's own, or the machine's when
+// the desktop app signs its machine in.
+type AccountForm = { login: string; display_name?: string; password: string };
+const browserCalls = {
+  identify: (login: string) => api.identify(login),
+  register: (payload: AccountForm) => api.register(payload),
+  signIn: (login: string, password: string) => api.signIn(login, password),
+  setup: (payload: AccountForm) => api.setupFirstAdmin(payload),
+};
+const deviceCalls = {
+  identify: (login: string) => api.deviceIdentify(login),
+  register: (payload: AccountForm) => api.deviceRegister(payload),
+  signIn: (login: string, password: string) => api.deviceSignIn(login, password),
+  setup: (payload: AccountForm) => api.deviceSetup(payload),
+};
+
 // SignInScreen asks for the login name first and checks whether it is
 // registered: a registered name goes on to its password, an unknown one to
-// registration, which an administrator approves.
-export function SignInScreen() {
+// registration, which an administrator approves. With device set it signs
+// this machine in, and where no account exists yet and the machine may, it
+// creates the first administrator instead.
+export function SignInScreen({ device }: { device?: DeviceAccount } = {}) {
   const { t } = useI18n();
+  const calls = device ? deviceCalls : browserCalls;
   const [step, setStep] = useState<SignInStep>("identify");
   const [login, setLogin] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -133,9 +160,9 @@ export function SignInScreen() {
     setNotice("");
     void run(async () => {
       try {
-        const result = await api.identify(name);
+        const result = await calls.identify(name);
         setLogin(result.login || name);
-        goTo(nextSignInStep(result));
+        goTo(nextSignInStep(result, { setupAllowed: device?.setup_allowed }));
       } catch (failure) {
         if (!identifyUnsupported(failure)) throw failure;
         setLogin(name);
@@ -148,12 +175,14 @@ export function SignInScreen() {
     event.preventDefault();
     if (!password) return;
     void run(async () => {
-      await api.signIn(login, password);
+      await calls.signIn(login, password);
       setPassword("");
       notifyAuthChanged();
     });
   }
 
+  // register asks for an account, or in the setup step creates the first
+  // administrator and signs in with it.
   function register(event: FormEvent) {
     event.preventDefault();
     const problem = accountFormError({ login, password, confirm }, { passwordRequired: true });
@@ -161,8 +190,16 @@ export function SignInScreen() {
       setError(t(problem, { min: String(MIN_PASSWORD_LENGTH) }));
       return;
     }
+    const payload = { login, display_name: displayName.trim() || undefined, password };
     void run(async () => {
-      await api.register({ login, display_name: displayName.trim() || undefined, password });
+      if (step === "setup") {
+        await calls.setup(payload);
+        setPassword("");
+        setConfirm("");
+        notifyAuthChanged();
+        return;
+      }
+      await calls.register(payload);
       goTo("pending");
     });
   }
@@ -178,8 +215,8 @@ export function SignInScreen() {
   const alert = error ? <p className="error" role="alert">{error}</p> : null;
   const status = notice ? <p className="muted" role="status">{notice}</p> : null;
 
-  let title = t("auth.title");
-  let subtitle = t("auth.identifySubtitle");
+  let title = t(device ? "auth.deviceTitle" : "auth.title");
+  let subtitle = t(device ? "auth.deviceSubtitle" : "auth.identifySubtitle");
   let body: ReactNode;
   let onSubmit: ((event: FormEvent) => void) | undefined;
   switch (step) {
@@ -223,8 +260,9 @@ export function SignInScreen() {
       );
       break;
     case "register":
-      title = t("auth.registerTitle");
-      subtitle = t("auth.registerSubtitle", { login });
+    case "setup":
+      title = t(step === "setup" ? "accounts.setupTitle" : "auth.registerTitle");
+      subtitle = t(step === "setup" ? "auth.setupSubtitle" : "auth.registerSubtitle", { login });
       onSubmit = register;
       body = (
         <>
@@ -244,9 +282,9 @@ export function SignInScreen() {
             <input type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} />
           </label>
           <button className="primary-action" type="submit" disabled={busy || !password || !confirm}>
-            <UserPlus size={15} /> {t(busy ? "auth.registering" : "auth.register")}
+            <UserPlus size={15} /> {t(busy ? "auth.registering" : step === "setup" ? "accounts.setupConfirm" : "auth.register")}
           </button>
-          <p className="muted">{t("auth.registerHint")}</p>
+          <p className="muted">{t(step === "setup" ? "auth.setupHint" : "auth.registerHint")}</p>
         </>
       );
       break;
@@ -267,7 +305,7 @@ export function SignInScreen() {
       break;
     case "closed":
       title = t("auth.closedTitle");
-      subtitle = t("auth.closedSubtitle");
+      subtitle = t(device?.authority === "hub" ? "auth.closedHubSubtitle" : "auth.closedSubtitle");
       body = (
         <button className="ghost-action" type="button" onClick={() => goTo("identify")}>
           <ArrowLeft size={14} /> {t("auth.otherLogin")}

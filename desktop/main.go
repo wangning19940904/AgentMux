@@ -125,10 +125,11 @@ func newApp() *App {
 func (a *App) assetServerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/api" || strings.HasPrefix(request.URL.Path, "/api/") {
+			// This middleware is the native trust boundary. Every request
+			// carries the desktop marker, so the daemon answers as the
+			// account this machine is signed in to (server/device_account.go).
+			request.Header.Set("X-AgentMux-Desktop", "1")
 			if isDesktopObservationSessionPath(request.URL.Path) {
-				// This middleware is the native trust boundary. Preserve the
-				// desktop marker even if a WebView strips custom fetch headers.
-				request.Header.Set("X-AgentMux-Desktop", "1")
 				if strings.TrimSpace(request.Header.Get("Origin")) == "" {
 					request.Header.Set("Origin", "wails://wails.localhost")
 				}

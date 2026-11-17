@@ -397,8 +397,25 @@ button {
   border-radius: 6px;
 }
 
+/* The avatar opens the account page. */
+button.account {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.account:hover,
+button.account[aria-current="page"] {
+  background: var(--bg-elevated);
+}
+
+button.account:focus-visible {
+  outline: 2px solid var(--accent, currentColor);
+  outline-offset: 1px;
+}
+
 .account::before {
-  content: "A";
+  content: attr(data-initial);
   display: grid;
   place-items: center;
   width: 18px;
