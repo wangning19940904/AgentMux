@@ -1,6 +1,6 @@
 import { Network, Pencil, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { activeMachineScope, api, setActiveMachineScope, type AgentInstance, type SuperAgent } from "../../api";
+import { api, setMachineOverride, type AgentInstance, type SuperAgent } from "../../api";
 import { useI18n } from "../../i18n";
 import { useCachedResource } from "../../useCachedResource";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
@@ -15,7 +15,6 @@ import {
   cliCatalogForAgent,
   copyAgent,
   isAgentPart,
-  isOnAnotherMachine,
   isReadOnlyAgent,
   readOnlyNoticeKey,
   resourceTargetID,
@@ -36,11 +35,9 @@ import { confirmAction } from "../../components/ConfirmDialog";
 // An agent's workers, triggers and Tickets open over the Agents page.
 const AgentWork = lazy(() => import("../SuperAgentsPanel").then((module) => ({ default: module.SuperAgentsPanel })));
 
-// An agent's form and its activity talk to one machine throughout, so an agent
-// on another machine is opened with that machine selected. Selecting a machine
-// rebuilds the page; this carries what to open across that.
+// An agent's form and its activity talk to the machine the agent lives on,
+// while the list keeps showing every machine.
 type AgentView = "edit" | "work";
-let openAfterMachineChange: { machine: string; agentID: string; view: AgentView } | null = null;
 
 export type AgentsPanelProps = {
   createRequested?: boolean;
@@ -59,16 +56,21 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   // Workers and triggers may be unavailable on an older daemon; each agent's
   // own settings still show.
   const unified = useCachedResource("unifiedAgents", () => api.superAgents().then((items) => Array.isArray(items) ? items : []).catch(() => [] as SuperAgent[]));
+  // The machines a new agent can be made on.
+  const machines = useCachedResource("fleetTargets", () => api.fleetTargets());
   const refreshing = [agents, runtimes, channels, triggers, mcpServers, skills, tools, unified]
     .some((resource) => resource.loading);
   const refreshAll = () => Promise.all([
     agents.reload(), runtimes.reload(), channels.reload(),
     triggers.reload(), mcpServers.reload(), skills.reload(), tools.reload(), unified.reload(),
   ]);
-  const [workAgentID, setWorkAgentID] = useState("");
+  // The open chat, as the agent's machine and id (targetKey).
+  const [workAgentKey, setWorkAgentKey] = useState("");
   // Every agent created here is a Super Agent; the Agent form only edits
   // agents made before that.
   const [superDraft, setSuperDraft] = useState<SuperAgent | null>(null);
+  // The machine the open agent form talks to; a new agent is made there.
+  const [superMachine, setSuperMachine] = useState("local");
   const [superNotice, setSuperNotice] = useState("");
   const [superBusy, setSuperBusy] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null);
@@ -140,13 +142,18 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
     const query = searchQuery.trim().toLocaleLowerCase();
     return query ? routedAgents.filter((agent) => [agent.name, agent.id].some((value) => value.toLocaleLowerCase().includes(query))) : routedAgents;
   }, [routedAgents, searchQuery]);
-  const workAgent = unifiedItems.find((agent) => agent.id === workAgentID && !isOnAnotherMachine(agent));
+  const workAgent = unifiedItems.find((agent) => targetKey(agent.target_id, agent.id) === workAgentKey);
   // The chat shows the agent with the portrait its row has.
   const workAgentRow = workAgent
     ? items.find((item) => resourceTargetID(item) === resourceTargetID(workAgent) && unifiedAgentFor(item, unifiedItems)?.id === workAgent.id)
     : undefined;
 
+  // Requests of an open agent go to its machine; the override ends with it.
+  useEffect(() => () => setMachineOverride(null), []);
+
   const startNew = useCallback(() => {
+    setMachineOverride("local");
+    setSuperMachine("local");
     setSuperDraft(newSuperAgent());
     setSuperNotice("");
     setNotice("");
@@ -154,40 +161,49 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   }, []);
 
   function openAgent(agent: SuperAgent, view: AgentView) {
-    if (isOnAnotherMachine(agent)) {
-      openAfterMachineChange = { machine: agent.target_id ?? "", agentID: agent.id, view };
-      setActiveMachineScope(agent.target_id ?? "");
-      return;
-    }
+    const machine = resourceTargetID(agent);
+    // Set before the view mounts, so its first requests already go there.
+    setMachineOverride(machine);
     if (view === "work") {
-      setWorkAgentID(agent.id);
+      setWorkAgentKey(targetKey(agent.target_id, agent.id));
       return;
     }
-    setSuperDraft(structuredClone(agent));
+    setSuperMachine(machine);
+    const draft = structuredClone(agent);
+    delete draft.target_id;
+    delete draft.target_name;
+    setSuperDraft(draft);
     setSuperNotice("");
     setNotice("");
     setNoticeIsError(false);
   }
 
-  useEffect(() => {
-    const pending = openAfterMachineChange;
-    if (!pending) return;
-    if (pending.machine !== activeMachineScope()) {
-      openAfterMachineChange = null;
-      return;
-    }
-    if (!unified.hasValue || unified.loading) return;
-    openAfterMachineChange = null;
-    const agent = unifiedItems.find((item) => item.id === pending.agentID);
-    if (agent) openAgent(agent, pending.view);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unified.hasValue, unified.loading, unifiedItems]);
+  function closeWork() {
+    setMachineOverride(null);
+    setWorkAgentKey("");
+  }
+
+  function closeSuperDraft() {
+    setMachineOverride(null);
+    setSuperDraft(null);
+    setSuperNotice("");
+  }
+
+  // A new agent is made on the machine picked in its form. The form starts
+  // again for that machine: its frameworks and routers are that machine's.
+  function changeNewAgentMachine(machine: string) {
+    setMachineOverride(machine);
+    setSuperMachine(machine);
+    setSuperDraft((current) => ({ ...newSuperAgent(), name: current?.name ?? "", description: current?.description ?? "" }));
+    setSuperNotice("");
+  }
 
   async function saveSuperAgent(prepare: () => Promise<SuperAgent>) {
     setSuperBusy(true);
     setSuperNotice("");
     try {
       await api.saveSuperAgent(await prepare());
+      setMachineOverride(null);
       await Promise.all([agents.reload(), unified.reload(), channels.reload()]);
       setSuperDraft(null);
       setNotice(t("agents.saved"));
@@ -443,28 +459,32 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
 
       {superDraft && (
         <SuperAgentDrawer
+          key={superMachine}
           draft={superDraft}
           notice={superNotice}
           busy={superBusy}
+          machine={superMachine}
+          machines={machines.data ?? []}
+          onMachineChange={superDraft.id ? undefined : changeNewAgentMachine}
           onChange={setSuperDraft}
-          onClose={() => { setSuperDraft(null); setSuperNotice(""); }}
+          onClose={closeSuperDraft}
           onSave={(prepare) => void saveSuperAgent(prepare)}
         />
       )}
 
       {workAgent && (
         <div className="provider-drawer-layer">
-          <button className="provider-drawer-backdrop" type="button" aria-label={t("common.close")} onClick={() => setWorkAgentID("")} />
+          <button className="provider-drawer-backdrop" type="button" aria-label={t("common.close")} onClick={closeWork} />
           <aside className="provider-drawer agent-drawer agent-work-drawer" role="dialog" aria-modal="true" aria-labelledby="agent-work-title">
             <div className="provider-builder-head">
               <div className="provider-form-title">
                 <div>
                   <h2 id="agent-work-title">{workAgent.name}</h2>
-                  <span className="muted">{t("agents.work.title")}</span>
+                  <span className="muted">{t("agents.work.title")} <TargetBadge target_id={resourceTargetID(workAgent)} target_name={workAgent.target_name} /></span>
                 </div>
               </div>
               <div className="table-actions">
-                <button className="ghost-action icon-action" onClick={() => setWorkAgentID("")} title={t("common.close")}><X size={15} /></button>
+                <button className="ghost-action icon-action" onClick={closeWork} title={t("common.close")}><X size={15} /></button>
               </div>
             </div>
             <div className="surface-body provider-builder-body agent-drawer-body">
@@ -582,7 +602,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   </span>
                 </div>
                 <div className="agent-list-meta">
-                  <TargetBadge target_id={item.target_id} target_name={item.target_name} />
+                  <TargetBadge target_id={resourceTargetID(item)} target_name={item.target_name} />
                   <span className="pill agent-route-model-pill">{routeModelLabel}
                     {item.default_reasoning_effort?.trim() && ` · ${item.default_reasoning_effort.trim()}`}
                     {item.default_service_tier?.trim() && ` · ${["priority", "fast"].includes(item.default_service_tier.trim())
@@ -651,7 +671,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   </span>
                 </div>
                 <div className="agent-list-meta">
-                  <TargetBadge target_id={agent.target_id} target_name={agent.target_name} />
+                  <TargetBadge target_id={resourceTargetID(agent)} target_name={agent.target_name} />
                   {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
                   <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
                 </div>

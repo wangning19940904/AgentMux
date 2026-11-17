@@ -331,14 +331,6 @@
     min-width: 0;
   }
 
-  .workspace-header .remote-target-selector {
-    flex: 1 1 100%;
-    width: 100%;
-    min-width: 0;
-    height: 36px;
-    min-height: 36px;
-  }
-
   .workspace-header .workspace-create-action {
     flex: 1 1 0;
     justify-content: center;
