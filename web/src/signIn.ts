@@ -1,11 +1,13 @@
 import type { AccountIdentity, AuthSession, IdentifyResult } from "./api";
 
-// Sign-in and identity helpers. Accounts exist only once an administrator
-// creates the first one; until then the Console opens exactly as before. The
-// packaged desktop shell is the machine's own administrator surface and never
-// asks.
+// Sign-in and identity helpers. In a browser, accounts exist only once an
+// administrator creates the first one; until then the Console opens exactly
+// as before. The packaged desktop app is its machine's own app: the machine
+// is signed in to one account, and the app shows nothing but sign-in (or the
+// first administrator's setup) until it is.
 
-export type SignInGateState = "checking" | "signed-out" | "open";
+// "device-sign-in" is the desktop app of a machine that is not signed in.
+export type SignInGateState = "checking" | "signed-out" | "device-sign-in" | "open";
 
 // AUTH_CHANGED_EVENT asks the sign-in gate to look again, after a sign-in,
 // sign-out or first-administrator setup.
@@ -22,8 +24,12 @@ export function resolveSignInGate(
   session: AuthSession | null,
   options: { nativeDesktopAdmin: boolean; failed: boolean },
 ): SignInGateState {
-  if (options.nativeDesktopAdmin || options.failed) return "open";
+  if (options.failed) return "open";
   if (!session) return "checking";
+  if (options.nativeDesktopAdmin) {
+    // A daemon from before device sign-in reports no device: open as before.
+    return session.device && !session.device.signed_in ? "device-sign-in" : "open";
+  }
   return session.sign_in_required ? "signed-out" : "open";
 }
 
@@ -135,12 +141,18 @@ export function signInErrorKey(error: unknown): string {
 //   register  → an unknown name asks for an account
 //   pending   → a registration is waiting for an administrator
 //   closed    → no account exists yet; only the administrator can start
-export type SignInStep = "identify" | "password" | "register" | "pending" | "closed";
+//   setup     → no account exists yet, and this machine creates the first
+//               administrator (the desktop app of a hub)
+export type SignInStep = "identify" | "password" | "register" | "pending" | "closed" | "setup";
 
-export function nextSignInStep(result: Pick<IdentifyResult, "state" | "registration_open">): SignInStep {
+export function nextSignInStep(
+  result: Pick<IdentifyResult, "state" | "registration_open"> & { setup_required?: boolean },
+  options: { setupAllowed?: boolean } = {},
+): SignInStep {
   if (result.state === "registered") return "password";
   if (result.state === "pending") return "pending";
-  return result.registration_open ? "register" : "closed";
+  if (result.registration_open) return "register";
+  return result.setup_required && options.setupAllowed ? "setup" : "closed";
 }
 
 // identifyUnsupported: a daemon from before identify answers 404 or 405, and

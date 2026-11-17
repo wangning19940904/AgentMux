@@ -72,6 +72,7 @@ func (s *Server) registerAccountRoutes() {
 	s.mux.HandleFunc("POST /api/v1/accounts", s.handleAccountSave)
 	s.mux.HandleFunc("POST /api/v1/accounts/password", s.handleAccountPasswordReset)
 	s.mux.HandleFunc("POST /api/v1/accounts/reject", s.handleAccountReject)
+	s.registerDeviceAccountRoutes()
 }
 
 // Where accounts are kept, as /api/v1/auth/session reports it.
@@ -105,6 +106,9 @@ type authSessionResponse struct {
 	// PendingRegistrations counts registrations waiting for approval, for
 	// administrators.
 	PendingRegistrations int `json:"pending_registrations,omitempty"`
+	// Device is this machine's own sign-in, for the machine itself (its
+	// desktop app): it shows sign-in until the machine is signed in.
+	Device *deviceAccountView `json:"device,omitempty"`
 }
 
 // callerPrincipal resolves the request's own credential the way withAuth
@@ -146,6 +150,10 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	response.SetupAvailable = s.st != nil && !response.AccountsEnabled && principal != nil && principal.Admin
 	response.SignInRequired = response.AccountsEnabled && (principal == nil || anonymous)
 	response.RegistrationOpen = response.AccountsEnabled
+	if s.st != nil && s.machineController(r) {
+		view := s.deviceAccountView(r.Context())
+		response.Device = &view
+	}
 	if response.Admin {
 		for _, account := range accounts {
 			if account.Status == core.AccountStatusPending {
@@ -450,10 +458,21 @@ func (s *Server) handleOwnPassword(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(consoleSessionCookie); err == nil {
 		keep = cookie.Value
 	}
-	_, err := s.runAccountOp(r.Context(), accountOp{
+	op := accountOp{
 		Op: accountOpOwnPassword, Login: login, AccountID: principal.Account.ID,
-		CurrentPassword: req.CurrentPassword, Password: req.NewPassword, SessionToken: keep,
-	})
+		CurrentPassword: req.CurrentPassword, Password: req.NewPassword,
+	}
+	run := s.runAccountOp
+	if desktopRequest(r) && s.machineController(r) {
+		// The desktop changes the password of the account its machine is
+		// signed in to, at that account's authority, and the machine stays
+		// signed in.
+		if record, _ := s.loadDeviceAccount(); record != nil && record.Account.ID == principal.Account.ID {
+			keep, run = record.Token, s.runDeviceAccountOp
+		}
+	}
+	op.SessionToken = keep
+	_, err := run(r.Context(), op)
 	if err != nil {
 		var opErr *accountOpError
 		if errors.As(err, &opErr) && opErr.Code == accountCodeWrongPassword {

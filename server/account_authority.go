@@ -61,7 +61,23 @@ const (
 	accountOpResetPassword = "reset-password"
 	accountOpReject        = "reject"
 	accountOpImport        = "import"
+	// accountOpCheckSession resolves a session token to its account, for a
+	// machine that holds no copy of the sessions (a node's device sign-in).
+	accountOpCheckSession = "check-session"
 )
+
+// deviceAccountOps are what any machine paired with the hub may ask of it:
+// enough to sign the machine itself in. Everything else needs the standby.
+var deviceAccountOps = map[string]bool{
+	accountOpIdentify: true, accountOpRegister: true, accountOpSignIn: true,
+	accountOpSignOut: true, accountOpCheckSession: true,
+	// Changing one's own password needs the current one.
+	accountOpOwnPassword: true,
+}
+
+// deviceSessionTTL is how long a machine stays signed in. The account's
+// status and password still apply on every check.
+const deviceSessionTTL = 365 * 24 * time.Hour
 
 // Error codes the Console tells apart.
 const (
@@ -71,6 +87,7 @@ const (
 	accountCodeAccountsExist = "accounts_exist"
 	accountCodeWrongPassword = "wrong_credentials"
 	accountCodeNoAuthority   = "authority_unreachable"
+	accountCodeSignedOut     = "signed_out"
 )
 
 // accountOp is one account operation, as a standby sends it to its primary.
@@ -89,6 +106,8 @@ type accountOp struct {
 	UserAgent       string                  `json:"user_agent,omitempty"`
 	RemoteAddr      string                  `json:"remote_addr,omitempty"`
 	Accounts        []store.HandoverAccount `json:"accounts,omitempty"`
+	// Device asks for a machine's long-lived device session.
+	Device bool `json:"device,omitempty"`
 }
 
 // accountOpResult is what an operation produced.
@@ -200,7 +219,7 @@ func (s *Server) runAccountOp(ctx context.Context, op accountOp) (accountOpResul
 	if !follows {
 		return s.applyAccountOp(ctx, op)
 	}
-	if op.Op == accountOpIdentify {
+	if op.Op == accountOpIdentify || op.Op == accountOpCheckSession {
 		// Answered from the copy: it is current, and asking stays possible
 		// while the primary is briefly away.
 		if result, err := s.applyAccountOp(ctx, op); err == nil {
@@ -208,6 +227,56 @@ func (s *Server) runAccountOp(ctx context.Context, op accountOp) (accountOpResul
 		}
 	}
 	return s.forwardAccountOp(ctx, op)
+}
+
+// Where a machine's own (device) sign-in is decided.
+const (
+	deviceAuthorityLocal   = "local"
+	deviceAuthorityPrimary = "primary"
+	deviceAuthorityHub     = "hub"
+)
+
+// deviceAuthority says who keeps the accounts this machine signs in with:
+// itself, the primary it follows as a standby, or the hub it is linked to as
+// a node. A node has no copy of the hub's accounts, so it asks the hub.
+func (s *Server) deviceAuthority(ctx context.Context) (string, error) {
+	if s.nodeOfHubForTest {
+		return deviceAuthorityHub, nil
+	}
+	follows, err := s.followsPrimaryHub(ctx)
+	if err != nil {
+		return "", err
+	}
+	if follows {
+		return deviceAuthorityPrimary, nil
+	}
+	if s.st != nil && s.st.IsPostgres() {
+		if state, err := s.st.HubReplication(ctx); err == nil && state.Role == store.HubRolePrimary {
+			return deviceAuthorityLocal, nil
+		}
+	}
+	if s.node != nil && s.node.uplink() != nil && len(s.hubPeerDeviceID()) == 0 {
+		return deviceAuthorityHub, nil
+	}
+	return deviceAuthorityLocal, nil
+}
+
+// runDeviceAccountOp applies an operation for this machine's own sign-in,
+// at the authority deviceAuthority names.
+func (s *Server) runDeviceAccountOp(ctx context.Context, op accountOp) (accountOpResult, error) {
+	authority, err := s.deviceAuthority(ctx)
+	if err != nil {
+		return accountOpResult{}, err
+	}
+	op.Device = true
+	if authority == deviceAuthorityHub {
+		if !deviceAccountOps[op.Op] {
+			return accountOpResult{}, accountFailure(http.StatusForbidden, "",
+				"accounts are kept by the hub this machine is linked to; do this there")
+		}
+		return s.forwardAccountOp(ctx, op)
+	}
+	return s.runAccountOp(ctx, op)
 }
 
 // forwardAccountOp sends an operation to the primary and waits until this
@@ -387,6 +456,17 @@ func (s *Server) applyAccountOp(ctx context.Context, op accountOp) (accountOpRes
 		}
 		return accountOpResult{Account: account, Token: token}, nil
 
+	case accountOpCheckSession:
+		account, err := st.AuthenticateAccountSession(ctx, op.SessionToken)
+		if err != nil {
+			return accountOpResult{}, err
+		}
+		if account == nil {
+			return accountOpResult{}, accountFailure(http.StatusUnauthorized, accountCodeSignedOut,
+				"this session has ended: signed out, expired, or the account was disabled")
+		}
+		return accountOpResult{Account: account}, nil
+
 	case accountOpSignOut:
 		if op.SessionToken != "" {
 			if err := st.DeleteAccountSession(ctx, op.SessionToken); err != nil {
@@ -475,7 +555,11 @@ func (s *Server) applyAccountOp(ctx context.Context, op accountOp) (accountOpRes
 }
 
 func (s *Server) newAccountSession(ctx context.Context, account *core.Account, op accountOp) (string, error) {
-	token, _, err := s.st.CreateAccountSession(ctx, account.ID, core.SignInMethodPassword, op.UserAgent, op.RemoteAddr, accountSessionTTL)
+	method, ttl := core.SignInMethodPassword, accountSessionTTL
+	if op.Device {
+		method, ttl = core.SignInMethodDevice, deviceSessionTTL
+	}
+	token, _, err := s.st.CreateAccountSession(ctx, account.ID, method, op.UserAgent, op.RemoteAddr, ttl)
 	return token, err
 }
 
@@ -487,10 +571,6 @@ func (s *Server) handleUplinkAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if !s.isStandbyDevice(ctx, source.ID) {
-		writeErr(w, http.StatusForbidden, "only this hub's standby may change accounts through it")
-		return
-	}
 	if follows, err := s.followsPrimaryHub(ctx); err != nil || follows {
 		writeAccountOpError(w, accountFailure(http.StatusServiceUnavailable, accountCodeNoAuthority,
 			"this hub is not the primary hub now"))
@@ -499,6 +579,12 @@ func (s *Server) handleUplinkAccounts(w http.ResponseWriter, r *http.Request) {
 	var op accountOp
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAccountOpBytes)).Decode(&op); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid account operation")
+		return
+	}
+	// The standby may do anything here; any other paired machine may only
+	// sign itself in, so one account works on every machine.
+	if !s.isStandbyDevice(ctx, source.ID) && !(deviceAccountOps[op.Op] && op.Device) {
+		writeErr(w, http.StatusForbidden, "only this hub's standby may change accounts through it")
 		return
 	}
 	result, err := s.applyAccountOp(ctx, op)

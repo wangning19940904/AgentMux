@@ -153,3 +153,45 @@ it("asks for the password straight away when the daemon cannot identify names", 
     await act(async () => { root.unmount(); });
   }
 });
+
+it("keeps the desktop app on sign-in until its machine has an account, creating the first one when none exists", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("location", { ...window.location, protocol: "wails:" });
+  const desktopSession: AuthSession = {
+    ...signedOut, accounts_enabled: false, sign_in_required: false, authenticated: true, admin: true,
+    device: { signed_in: false, authority: "primary", setup_allowed: true },
+  };
+  const authSession = vi.spyOn(api, "authSession").mockResolvedValue(desktopSession);
+  const identify = vi.spyOn(api, "deviceIdentify").mockResolvedValue({
+    login: "ning", state: "unregistered", setup_required: true, registration_open: false,
+  });
+  const browserIdentify = vi.spyOn(api, "identify");
+  const setup = vi.spyOn(api, "deviceSetup").mockResolvedValue({ account: { id: "acct_1", login: "ning", role: "admin" } });
+  const { container, root } = await render(<SignInGate><p>console</p></SignInGate>);
+  try {
+    expect(container.textContent).not.toContain("console");
+    expect(container.textContent).toContain("Sign in on this machine");
+    await act(async () => { setInput(visibleInputs(container)[0], "ning"); });
+    await act(async () => { submit(container); });
+    expect(identify).toHaveBeenCalledWith("ning");
+    expect(browserIdentify).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Create the first administrator");
+
+    const [name, password, confirm] = visibleInputs(container);
+    await act(async () => {
+      setInput(name, "Ning");
+      setInput(password, "ning-password-1");
+      setInput(confirm, "ning-password-1");
+    });
+    authSession.mockResolvedValue({
+      ...desktopSession, accounts_enabled: true,
+      account: { id: "acct_1", login: "ning", display_name: "Ning", role: "admin" },
+      device: { signed_in: true, account: { id: "acct_1", login: "ning", role: "admin" }, authority: "primary", setup_allowed: true },
+    });
+    await act(async () => { submit(container); });
+    expect(setup).toHaveBeenCalledWith({ login: "ning", display_name: "Ning", password: "ning-password-1" });
+    expect(container.textContent).toContain("console");
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});

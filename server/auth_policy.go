@@ -90,6 +90,14 @@ func (s *Server) resolvePrincipal(r *http.Request) *core.Principal {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	if token, ok := bearerToken(header); ok {
 		if s.cfg.Bridge.Token != "" && token == s.cfg.Bridge.Token {
+			// The desktop app acts as the account its machine is signed in
+			// to (device_account.go); the bridge token alone stays the
+			// administrator.
+			if desktopRequest(r) {
+				if account := s.currentDeviceAccount(r.Context()); account != nil {
+					return core.AccountPrincipal(account)
+				}
+			}
 			return core.AdminPrincipal()
 		}
 		return nil

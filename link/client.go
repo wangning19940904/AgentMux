@@ -296,6 +296,12 @@ func LocalAPIHandler(addr, token string) http.Handler {
 				}
 			}
 			request.Out.Header.Set("X-AgentMux-Hub-Link", "1")
+			// The desktop marker makes a machine answer as its own device
+			// account; a forwarded request acts with the token above
+			// instead. Observability keeps it for its native session.
+			if !strings.HasPrefix(request.Out.URL.Path, "/api/v1/observability/") {
+				request.Out.Header.Del("X-AgentMux-Desktop")
+			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			writeLinkError(w, http.StatusBadGateway, "this device's AgentMux API did not answer: "+err.Error())

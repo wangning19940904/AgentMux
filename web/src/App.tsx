@@ -693,9 +693,17 @@ function Shell({
           onOpenMore={() => setMobileNavOpen((open) => !open)}
         />
 
-        <div className="account primary-account" title={identityName}>
+        <button
+          type="button"
+          className="account primary-account"
+          data-initial={(identityName.trim()[0] ?? "A").toUpperCase()}
+          title={identityName}
+          aria-label={t("app.openAccount", { name: identityName })}
+          aria-current={visibleTab === "accounts" ? "page" : undefined}
+          onClick={() => setTab("accounts")}
+        >
           <strong>{identityName}</strong>
-        </div>
+        </button>
 
         {!primaryCollapsed && <SidebarResizeHandle
           label={t("nav.resizePrimary")}

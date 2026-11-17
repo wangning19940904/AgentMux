@@ -399,6 +399,17 @@ export const api = {
     postChecked<{ account: AccountIdentity; status: "pending" }>("/api/v1/auth/register", payload, { local: true }),
   signIn: (login: string, password: string) =>
     postChecked<{ account: AccountIdentity }>("/api/v1/auth/sign-in", { login, password }, { local: true }),
+  // The device calls sign this machine itself in or out: one account per
+  // machine, kept by its AgentMux. Only the machine's own app may make them.
+  deviceIdentify: (login: string) =>
+    postChecked<IdentifyResult>("/api/v1/auth/device/identify", { login }, { local: true }),
+  deviceRegister: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: AccountIdentity; status: "pending" }>("/api/v1/auth/device/register", payload, { local: true }),
+  deviceSignIn: (login: string, password: string) =>
+    postChecked<{ account: AccountIdentity }>("/api/v1/auth/device/sign-in", { login, password }, { local: true }),
+  deviceSetup: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: AccountIdentity; existing?: boolean }>("/api/v1/auth/device/setup", payload, { local: true }),
+  deviceSignOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/device/sign-out", {}, { local: true }),
   signOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/sign-out", {}, { local: true }),
   setupFirstAdmin: (payload: { login: string; display_name?: string; password: string }) =>
     // existing: accounts already existed at the authority (another hub of

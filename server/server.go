@@ -60,10 +60,13 @@ type Server struct {
 	fleet              fleetCache
 	// primaryHubForTest and standbyForTest stand in for the hub lease and
 	// the standby's record, which need PostgreSQL; followsForTest makes this
-	// server send account operations to its hub, as a standby does.
+	// server send account operations to its hub, as a standby does, and
+	// nodeOfHubForTest makes its device sign-in go to its hub, as a node's.
 	primaryHubForTest  *bool
 	standbyForTest     string
 	followsForTest     bool
+	nodeOfHubForTest   bool
+	deviceAccount      deviceAccountState
 	linkHub            *linkpkg.Hub
 	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service
