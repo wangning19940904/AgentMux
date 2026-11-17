@@ -101,6 +101,9 @@ type Options struct {
 	// ChannelHasAgent reports whether a channel has its own Agent to take the
 	// messages a Super Agent does not claim.
 	ChannelHasAgent func(context.Context, string) bool
+	// Reactions marks a Feishu message while the router works on it; nil
+	// marks nothing.
+	Reactions ChatReactor
 	// RuntimeAvailable reports whether an agent framework can run on this machine.
 	RuntimeAvailable func(string) bool
 	// DetectTools finds what workers on this machine can use besides code,
@@ -151,6 +154,10 @@ type Service struct {
 	// supervision condition was first seen holding; see supervision.go.
 	turnStarts map[string]time.Time
 	suspects   map[string]time.Time
+	// reactions are the marks on messages the router is working on, by
+	// reactionKey; see reactions.go.
+	reactor   ChatReactor
+	reactions map[string]reactionMark
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -232,6 +239,7 @@ func New(options Options) *Service {
 		routerAttempts: map[string]int{}, routerFeedback: map[string]string{}, notBefore: map[string]time.Time{}, health: map[string]SourceHealth{},
 		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
 		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
+		reactor: options.Reactions, reactions: map[string]reactionMark{},
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
@@ -719,6 +727,11 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		reasons = append(reasons, decision.Reason)
 	}
 	reply := strings.TrimSpace(decision.Reply)
+	// A message that did not address the bot is marked once the router
+	// chooses to answer it, until the answer is sent.
+	if reply != "" && reactsTo(trigger) {
+		s.react(ctx, triggerReactionKey(trigger), trigger.Reply)
+	}
 	replied := false
 	sendReply := func() {
 		if replied {
@@ -1038,6 +1051,9 @@ func joinAnswer(parts []string) string {
 }
 
 func (s *Service) finishTrigger(ctx context.Context, trigger core.SuperAgentTrigger, disposition, reason, ticketID string) {
+	if reactsTo(trigger) {
+		s.unreact(ctx, triggerReactionKey(trigger))
+	}
 	trigger.Disposition, trigger.Reason, trigger.TicketID = disposition, reason, ticketID
 	trigger.UpdatedAt = s.now().UTC()
 	if err := s.store.UpdateSuperAgentTrigger(ctx, trigger); err != nil && ctx.Err() == nil {

@@ -521,6 +521,11 @@ stay apart.
 - **Feishu messages:** mentions and direct messages are claimed, so the channel's
   own Agent does not also answer. `/` commands stay with the channel. Follow-ups
   in a thread with a Ticket reach the router without another mention.
+  A mention or direct message from an allowed sender gets the channel's ack
+  reaction as soon as it is taken, and loses it once the router has answered
+  (or chosen not to). Any other message is marked only when the router writes a
+  reply, until that reply is sent. The channel's `ack_reaction_enabled` and
+  `ack_reaction_emojis` apply, as for a channel turn.
 - **Feishu documents:** the channel's app needs access to each document, and the
   app must subscribe to `drive.file.edit_v1` (the Console's second scan adds it
   with the document read scopes). Edits within the debounce window
