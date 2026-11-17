@@ -84,7 +84,7 @@ export function FrameworksPanel() {
       : t("remote.localMachine");
   const nodeMissing = Boolean(prereqs && (!prereqs.node || !prereqs.npm));
   // Install settings belong to one machine and are edited on that machine.
-  const settingsEditable = activeMachineScope() === "local";
+  const settingsEditable = !activeRemoteID();
 
   function machineLabel(item: Framework) {
     if (item.target_id === "local") return t("remote.localMachine");

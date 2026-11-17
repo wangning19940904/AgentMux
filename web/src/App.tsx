@@ -34,7 +34,6 @@ import {
   Video,
   Zap,
 } from "lucide-react";
-import { RemoteTargetSelector } from "./RemoteTargetSelector";
 import { KeepAwakeControl } from "./KeepAwakeControl";
 import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
@@ -349,7 +348,6 @@ function Shell({
   // the page shows of them is then out of date and worth reloading.
   const [fleetRecovered, setFleetRecovered] = useState("");
   const [machineScopeVersion, setMachineScopeVersion] = useState(0);
-  const [remoteAddRequest, setRemoteAddRequest] = useState(0);
   const [createAgentRequested, setCreateAgentRequested] = useState(false);
   const handleCreateAgentRequest = useCallback(() => setCreateAgentRequested(false), []);
   const [searchQuery, setSearchQuery] = useState("");
@@ -417,8 +415,14 @@ function Shell({
     if (session && role === "member" && activeMachineScope() !== "local") {
       setActiveMachineScope("local");
       window.location.reload();
+      return;
     }
-  }, [role, session]);
+    // Administrators always see every machine. A machine picked before there
+    // was no picker would otherwise keep the Console on that one machine.
+    if (adminReady && activeMachineScope() !== "all") {
+      setActiveMachineScope("all");
+    }
+  }, [adminReady, role, session]);
 
   useEffect(() => {
     if (identity.state === "ready" && !tabAllowedForRole(tab, role)) setTab(MEMBER_LANDING_TAB);
@@ -887,14 +891,6 @@ function Shell({
             </span>
           </div>
 		    <div className="workspace-header-actions">
-		      {adminReady && visibleTab !== "accounts" && (
-			    <RemoteTargetSelector
-				  onAddMachine={() => {
-                  setRemoteAddRequest((request) => request + 1);
-                  setTab("machines");
-                }}
-			    />
-		      )}
               {visibleTab === "agents" && (
                 <>
                   <button
@@ -964,7 +960,7 @@ function Shell({
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
 				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
                   {visibleTab === "subscriptions" && <EventSubscriptionsPanel />}
-				  {visibleTab === "machines" && <RemoteHostsPanel addRequest={remoteAddRequest} />}
+				  {visibleTab === "machines" && <RemoteHostsPanel />}
                 </>
               )}
             </Suspense>

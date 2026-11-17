@@ -19,7 +19,9 @@ vi.mock("./api", () => ({
     agentInstances: async () => [], agents: async () => ["codex"],
     channels: async () => [], triggers: async () => [],
     mcp: async () => [], skills: async () => [], tools: async () => ({ cli: [] }),
+    fleetTargets: async () => [],
   },
+  setMachineOverride: () => {},
 }));
 vi.mock("./panels/agents/AgentForm", () => ({ AgentForm: () => <div>agent form</div> }));
 

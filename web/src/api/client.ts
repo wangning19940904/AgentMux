@@ -38,8 +38,37 @@ export function resolveMachineScope(stored: string | null | undefined): MachineS
   return stored && stored.trim() ? stored : "all";
 }
 
-export function activeMachineScope(): MachineScope {
+// The Console always shows every machine; there is no machine to pick. A view
+// that belongs to one machine, such as an agent's form or chat, routes its
+// requests there while it is open (setMachineOverride). Members stay on this
+// hub, which is the stored scope "local".
+let machineOverride: string | null = null;
+
+export function baseMachineScope(): MachineScope {
   return resolveMachineScope(localStorage.getItem(ACTIVE_REMOTE_KEY));
+}
+
+export function activeMachineScope(): MachineScope {
+  return machineOverride ?? baseMachineScope();
+}
+
+// setMachineOverride routes this Console's requests to one machine, or back
+// to every machine with null. It does not rebuild the page.
+export function setMachineOverride(targetID: string | null | undefined) {
+  machineOverride = targetID?.trim() || null;
+}
+
+// withBaseMachineScope runs fn as the page sees the fleet, ignoring a view
+// routed to one machine. Routing is decided synchronously when a request
+// starts, so this covers the requests fn starts before its first await.
+export function withBaseMachineScope<T>(fn: () => T): T {
+  const saved = machineOverride;
+  machineOverride = null;
+  try {
+    return fn();
+  } finally {
+    machineOverride = saved;
+  }
 }
 
 export function setActiveMachineScope(scope: MachineScope) {

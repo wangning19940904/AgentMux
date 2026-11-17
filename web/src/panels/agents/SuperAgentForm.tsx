@@ -2,7 +2,7 @@ import { Bot, ChevronRight, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { isDesktopApp } from "../../api/desktop";
-import type { SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../../api";
+import type { MachineTarget, SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
 import { confirmAction } from "../../components/ConfirmDialog";
@@ -27,6 +27,11 @@ export type SuperAgentFormProps = {
   draft: SuperAgent;
   notice: string;
   busy: boolean;
+  // machine is where the agent lives and where this form's requests go. A new
+  // agent's machine is picked with onMachineChange; a saved one's is fixed.
+  machine?: string;
+  machines?: MachineTarget[];
+  onMachineChange?: (machine: string) => void;
   onChange: (next: SuperAgent) => void;
   onClose: () => void;
   // prepare saves the agent's router and returns the Super Agent to save.
@@ -34,6 +39,40 @@ export type SuperAgentFormProps = {
 };
 
 const isLocal = (item: { target_id?: string }) => !item.target_id || item.target_id === "local";
+
+function machineName(target: MachineTarget | undefined, id: string, localLabel: string) {
+  if (id === "local" || target?.kind === "local") return localLabel;
+  return target?.name || id;
+}
+
+// MachineField names the machine an agent lives on, and picks it for a new one.
+function MachineField({ machine, machines, onChange }: { machine: string; machines: MachineTarget[]; onChange?: (machine: string) => void }) {
+  const { t } = useI18n();
+  const local = t("remote.localMachine");
+  const current = machines.find((target) => target.id === machine);
+  if (!onChange) {
+    return (
+      <div className="field"><span>{t("superAgentForm.machine")}</span>
+        <div><span className="target-badge"><Server size={12} aria-hidden="true" /> {machineName(current, machine, local)}</span></div>
+        <small>{t("superAgentForm.machineFixed")}</small>
+      </div>
+    );
+  }
+  const options = machines.filter((target) => target.trusted);
+  return (
+    <label className="field"><span>{t("superAgentForm.machine")}</span>
+      <select value={machine} aria-label={t("superAgentForm.machine")} onChange={(event) => onChange(event.target.value)}>
+        {!options.some((target) => target.id === machine) && <option value={machine}>{machineName(current, machine, local)}</option>}
+        {options.map((target) => (
+          <option key={target.id} value={target.id} disabled={!target.online && target.id !== machine}>
+            {machineName(target, target.id, local)}{!target.online ? ` · ${t("remote.offlineShort")}` : ""}
+          </option>
+        ))}
+      </select>
+      <small>{t("superAgentForm.machineHelp")}</small>
+    </label>
+  );
+}
 
 // routerNameFor is the name a router takes from its agent. The host names an
 // unnamed agent after the framework.
@@ -45,7 +84,7 @@ function modelChoice(router: SuperAgentRouter): ModelChoice {
   return { model: router.model ?? "", reasoning_effort: router.reasoning_effort ?? "", service_tier: router.service_tier ?? "" };
 }
 
-export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSave }: SuperAgentFormProps) {
+export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machines = [], onMachineChange, onChange, onClose, onSave }: SuperAgentFormProps) {
   const { t } = useI18n();
   const hosts = useAsync(() => api.remoteHosts().catch(() => []), []);
   const channels = useAsync(() => api.channels(), []);
@@ -192,6 +231,7 @@ export function SuperAgentDrawer({ draft, notice, busy, onChange, onClose, onSav
 
           <section className="super-agent-section" aria-labelledby="saf-identity">
             <header><h3 id="saf-identity">{t("superAgentForm.section.identity")}</h3></header>
+            <MachineField machine={machine} machines={machines} onChange={onMachineChange} />
             <label className="field"><span>{t("superAgentForm.name")}</span>
               <input value={draft.name} placeholder={t("superAgentForm.namePlaceholder")} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
               <small>{t("superAgentForm.nameHelp")}</small>

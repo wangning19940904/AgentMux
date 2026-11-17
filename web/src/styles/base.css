@@ -130,8 +130,7 @@ button:disabled {
 .native-desktop input,
 .native-desktop select,
 .native-desktop textarea,
-.native-desktop summary,
-.native-desktop .remote-target-selector {
+.native-desktop summary {
   --wails-draggable: no-drag;
 }
 
@@ -930,55 +929,6 @@ body.sidebar-resizing * {
   font-size: 19px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workspace-header .remote-target-selector {
-  flex: 0 1 260px;
-  height: 38px;
-}
-
-.remote-target-selector {
-  display: flex;
-  flex: 0 1 270px;
-  align-items: center;
-  gap: 8px;
-  min-width: 190px;
-  height: 40px;
-  padding: 4px 10px;
-  color: var(--text-soft);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.remote-target-selector.remote {
-  color: var(--accent-strong);
-  background: color-mix(in srgb, var(--accent-soft) 44%, var(--bg));
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-}
-
-.remote-target-selector > label {
-  display: grid;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.remote-target-selector > label > span {
-  display: none;
-}
-
-.remote-target-selector select {
-  width: 100%;
-  min-width: 0;
-  padding: 0 24px 0 0;
-  overflow: hidden;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  font-size: 12px;
-  font-weight: 720;
-  outline: 0;
-  text-overflow: ellipsis;
 }
 
 .target-badge {
