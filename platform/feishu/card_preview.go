@@ -12,7 +12,7 @@ import (
 const cardPreviewQueryLimit = 50
 
 // inboundCardPreviewText uses mention identities to remove only this bot.
-// Agent input and command routing continue to use the original text.
+// It runs on mention keys; inboundMessageText swaps in names afterwards.
 func inboundCardPreviewText(msg *larkim.EventMessage, botOpenID, text string) string {
 	var botIDs []string
 	if botOpenID != "" {
@@ -24,6 +24,10 @@ func inboundCardPreviewText(msg *larkim.EventMessage, botOpenID, text string) st
 		}
 		if mention.Key != nil {
 			text = removeCardPreviewMention(text, *mention.Key)
+			// Received post at-elements may carry the mention key as user_id.
+			if *mention.Key != "" {
+				botIDs = append(botIDs, *mention.Key)
+			}
 		}
 		if mention.Id != nil {
 			for _, id := range []*string{mention.Id.OpenId, mention.Id.UserId, mention.Id.UnionId} {

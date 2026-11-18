@@ -367,10 +367,13 @@ func renderPostText(post larkPostContent, skipMentionIDs ...string) string {
 				if name == "" {
 					name = strings.TrimSpace(element.UserID)
 				}
-				if name != "" {
+				// Received events name the user by mention key (@_user_1) and
+				// may leave user_name empty. Keep the key intact so it can be
+				// resolved from the event's mentions list later.
+				if name != "" && !strings.HasPrefix(name, "@") {
 					line.WriteByte('@')
-					line.WriteString(name)
 				}
+				line.WriteString(name)
 			case "img":
 				line.WriteString("[图片]")
 			case "media":
