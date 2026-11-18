@@ -1568,6 +1568,9 @@ export interface SuperAgent extends TargetMetadata {
   id: string;
   name: string;
   description?: string;
+  // "preset:<id>" for a built-in portrait or an image data: URL. Empty shows
+  // the portrait of the bot the agent answers through.
+  avatar?: string;
   router_runtime?: string;
   router_agent_id: string;
   router_prompt?: string;
@@ -1675,6 +1678,8 @@ export interface SuperAgentTrigger {
   answer?: string;
   actor?: string;
   actor_name?: string;
+  // The sender's portrait URL, when the platform has one.
+  actor_avatar?: string;
   title?: string;
   text: string;
   disposition: string;

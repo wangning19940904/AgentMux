@@ -72,4 +72,15 @@ describe("previewText", () => {
   it("flattens markdown to one line", () => {
     expect(previewText({ type: "answer", at: "", trigger: trigger({ answer: "| Order | OK |\n**done**" }) })).toBe("Order OK done");
   });
+
+  it("keeps each person's portrait for their messages and their direct chat", () => {
+    const [, direct] = buildConversations(activity({
+      triggers: [
+        trigger({ id: "t1", thread_key: "feishu:c1:oc_dm:om_1", actor: "ou_a", actor_name: "Alice", actor_avatar: "https://img.example/a" }),
+        trigger({ id: "t2", thread_key: "feishu:c1:oc_dm:om_2", actor: "ou_a", actor_name: "Alice" }),
+      ],
+    }));
+    expect(direct.participants).toEqual(["Alice"]);
+    expect(direct.avatars).toEqual({ Alice: "https://img.example/a" });
+  });
 });

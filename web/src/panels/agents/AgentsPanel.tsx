@@ -6,6 +6,7 @@ import { useCachedResource } from "../../useCachedResource";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
 import {
   EMPTY_AGENT,
+  agentChannels,
   agentRegistryMetrics,
   agentSourceClass,
   agentSourceDetailKey,
@@ -126,8 +127,8 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   const draftCLICatalog = cliCatalogForAgent(cliCatalog, draftTargetID);
 
   const registryMetrics = useMemo(
-    () => agentRegistryMetrics(items, channelItems, routedAgents),
-    [items, channelItems, routedAgents],
+    () => agentRegistryMetrics(items, channelItems, routedAgents, unifiedItems),
+    [items, channelItems, routedAgents, unifiedItems],
   );
   const visibleItems = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase();
@@ -146,6 +147,10 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
   // The chat shows the agent with the portrait its row has.
   const workAgentRow = workAgent
     ? items.find((item) => resourceTargetID(item) === resourceTargetID(workAgent) && unifiedAgentFor(item, unifiedItems)?.id === workAgent.id)
+    : undefined;
+
+  const workAgentAvatar = workAgent
+    ? <AgentAvatar avatar={workAgent.avatar} channels={agentChannels(workAgent, channelItems, workAgentRow ? boundChannelsForAgent(workAgentRow, channelItems) : [])} />
     : undefined;
 
   // Requests of an open agent go to its machine; the override ends with it.
@@ -478,6 +483,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           <aside className="provider-drawer agent-drawer agent-work-drawer" role="dialog" aria-modal="true" aria-labelledby="agent-work-title">
             <div className="provider-builder-head">
               <div className="provider-form-title">
+                {workAgentAvatar}
                 <div>
                   <h2 id="agent-work-title">{workAgent.name}</h2>
                   <span className="muted">{t("agents.work.title")} <TargetBadge target_id={resourceTargetID(workAgent)} target_name={workAgent.target_name} /></span>
@@ -491,7 +497,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
               <Suspense fallback={<div className="empty-state">{t("common.loading")}</div>}>
                 <AgentWork
                   agentID={workAgent.id}
-                  avatar={workAgentRow ? <AgentAvatar channels={boundChannelsForAgent(workAgentRow, channelItems)} /> : undefined}
+                  avatar={workAgentAvatar}
                   onChanged={() => void Promise.all([unified.reload(), agents.reload(), channels.reload()])}
                 />
               </Suspense>
@@ -549,12 +555,12 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
           {agents.error && <div className="empty-state error">{String(agents.error)}</div>}
           {!agents.loading && !agents.error && visibleItems.length === 0 && visibleRouted.length === 0 && <div className="empty-state">{t("agents.empty")}</div>}
           {visibleItems.map((item) => {
-            const itemChannels = boundChannelsForAgent(item, channelItems);
+            const itemUnified = unifiedAgentFor(item, unifiedItems);
+            const itemChannels = agentChannels(itemUnified, channelItems, boundChannelsForAgent(item, channelItems));
             // Providers and routing belong to the framework, so an agent
             // shows only the model it asks its framework for.
             const routeModelLabel = t("agents.frameworkModel", { model: item.default_model?.trim() || t("agents.defaultModelShort") });
             const itemReadOnly = isReadOnlyAgent(item);
-            const itemUnified = unifiedAgentFor(item, unifiedItems);
             const policy = workPolicy(itemUnified);
             const itemKey = targetKey(item.target_id, item.id);
             const toggleOperation = `toggle:${itemKey}`;
@@ -575,7 +581,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                       onClick={() => openAgent(itemUnified, "work")}
                       onDoubleClick={(event) => event.stopPropagation()}
                     >
-                      <AgentAvatar channels={itemChannels} />
+                      <AgentAvatar avatar={itemUnified.avatar} channels={itemChannels} />
                     </button>
                   ) : <AgentAvatar channels={itemChannels} />}
                   <span>
@@ -649,6 +655,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             const router = allInstances.find((item) => item.id === agent.router_agent_id && resourceTargetID(item) === resourceTargetID(agent));
             const policy = workPolicy(agent);
             const agentKey = targetKey(agent.target_id, agent.id);
+            const routedChannels = agentChannels(agent, channelItems);
             return (
               <article className="agent-registry-row" key={`agent:${agentKey}`} onDoubleClick={() => openAgent(agent, "work")}>
                 <div className="agent-list-main">
@@ -660,7 +667,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                     onClick={() => openAgent(agent, "work")}
                     onDoubleClick={(event) => event.stopPropagation()}
                   >
-                    <AgentAvatar channels={[]} />
+                    <AgentAvatar avatar={agent.avatar} channels={routedChannels} />
                   </button>
                   <span>
                     <span className="agent-list-title-row">
@@ -673,6 +680,11 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 <div className="agent-list-meta">
                   <TargetBadge target_id={resourceTargetID(agent)} target_name={agent.target_name} />
                   {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
+                  <ChannelLogoGroup
+                    channels={routedChannels}
+                    emptyLabel={channelStatusLabel}
+                    label={t("agents.boundChannelsShort")}
+                  />
                   <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
                 </div>
                 <div className="agent-row-actions">

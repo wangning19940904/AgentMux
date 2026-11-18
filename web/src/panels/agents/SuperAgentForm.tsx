@@ -9,7 +9,8 @@ import { confirmAction } from "../../components/ConfirmDialog";
 import { SourceEditor } from "../superAgentSetup";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { SuperAgentPrompts, promptProblems } from "./SuperAgentPrompts";
-import { workDirErrorMessage } from "./agentUtils";
+import { agentChannels, workDirErrorMessage } from "./agentUtils";
+import { AvatarPicker } from "./AvatarPicker";
 import { ModelPicker } from "../superAgentModelPicker";
 import type { ModelChoice } from "../superAgentModelPicker";
 import { isReachableOrigin } from "../superAgentSetupModel";
@@ -199,6 +200,10 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
   const updateSource = (index: number, patch: Partial<SuperAgentSource>) =>
     onChange({ ...draft, sources: draft.sources.map((source, position) => position === index ? { ...source, ...patch } : source) });
   const channelSources = draft.sources.filter(isChannelSource);
+  // The bots the agent answers through, whose portrait it shows by default.
+  // Requests from this form go to the agent's machine, so every channel
+  // listed is one of its own.
+  const avatarChannels = agentChannels({ ...draft, target_id: undefined }, (channels.data ?? []).map(({ target_id: _target, ...channel }) => channel));
 
   const routerCapability = routerDraft ? capability(routerDraft.runtime_id) : undefined;
   // Routers always run in their framework's default mode, Auto where it has
@@ -240,6 +245,7 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
               <input value={draft.description ?? ""} placeholder={t("superAgentForm.descriptionPlaceholder")} onChange={(event) => onChange({ ...draft, description: event.target.value })} />
               <small>{t("superAgentForm.descriptionHelp")}</small>
             </label>
+            <AvatarPicker value={draft.avatar ?? ""} channels={avatarChannels} onChange={(avatar) => onChange({ ...draft, avatar: avatar || undefined })} />
           </section>
 
           <section className="super-agent-section" aria-labelledby="saf-router">

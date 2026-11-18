@@ -50,9 +50,9 @@ func fakeFeishuDirectory(t *testing.T, namesDenied bool) (*FeishuAPI, func() []s
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"code":99991672,"msg":"Access denied. One of the following scopes is required: [contact:user.base:readonly]"}`)
 		case path == "/open-apis/contact/v3/users/batch":
-			var items []map[string]string
+			var items []map[string]any
 			for _, id := range query["user_ids"] {
-				items = append(items, map[string]string{"open_id": id, "name": "Name of " + id})
+				items = append(items, map[string]any{"open_id": id, "name": "Name of " + id, "avatar": map[string]string{"avatar_72": "https://img.example/72/" + id, "avatar_240": "https://img.example/240/" + id}})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"items": items}})
 		default:
@@ -135,7 +135,7 @@ func TestFeishuDirectoryUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(users) != 2 || users[0].OpenID != "ou_a" || users[0].Name != "Name of ou_a" || users[1].OpenID != "ou_d" || users[1].Email != "dan@acme.com" {
+	if len(users) != 2 || users[0].OpenID != "ou_a" || users[0].Name != "Name of ou_a" || users[0].Avatar != "https://img.example/240/ou_a" || users[1].OpenID != "ou_d" || users[1].Email != "dan@acme.com" {
 		t.Fatalf("users = %+v", users)
 	}
 	if !strings.Contains(strings.Join(calls(), "\n"), `/batch_get_id?user_id_type=open_id Bearer tat {"emails":["dan@acme.com","nobody@acme.com"]}`) {

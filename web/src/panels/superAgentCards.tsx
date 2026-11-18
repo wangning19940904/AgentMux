@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "../api";
 import type { SuperAgentActivity, SuperAgentPlan, SuperAgentTicket } from "../api";
 import { useI18n } from "../i18n";
+import { WorkerFace, workerPersona } from "./agents/avatars";
 
 // What a card needs from the page around it: the agent's activity, the
 // action in flight, and how to run one.
@@ -47,11 +48,16 @@ function TicketActions({ ticket, context }: { ticket: SuperAgentTicket; context:
   );
 }
 
-export function ticketWhere(ticket: SuperAgentTicket, context: CardContext, t: (key: string) => string) {
+// ticketWhere says who works on a Ticket, where, and for whom. The chat names
+// the worker above the card, so it leaves the persona out.
+export function ticketWhere(ticket: SuperAgentTicket, context: CardContext, t: (key: string) => string, persona = true) {
+  // The requester is named as the event that started the Ticket names them.
+  const requester = context.activity?.triggers?.find((trigger) => trigger.id === ticket.trigger_id)?.actor_name;
   return [
+    persona ? workerPersona(ticket.worker).name : "",
     ticket.worker.label || ticket.worker.agent_id,
     ticket.worker.host_id ? (machineName(context.activity, ticket.worker.host_id) ?? t("superAgents.remote")) : t("superAgents.local"),
-    ticket.actor ?? "",
+    requester || ticket.actor || "",
   ].filter(Boolean).join(" · ");
 }
 
@@ -139,7 +145,7 @@ export function TicketCard({ ticket, context, variant = "form" }: { ticket: Supe
           <strong>{ticket.title}</strong>
           <span className="control-row">{status}<TicketActions ticket={ticket} context={context} /></span>
         </header>
-        <small>{ticketWhere(ticket, context, t)}</small>
+        <small className="super-agent-ticket-worker"><WorkerFace worker={ticket.worker} className="avatar-mini" iconSize={11} />{ticketWhere(ticket, context, t)}</small>
         <TicketFacts ticket={ticket} context={context} />
         {ticket.output && <pre>{ticket.output}</pre>}
         {ticket.error && <div className="error">{ticket.error}</div>}
@@ -156,7 +162,7 @@ export function TicketCard({ ticket, context, variant = "form" }: { ticket: Supe
         {status}
       </header>
       <strong className="super-agent-chat-card-title">{ticket.title}</strong>
-      <small className="muted">{ticketWhere(ticket, context, t)}</small>
+      <small className="muted">{ticketWhere(ticket, context, t, false)}</small>
       {ticket.output && (
         <div className={`message-content super-agent-chat-output${long && !expanded ? " collapsed" : ""}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{ticket.output}</ReactMarkdown>

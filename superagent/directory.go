@@ -38,6 +38,8 @@ type FeishuUser struct {
 	Email      string   `json:"email,omitempty"`
 	Department string   `json:"department,omitempty"`
 	ChatIDs    []string `json:"chat_ids,omitempty"`
+	// Avatar is the person's portrait URL on Feishu's image host.
+	Avatar string `json:"avatar,omitempty"`
 }
 
 // FeishuChatList and FeishuUserList stop at a size the Console can show.
@@ -232,6 +234,10 @@ func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails
 				OpenID string `json:"open_id"`
 				Name   string `json:"name"`
 				Email  string `json:"email"`
+				Avatar struct {
+					Avatar72  string `json:"avatar_72"`
+					Avatar240 string `json:"avatar_240"`
+				} `json:"avatar"`
 			} `json:"items"`
 		} `json:"data"`
 	}
@@ -250,7 +256,10 @@ func (f *FeishuAPI) Users(ctx context.Context, channelID string, openIDs, emails
 		return users, nil
 	}
 	for _, item := range named.Data.Items {
-		users = append(users, FeishuUser{OpenID: item.OpenID, Name: item.Name, Email: firstNonEmpty(item.Email, emailOf[item.OpenID])})
+		users = append(users, FeishuUser{
+			OpenID: item.OpenID, Name: item.Name, Email: firstNonEmpty(item.Email, emailOf[item.OpenID]),
+			Avatar: firstNonEmpty(item.Avatar.Avatar240, item.Avatar.Avatar72),
+		})
 	}
 	return users, nil
 }

@@ -10,6 +10,7 @@ import { PlanCard, TicketCard, timerStatusClass, triggerStatusClass } from "./su
 import type { CardContext } from "./superAgentCards";
 import { CONSOLE_CONVERSATION, buildConversations, previewText } from "./superAgentConversations";
 import type { ChatItem, Conversation } from "./superAgentConversations";
+import { WorkerFace, workerPersona } from "./agents/avatars";
 
 export type SuperAgentChatProps = {
   agent: SuperAgent;
@@ -235,6 +236,9 @@ function itemID(item: ChatItem) {
 }
 
 function ContactAvatar({ conversation }: { conversation: Conversation }) {
+  // A direct chat shows the person in it.
+  const person = conversation.kind === "chat" && conversation.participants.length === 1 ? conversation.participants[0] : "";
+  if (person && conversation.avatars[person]) return <PersonFace name={person} avatar={conversation.avatars[person]} />;
   const icon = conversation.kind === "console" ? <SquareTerminal size={16} />
     : conversation.kind === "chat" ? (conversation.participants.length > 1 ? <Users size={16} /> : <MessagesSquare size={16} />)
     : conversation.key.startsWith("thread:mail:") ? <Inbox size={16} />
@@ -245,7 +249,17 @@ function ContactAvatar({ conversation }: { conversation: Conversation }) {
   return <span className={`super-agent-chat-face contact kind-${conversation.kind}`} aria-hidden="true">{icon}</span>;
 }
 
-function PersonFace({ name }: { name: string }) {
+function PersonFace({ name, avatar }: { name: string; avatar?: string }) {
+  // A portrait that fails to load, such as one Feishu has since replaced,
+  // falls back to the initial.
+  const [failed, setFailed] = useState("");
+  if (avatar && failed !== avatar) {
+    return (
+      <span className="super-agent-chat-face person photo" aria-hidden="true">
+        <img src={avatar} alt="" referrerPolicy="no-referrer" onError={() => setFailed(avatar)} />
+      </span>
+    );
+  }
   const initial = Array.from(name.trim())[0]?.toUpperCase() ?? "?";
   let hash = 0;
   for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
@@ -296,7 +310,7 @@ function ChatEntry({ item, conversation, context, agentName, agentFace, clock, d
                 </span>
               )}
             </div>
-            <PersonFace name={name} />
+            <PersonFace name={name} avatar={conversation.kind === "console" ? undefined : trigger.actor_avatar || conversation.avatars[name]} />
           </div>
           {trigger.disposition === "pending" && fromAgent(<div className="session-typing"><span /><span /><span />{t("superAgents.disposition.pending")}</div>)}
         </>
@@ -306,8 +320,19 @@ function ChatEntry({ item, conversation, context, agentName, agentFace, clock, d
       return fromAgent(<AnswerBubble trigger={item.trigger} />, item.trigger.updated_at || item.at);
     case "event":
       return fromAgent(<AnswerBubble trigger={item.trigger} />, item.at, t(`superAgents.chat.event.${item.trigger.kind}`));
-    case "ticket":
-      return fromAgent(<TicketCard ticket={item.ticket} context={context} variant="chat" />, item.at);
+    case "ticket": {
+      // A Ticket is the worker's message: it speaks as itself, for the agent.
+      const worker = item.ticket.worker;
+      return (
+        <div className="super-agent-chat-row from-agent from-worker">
+          <span className="super-agent-chat-face worker" aria-hidden="true"><WorkerFace worker={worker} /></span>
+          <div className="super-agent-chat-stack">
+            <span className="super-agent-chat-author">{t("superAgents.chat.workerAuthor", { name: workerPersona(worker).name, agent: agentName })}<time>{clock(item.at)}</time></span>
+            <TicketCard ticket={item.ticket} context={context} variant="chat" />
+          </div>
+        </div>
+      );
+    }
     case "plan":
       return fromAgent(<PlanCard plan={item.plan} context={context} declineNote={declineNote} onDeclineNote={onDeclineNote} variant="chat" />, item.at);
     case "timer": {
