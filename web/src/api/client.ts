@@ -131,16 +131,23 @@ async function fleetBatch<T>(
     endpoint, [...targetIDs].sort(),
     requests.map((request) => [request.method || "GET", fleetWarningResourceKey(request.path)]),
   ])) : () => {};
-  try {
+  const send = async (ids: string[]) => {
     const res = await fetch(path, {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
-      body: JSON.stringify({ target_ids: targetIDs, requests }),
+      body: JSON.stringify({ target_ids: ids, requests }),
     });
     if (endpoint === "execute") invalidateResourceCache();
     const payload = (await res.json().catch(() => ({}))) as FleetBatchResult<T> & { error?: string };
     if (!res.ok) throw new Error(payload.error || `${path}: ${res.status}`);
+    return payload;
+  };
+  try {
+    let payload = await send(targetIDs);
+    if (endpoint === "query" && recordWarnings) {
+      payload = await retryAwayTargets(payload, requests, send);
+    }
     const receivedAt = new Date();
     const offline = new Set<string>();
     updateWarnings((payload.targets ?? []).flatMap((target) => requests.flatMap((request) => {
@@ -164,6 +171,54 @@ async function fleetBatch<T>(
 // A linked machine without a connection; it comes back by itself.
 function isOfflineError(error?: string) {
   return !!error && /device is offline/i.test(error);
+}
+
+// Right after the Console opens, as when the desktop app starts, the hub may
+// not reach its machines yet: its own links are still connecting. A read that
+// finds machines offline then asks those machines again a few times before
+// they are reported, so a start does not flash every machine as offline.
+// Later, an offline machine is reported at once.
+const fleetStartupRetry = {
+  windowMs: 30_000,
+  delaysMs: import.meta.env.MODE === "test" ? [] : [1_000, 2_000, 3_000, 4_000],
+};
+
+export function setFleetStartupRetry(options: { windowMs?: number; delaysMs?: number[] }) {
+  Object.assign(fleetStartupRetry, options);
+}
+
+function inFleetStartupWindow() {
+  return typeof performance !== "undefined" && performance.now() < fleetStartupRetry.windowMs;
+}
+
+// awayTargetIDs are the machines whose answer says they are offline: a
+// failed read, or what they last reported.
+function awayTargetIDs<T>(payload: FleetBatchResult<T>, requests: FleetOperation[]) {
+  return (payload.targets ?? []).filter((target) => requests.some((request) => {
+    const response = target.responses.find((response) => response.key === request.key);
+    return response?.ok ? !!response.reported_at : isOfflineError(response?.error);
+  })).map((target) => target.target.id);
+}
+
+async function retryAwayTargets<P extends FleetBatchResult<T>, T>(
+  payload: P,
+  requests: FleetOperation[],
+  send: (ids: string[]) => Promise<P>,
+): Promise<P> {
+  for (const delay of fleetStartupRetry.delaysMs) {
+    const away = awayTargetIDs(payload, requests);
+    if (!away.length || !inFleetStartupWindow()) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    let retried: P;
+    try {
+      retried = await send(away);
+    } catch {
+      break; // The first answer stands.
+    }
+    const answers = new Map((retried.targets ?? []).map((target) => [target.target.id, target]));
+    payload = { ...payload, targets: (payload.targets ?? []).map((target) => answers.get(target.target.id) ?? target) };
+  }
+  return payload;
 }
 
 export function fleetQuery<T>(requests: FleetOperation[], targetIDs?: string[]) {

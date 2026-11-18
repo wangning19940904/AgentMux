@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fleetQuery, resolveMachineScope } from "./client";
+import { fleetQuery, resolveMachineScope, setFleetStartupRetry } from "./client";
 import { beginFleetWarningUpdate, currentFleetWarnings, currentOfflineTargets, fleetWarningMessage, fleetWarningResourceKey, fleetWarningWithContext, resetFleetWarnings } from "./fleetWarnings";
 import { api, mergeFleetObservationOverview, mergeFleetUsage } from "./index";
 import { fleetCall, fleetReadArray, interactiveFleetGet } from "./fleet";
@@ -357,5 +357,44 @@ describe("data an offline linked machine last reported", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("[]")));
     await api.superAgents();
     expect(currentFleetWarnings()).toEqual([]);
+  });
+});
+
+describe("machines found offline as the Console starts", () => {
+  const offline = (id: string, name: string) => ({
+    target: { id, name, kind: "link", trusted: true, online: false },
+    responses: [{ key: "tools", status: 502, ok: false, error: "device is offline" }],
+  });
+  afterEach(() => setFleetStartupRetry({ windowMs: 30_000, delaysMs: [] }));
+
+  it("are asked again before they are reported", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all" });
+    setFleetStartupRetry({ windowMs: Number.MAX_SAFE_INTEGER, delaysMs: [0, 0] });
+    const bodies: { target_ids: string[] }[] = [];
+    const answers = [
+      { targets: [target("local", "Local machine", "tools", { clis: [] }), offline("dev_1", "home-box"), offline("dev_2", "gpu-box")] },
+      { targets: [target("dev_1", "home-box", "tools", { clis: [] }), offline("dev_2", "gpu-box")] },
+      { targets: [target("dev_2", "gpu-box", "tools", { clis: [] })] },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify(answers[bodies.length - 1]));
+    }));
+
+    const result = await fleetQuery<{ clis: unknown[] }>([{ key: "tools", path: "/api/v1/tools" }]);
+    // Only the machines still away are asked again.
+    expect(bodies.map((body) => body.target_ids)).toEqual([["all"], ["dev_1", "dev_2"], ["dev_2"]]);
+    expect(result.targets.map((item) => [item.target.id, item.responses[0].ok])).toEqual([["local", true], ["dev_1", true], ["dev_2", true]]);
+    expect(currentFleetWarnings()).toEqual([]);
+  });
+
+  it("are reported at once later on", async () => {
+    vi.stubGlobal("localStorage", { getItem: () => "all" });
+    setFleetStartupRetry({ windowMs: 0, delaysMs: [0, 0] });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ targets: [offline("dev_1", "home-box")] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await fleetQuery([{ key: "tools", path: "/api/v1/tools" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(currentFleetWarnings()).toHaveLength(1);
   });
 });
