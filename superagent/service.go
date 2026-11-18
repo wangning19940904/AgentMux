@@ -148,8 +148,10 @@ type Service struct {
 	notBefore      map[string]time.Time
 	health         map[string]SourceHealth
 	places         map[string]feishuPlaces
-	scopeChecks    map[string]scopeState
-	activities     map[string]activity
+	// people names Feishu senders by channel and open_id; see people.go.
+	people      map[string]personEntry
+	scopeChecks map[string]scopeState
+	activities  map[string]activity
 	// turnStarts says when each running turn began, and suspects when each
 	// supervision condition was first seen holding; see supervision.go.
 	turnStarts map[string]time.Time
@@ -367,6 +369,7 @@ func (s *Service) Ingest(ctx context.Context, agent core.SuperAgent, source core
 		trigger.Disposition = core.SuperAgentDispositionFiltered
 		trigger.Reason = "sender is not on this source's allowed list"
 	}
+	s.nameTrigger(ctx, &trigger)
 	inserted, err := s.store.InsertSuperAgentTrigger(ctx, trigger)
 	if err != nil {
 		return false, err
@@ -1382,6 +1385,7 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.nameTriggers(ctx, triggers)
 	timers, timerWarning, err := s.activityTimers(ctx, id)
 	if err != nil {
 		return nil, err

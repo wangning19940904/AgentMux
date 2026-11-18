@@ -171,12 +171,32 @@ export function boundChannelsForAgent(agent: AgentInstance, channels: Channel[])
   );
 }
 
+// agentChannels are the channels an agent hears from: those its sources name,
+// such as the Feishu bot of a message source, and those bound to its brain.
+// rowChannels are channels already bound to the agent's own row, kept first.
+export function agentChannels(agent: SuperAgent | undefined, channels: Channel[], rowChannels: Channel[] = []): Channel[] {
+  const result = [...rowChannels];
+  if (!agent) return result;
+  const targetID = resourceTargetID(agent);
+  const named = new Set(agent.sources
+    .filter((source) => source.kind === "feishu_message" || source.kind === "feishu_doc" || source.kind === "channel")
+    .map((source) => source.config?.channel_id?.trim())
+    .filter(Boolean));
+  for (const channel of channels) {
+    if (resourceTargetID(channel) !== targetID || result.some((item) => item.id === channel.id && resourceTargetID(item) === targetID)) continue;
+    if (named.has(channel.id) || (agent.router_agent_id && channel.agent_id === agent.router_agent_id)) result.push(channel);
+  }
+  return result;
+}
+
 // routed are the agents listed without an Agent row of their own; they count
-// as agents and their machines as machines.
+// as agents and their machines as machines. Channels count once each, whether
+// bound to an Agent row or named by any agent's sources.
 export function agentRegistryMetrics(
   agents: AgentInstance[],
   channels: Channel[],
   routed: SuperAgent[] = [],
+  unified: SuperAgent[] = routed,
 ): { agentCount: number; machineCount: number; channelCount: number } {
   const agentKeys = new Set(agents.map((agent) => `${resourceTargetID(agent)}::${agent.id}`));
   const machineIDs = new Set([...agents, ...routed].map((agent) => resourceTargetID(agent)));
@@ -186,6 +206,7 @@ export function agentRegistryMetrics(
     const targetID = resourceTargetID(channel);
     if (agentKeys.has(`${targetID}::${channel.agent_id}`)) channelKeys.add(`${targetID}::${channel.id}`);
   });
+  unified.forEach((agent) => agentChannels(agent, channels).forEach((channel) => channelKeys.add(`${resourceTargetID(channel)}::${channel.id}`)));
 
   return {
     agentCount: agents.length + routed.length,

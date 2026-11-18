@@ -24,6 +24,8 @@ export interface Conversation {
   chatID?: string;
   // Who wrote in it, by display name, in the order they first did.
   participants: string[];
+  // Their portraits, by display name, when the platform had one.
+  avatars: Record<string, string>;
   // Oldest first.
   items: ChatItem[];
   lastAt: string;
@@ -94,7 +96,7 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
     if (!conversation) {
       conversation = {
         key: located.key, kind: located.kind, sourceKind, sourceID, channelID: located.channelID, chatID: located.chatID,
-        participants: [], items: [], lastAt: "", active: 0, attention: false,
+        participants: [], avatars: {}, items: [], lastAt: "", active: 0, attention: false,
       };
       byKey.set(located.key, conversation);
     }
@@ -117,6 +119,7 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
       conversation.items.push({ type: "request", at: trigger.received_at, trigger });
       const name = trigger.actor_name || trigger.actor;
       if (name && trigger.source_kind !== "console" && !conversation.participants.includes(name)) conversation.participants.push(name);
+      if (name && trigger.actor_avatar && trigger.source_kind !== "console") conversation.avatars[name] ??= trigger.actor_avatar;
       if (trigger.answer?.trim()) conversation.items.push({ type: "answer", at: trigger.received_at, trigger });
       if (trigger.disposition === "pending") conversation.active++;
       if (trigger.disposition === "failed") conversation.attention = true;

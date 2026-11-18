@@ -10,6 +10,7 @@ import { sourceHookAddress } from "./superAgentSetup";
 import { githubPolls, isChannelSource, newSuperAgent } from "./superAgentModel";
 import { SuperAgentDrawer } from "./agents/SuperAgentForm";
 import { isOnAnotherMachine } from "./agents/agentUtils";
+import { WorkerFace, workerPersona } from "./agents/avatars";
 import { confirmAction } from "../components/ConfirmDialog";
 import { PlanCard, TicketCard, timerStatusClass, triggerStatusClass } from "./superAgentCards";
 import type { CardContext } from "./superAgentCards";
@@ -194,7 +195,8 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                     return (
                       <span key={worker.id} className="super-agent-chip" title={status?.detail}>
                         <i className={status?.available ? "online" : "offline"} />
-                        {worker.label || worker.agent_id}
+                        <WorkerFace worker={worker} className="avatar-mini" iconSize={11} />
+                        {workerPersona(worker).name} · {worker.label || worker.agent_id}
                         <small>{[worker.host_id ? t("superAgents.remote") : t("superAgents.local"), tierLabel(worker.id)].filter(Boolean).join(" · ")}</small>
                         {healthMarks(worker.host_id, [status?.runtime_id])}
                       </span>

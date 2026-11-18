@@ -107,6 +107,10 @@ type SuperAgent struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Avatar is the agent's portrait: "preset:<id>" for one of the Console's
+	// built-in portraits, or a small image as a data: URL. Empty shows the
+	// portrait of the bot it answers through.
+	Avatar string `json:"avatar,omitempty"`
 	// RouterRuntime names an installed framework to route with. The host then
 	// creates the router Agent, and RouterAgentID records which one it is.
 	RouterRuntime string `json:"router_runtime,omitempty"`
@@ -238,24 +242,26 @@ type SuperAgentSource struct {
 // SuperAgentTrigger is one immutable event. DedupeKey makes intake idempotent,
 // so a redelivered webhook or a restarted poller creates one Ticket.
 type SuperAgentTrigger struct {
-	ID           string          `json:"id"`
-	SuperAgentID string          `json:"super_agent_id"`
-	SourceID     string          `json:"source_id"`
-	SourceKind   string          `json:"source_kind"`
-	DedupeKey    string          `json:"dedupe_key"`
-	ThreadKey    string          `json:"thread_key"`
-	Actor        string          `json:"actor,omitempty"`
-	ActorName    string          `json:"actor_name,omitempty"`
-	Addressed    bool            `json:"addressed"`
-	Kind         string          `json:"kind,omitempty"`
-	Title        string          `json:"title,omitempty"`
-	Text         string          `json:"text"`
-	Reply        json.RawMessage `json:"reply,omitempty"`
-	Disposition  string          `json:"disposition"`
-	Reason       string          `json:"reason,omitempty"`
-	TicketID     string          `json:"ticket_id,omitempty"`
-	ReceivedAt   time.Time       `json:"received_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID           string `json:"id"`
+	SuperAgentID string `json:"super_agent_id"`
+	SourceID     string `json:"source_id"`
+	SourceKind   string `json:"source_kind"`
+	DedupeKey    string `json:"dedupe_key"`
+	ThreadKey    string `json:"thread_key"`
+	Actor        string `json:"actor,omitempty"`
+	ActorName    string `json:"actor_name,omitempty"`
+	// ActorAvatar is the sender's portrait URL, when the platform has one.
+	ActorAvatar string          `json:"actor_avatar,omitempty"`
+	Addressed   bool            `json:"addressed"`
+	Kind        string          `json:"kind,omitempty"`
+	Title       string          `json:"title,omitempty"`
+	Text        string          `json:"text"`
+	Reply       json.RawMessage `json:"reply,omitempty"`
+	Disposition string          `json:"disposition"`
+	Reason      string          `json:"reason,omitempty"`
+	TicketID    string          `json:"ticket_id,omitempty"`
+	ReceivedAt  time.Time       `json:"received_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 	// Answer is what the agent said back to the thread about this event: its
 	// reply and any notice AgentMux added. Empty when it said nothing.
 	Answer string `json:"answer,omitempty"`

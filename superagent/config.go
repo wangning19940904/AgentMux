@@ -121,6 +121,10 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	agent.ID = strings.TrimSpace(agent.ID)
 	agent.Name = strings.TrimSpace(agent.Name)
 	agent.RouterAgentID = strings.TrimSpace(agent.RouterAgentID)
+	agent.Avatar = strings.TrimSpace(agent.Avatar)
+	if err := validAvatar(agent.Avatar); err != nil {
+		return err
+	}
 	if agent.ID == "" {
 		agent.ID = "sa_" + uuid.NewString()
 	}
