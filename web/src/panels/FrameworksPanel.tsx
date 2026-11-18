@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Package, Play, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Package, Play, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
   activeRemoteID,
@@ -9,13 +9,28 @@ import {
   FrameworkUpdateCheck,
   OperationProgress,
 } from "../api";
+import type { SetStateAction } from "react";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { InternalOnlyDialog } from "../components/InternalOnlyDialog";
-import { groupResources } from "../components/resourceGroups";
 import { targetKey } from "../components/TargetBadge";
 import { useI18n } from "../i18n";
-import { useAsync } from "../useAsync";
+import { useCachedResource } from "../useCachedResource";
 import { FrameworkBusyAction, FrameworkGroupRow, FrameworkInstallingRow, FrameworkTableRows } from "./frameworks/FrameworkTableRows";
+import {
+  cachedUpdateChecks,
+  forgetAllUpdateChecks,
+  forgetUpdateCheck,
+  rememberUpdateCheck,
+  useFrameworksResource,
+} from "./frameworks/frameworkPageCache";
+import {
+  expandedFrameworkGroups,
+  FrameworkGroupBy,
+  groupFrameworks,
+  loadFrameworkGroupBy,
+  rememberExpandedFrameworkGroups,
+  saveFrameworkGroupBy,
+} from "./frameworks/frameworkGrouping";
 import { frameworkCompanyName } from "./frameworks/frameworkPresentation";
 import { useFrameworkAuth } from "./frameworks/useFrameworkAuth";
 import { latestHealthResult, useFrameworkHealth } from "./frameworks/useFrameworkHealth";
@@ -35,8 +50,10 @@ import { CustomCommandConfirmDialog, CustomCommandEntry, FrameworkInstallSetting
 
 export function FrameworksPanel() {
   const { t } = useI18n();
-  const frameworks = useAsync(() => api.frameworks(), []);
-  const remoteHosts = useAsync(() => api.remoteHosts(), []);
+  // The list is cached across visits (and prefetched from the navigation), so
+  // the page shows the last known frameworks at once while it refreshes.
+  const frameworks = useFrameworksResource();
+  const remoteHosts = useCachedResource("remoteHosts", () => api.remoteHosts());
   // Install, update and uninstall run in a module-level store so they survive
   // navigating away; local state covers short-lived row actions and bulk updates.
   const operations = useFrameworkOperations();
@@ -51,7 +68,9 @@ export function FrameworksPanel() {
     ...Object.fromEntries(Object.values(operations).map((operation) => [operation.key, operation.progress])),
   }), [operations, localProgress]);
   const handledOutcomes = useRef(new Set<FrameworkOperation>());
-  const [checks, setChecks] = useState<Record<string, FrameworkUpdateCheck>>({});
+  const [checks, setCheckState] = useState<Record<string, FrameworkUpdateCheck>>(() => cachedUpdateChecks());
+  const [groupBy, setGroupByState] = useState<FrameworkGroupBy>(loadFrameworkGroupBy);
+  const [expanded, setExpandedState] = useState<Set<string>>(expandedFrameworkGroups);
   const [notice, setNotice] = useState("");
   const [noticeError, setNoticeError] = useState(false);
   const [result, setResult] = useState<FrameworkInstallResult | null>(null);
@@ -74,8 +93,6 @@ export function FrameworksPanel() {
     .filter((item) => !item.installed && item.spec.supported && item.spec.install_supported)
     .sort((left, right) => left.spec.display.localeCompare(right.spec.display)), [items]);
   const installingItems = installableItems.filter((item) => operations[targetKey(item.target_id, item.spec.kind)]?.action === "install");
-  const installedGroups = groupResources(installedItems, (item) => item.spec.kind, (item) => targetKey(item.target_id, item.spec.kind), activeMachineScope() === "all");
-  const frameworkPagination = useCatalogPagination(installedGroups);
   const selectedRemoteID = activeRemoteID();
   const currentMachine = activeMachineScope() === "all"
     ? t("remote.allMachines")
@@ -85,19 +102,42 @@ export function FrameworksPanel() {
   const nodeMissing = Boolean(prereqs && (!prereqs.node || !prereqs.npm));
   // Install settings belong to one machine and are edited on that machine.
   const settingsEditable = !activeRemoteID();
+  const installedGroups = groupFrameworks(installedItems, groupBy, machineLabel);
+  const frameworkPagination = useCatalogPagination(installedGroups, groupBy);
+  const listLoading = !frameworks.hasValue && frameworks.loading;
 
   function machineLabel(item: Framework) {
     if (item.target_id === "local") return t("remote.localMachine");
     return item.target_name || item.target_id || currentMachine;
   }
 
-  // The local machine comes first, then the others by name.
-  function compareMachines(left: Framework, right: Framework) {
-    const leftLocal = !left.target_id || left.target_id === "local";
-    const rightLocal = !right.target_id || right.target_id === "local";
-    if (leftLocal !== rightLocal) return leftLocal ? -1 : 1;
-    return machineLabel(left).localeCompare(machineLabel(right));
+  function setChecks(update: SetStateAction<Record<string, FrameworkUpdateCheck>>) {
+    setCheckState((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      Object.entries(next).forEach(([key, check]) => { if (current[key] !== check) rememberUpdateCheck(key, check); });
+      return next;
+    });
   }
+
+  function setGroupBy(value: FrameworkGroupBy) {
+    saveFrameworkGroupBy(value);
+    setGroupByState(value);
+  }
+
+  function setExpanded(next: Set<string>) {
+    rememberExpandedFrameworkGroups(next);
+    setExpandedState(next);
+  }
+
+  function toggleGroup(key: string) {
+    const next = new Set(expanded);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setExpanded(next);
+  }
+
+  const pageGroupKeys = frameworkPagination.pageItems.map((group) => group.key);
+  const allExpanded = pageGroupKeys.length > 0 && pageGroupKeys.every((key) => expanded.has(key));
 
   function markBusy(key: string, action: FrameworkBusyAction) {
     setBusy((current) => ({ ...current, [key]: action }));
@@ -143,7 +183,8 @@ export function FrameworksPanel() {
   }, [installedItems, busy, checks, bulkProgress]);
 
   function forgetCheck(key: string) {
-    setChecks((current) => {
+    forgetUpdateCheck(key);
+    setCheckState((current) => {
       const next = { ...current };
       delete next[key];
       return next;
@@ -342,6 +383,33 @@ export function FrameworksPanel() {
             <span className="pill on">{installedGroups.length}</span>
           </div>
           <div className="catalog-bulk-actions">
+            <div className="segmented framework-group-by" role="radiogroup" aria-label={t("frameworks.groupBy")}>
+              {(["framework", "machine"] as const).map((value) => (
+                <button
+                  aria-checked={groupBy === value}
+                  className={groupBy === value ? "active" : ""}
+                  key={value}
+                  onClick={() => setGroupBy(value)}
+                  role="radio"
+                  type="button"
+                >
+                  {t(value === "framework" ? "frameworks.groupByFramework" : "frameworks.groupByMachine")}
+                </button>
+              ))}
+            </div>
+            <button
+              className="ghost-action"
+              disabled={pageGroupKeys.length === 0}
+              onClick={() => {
+                const next = new Set(expanded);
+                pageGroupKeys.forEach((key) => (allExpanded ? next.delete(key) : next.add(key)));
+                setExpanded(next);
+              }}
+              type="button"
+            >
+              {allExpanded ? <ChevronsDownUp size={15} /> : <ChevronsUpDown size={15} />}
+              {t(allExpanded ? "frameworks.collapseAll" : "frameworks.expandAll")}
+            </button>
             {activeMachineScope() !== "all" && (
               <FrameworkHealthChecksControl
                 settings={health.checks[""]}
@@ -384,7 +452,7 @@ export function FrameworksPanel() {
         <div className="catalog-table-wrap">
           <table className="catalog-table framework-table">
             <thead><tr>
-              <th>{t("frameworks.machine")}</th>
+              <th>{t(groupBy === "framework" ? "frameworks.machine" : "frameworks.framework")}</th>
               <th>{t("frameworks.versionAndUpdate")}</th>
               <th>{t("frameworks.account")}</th>
               <th>{t("frameworks.availability")}</th>
@@ -395,25 +463,35 @@ export function FrameworksPanel() {
                 const key = targetKey(item.target_id, item.spec.kind);
                 return <FrameworkInstallingRow key={`installing:${key}`} item={item} progress={progress[key]} />;
               })}
+              {listLoading && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("common.loading")}</td></tr>}
               {frameworkPagination.pageItems.map((group) => {
-                const members = [...group.members].sort(compareMachines);
+                const { members } = group;
                 const keys = members.map((item) => targetKey(item.target_id, item.spec.kind));
                 const outdated = updateCandidates.filter((item) => keys.includes(targetKey(item.target_id, item.spec.kind)));
-                const latestVersion = keys.map((key) => checks[key]?.latest_version).find(Boolean);
+                const latestVersion = group.by === "framework" ? keys.map((key) => checks[key]?.latest_version).find(Boolean) : undefined;
+                const open = expanded.has(group.key);
                 return (
                   <Fragment key={group.key}>
                     <FrameworkGroupRow
+                      by={group.by}
                       item={members[0]}
-                      machineCount={members.length}
+                      machineName={machineLabel(members[0])}
+                      count={members.length}
                       latestVersion={latestVersion}
                       outdatedCount={outdated.length}
+                      failedCount={keys.filter((key) => checks[key]?.error).length}
+                      updating={keys.some((key) => busy[key] === "update" || busy[key] === "install")}
+                      checking={members.some((item, index) => item.spec.update_supported && (busy[keys[index]] === "check" || !checks[keys[index]]))}
+                      expanded={open}
+                      onToggle={() => toggleGroup(group.key)}
                       updateDisabled={updateAllBlocked}
                       onUpdateOutdated={() => requestUpdateMany(outdated)}
                     />
-                    {members.map((item) => {
+                    {open && members.map((item) => {
                       const key = targetKey(item.target_id, item.spec.kind);
                       return <FrameworkTableRows
                         key={key}
+                        identity={group.by === "framework" ? "machine" : "framework"}
                         item={item}
                         busy={busy[key]}
                         progress={progress[key]}
@@ -444,7 +522,7 @@ export function FrameworksPanel() {
                   </Fragment>
                 );
               })}
-              {installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("frameworks.noInstalled")}</td></tr>}
+              {!listLoading && installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("frameworks.noInstalled")}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -491,7 +569,8 @@ export function FrameworksPanel() {
           onClose={() => setSettingsOpen(false)}
           onSaved={() => {
             setSettingsOpen(false);
-            setChecks({});
+            forgetAllUpdateChecks();
+            setCheckState({});
             setResult(null);
             setNoticeError(false);
             setNotice(t("frameworks.settingsSaved"));

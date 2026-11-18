@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,13 @@ func Detect(s Spec, pre Prereqs) Status {
 			return st
 		}
 		st.Installed = true
+		fingerprint, cacheable := binaryFingerprint(binary)
+		if cacheable {
+			if version, ok := cachedVersion(s.Kind, fingerprint); ok {
+				st.Version = version
+				return st
+			}
+		}
 		args := s.VersionArgs
 		if len(args) == 0 {
 			args = []string{"--version"}
@@ -95,6 +103,8 @@ func Detect(s Spec, pre Prereqs) Status {
 		st.Version = normalizeSDKVersion(string(out))
 		if st.Version == "" {
 			st.Detail = "version command returned no recognizable version"
+		} else if cacheable {
+			storeVersion(s.Kind, fingerprint, st.Version)
 		}
 	case KindSDK:
 		st.Detail = "requires a " + s.Language + " runtime (not yet supported)"
@@ -245,13 +255,74 @@ func nvmNodeBinDirs(nvmDir string) []string {
 	return dirs
 }
 
-// DetectAll returns the status of every framework in the catalog.
+// DetectAll returns the status of every framework in the catalog. Version
+// commands start a Node or native process each, so they run concurrently
+// rather than one after another.
 func DetectAll() []Status {
 	pre := DetectPrereqs()
 	specs := Catalog()
-	out := make([]Status, 0, len(specs))
-	for _, s := range specs {
-		out = append(out, Detect(s, pre))
+	out := make([]Status, len(specs))
+	var wg sync.WaitGroup
+	for i, s := range specs {
+		wg.Add(1)
+		go func(i int, s Spec) {
+			defer wg.Done()
+			out[i] = Detect(s, pre)
+		}(i, s)
 	}
+	wg.Wait()
 	return out
+}
+
+// versionCache remembers the version a CLI binary reported, keyed by the
+// binary's resolved path, size and modification time. Installing, updating or
+// replacing the CLI changes that fingerprint; shims from version managers do
+// not change when the version behind them does, so entries also expire.
+var versionCache = struct {
+	sync.Mutex
+	entries map[string]versionCacheEntry
+}{entries: map[string]versionCacheEntry{}}
+
+const versionCacheTTL = 10 * time.Minute
+
+type versionCacheEntry struct {
+	fingerprint string
+	version     string
+	storedAt    time.Time
+}
+
+func binaryFingerprint(binary string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return resolved + "|" + strconv.FormatInt(info.Size(), 10) + "|" + strconv.FormatInt(info.ModTime().UnixNano(), 10), true
+}
+
+func cachedVersion(kind, fingerprint string) (string, bool) {
+	versionCache.Lock()
+	defer versionCache.Unlock()
+	entry, ok := versionCache.entries[kind]
+	if !ok || entry.fingerprint != fingerprint || time.Since(entry.storedAt) > versionCacheTTL {
+		return "", false
+	}
+	return entry.version, true
+}
+
+func storeVersion(kind, fingerprint, version string) {
+	versionCache.Lock()
+	defer versionCache.Unlock()
+	versionCache.entries[kind] = versionCacheEntry{fingerprint: fingerprint, version: version, storedAt: time.Now()}
+}
+
+// ForgetVersion drops a cached version so the next detection runs the CLI's
+// version command again, for example right after an install or update.
+func ForgetVersion(kind string) {
+	versionCache.Lock()
+	defer versionCache.Unlock()
+	delete(versionCache.entries, kind)
 }

@@ -1,4 +1,6 @@
-import { CheckCircle2, Copy, Download, ExternalLink, List, LogIn, LogOut, Package, Play, RefreshCw, Trash2, UserRound, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
+import { CheckCircle2, ChevronRight, Copy, Download, Ellipsis, ExternalLink, List, LogIn, LogOut, Monitor, Package, Play, RefreshCw, Trash2, UserRound, X } from "lucide-react";
 import type {
   Framework,
   FrameworkAuthStatus,
@@ -19,47 +21,74 @@ import type { FrameworkAccountFieldKey, FrameworkAccountSummary } from "./framew
 
 export type FrameworkBusyAction = "install" | "update" | "uninstall" | "check" | "auth" | "logout" | "complete" | "cancel";
 
-// One framework's header row in the catalog: its identity plus a summary of
-// every machine it is installed on, with one action to update the outdated ones.
+// A group's header row in the catalog: a framework with a row per machine, or
+// a machine with a row per framework. Groups start collapsed, so the header
+// carries the summary: how many installs, which can be updated, which failed
+// their update check, and one action to update the outdated ones.
 export function FrameworkGroupRow({
+  by,
   item,
-  machineCount,
+  machineName,
+  count,
   latestVersion,
   outdatedCount,
+  failedCount,
+  updating,
+  checking,
+  expanded,
+  onToggle,
   updateDisabled,
   onUpdateOutdated,
 }: {
+  by: "framework" | "machine";
   item: Framework;
-  machineCount: number;
+  machineName: string;
+  count: number;
   latestVersion?: string;
   outdatedCount: number;
+  failedCount: number;
+  updating: boolean;
+  checking: boolean;
+  expanded: boolean;
+  onToggle: () => void;
   updateDisabled: boolean;
   onUpdateOutdated: () => void;
 }) {
   const { t } = useI18n();
   const { spec } = item;
+  const byFramework = by === "framework";
   return (
-    <tr className="framework-group-row">
+    <tr className={`framework-group-row${expanded ? " expanded" : ""}`}>
       <td colSpan={5}>
         <div className="framework-group-head">
-          <span className="provider-icon"><Package size={16} /></span>
-          <span className="framework-group-copy">
-            <strong>{spec.display}</strong>
-            <span className="framework-meta-tags">
-              <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
-              <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+          <button aria-expanded={expanded} className="framework-group-toggle" onClick={onToggle} type="button">
+            <ChevronRight className="framework-group-chevron" size={16} />
+            <span className="provider-icon">{byFramework ? <Package size={16} /> : <Monitor size={16} />}</span>
+            <span className="framework-group-copy">
+              <strong>{byFramework ? spec.display : machineName}</strong>
+              {byFramework && (
+                <span className="framework-meta-tags">
+                  <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
+                  <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
+                </span>
+              )}
             </span>
-          </span>
+          </button>
           <span className="framework-group-summary">
-            <span>{t("resources.machineCount", { count: machineCount })}</span>
+            <span>{byFramework ? t("resources.machineCount", { count }) : t("frameworks.frameworkCount", { count })}</span>
             {latestVersion && <span className="mono">{t("frameworks.latestVersion")} v{latestVersion}</span>}
-            {outdatedCount > 0
-              ? <span className="framework-update-state warning">{t("frameworks.groupOutdated", { count: outdatedCount })}</span>
-              : null}
+            {updating
+              ? <span className="framework-update-state"><RefreshCw className="spin" size={12} />{t("frameworks.groupUpdating")}</span>
+              : outdatedCount > 0
+                ? <span className="framework-update-state warning">{t(byFramework ? "frameworks.groupOutdated" : "frameworks.machineGroupOutdated", { count: outdatedCount })}</span>
+                : checking
+                  ? <span className="framework-update-state"><RefreshCw className="spin" size={12} />{t("tools.checkingUpdate")}</span>
+                  : failedCount === 0 && <span className="framework-update-state success"><CheckCircle2 size={12} />{t("frameworks.groupUpToDate")}</span>}
+            {failedCount > 0 && <span className="framework-update-state warning">{t(byFramework ? "frameworks.groupCheckFailed" : "frameworks.machineGroupCheckFailed", { count: failedCount })}</span>}
           </span>
           {outdatedCount > 0 && (
             <button className="ghost-action" disabled={updateDisabled} onClick={onUpdateOutdated} type="button">
-              <Download size={14} />{t("frameworks.updateGroup", { count: outdatedCount })}
+              <Download size={14} />{t(byFramework ? "frameworks.updateGroup" : "frameworks.updateMachineGroup", { count: outdatedCount })}
             </button>
           )}
         </div>
@@ -71,6 +100,7 @@ export function FrameworkGroupRow({
 // One machine's install of a framework: its version, signed-in account and
 // actions. Every machine gets its own row so versions can be compared at a glance.
 export function FrameworkTableRows({
+  identity = "machine",
   item,
   busy,
   progress,
@@ -97,6 +127,7 @@ export function FrameworkTableRows({
   onDismissAuth,
   onCopyCode,
 }: {
+  identity?: "machine" | "framework";
   item: Framework;
   busy?: FrameworkBusyAction;
   progress?: OperationProgress;
@@ -126,7 +157,6 @@ export function FrameworkTableRows({
   const { t } = useI18n();
   const { spec } = item;
   const hasUpdate = Boolean(check?.update_available);
-  const action: "update" | "check" = hasUpdate ? "update" : "check";
   const updateStatus = frameworkUpdateStatusLabel(check, t);
   const updateStatusClass = check?.error || check?.update_available ? "warning" : "success";
   const authActive = loginFlow?.state === "waiting";
@@ -135,34 +165,50 @@ export function FrameworkTableRows({
   const authenticated = auth?.state === "authenticated";
   const canLogout = Boolean(authenticated && auth?.logout_supported);
   const account = frameworkAccountSummary(auth);
-  const buttonLabel = busy === "check"
-    ? t("tools.checkingUpdate")
-    : busy === "update"
-      ? t("frameworks.installing")
-      : action === "update"
-          ? t("tools.update")
-          : t("tools.checkUpdate");
+  const buttonLabel = busy === "update" ? t("frameworks.installing") : t("tools.update");
 
   return (
     <>
       <tr className={`catalog-row framework-installed-row framework-instance-row${hasUpdate ? " outdated" : ""}`}>
-        <td className="framework-machine-cell" data-label={t("frameworks.machine")}>
-          <span className="framework-machine-name" title={currentMachine}>{currentMachine}</span>
-        </td>
+        {identity === "machine" ? (
+          <td className="framework-machine-cell" data-label={t("frameworks.machine")}>
+            <span className="framework-machine-name" title={currentMachine}>{currentMachine}</span>
+          </td>
+        ) : (
+          <td className="framework-machine-cell" data-label={t("frameworks.framework")}>
+            <span className="framework-machine-name" title={spec.display}>{spec.display}</span>
+            <span className="framework-meta-tags">
+              <span className="pill framework-company">{frameworkCompanyName(spec)}</span>
+            </span>
+          </td>
+        )}
         <td data-label={t("frameworks.versionAndUpdate")}>
           <span className="framework-version-copy">
             <strong className="mono">{item.version ? `v${item.version}` : "—"}</strong>
-            {updateStatus ? (
+            {updateStatus && busy !== "check" ? (
               <span className={`framework-update-state ${updateStatusClass}`} title={check?.error || undefined}>
                 {updateStatusClass === "success" && <CheckCircle2 size={13} />}{updateStatus}
               </span>
-            ) : <span className="framework-update-state">{t("tools.checkingUpdate")}</span>}
+            ) : <span className="framework-update-state"><RefreshCw className="spin" size={12} />{t("tools.checkingUpdate")}</span>}
           </span>
         </td>
         <td className="framework-account-cell" data-label={t("frameworks.account")}>
           {account
             ? <FrameworkAccountLine account={account} />
-            : <span className="muted">{supportsLogin && !authChecking ? t("tools.authLoginRequired") : "—"}</span>}
+            : supportsLogin && !authenticated
+              ? (
+                <button
+                  className="framework-login-link"
+                  disabled={disabled || Boolean(busy) || authActive || authChecking}
+                  onClick={onAuth}
+                  title={frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
+                  type="button"
+                >
+                  {authChecking || busy === "auth" ? <RefreshCw className="spin" size={12} /> : <LogIn size={12} />}
+                  {authChecking ? t("tools.authChecking") : t("tools.authLogin")}
+                </button>
+              )
+              : <span className="muted">{authenticated ? t("tools.authAuthenticated") : "—"}</span>}
         </td>
         <td data-label={t("frameworks.availability")}>
           <div className="framework-health-cell">
@@ -183,50 +229,38 @@ export function FrameworkTableRows({
         </td>
         <td className="catalog-action-cell" data-label={t("common.actions")}>
           <div className="framework-row-actions">
-            {spec.update_supported && (
+            {spec.update_supported && (hasUpdate || busy === "update") && (
               <button
-                className={hasUpdate ? "action" : "ghost-action"}
+                className="action"
                 disabled={disabled || Boolean(busy) || authActive}
-                onClick={() => (action === "check" ? onCheck?.() : onInstall?.(action))}
+                onClick={() => onInstall?.("update")}
                 type="button"
               >
-                {busy === "check" || action === "check" ? <RefreshCw className={busy === "check" ? "spin" : ""} size={14} /> : <Download size={14} />}
-                {buttonLabel}
+                <Download size={14} />{buttonLabel}
               </button>
             )}
-            {supportsLogin && (
-              <button
-                className={`ghost-action${authenticated ? " framework-authenticated-action" : ""}`}
-                disabled={disabled || Boolean(busy) || authActive || authChecking || Boolean(authenticated && !canLogout)}
-                onClick={canLogout ? onLogout : onAuth}
-                title={canLogout
-                  ? account ? t("frameworks.authLogoutAccountHint", { account: account.identity }) : t("tools.authLogoutHint")
-                  : frameworkAuthStatusLabel(auth, spec.env_required ?? [], t)}
-                type="button"
-              >
-                {authChecking || busy === "auth" || busy === "logout"
-                  ? <RefreshCw className="spin" size={14} />
-                  : authenticated
-                    ? <LogOut size={14} />
-                    : <LogIn size={14} />}
-                {busy === "logout"
-                  ? t("tools.authLoggingOut")
-                  : authenticated
-                    ? t("tools.authAuthenticated")
-                    : authChecking
-                      ? t("tools.authChecking")
-                      : t("tools.authLogin")}
-              </button>
-            )}
-            <button
-              className="ghost-action danger-action"
-              disabled={disabled || !spec.uninstall_supported || Boolean(busy) || authActive}
-              onClick={onUninstall}
-              title={!spec.uninstall_supported ? t("frameworks.uninstallUnsupported") : undefined}
-              type="button"
-            >
-              <Trash2 size={14} />{busy === "uninstall" ? t("frameworks.uninstalling") : t("frameworks.uninstall")}
-            </button>
+            <FrameworkRowMenu
+              disabled={disabled || Boolean(busy) || authActive}
+              label={t("common.more")}
+              items={[
+                ...(spec.update_supported ? [{
+                  key: "check", icon: <RefreshCw size={14} />, label: t("tools.checkUpdate"), onSelect: () => onCheck?.(),
+                }] : []),
+                ...(canLogout ? [{
+                  key: "logout", icon: <LogOut size={14} />,
+                  label: busy === "logout" ? t("tools.authLoggingOut") : t("frameworks.authLogout"),
+                  title: account ? t("frameworks.authLogoutAccountHint", { account: account.identity }) : t("tools.authLogoutHint"),
+                  onSelect: onLogout,
+                }] : []),
+                {
+                  key: "uninstall", icon: <Trash2 size={14} />, danger: true,
+                  label: busy === "uninstall" ? t("frameworks.uninstalling") : t("frameworks.uninstall"),
+                  title: spec.uninstall_supported ? undefined : t("frameworks.uninstallUnsupported"),
+                  disabled: !spec.uninstall_supported,
+                  onSelect: onUninstall,
+                },
+              ]}
+            />
           </div>
         </td>
       </tr>
@@ -259,6 +293,96 @@ export function FrameworkTableRows({
 // A framework whose install is running in the background. It is listed in the
 // catalog (not the install dialog) so the dialog can close as soon as the
 // install starts while progress stays visible.
+interface FrameworkRowMenuItem {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  title?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
+}
+
+// The less frequent actions of a row. The list is positioned against the
+// viewport: the catalog table scrolls sideways, which would clip it.
+function FrameworkRowMenu({ items, label, disabled }: { items: FrameworkRowMenuItem[]; label: string; disabled?: boolean }) {
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!position) return;
+    const close = () => setPosition(null);
+    const onPointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!anchor.current?.contains(target) && !list.current?.contains(target)) close();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      close();
+      anchor.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    list.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [position]);
+  useEffect(() => { if (disabled) setPosition(null); }, [disabled]);
+
+  function toggle() {
+    if (position) {
+      setPosition(null);
+      return;
+    }
+    const rect = anchor.current?.getBoundingClientRect();
+    if (rect) setPosition({ top: rect.bottom + 4, right: Math.max(8, window.innerWidth - rect.right) });
+  }
+
+  return (
+    <>
+      <button
+        aria-expanded={Boolean(position)}
+        aria-haspopup="menu"
+        aria-label={label}
+        className="ghost-action icon-only framework-row-menu-button"
+        disabled={disabled}
+        onClick={toggle}
+        ref={anchor}
+        title={label}
+        type="button"
+      >
+        <Ellipsis size={15} />
+      </button>
+      {position && (
+        <div className="framework-row-menu" ref={list} role="menu" style={{ top: position.top, right: position.right }}>
+          {items.map((item) => (
+            <button
+              className={item.danger ? "danger" : undefined}
+              disabled={item.disabled}
+              key={item.key}
+              onClick={() => {
+                setPosition(null);
+                item.onSelect();
+              }}
+              role="menuitem"
+              title={item.title}
+              type="button"
+            >
+              {item.icon}{item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function FrameworkInstallingRow({ item, progress }: { item: Framework; progress?: OperationProgress }) {
   const { t } = useI18n();
   return (

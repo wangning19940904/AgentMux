@@ -4,7 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activeMachineScope, activeRemoteID, api, type Framework, type FrameworkInstallResult, type OperationProgress } from "../api";
 import { I18nProvider } from "../i18n";
+import { clearResourceCache } from "../resourceCache";
 import { FrameworksPanel } from "./FrameworksPanel";
+import { rememberExpandedFrameworkGroups } from "./frameworks/frameworkGrouping";
+import { resetFrameworkPageCache } from "./frameworks/frameworkPageCache";
 
 vi.mock("../api", () => ({
   api: {
@@ -67,6 +70,11 @@ async function typeInto(input: HTMLInputElement, value: string) {
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  clearResourceCache();
+  resetFrameworkPageCache();
+  localStorage.clear();
+  // Groups start collapsed; most tests look at the rows inside DeepSeek Harness.
+  rememberExpandedFrameworkGroups(new Set(["framework:dsh"]));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(activeMachineScope).mockReturnValue("local" as ReturnType<typeof activeMachineScope>);
   vi.mocked(activeRemoteID).mockReturnValue("");
@@ -83,6 +91,13 @@ beforeEach(async () => {
 async function mountPanel() {
   root = createRoot(container);
   await act(async () => { root.render(<I18nProvider language="zh"><FrameworksPanel /></I18nProvider>); });
+}
+
+// Mounts the page again with freshly mocked data instead of the cached list.
+async function remount() {
+  await act(async () => { root.unmount(); });
+  clearResourceCache();
+  await mountPanel();
 }
 
 afterEach(async () => {
@@ -180,8 +195,7 @@ describe("install settings", () => {
       frameworks: [{ ...dsh, commands: { install: { command, custom: true } } }],
     });
     vi.mocked(api.installFramework).mockResolvedValue({ kind: "dsh", action: "install", ok: false, error: "stop here" });
-    await act(async () => { root.unmount(); });
-    await mountPanel();
+    await remount();
 
     await click(button(container, "安装框架"));
     await click(button(container.querySelector<HTMLElement>('[role="dialog"]')!, "安装"));
@@ -226,8 +240,7 @@ describe("install settings", () => {
   it("only edits install settings for this machine", async () => {
     vi.mocked(activeMachineScope).mockReturnValue("ecs_cn" as ReturnType<typeof activeMachineScope>);
     vi.mocked(activeRemoteID).mockReturnValue("ecs_cn");
-    await act(async () => { root.unmount(); });
-    await mountPanel();
+    await remount();
     expect(button(container, "安装设置").disabled).toBe(true);
   });
 
@@ -246,8 +259,7 @@ describe("install settings", () => {
         : { kind: "dsh", installed: true, update_available: false, latest_version: "0.2.1" }
     ));
     vi.mocked(api.installFramework).mockResolvedValue({ kind: "dsh", action: "update", ok: true });
-    await act(async () => { root.unmount(); });
-    await mountPanel();
+    await remount();
 
     const rows = Array.from(container.querySelectorAll<HTMLElement>(".framework-instance-row"));
     expect(rows.map((row) => row.querySelector(".framework-machine-name")?.textContent)).toEqual(["本机", "home-macmini"]);
@@ -274,8 +286,7 @@ describe("install settings", () => {
       checks: { enabled: false, interval_minutes: 30 },
     });
     vi.mocked(api.saveFrameworkHealthSettings).mockImplementation(async (settings) => settings);
-    await act(async () => { root.unmount(); });
-    await mountPanel();
+    await remount();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
     expect(container.textContent).toContain("异常");
@@ -289,10 +300,65 @@ describe("install settings", () => {
     expect(container.querySelector(".framework-health-checks select")).not.toBeNull();
   });
 
+  it("starts with groups collapsed and groups by machine on request", async () => {
+    rememberExpandedFrameworkGroups(new Set());
+    vi.mocked(activeMachineScope).mockReturnValue("all" as ReturnType<typeof activeMachineScope>);
+    const codex: Framework = { ...dsh, spec: { ...dsh.spec, kind: "codex", display: "Codex", company: "OpenAI" } };
+    vi.mocked(api.frameworks).mockResolvedValue({
+      prereqs: { node: true, npm: true },
+      frameworks: [
+        { ...dsh, installed: true, version: "0.2.0", target_id: "home", target_name: "home-macmini" },
+        { ...dsh, installed: true, version: "0.2.1", target_id: "local", target_name: "this-mac" },
+        { ...codex, installed: true, version: "0.170.0", target_id: "home", target_name: "home-macmini" },
+      ],
+    });
+    vi.mocked(api.checkFrameworkUpdate).mockImplementation(async (kind, targetID) => (
+      kind === "dsh" && targetID === "home"
+        ? { kind, installed: true, update_available: true, current_version: "0.2.0", latest_version: "0.2.1" }
+        : { kind, installed: true, update_available: false }
+    ));
+    await remount();
+
+    let headers = Array.from(container.querySelectorAll<HTMLElement>(".framework-group-row"));
+    expect(headers.map((row) => row.querySelector("strong")?.textContent)).toEqual(["Codex", "DeepSeek Harness"]);
+    expect(container.querySelectorAll(".framework-instance-row")).toHaveLength(0);
+    expect(headers[1].textContent).toContain("1 台可更新");
+
+    await click(headers[1].querySelector<HTMLButtonElement>(".framework-group-toggle")!);
+    expect(headers[1].querySelector(".framework-group-toggle")?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelectorAll(".framework-instance-row")).toHaveLength(2);
+
+    await click(button(container, "按机器"));
+    headers = Array.from(container.querySelectorAll<HTMLElement>(".framework-group-row"));
+    expect(headers.map((row) => row.querySelector("strong")?.textContent)).toEqual(["本机", "home-macmini"]);
+    expect(headers[1].textContent).toContain("2 个框架");
+    expect(headers[1].textContent).toContain("1 个可更新");
+    expect(container.querySelectorAll(".framework-instance-row")).toHaveLength(0);
+
+    await click(button(container, "全部展开"));
+    const rows = Array.from(container.querySelectorAll<HTMLElement>(".framework-instance-row"));
+    expect(rows.map((row) => row.querySelector(".framework-machine-name")?.textContent)).toEqual(["DeepSeek Harness", "Codex", "DeepSeek Harness"]);
+    expect(localStorage.getItem("agentmux.frameworks.groupBy")).toBe("machine");
+  });
+
+  it("shows the last known list and update checks at once when the page opens again", async () => {
+    vi.mocked(api.frameworks).mockResolvedValue(frameworksResponse(true));
+    await remount();
+    expect(api.checkFrameworkUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+
+    const pending = deferred<ReturnType<typeof frameworksResponse>>();
+    vi.mocked(api.frameworks).mockReturnValue(pending.promise);
+    await mountPanel();
+    expect(container.querySelector(".framework-installed-row")?.textContent).toContain("v0.2.1-rc.5");
+    expect(container.textContent).not.toContain("加载中");
+    expect(api.checkFrameworkUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve(frameworksResponse(true)); });
+  });
+
   it("hides the periodic check setting when every machine is in view", async () => {
     vi.mocked(activeMachineScope).mockReturnValue("all" as ReturnType<typeof activeMachineScope>);
-    await act(async () => { root.unmount(); });
-    await mountPanel();
+    await remount();
     expect(container.querySelector(".framework-health-checks")).toBeNull();
   });
 });

@@ -7,7 +7,7 @@ export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
 export * from "./mailbox";
-import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, del, delChecked } from "./client";
+import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, del, delChecked } from "./client";
 import type { Targeted } from "./fleet";
 import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
@@ -597,7 +597,7 @@ export const api = {
     putChecked<FrameworkInstallSettingsResponse>("/api/v1/frameworks/install-settings", settings, { local: true }),
   checkFrameworkUpdate: (kind: string, targetID?: string) => targetID
     ? fleetCall<FrameworkUpdateCheck>({ key: "check", method: "POST", path: "/api/v1/frameworks/check", body: { kind } }, [targetID], { confirm: false }).then((result) => result.first)
-    : post<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
+    : postQuery<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
   usage: (period: string, from = "", to = "") => {
     const params = new URLSearchParams({ period });
     if (from) params.set("from", from);

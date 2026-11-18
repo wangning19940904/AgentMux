@@ -57,11 +57,13 @@ func UpdateWithProgress(ctx context.Context, kind string, progress ProgressFunc)
 // check, installer execution, and verification stages.
 func UpdateWithProgressOptions(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
 	reportProgress(progress, "checking", "", 8)
-	check := CheckUpdateWithSettings(ctx, kind, options.Settings)
-	if check.Error != "" {
+	// An explicit update always asks the registry again rather than trusting
+	// the page's cached answer.
+	check, latestErr := checkUpdate(ctx, kind, options.Settings, true)
+	if check.Error != "" && latestErr == nil {
 		return InstallResult{Kind: kind, Action: "update", Error: check.Error}
 	}
-	if !check.UpdateAvailable {
+	if latestErr == nil && !check.UpdateAvailable {
 		return InstallResult{
 			Kind:    kind,
 			Action:  "update",
@@ -80,7 +82,20 @@ func UpdateWithProgressOptions(ctx context.Context, kind string, options Install
 	if spec.KindType != KindCLI {
 		return InstallResult{Kind: kind, Action: "update", Error: fmt.Sprintf("framework %q does not have a runnable adapter", kind)}
 	}
-	return updateCLIWithProgress(ctx, spec, check, options, progress)
+	if latestErr != nil {
+		// The installation and its version are known; only the registry
+		// lookup failed (often a dropped connection). The package manager does
+		// its own resolution, so run the update instead of failing on the
+		// pre-check, and verify the result without a target version.
+		check.Error = ""
+		check.LatestVersion = ""
+	}
+	res := updateCLIWithProgress(ctx, spec, check, options, progress)
+	if latestErr != nil {
+		note := fmt.Sprintf("Latest version could not be checked before updating (%v); ran the update anyway.\n", latestErr)
+		res.Log = note + res.Log
+	}
+	return res
 }
 
 // UninstallWithProgress removes a CLI only through a catalog-owned command and
@@ -168,16 +183,37 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
 		defer cancel()
 	}
-	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
-	cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
-	out, err := cmd.CombinedOutput()
+	out, err := runCLIUpdateCommand(runCtx, command)
 	res.Log = string(out)
 	if err != nil {
-		res.Error = fmt.Sprintf("update failed: %v", err)
-		return res
+		fallback, ok := npmFallbackUpdatePlan(spec, plan, res.Log, options.Settings)
+		if ok {
+			if _, lookErr := exec.LookPath("npm"); lookErr != nil {
+				ok = false
+			}
+		}
+		if !ok {
+			res.Error = fmt.Sprintf("update failed: %v", err)
+			return res
+		}
+		// The native updater could not tell how the CLI was installed. npm
+		// publishes the same CLI, so update through it instead.
+		res.Log += fmt.Sprintf("\n%s could not detect its installation method; updating with npm instead.\n", res.Command)
+		res.Command = fallback.Command
+		reportProgress(progress, "updating", res.Command, 50)
+		out, err = runCLIUpdateCommand(runCtx, fallback.Argv)
+		res.Log += string(out)
+		if err != nil {
+			res.Error = fmt.Sprintf("update failed: %v", err)
+			return res
+		}
 	}
 
 	reportProgress(progress, "verifying", "", 88)
+	// The installed binary (or the wrapper in front of it) may keep its size
+	// and mtime across an update, so do not trust a cached version.
+	ForgetVersion(spec.Kind)
+	forgetLatestVersions(spec.Kind)
 	status := Detect(spec, DetectPrereqs())
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
@@ -188,22 +224,41 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 		res.Error = "update command completed but the installed version could not be verified"
 		return res
 	}
-	advanced := sdkVersionGreater(res.Version, check.CurrentVersion)
-	if spec.ExactLatest {
-		// Native builds such as Cursor use date+hash identifiers. Hashes are not
-		// ordered, so success means the installer selected the exact build exposed
-		// by the official latest-version endpoint.
-		advanced = res.Version == check.LatestVersion
-	}
-	if !advanced {
+	if !updateAdvanced(spec, check, res.Version) {
 		res.Error = fmt.Sprintf(
 			"update command completed but version did not advance (still %s; latest %s)",
 			res.Version, check.LatestVersion,
 		)
 		return res
 	}
+	if check.LatestVersion == "" && res.Version == check.CurrentVersion {
+		res.Log += fmt.Sprintf("\n%s is still %s; the package manager found nothing newer.\n", spec.Display, res.Version)
+	}
 	res.OK = true
 	return res
+}
+
+// updateAdvanced reports whether the version installed after an update is
+// acceptable. Without a known latest version (the registry lookup failed),
+// a successful package-manager run is trusted.
+func updateAdvanced(spec Spec, check UpdateCheck, installed string) bool {
+	switch {
+	case check.LatestVersion == "":
+		return true
+	case spec.ExactLatest:
+		// Native builds such as Cursor use date+hash identifiers. Hashes are not
+		// ordered, so success means the installer selected the exact build
+		// exposed by the official latest-version endpoint.
+		return installed == check.LatestVersion
+	default:
+		return sdkVersionGreater(installed, check.CurrentVersion)
+	}
+}
+
+func runCLIUpdateCommand(ctx context.Context, command []string) ([]byte, error) {
+	cmd := frameworkCommandContext(ctx, command[0], command[1:]...)
+	cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
+	return cmd.CombinedOutput()
 }
 
 func install(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
@@ -301,6 +356,8 @@ func installCLIWithProgress(ctx context.Context, spec Spec, options InstallOptio
 	}
 
 	reportProgress(progress, "verifying", "", 88)
+	ForgetVersion(spec.Kind)
+	forgetLatestVersions(spec.Kind)
 	status := Detect(spec, DetectPrereqs())
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
