@@ -85,6 +85,7 @@ func (s *Server) registerSuperAgentRoutes() {
 	s.mux.HandleFunc("DELETE /api/v1/super-agents/routers", s.handleSuperAgentRouterDelete)
 	s.mux.HandleFunc("GET /api/v1/super-agents/activity", s.handleSuperAgentActivity)
 	s.mux.HandleFunc("GET /api/v1/super-agents/tickets", s.handleSuperAgentTickets)
+	s.mux.HandleFunc("GET /api/v1/super-agents/work", s.handleSuperAgentWork)
 	s.registerDispatchRoutes()
 	// Workers this machine keeps for agents that live on another machine.
 	s.mux.HandleFunc("POST /api/v1/super-agents/workers/launch", s.handleHostedWorkerLaunch)
@@ -616,6 +617,21 @@ func (s *Server) handleSuperAgentTickets(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, tickets)
+}
+
+// handleSuperAgentWork is what every agent here is doing now: events with a
+// router, Tickets in hand or lately finished, and follow-ups.
+func (s *Server) handleSuperAgentWork(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	work, err := s.superAgents.Work(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, work)
 }
 
 // handleHostedWorkerLaunch keeps a worker here for an agent that lives on

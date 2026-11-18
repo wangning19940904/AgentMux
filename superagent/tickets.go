@@ -24,6 +24,10 @@ type TicketSummary struct {
 	// MachineName is where the worker runs. Empty means the agent's machine.
 	MachineName   string `json:"machine_name,omitempty"`
 	PendingInputs int    `json:"pending_inputs,omitempty"`
+	// Request is the message the Ticket came from and RequesterName who sent
+	// it, where they are still known. Only the work overview fills them.
+	Request       string `json:"request,omitempty"`
+	RequesterName string `json:"requester_name,omitempty"`
 }
 
 // Tickets lists the newest Tickets of every agent on this machine.
@@ -44,24 +48,7 @@ func (s *Service) Tickets(ctx context.Context, limit int) ([]TicketSummary, erro
 			return nil, err
 		}
 		for _, ticket := range tickets {
-			summary := TicketSummary{SuperAgentTicket: ticket, SuperAgentName: agent.Name, PendingInputs: len(ticket.Inputs)}
-			summary.Inputs, summary.Reply, summary.Links = nil, nil, nil
-			summary.DispatchKey, summary.Helpers = "", cutHelpers(summary.Helpers, ticketSummaryOutput)
-			summary.Output = truncateRunes(summary.Output, ticketSummaryOutput)
-			summary.Instructions = truncateRunes(summary.Instructions, ticketSummaryOutput)
-			if review := summary.AutoReview; review != nil {
-				cut := *review
-				cut.Findings = truncateRunes(cut.Findings, ticketSummaryOutput)
-				summary.AutoReview = &cut
-			}
-			if hostID := ticket.Worker.HostID; hostID != "" {
-				summary.MachineName = hostID
-				if fleet != nil {
-					if name, known := fleet.MachineName(hostID); known {
-						summary.MachineName = name
-					}
-				}
-			}
+			summary := summarizeTicket(ticket, agent.Name, fleet)
 			summaries = append(summaries, summary)
 		}
 	}
@@ -75,4 +62,28 @@ func (s *Service) Tickets(ctx context.Context, limit int) ([]TicketSummary, erro
 		summaries = summaries[:limit]
 	}
 	return summaries, nil
+}
+
+// summarizeTicket cuts a Ticket down to what a list shows, and names the
+// machine its worker runs on.
+func summarizeTicket(ticket core.SuperAgentTicket, agentName string, fleet MachineFleet) TicketSummary {
+	summary := TicketSummary{SuperAgentTicket: ticket, SuperAgentName: agentName, PendingInputs: len(ticket.Inputs)}
+	summary.Inputs, summary.Reply, summary.Links = nil, nil, nil
+	summary.DispatchKey, summary.Helpers = "", cutHelpers(summary.Helpers, ticketSummaryOutput)
+	summary.Output = truncateRunes(summary.Output, ticketSummaryOutput)
+	summary.Instructions = truncateRunes(summary.Instructions, ticketSummaryOutput)
+	if review := summary.AutoReview; review != nil {
+		cut := *review
+		cut.Findings = truncateRunes(cut.Findings, ticketSummaryOutput)
+		summary.AutoReview = &cut
+	}
+	if hostID := ticket.Worker.HostID; hostID != "" {
+		summary.MachineName = hostID
+		if fleet != nil {
+			if name, known := fleet.MachineName(hostID); known {
+				summary.MachineName = name
+			}
+		}
+	}
+	return summary
 }

@@ -1914,6 +1914,56 @@ export interface SuperAgentTimer {
   updated_at?: string;
 }
 
+// SuperAgentWork is what every agent on one machine is doing: the events
+// still with a router, the Tickets in hand and lately finished, and the
+// follow-ups the routers set for themselves.
+export interface SuperAgentWork {
+  routing: SuperAgentRoutingItem[];
+  tickets: SuperAgentWorkTicket[];
+  timers: SuperAgentWorkTimer[];
+}
+
+// An event a router has yet to decide on; routing is true while the router
+// reads it, otherwise it waits its turn on its thread.
+export interface SuperAgentRoutingItem {
+  id: string;
+  super_agent_id: string;
+  super_agent_name: string;
+  source_kind: string;
+  kind?: string;
+  thread_key: string;
+  actor?: string;
+  actor_name?: string;
+  title?: string;
+  text: string;
+  ticket_id?: string;
+  routing: boolean;
+  received_at: string;
+}
+
+export interface SuperAgentWorkTicket extends SuperAgentTicket {
+  super_agent_id: string;
+  super_agent_name: string;
+  // Where the worker runs; empty is the agent's own machine.
+  machine_name?: string;
+  pending_inputs?: number;
+  // The message the Ticket came from and who sent it, where still known.
+  request?: string;
+  requester_name?: string;
+}
+
+export interface SuperAgentWorkTimer extends SuperAgentTimer {
+  super_agent_id: string;
+  super_agent_name: string;
+  ticket_title?: string;
+}
+
+// One machine's answer for the work page: its work, or why it has none.
+export interface MachineWork extends TargetMetadata {
+  work?: SuperAgentWork;
+  error?: string;
+}
+
 export interface SuperAgentActivity {
   tickets: SuperAgentTicket[];
   triggers: SuperAgentTrigger[];

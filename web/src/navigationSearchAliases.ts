@@ -17,6 +17,12 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "chaoji", "chao ji", "cjznt",
     "super agent", "super agents", "superagent", "ticket", "proactive",
   ],
+  work: [
+    "运行中的工作", "工作", "工单", "任务", "进度", "处理中", "跟进", "定时跟进", "停止任务",
+    "yunxingzhong", "yun xing zhong", "yxz", "gongdan", "gong dan", "gd",
+    "running work", "work", "ticket", "tickets", "worker", "workers", "follow-up", "follow-ups",
+    "in progress", "queue", "stop task", "requests",
+  ],
   frameworks: [
     "框架", "智能体框架", "开发框架", "运行时", "SDK",
     "kuangjia", "kuang jia", "kj", "yunxingshi", "yun xing shi", "yxs",

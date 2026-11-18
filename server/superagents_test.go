@@ -32,6 +32,7 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/routers"},
 		{http.MethodDelete, "/api/v1/super-agents/routers?id=x"},
 		{http.MethodGet, "/api/v1/super-agents/activity?id=x"},
+		{http.MethodGet, "/api/v1/super-agents/work"},
 		{http.MethodPost, "/api/v1/super-agents/setup"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/tickets/stop"},
@@ -63,6 +64,9 @@ func TestSuperAgentRoutesAreNotOpenToMembers(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents"},
 		{http.MethodPost, "/api/v1/super-agents/trigger"},
 		{http.MethodPost, "/api/v1/super-agents/routers"},
+		{http.MethodGet, "/api/v1/super-agents/work"},
+		{http.MethodPost, "/api/v1/super-agents/tickets/stop"},
+		{http.MethodPost, "/api/v1/super-agents/timers/cancel"},
 		{http.MethodGet, "/api/v1/super-agents/feishu/members"},
 		{http.MethodPost, "/api/v1/super-agents/github/account"},
 		{http.MethodPost, "/api/v1/super-agents/github/login"},
@@ -383,6 +387,15 @@ func TestSuperAgentTicketsRouteListsNothingOnAFreshMachine(t *testing.T) {
 	s.SetSuperAgents(superagent.New(superagent.Options{Store: &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}}), nil)
 	rec := doJSON(t, s, http.MethodGet, "/api/v1/super-agents/tickets", nil)
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSuperAgentWorkRouteListsNothingOnAFreshMachine(t *testing.T) {
+	s, st := newTestServer(t)
+	s.SetSuperAgents(superagent.New(superagent.Options{Store: &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}}), nil)
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/super-agents/work", nil)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"routing":[],"tickets":[],"timers":[]}` {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }
