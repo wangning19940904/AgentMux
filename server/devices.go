@@ -50,6 +50,15 @@ type deviceBackend struct {
 	// it, and presence says which machines are linked to it, for a standby.
 	viaHub   func(ctx context.Context, id string) (net.Conn, error)
 	presence func(ctx context.Context) map[string]bool
+	// startingUplink returns this machine's link to the hub it follows
+	// while that link is still making its first connection after the
+	// server started, or nil.
+	startingUplink func() uplinkWaiter
+}
+
+// uplinkWaiter is a link to a hub that can be waited on until it connects.
+type uplinkWaiter interface {
+	WaitConnected(ctx context.Context) bool
 }
 
 func (b *deviceBackend) isSelf(id string) bool {
@@ -150,22 +159,48 @@ const (
 func (b *deviceBackend) Dial(ctx context.Context, id string) (net.Conn, error) {
 	conn, err := b.hub.Dial(ctx, id)
 	if err != nil && linkpkg.IsOffline(err) && b.viaHub != nil && b.following != nil && b.following() {
-		return b.viaHub(ctx, id)
+		return b.dialViaHub(ctx, id)
 	}
 	if err == nil || !linkpkg.IsOffline(err) || !b.expectingReconnect(ctx, id) {
 		return conn, err
 	}
-	// Leave the request time to fail as offline rather than time out.
-	wait := reconnectWait
-	if deadline, ok := ctx.Deadline(); ok {
-		wait = min(wait, time.Until(deadline)/2)
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	waitCtx, cancel := reconnectContext(ctx)
 	defer cancel()
 	if !b.hub.WaitConnected(waitCtx, id) {
 		return nil, err
 	}
 	return b.hub.Dial(ctx, id)
+}
+
+// dialViaHub reaches a machine through the hub this one follows. Right after
+// the server starts, its own link to that hub is not up yet; a request then
+// waits briefly for the link instead of failing, as on the primary, so a
+// Console opened with the app does not load every machine as offline.
+func (b *deviceBackend) dialViaHub(ctx context.Context, id string) (net.Conn, error) {
+	var starting uplinkWaiter
+	if b.startingUplink != nil {
+		starting = b.startingUplink()
+	}
+	conn, err := b.viaHub(ctx, id)
+	if err == nil || !linkpkg.IsOffline(err) || starting == nil {
+		return conn, err
+	}
+	waitCtx, cancel := reconnectContext(ctx)
+	defer cancel()
+	if !starting.WaitConnected(waitCtx) {
+		return nil, err
+	}
+	return b.viaHub(ctx, id)
+}
+
+// reconnectContext bounds a wait for a connection, leaving the request time
+// to fail as offline rather than time out.
+func reconnectContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	wait := reconnectWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/2)
+	}
+	return context.WithTimeout(ctx, wait)
 }
 
 func (b *deviceBackend) expectingReconnect(ctx context.Context, id string) bool {
@@ -222,7 +257,14 @@ func (s *Server) setupLink() {
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
 	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels,
-		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence}
+		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence,
+		startingUplink: func() uplinkWaiter {
+			// A nil client must not become a non-nil interface.
+			if client := s.node.startingUplink(); client != nil {
+				return client
+			}
+			return nil
+		}}
 	s.setupPassiveLink()
 	if s.remote != nil {
 		s.remote.SetLinkBackend(s.devices)
@@ -827,6 +869,24 @@ func (n *nodeLink) stop() {
 		n.cancel()
 	}
 	n.client, n.cancel = nil, nil
+}
+
+// startingUplink returns this machine's link to its hub while the link is
+// still coming up after the server started: it is not connected and began
+// less than reconnectGrace ago. A link that stays down past that is offline, and
+// requests fail at once again.
+func (n *nodeLink) startingUplink() *linkpkg.Client {
+	n.mu.Lock()
+	client := n.client
+	n.mu.Unlock()
+	if client == nil || client.Connected() {
+		return nil
+	}
+	started := client.StartedAt()
+	if started.IsZero() || time.Since(started) > reconnectGrace {
+		return nil
+	}
+	return client
 }
 
 // uplink is the client for requests up this machine's link, or nil without

@@ -181,6 +181,14 @@ func (s *Server) hubPresence(ctx context.Context) map[string]bool {
 	if fresh {
 		return presence
 	}
+	// Right after the server starts, the link to the hub is not up yet;
+	// asking at once would list every machine as offline until the answer
+	// expires.
+	if starting := s.node.startingUplink(); starting != nil {
+		waitCtx, cancel := reconnectContext(ctx)
+		starting.WaitConnected(waitCtx)
+		cancel()
+	}
 	_, _ = s.fetchHubFleet(ctx, uplink)
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

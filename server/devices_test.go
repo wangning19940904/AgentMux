@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -503,6 +505,85 @@ func TestDeviceDialWaitsOnlyForDevicesExpectedBack(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	if _, err := backend.Dial(short, recent); !linkpkg.IsOffline(err) {
+		t.Fatalf("dial err = %v, want offline", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatal("the wait ignored the request's deadline")
+	}
+}
+
+type fakeUplinkWaiter struct {
+	connected chan struct{}
+}
+
+func (f *fakeUplinkWaiter) WaitConnected(ctx context.Context) bool {
+	select {
+	case <-f.connected:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// A standby reaches machines through the primary over its own link, which is
+// not up for the first seconds after the app starts. A request then waits for
+// that link instead of reporting every machine offline.
+func TestStandbyDialWaitsForItsStartingLinkToTheHub(t *testing.T) {
+	st, err := store.OpenLegacySQLite(filepath.Join(t.TempDir(), "standby-dial.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	var linkUp atomic.Bool
+	var calls atomic.Int32
+	viaHub := func(context.Context, string) (net.Conn, error) {
+		calls.Add(1)
+		if !linkUp.Load() {
+			return nil, linkpkg.ErrOffline
+		}
+		near, far := net.Pipe()
+		t.Cleanup(func() { _ = near.Close(); _ = far.Close() })
+		return near, nil
+	}
+	waiter := &fakeUplinkWaiter{connected: make(chan struct{})}
+	var starting uplinkWaiter = waiter
+	backend := &deviceBackend{st: st, hub: linkpkg.NewHub(st, nil), viaHub: viaHub,
+		following: func() bool { return true }, startingUplink: func() uplinkWaiter { return starting }}
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		linkUp.Store(true)
+		close(waiter.connected)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := backend.Dial(ctx, "device-1")
+	if err != nil {
+		t.Fatalf("dial while the link starts: %v", err)
+	}
+	_ = conn.Close()
+	if calls.Load() != 2 {
+		t.Fatalf("hub dialed %d times, want a failed try and one after the link came up", calls.Load())
+	}
+
+	// Once the link has come up, or never will, an offline machine fails at once.
+	linkUp.Store(false)
+	starting = nil
+	calls.Store(0)
+	started := time.Now()
+	if _, err := backend.Dial(ctx, "device-1"); !linkpkg.IsOffline(err) {
+		t.Fatalf("dial err = %v, want offline", err)
+	}
+	if calls.Load() != 1 || time.Since(started) > time.Second {
+		t.Fatalf("an offline machine waited: %d tries in %s", calls.Load(), time.Since(started))
+	}
+
+	// The wait is bounded by the request.
+	starting = &fakeUplinkWaiter{connected: make(chan struct{})}
+	short, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	started = time.Now()
+	if _, err := backend.Dial(short, "device-1"); !linkpkg.IsOffline(err) {
 		t.Fatalf("dial err = %v, want offline", err)
 	}
 	if time.Since(started) > 2*time.Second {
