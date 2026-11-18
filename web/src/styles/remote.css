@@ -2112,3 +2112,23 @@
 .super-agent-chat-bubble td { overflow-wrap: break-word; vertical-align: top; }
 .super-agent-chat-output th,
 .super-agent-chat-bubble th { color: var(--text-soft); font-weight: 600; text-align: left; background: var(--bg-elevated); }
+
+.remote-phone-list {
+  border-top: 1px solid var(--border);
+}
+
+.remote-phone-list > h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 18px 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.remote-phone-list > .empty-state,
+.remote-phone-list > .remote-feedback {
+  margin: 8px 18px 16px;
+}

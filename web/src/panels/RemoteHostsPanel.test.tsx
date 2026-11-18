@@ -24,6 +24,8 @@ vi.mock("../api", () => ({
     accounts: vi.fn(),
     assignDeviceOwner: vi.fn(),
     hubClientLink: vi.fn(),
+    phones: vi.fn(async () => []),
+    signOutPhone: vi.fn(),
   },
   APIError: class extends Error {},
   activeRemoteID: vi.fn(),

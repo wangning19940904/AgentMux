@@ -585,6 +585,25 @@ export interface IdentifyResult {
   registration_open: boolean;
 }
 
+// PhoneDevice is a phone app signed in to an account, as
+// /api/v1/devices/phones lists it. Each is one account session.
+export interface PhoneDevice {
+  id: string;
+  platform: "android" | "ios";
+  // name is the phone's model, when the app reports it.
+  name?: string;
+  os?: string;
+  app_version?: string;
+  account_id: string;
+  account_name?: string;
+  signed_in_at: string;
+  last_seen_at?: string;
+  remote_addr?: string;
+  // active: the phone used its session in the last ten minutes.
+  active: boolean;
+  current?: boolean;
+}
+
 // PairedDevice is a machine paired with this hub, as /api/v1/devices lists
 // it. Administrators see every device with the account that owns it; a
 // member sees their own. A device without an owner belongs to administrators.

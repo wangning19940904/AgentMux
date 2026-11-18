@@ -64,6 +64,9 @@ const (
 	// accountOpCheckSession resolves a session token to its account, for a
 	// machine that holds no copy of the sessions (a node's device sign-in).
 	accountOpCheckSession = "check-session"
+	// accountOpEndSession ends one session by its record ID (a phone
+	// signed out from the Devices page), limited to AccountID when set.
+	accountOpEndSession = "end-session"
 )
 
 // deviceAccountOps are what any machine paired with the hub may ask of it:
@@ -102,6 +105,7 @@ type accountOp struct {
 	CurrentPassword string                  `json:"current_password,omitempty"`
 	AccountID       string                  `json:"account_id,omitempty"`
 	SessionToken    string                  `json:"session_token,omitempty"`
+	SessionID       string                  `json:"session_id,omitempty"`
 	StartSession    bool                    `json:"start_session,omitempty"`
 	UserAgent       string                  `json:"user_agent,omitempty"`
 	RemoteAddr      string                  `json:"remote_addr,omitempty"`
@@ -472,6 +476,16 @@ func (s *Server) applyAccountOp(ctx context.Context, op accountOp) (accountOpRes
 			if err := st.DeleteAccountSession(ctx, op.SessionToken); err != nil {
 				return accountOpResult{}, err
 			}
+		}
+		return accountOpResult{}, nil
+
+	case accountOpEndSession:
+		ended, err := st.DeleteAccountSessionByID(ctx, op.SessionID, op.AccountID)
+		if err != nil {
+			return accountOpResult{}, err
+		}
+		if !ended {
+			return accountOpResult{}, accountFailure(http.StatusNotFound, "", "no such phone session")
 		}
 		return accountOpResult{}, nil
 

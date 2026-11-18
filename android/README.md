@@ -25,15 +25,31 @@ the hub has `[hub] client_api = true`.
 
 ## What is here
 
+Four tabs, after the layout of Persona's Android app (large-title list pages,
+hairline rows, monogram avatars, status dots):
+
+| Tab | What it does | Hub API |
+| --- | --- | --- |
+| Messages | Conversations with agents and people, a thread page to read and reply, and New conversation from the mailbox directory | `/api/v1/mailbox`, `/mailbox/messages`, `/mailbox/directory` |
+| Agents (administrators) | Every machine's agents, filtered by machine, with a detail page; live Claude Code / Codex sessions with their transcript, and replies to sessions that run behind a channel | `/api/v1/remote/fleet/query` and `/execute` over `/agent-instances`, `/sessions`, `/sessions/messages` |
+| Devices | Computers and servers with their state and hub role (members: their paired machines), and the phones signed in, which an administrator can sign out | `/api/v1/fleet` (or `/devices`), `/api/v1/devices/phones` |
+| Me | Account, hub address and pinned certificate, this phone's name, sign out, use another hub | |
+
+Pages poll while they are on screen (a thread every 4 s, lists every 15–30 s).
+
+The app's User-Agent names it and the phone, `AgentMux-Android/0.2.0 (Xiaomi 14; Android 15)`
+([`PhoneIdentity.kt`](app/src/main/java/com/agentmux/mobile/hub/PhoneIdentity.kt)),
+which is how the Console's Devices page lists the phone under **Phones**.
+
 | Part | File |
 | --- | --- |
-| Link parsing | `hub/HubLink.kt` |
-| Certificate pinning | `hub/PinnedTls.kt` |
-| API client and errors | `hub/HubClient.kt`, `hub/Models.kt` |
-| Stored hub and session | `hub/HubStore.kt` |
-| Screens: connect, sign in, inbox | `ui/AppViewModel.kt`, `ui/Screens.kt` |
+| Link parsing, pinning, API client | `hub/` |
+| Theme, icons, shared components | `ui/theme/`, `ui/components/` |
+| State and navigation | `ui/AppViewModel.kt`, `ui/AppRoot.kt` |
+| Screens | `ui/screens/` |
+| Launcher icon | made from `assets/branding/agentmux-logo.png` by `scripts/make_icons.py` |
 
-Not yet: push notifications, approvals, sending messages, and wrapping the stored session with a Keystore key.
+Not yet: push notifications, approvals, and wrapping the stored session with a Keystore key.
 
 ## Build
 
