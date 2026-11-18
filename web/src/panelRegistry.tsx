@@ -7,6 +7,7 @@ const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => (
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
+  work: lazy(() => import("./panels/WorkPanel").then((module) => ({ default: module.WorkPanel }))),
   frameworks: lazy(() => import("./panels/FrameworksPanel").then((module) => ({ default: module.FrameworksPanel }))),
   observability: lazy(() => import("./panels/ObservabilityPanel").then((module) => ({ default: module.ObservabilityPanel }))),
   usage: lazy(() => import("./panels/UsagePanel").then((module) => ({ default: module.UsagePanel }))),

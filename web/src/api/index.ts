@@ -27,6 +27,8 @@ import type {
   FeishuUserList,
   SuperAgent,
   SuperAgentActivity,
+  SuperAgentWork,
+  MachineWork,
   SuperAgentPlan,
   SuperAgentRouter,
   SuperAgentPromptPart,
@@ -314,6 +316,12 @@ function mergeFleetTools(batch: FleetBatchResult<ToolsResponse>): ToolsResponse 
   result.marketplace = [...marketplace.values()];
   if (!success) throw new Error(result.warnings?.join("; ") || "No machine returned tool data.");
   return result;
+}
+
+// superAgentAction runs a Ticket or timer action on the machine that keeps it.
+async function superAgentAction(path: string, id: string, targetID?: string) {
+  if (!targetID || targetID === activeMachineScope()) return post<{ ok: boolean }>(path, { id });
+  return (await fleetCall<{ ok: boolean }>({ key: "action", method: "POST", path, body: { id } }, [targetID], { confirm: false })).first;
 }
 
 export const api = {
@@ -986,9 +994,28 @@ export const api = {
   deleteSuperAgentRouter: (id: string) => del<{ ok: boolean }>(`/api/v1/super-agents/routers?id=${encodeURIComponent(id)}`),
   setupSuperAgent: (draft: SuperAgent, instruction: string, conversationID?: string) => post<SuperAgentSetupResult>("/api/v1/super-agents/setup", { draft, instruction, conversation_id: conversationID }),
   triggerSuperAgent: (id: string, text: string) => post<SuperAgentTrigger>("/api/v1/super-agents/trigger", { id, text }),
-  stopSuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/stop", { id }),
+  // targetID names the machine the agent lives on; without it the request
+  // goes to the machine the open view talks to.
+  stopSuperAgentTicket: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/tickets/stop", id, targetID),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
-  cancelSuperAgentTimer: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/timers/cancel", { id }),
+  cancelSuperAgentTimer: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/timers/cancel", id, targetID),
+  // What every agent on every machine is doing now, one entry per machine.
+  // A machine without agents (or too old to list their work) is left out.
+  superAgentWork: async (): Promise<MachineWork[]> => {
+    const path = "/api/v1/super-agents/work";
+    if (!fleetMode()) {
+      const scope = activeMachineScope();
+      return [{ target_id: scope, work: await get<SuperAgentWork>(path) }];
+    }
+    const batch = await fleetMonitorQuery<SuperAgentWork>([{ key: "work", path }]);
+    return batch.targets.flatMap((target): MachineWork[] => {
+      const response = operationFor<SuperAgentWork>(target.responses, "work");
+      const machine = { target_id: target.target.id, target_name: target.target.name };
+      if (response?.ok && response.data) return [{ ...machine, work: response.data }];
+      if (response && [404, 405, 503].includes(response.status)) return [];
+      return [{ ...machine, error: response?.error || "unavailable" }];
+    });
+  },
   approveSuperAgentPlan: (agentID: string, planID: string, remember: boolean) =>
     postChecked<SuperAgentPlan>("/api/v1/super-agents/plans/approve", { agent_id: agentID, plan_id: planID, remember }),
   declineSuperAgentPlan: (agentID: string, planID: string, note = "") =>

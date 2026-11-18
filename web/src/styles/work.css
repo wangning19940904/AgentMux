@@ -1,0 +1,114 @@
+/* Running Work: every agent's requests, tickets and follow-ups. */
+.work-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.work-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-summary > span { display: inline-flex; align-items: center; gap: 6px; }
+
+.work-filters { flex-wrap: wrap; }
+
+.work-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.work-search input {
+  width: 220px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 6px 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.work-unreachable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+  font-size: 12px;
+}
+
+.work-unreachable small { color: var(--muted); text-decoration: underline dotted; cursor: help; }
+
+.work-list { margin-top: 0; }
+
+.work-item > header strong { min-width: 0; overflow-wrap: anywhere; }
+
+.work-request {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.work-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.work-facts > div { display: inline-flex; gap: 6px; min-width: 0; }
+.work-facts dt { color: var(--muted); }
+.work-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.work-mono { font-family: var(--mono); font-size: 11px; }
+
+.work-ticket.ticket-running { border-left: 3px solid var(--accent, var(--border-strong)); }
+
+.work-output summary,
+.work-finished > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.work-output summary::-webkit-details-marker,
+.work-finished > summary::-webkit-details-marker { display: none; }
+.work-output[open] summary svg,
+.work-finished[open] > summary svg { transform: rotate(180deg); }
+.work-output pre { margin-top: 6px; }
+.work-finished > .orchestration-task-list { margin-top: 12px; }
+
+@media (max-width: 640px) {
+  .work-filters, .work-search { width: 100%; }
+  .work-search input { width: 100%; }
+  .work-filters select { width: 100%; }
+}

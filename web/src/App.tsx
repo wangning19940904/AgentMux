@@ -15,6 +15,7 @@ import {
   Gauge,
   Languages,
   LayoutGrid,
+  ListChecks,
   Moon,
   PanelLeft,
   PanelLeftClose,
@@ -112,6 +113,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Bot,
     items: [
       { id: "agents", labelKey: "nav.agents", icon: Bot },
+      { id: "work", labelKey: "nav.work", icon: ListChecks },
       { id: "frameworks", labelKey: "nav.frameworks", icon: Blocks },
       { id: "skills", labelKey: "nav.skills", icon: Sparkles },
       { id: "mcp", labelKey: "nav.mcp", icon: Boxes },
