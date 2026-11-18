@@ -100,6 +100,46 @@ type Client struct {
 	status       ClientStatus
 	reportStatus reportStatuses
 	session      *yamux.Session
+	// started is when Run began. attached is closed and replaced whenever
+	// a connection to the hub is made; nil until something waits for one.
+	started  time.Time
+	attached chan struct{}
+}
+
+// StartedAt is when the client began connecting, or zero before Run.
+func (c *Client) StartedAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started
+}
+
+// Connected reports whether the node has a connection to the hub now.
+func (c *Client) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.session != nil && !c.session.IsClosed()
+}
+
+// WaitConnected waits until the node has a connection to the hub, and
+// reports whether it got one before ctx ended.
+func (c *Client) WaitConnected(ctx context.Context) bool {
+	for {
+		c.mu.Lock()
+		session := c.session
+		if c.attached == nil {
+			c.attached = make(chan struct{})
+		}
+		attached := c.attached
+		c.mu.Unlock()
+		if session != nil && !session.IsClosed() {
+			return true
+		}
+		select {
+		case <-attached:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 // Uplink returns an HTTP client whose requests travel up the link to the
@@ -141,6 +181,9 @@ func (c *Client) Run(ctx context.Context) error {
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	c.mu.Lock()
+	c.started = time.Now()
+	c.mu.Unlock()
 	backoff := minBackoff
 	for {
 		started := time.Now()
@@ -228,6 +271,10 @@ func (c *Client) serveSession(ctx context.Context, ws *websocket.Conn) error {
 	c.Log.Info("hub link connected", "hub", c.State.HubURL, "device", c.State.DeviceID)
 	c.mu.Lock()
 	c.session = session
+	if c.attached != nil {
+		close(c.attached)
+		c.attached = nil
+	}
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()

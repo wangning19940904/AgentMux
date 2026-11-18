@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -306,6 +307,44 @@ func TestCertificateIsStable(t *testing.T) {
 	_, second, err := LoadOrCreateCertificate(dir)
 	if err != nil || first != second || len(first) != 64 {
 		t.Fatalf("fingerprints %q, %q, %v", first, second, err)
+	}
+}
+
+func TestClientWaitConnectedReturnsWhenTheLinkComesUp(t *testing.T) {
+	registry := newFakeRegistry("CODE4321")
+	hub, join := startHub(t, registry)
+	join.Code = "CODE4321"
+	state, err := Pair(context.Background(), join, core.DeviceInfo{Name: "node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Refused at first, as by a hub that is not the primary yet.
+	var admit atomic.Bool
+	hub.SetGate(func() error {
+		if !admit.Load() {
+			return errors.New("not the primary")
+		}
+		return nil
+	})
+	client, _, _ := runClient(t, state, http.NotFoundHandler())
+	waitFor(t, "the client to start", func() bool { return !client.StartedAt().IsZero() })
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if client.WaitConnected(short) || client.Connected() {
+		t.Fatal("a refused link was reported connected")
+	}
+	waited := make(chan bool, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		waited <- client.WaitConnected(ctx)
+	}()
+	admit.Store(true)
+	if !<-waited {
+		t.Fatal("the wait ended before the link came up")
+	}
+	if !client.Connected() {
+		t.Fatal("the link is not connected")
 	}
 }
 
