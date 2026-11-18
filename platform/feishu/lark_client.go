@@ -127,10 +127,7 @@ func (c *larkClient) eventDispatcher(ctx context.Context, project string, inboun
 				return nil
 			}
 			msg := event.Event.Message
-			if msg.MessageType == nil || msg.Content == nil {
-				return nil
-			}
-			text := extractText(*msg.MessageType, *msg.Content)
+			text, previewText, mentionedBot, mentionAll := inboundMessageText(msg, botOpenID)
 			if text == "" {
 				return nil
 			}
@@ -163,15 +160,12 @@ func (c *larkClient) eventDispatcher(ctx context.Context, project string, inboun
 				event.Event.Sender.SenderId.OpenId != nil {
 				userID = *event.Event.Sender.SenderId.OpenId
 			}
-			mentionedBot, mentionAll := mentionState(msg, botOpenID, text)
-			text = stripBotCommandMention(msg, botOpenID, text)
 			if c.meetingActivity != nil && userID != "" && (chatType == "p2p" || mentionedBot) {
 				if _, loaded := c.meetingDiscovery.LoadOrStore(userID, struct{}{}); !loaded {
 					go c.meetingActivity.BootstrapActiveMeetings(ctx, []string{userID})
 				}
 			}
 			c.markInbound()
-			previewText := inboundCardPreviewText(msg, botOpenID, text)
 			message := &core.Message{
 				ID:           messageID,
 				ChatID:       chatID,
