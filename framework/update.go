@@ -9,7 +9,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // UpdateCheck reports whether an installed framework has a newer version.
@@ -31,19 +34,30 @@ func CheckUpdate(ctx context.Context, kind string) UpdateCheck {
 }
 
 // CheckUpdateWithSettings is CheckUpdate reading the latest version from the
-// registry the machine's install settings select.
+// registry the machine's install settings select. Successful latest-version
+// lookups are cached briefly because the Console checks every installed
+// framework on every machine each time the frameworks page opens.
 func CheckUpdateWithSettings(ctx context.Context, kind string, settings InstallSettings) UpdateCheck {
+	res, _ := checkUpdate(ctx, kind, settings, false)
+	return res
+}
+
+// checkUpdate is CheckUpdateWithSettings that also reports, separately, an
+// error that came only from the latest-version lookup. The installation was
+// then detected and its current version is known, so an explicit update can
+// still run. fresh bypasses the latest-version cache.
+func checkUpdate(ctx context.Context, kind string, settings InstallSettings, fresh bool) (UpdateCheck, error) {
 	kind = strings.TrimSpace(kind)
 	res := UpdateCheck{Kind: kind, CheckedAt: time.Now()}
 	spec, ok := Lookup(kind)
 	if !ok {
 		res.Error = fmt.Sprintf("unknown framework %q", kind)
-		return res
+		return res, nil
 	}
 	res.Display = spec.Display
 	if !spec.Supported || !spec.UpdateSupported {
 		res.Error = fmt.Sprintf("framework %q does not support update checks", kind)
-		return res
+		return res, nil
 	}
 
 	pre := DetectPrereqs()
@@ -51,28 +65,23 @@ func CheckUpdateWithSettings(ctx context.Context, kind string, settings InstallS
 	res.Installed = status.Installed
 	if !status.Installed {
 		res.Error = fmt.Sprintf("framework %q is not installed", kind)
-		return res
+		return res, nil
 	}
 	current := normalizeSDKVersion(status.Version)
 	if current == "" {
 		res.Error = fmt.Sprintf("could not parse installed version from %q", status.Version)
-		return res
+		return res, nil
 	}
 	res.CurrentVersion = current
 
-	latest, err := latestFrameworkVersion(ctx, spec, pre, settings)
+	latest, err := cachedLatestFrameworkVersion(ctx, spec, pre, settings, fresh)
 	if err != nil {
 		res.Error = fmt.Sprintf("check update failed: %v", err)
-		return res
-	}
-	latest = normalizeSDKVersion(latest)
-	if latest == "" {
-		res.Error = "registry did not return a latest version"
-		return res
+		return res, err
 	}
 	res.LatestVersion = latest
 	res.UpdateAvailable = frameworkUpdateAvailable(spec, latest, current)
-	return res
+	return res, nil
 }
 
 func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
@@ -85,6 +94,79 @@ func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
 	return sdkVersionGreater(latest, current)
 }
 
+// latestVersionCacheTTL bounds how long a successful latest-version lookup is
+// reused. Failures are never cached so a transient registry error does not
+// stick.
+const latestVersionCacheTTL = 10 * time.Minute
+
+type latestVersionCacheEntry struct {
+	version  string
+	storedAt time.Time
+}
+
+var (
+	latestVersionCache = struct {
+		sync.Mutex
+		entries map[string]latestVersionCacheEntry
+	}{entries: map[string]latestVersionCacheEntry{}}
+	// latestVersionLookups collapses concurrent identical lookups, such as a
+	// page checking several machines that forward to the same daemon.
+	latestVersionLookups singleflight.Group
+	latestVersionNow     = time.Now
+)
+
+// latestVersionCacheKey covers every input that can change the answer: the
+// framework, its official endpoint, the registries the settings select, and
+// the npm whose configuration `npm view` would read.
+func latestVersionCacheKey(spec Spec, pre Prereqs, settings InstallSettings) string {
+	return strings.Join([]string{
+		spec.Kind, spec.LatestURL, settings.override(spec.Kind).Registry,
+		latestVersionRegistry(spec, settings), pre.NPMPath,
+	}, "\x00")
+}
+
+func cachedLatestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs, settings InstallSettings, fresh bool) (string, error) {
+	key := latestVersionCacheKey(spec, pre, settings)
+	if !fresh {
+		latestVersionCache.Lock()
+		entry, ok := latestVersionCache.entries[key]
+		latestVersionCache.Unlock()
+		if ok && latestVersionNow().Sub(entry.storedAt) < latestVersionCacheTTL {
+			return entry.version, nil
+		}
+	}
+	value, err, _ := latestVersionLookups.Do(key, func() (any, error) {
+		latest, err := latestFrameworkVersion(ctx, spec, pre, settings)
+		if err != nil {
+			return "", err
+		}
+		latest = normalizeSDKVersion(latest)
+		if latest == "" {
+			return "", fmt.Errorf("registry did not return a latest version")
+		}
+		latestVersionCache.Lock()
+		latestVersionCache.entries[key] = latestVersionCacheEntry{version: latest, storedAt: latestVersionNow()}
+		latestVersionCache.Unlock()
+		return latest, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return value.(string), nil
+}
+
+// forgetLatestVersions drops cached latest versions for one framework.
+func forgetLatestVersions(kind string) {
+	prefix := kind + "\x00"
+	latestVersionCache.Lock()
+	defer latestVersionCache.Unlock()
+	for key := range latestVersionCache.entries {
+		if strings.HasPrefix(key, prefix) {
+			delete(latestVersionCache.entries, key)
+		}
+	}
+}
+
 func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs, settings InstallSettings) (string, error) {
 	switch spec.KindType {
 	case KindSDK:
@@ -95,7 +177,21 @@ func latestFrameworkVersion(ctx context.Context, spec Spec, pre Prereqs, setting
 		// official endpoint wins over the machine default.
 		frameworkRegistry := settings.override(spec.Kind).Registry
 		if spec.LatestURL != "" && (frameworkRegistry == "" || spec.NPMPackage == "") {
-			return officialCLIVersion(ctx, spec.LatestURL)
+			version, err := officialCLIVersion(ctx, spec.LatestURL)
+			if err == nil || spec.NPMPackage == "" || !pre.NPM || ctx.Err() != nil {
+				return version, err
+			}
+			// The official endpoint can be unreachable while npm still works,
+			// for example behind a proxy or mirror configured only in .npmrc.
+			// npm resolves the same package, so ask it before giving up.
+			npmVersion, npmErr := npmPackageVersion(ctx, spec.NPMPackage, latestVersionRegistry(spec, settings))
+			if npmErr == nil && normalizeSDKVersion(npmVersion) != "" {
+				return npmVersion, nil
+			}
+			if npmErr == nil {
+				npmErr = fmt.Errorf("no recognizable version")
+			}
+			return "", fmt.Errorf("%v (npm view fallback: %v)", err, npmErr)
 		}
 		if spec.NPMPackage != "" {
 			if !pre.NPM {
@@ -130,6 +226,11 @@ func npmPackageVersion(ctx context.Context, pkg, registry string) (string, error
 	return strings.TrimSpace(string(out)), nil
 }
 
+// latestVersionRetryDelays are the waits before each retry of an official
+// latest-version request. Registries and corporate proxies occasionally drop
+// a connection (surfacing as EOF or a reset) or answer 5xx under load.
+var latestVersionRetryDelays = []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond}
+
 func officialCLIVersion(ctx context.Context, url string) (string, error) {
 	runCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -137,27 +238,54 @@ func officialCLIVersion(ctx context.Context, url string) (string, error) {
 		runCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(runCtx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		version, retryable, err := fetchOfficialCLIVersion(runCtx, url)
+		if err == nil {
+			return version, nil
+		}
+		lastErr = err
+		if !retryable || attempt >= len(latestVersionRetryDelays) || runCtx.Err() != nil {
+			break
+		}
+		timer := time.NewTimer(latestVersionRetryDelays[attempt])
+		select {
+		case <-runCtx.Done():
+			timer.Stop()
+			return "", lastErr
+		case <-timer.C:
+		}
 	}
+	return "", lastErr
+}
+
+// fetchOfficialCLIVersion makes one request. retryable reports a transport
+// failure or a server-side status that a later attempt may not repeat.
+func fetchOfficialCLIVersion(ctx context.Context, url string) (string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, err
+	}
+	// http.DefaultClient honours HTTP(S)_PROXY/NO_PROXY, which the daemon
+	// imports from the login shell at startup.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", ctx.Err() == nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("latest-version endpoint returned %s", resp.Status)
+		retryable := resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests
+		return "", retryable, fmt.Errorf("latest-version endpoint returned %s", resp.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		return "", err
+		return "", ctx.Err() == nil, err
 	}
 	version := officialVersionFromBody(body)
 	if version == "" {
-		return "", fmt.Errorf("latest-version endpoint returned no recognizable version")
+		return "", false, fmt.Errorf("latest-version endpoint returned no recognizable version")
 	}
-	return version, nil
+	return version, false, nil
 }
 
 func officialVersionFromBody(body []byte) string {

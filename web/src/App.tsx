@@ -38,7 +38,7 @@ import {
 import { KeepAwakeControl } from "./KeepAwakeControl";
 import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
-import { RegisteredPanel } from "./panelRegistry";
+import { prefetchPanel, RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
 import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
 import { ConnectionBanner } from "./pwa/ConnectionBanner";
@@ -367,6 +367,13 @@ function Shell({
   const ActiveIcon = active.icon;
   const SecondaryIcon = activeGroup?.icon ?? LayoutGrid;
   const secondaryItems = activeGroup?.items ?? [OVERVIEW_ITEM];
+  const secondaryPrefetchKey = secondaryItems.map((item) => item.id).join(",");
+  // Warm the slower pages of the section in view once the current page settles,
+  // so opening them shows data at once.
+  useEffect(() => {
+    const timer = window.setTimeout(() => secondaryItems.forEach((item) => prefetchPanel(item.id)), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [secondaryPrefetchKey]);
   const shellStyle = {
     "--primary-sidebar-width": `${primaryCollapsed ? PRIMARY_SIDEBAR_COLLAPSED_WIDTH : primarySidebarWidth}px`,
     "--secondary-sidebar-width": `${secondarySidebarWidth}px`,
@@ -824,6 +831,8 @@ function Shell({
                 key={item.id}
                 className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
                 onClick={() => setTab(item.id)}
+                onFocus={() => prefetchPanel(item.id)}
+                onMouseEnter={() => prefetchPanel(item.id)}
                 disabled={navigationLocked}
               >
                 <Icon size={16} />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../../api";
+import { activeMachineScope, api } from "../../api";
 import type { Framework, FrameworkHealthRecord, FrameworkHealthSettings, FrameworkSmokeResult } from "../../api";
 import { targetKey } from "../../components/TargetBadge";
 
@@ -41,9 +41,16 @@ export function latestHealthResult(results?: Record<string, FrameworkSmokeResult
   return latest;
 }
 
+// The last results per machine selection, shown at once when the page opens
+// again while they are reloaded.
+const healthCache = new Map<string, { results: FrameworkHealthResults; records: FrameworkHealthRecords }>();
+
 export function useFrameworkHealth(items: Framework[]) {
-  const [results, setResults] = useState<FrameworkHealthResults>({});
-  const [records, setRecords] = useState<FrameworkHealthRecords>({});
+  const [results, setResults] = useState<FrameworkHealthResults>(() => healthCache.get(activeMachineScope())?.results ?? {});
+  const [records, setRecords] = useState<FrameworkHealthRecords>(() => healthCache.get(activeMachineScope())?.records ?? {});
+  useEffect(() => {
+    healthCache.set(activeMachineScope(), { results, records });
+  }, [results, records]);
   // Periodic check settings per machine ("" is the machine in view).
   const [checks, setChecks] = useState<Record<string, FrameworkHealthSettings>>({});
   const [testing, setTesting] = useState<Record<string, Record<string, boolean>>>({});

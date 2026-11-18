@@ -1337,13 +1337,21 @@
 }
 
 .framework-table {
-  min-width: 720px;
+  min-width: 620px;
 }
 
-.framework-table th:nth-child(1) { width: 24%; }
-.framework-table th:nth-child(2) { width: 20%; }
-.framework-table th:nth-child(3) { width: 22%; }
-.framework-table th:nth-child(4) { width: 34%; }
+.framework-table th,
+.framework-table td {
+  padding-inline: 10px;
+}
+
+/* Every column has a share: the actions column used to get what was left of
+   100%, which was nothing, so its buttons spilled over the availability column. */
+.framework-table th:nth-child(1) { width: 22%; }
+.framework-table th:nth-child(2) { width: 16%; }
+.framework-table th:nth-child(3) { width: 16%; }
+.framework-table th:nth-child(4) { width: 25%; }
+.framework-table th:nth-child(5) { width: 21%; }
 
 /* A framework's header row, followed by one row per machine it is on. */
 .framework-table .framework-group-row td {
@@ -1389,13 +1397,114 @@
   white-space: nowrap;
 }
 
+.framework-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 6px 2px 0;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.framework-group-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.framework-group-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.framework-group-row.expanded .framework-group-chevron {
+  transform: rotate(90deg);
+}
+
+.framework-group-by button {
+  min-height: 26px;
+  padding: 0 10px;
+}
+
 .framework-table .framework-instance-row td {
   padding-top: 10px;
   padding-bottom: 10px;
 }
 
-.framework-instance-row .framework-machine-cell {
-  padding-left: 52px;
+.framework-table .framework-instance-row .framework-machine-cell {
+  padding-left: 36px;
+}
+
+.framework-table .framework-instance-row td:first-child {
+  box-shadow: inset 2px 0 0 var(--border);
+}
+
+.framework-login-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  color: var(--accent-strong, var(--accent));
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.framework-login-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.framework-login-link:not(:disabled):hover {
+  text-decoration: underline;
+}
+
+.framework-row-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+
+.framework-row-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.framework-row-menu button:not(:disabled):hover,
+.framework-row-menu button:focus-visible {
+  background: var(--bg-subtle);
+  outline: 0;
+}
+
+.framework-row-menu button.danger { color: var(--red, #b91c1c); }
+.framework-row-menu button:disabled { color: var(--muted); cursor: default; }
+
+.framework-machine-cell .framework-meta-tags {
+  margin-top: 5px;
 }
 
 .framework-machine-name {
@@ -1534,9 +1643,13 @@
 .framework-update-state.warning { color: var(--amber, #a16207); }
 
 .framework-row-actions {
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 7px;
+}
+
+.framework-health-cell .framework-row-actions {
+  justify-content: flex-start;
 }
 
 .catalog-action-cell .framework-row-actions .action,
@@ -1544,6 +1657,12 @@
   min-width: 0;
   padding-inline: 10px;
   white-space: nowrap;
+}
+
+.catalog-action-cell .framework-row-actions .icon-only {
+  justify-content: center;
+  width: 34px;
+  padding-inline: 0;
 }
 
 .framework-account {

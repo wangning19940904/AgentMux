@@ -300,6 +300,19 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// postQuery is a POST that only reads (for example an update check). It leaves
+// cached resources alone, so a page that runs many such queries does not
+// refetch its lists after each one.
+export async function postQuery<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(apiPath(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
 export async function put<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(apiPath(path), {
     method: "PUT",

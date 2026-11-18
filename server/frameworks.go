@@ -230,6 +230,8 @@ func (s *Server) handleFrameworkInstallStream(w http.ResponseWriter, r *http.Req
 
 func (s *Server) runFrameworkInstall(ctx context.Context, kind, action string, options framework.InstallOptions, progress framework.ProgressFunc) framework.InstallResult {
 	var res framework.InstallResult
+	// The installed version changes, so the next list reads it from the CLI.
+	defer framework.ForgetVersion(kind)
 	switch action {
 	case "install":
 		res = framework.InstallWithProgressOptions(ctx, kind, options, progress)

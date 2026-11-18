@@ -2,13 +2,14 @@ import { lazy } from "react";
 import type { ComponentType, LazyExoticComponent } from "react";
 import type { NavigationTabID } from "./navigationSearchAliases";
 import type { AgentsPanelProps } from "./panels/agents/AgentsPanel";
+import { prefetchFrameworks } from "./panels/frameworks/frameworkPageCache";
 
 const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel })));
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
   overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
   work: lazy(() => import("./panels/WorkPanel").then((module) => ({ default: module.WorkPanel }))),
-  frameworks: lazy(() => import("./panels/FrameworksPanel").then((module) => ({ default: module.FrameworksPanel }))),
+  frameworks: lazy(() => loadFrameworksPanel().then((module) => ({ default: module.FrameworksPanel }))),
   observability: lazy(() => import("./panels/ObservabilityPanel").then((module) => ({ default: module.ObservabilityPanel }))),
   usage: lazy(() => import("./panels/UsagePanel").then((module) => ({ default: module.UsagePanel }))),
   settings: lazy(() => import("./panels/MenuBarPanel").then((module) => ({ default: module.MenuBarPanel }))),
@@ -22,6 +23,27 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   guard: lazy(() => import("./panels/GuardPanel").then((module) => ({ default: module.GuardPanel }))),
   accounts: lazy(() => import("./panels/AccountsPanel").then((module) => ({ default: module.AccountsPanel }))),
 };
+
+function loadFrameworksPanel() {
+  return import("./panels/FrameworksPanel");
+}
+
+// Pages whose data takes a while to gather (every machine is asked) start
+// loading their code and data as soon as their navigation entry is pointed at.
+const PREFETCHERS: Partial<Record<NavigationTabID, () => void>> = {
+  frameworks: () => {
+    void loadFrameworksPanel();
+    prefetchFrameworks();
+  },
+};
+
+export function prefetchPanel(tab: NavigationTabID) {
+  try {
+    PREFETCHERS[tab]?.();
+  } catch {
+    // Prefetching is best effort; the page loads its data when it opens.
+  }
+}
 
 export function RegisteredPanel({ tab, ...agentProps }: {
   tab: NavigationTabID;

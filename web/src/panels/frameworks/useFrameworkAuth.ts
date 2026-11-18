@@ -8,6 +8,7 @@ import { useI18n } from "../../i18n";
 import type { FrameworkBusyAction } from "./FrameworkTableRows";
 import { resolveFrameworkLoginFlow } from "./frameworkAuthModel";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
+import { cachedAuthStatuses, rememberAuthStatus } from "./frameworkPageCache";
 
 const LOGIN_POLL_MS = 1_500;
 
@@ -29,11 +30,15 @@ export function useFrameworkAuth({
   setNotice: (value: SetStateAction<string>, error?: boolean) => void;
 }) {
   const { t } = useI18n();
-  const [auth, setAuth] = useState<Record<string, FrameworkAuthStatus>>({});
+  const [auth, setAuthState] = useState<Record<string, FrameworkAuthStatus>>(() => cachedAuthStatuses());
   const [loginFlows, setLoginFlows] = useState<Record<string, FrameworkLoginFlow>>({});
   const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
   const [copiedCode, setCopiedCode] = useState("");
   const notifiedSessions = useRef(new Set<string>());
+  const storeAuth = (key: string, status: FrameworkAuthStatus) => {
+    rememberAuthStatus(key, status);
+    setAuthState((current) => ({ ...current, [key]: status }));
+  };
   const authItems = items.filter((item) => item.installed && item.spec.kind_type === "cli");
   const authTargetKey = JSON.stringify(authItems.map((item) => [rowKey(item), item.target_id || ""]));
   const activeLoginKey = JSON.stringify(
@@ -51,7 +56,9 @@ export function useFrameworkAuth({
     .sort());
 
   useEffect(() => {
-    setAuth({});
+    // Show the statuses read on an earlier visit while they are refreshed.
+    const cached = cachedAuthStatuses();
+    setAuthState(Object.fromEntries(authItems.map((item) => [rowKey(item), cached[rowKey(item)]]).filter(([, status]) => status)));
     setLoginFlows({});
     notifiedSessions.current.clear();
     if (authItems.length === 0) return;
@@ -71,7 +78,8 @@ export function useFrameworkAuth({
       }
     })).then((statuses) => {
       if (!active) return;
-      setAuth(Object.fromEntries(statuses));
+      statuses.forEach(([key, status]) => rememberAuthStatus(key, status));
+      setAuthState(Object.fromEntries(statuses));
     });
     return () => { active = false; };
   }, [authTargetKey]);
@@ -97,7 +105,7 @@ export function useFrameworkAuth({
             // Older remote AgentMux versions do not expose lifecycle status.
           }
           if (!active) return;
-          setAuth((current) => ({ ...current, [key]: status }));
+          storeAuth(key, status);
           setLoginFlows((current) => {
             const flow = current[key];
             const nextFlow = resolveFrameworkLoginFlow(flow, sessionID, {
@@ -149,7 +157,7 @@ export function useFrameworkAuth({
     const key = rowKey(item);
     try {
       const status = await api.frameworkAuth(item.spec.kind, item.target_id);
-      setAuth((current) => ({ ...current, [key]: status }));
+      storeAuth(key, status);
       return status;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error), true);
@@ -182,7 +190,7 @@ export function useFrameworkAuth({
     setNotice("");
     try {
       const status = await api.logoutFramework(item.spec.kind, item.target_id);
-      setAuth((current) => ({ ...current, [key]: status }));
+      storeAuth(key, status);
       setNotice(t("tools.authLoggedOut"));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error), true);
