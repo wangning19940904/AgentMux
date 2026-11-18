@@ -1,17 +1,125 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AgentMux</string>
-    <string name="connect_intro">Open the hub\'s Console on a computer and show the phone link, then scan its QR code.</string>
+
+    <!-- Connect and sign in -->
+    <string name="connect_title">Connect to your hub</string>
+    <string name="connect_intro">Your agents keep running on your computers. Watch them and message them from here.</string>
+    <string name="connect_step_1">On a computer, open the AgentMux Console and go to Devices.</string>
+    <string name="connect_step_2">Choose Connect a phone to show the QR code.</string>
+    <string name="connect_step_3">Scan it here, then sign in with your AgentMux account.</string>
     <string name="scan_qr">Scan QR code</string>
     <string name="scan_prompt">Scan the hub link from the AgentMux Console</string>
-    <string name="or_paste">Or paste the link:</string>
+    <string name="or_paste">Or paste the link</string>
     <string name="connect">Connect</string>
+    <string name="sign_in_title">Sign in</string>
+    <string name="sign_in_intro">Use the AgentMux account you use in the Console.</string>
     <string name="pinned_certificate">Certificate pinned: %1$s…</string>
+    <string name="public_certificate">Certificate checked by a public CA</string>
     <string name="login">Login name</string>
     <string name="password">Password</string>
     <string name="sign_in">Sign in</string>
+    <string name="signing_in">Signing in…</string>
     <string name="use_another_hub">Use another hub</string>
+    <string name="use_another_hub_hint">Sign out and scan a different hub link</string>
+    <string name="forget_hub_body">This phone signs out and forgets this hub. You can connect again by scanning its QR code.</string>
+    <string name="forget_hub_confirm">Forget hub</string>
+
+    <!-- Tabs -->
+    <string name="tab_inbox">Messages</string>
+    <string name="tab_agents">Agents</string>
+    <string name="tab_devices">Devices</string>
+    <string name="tab_me">Me</string>
+
+    <!-- Common -->
+    <string name="back">Back</string>
     <string name="refresh">Refresh</string>
+    <string name="retry">Retry</string>
+    <string name="cancel">Cancel</string>
     <string name="sign_out">Sign out</string>
-    <string name="no_messages">No conversations yet.</string>
+    <string name="online">Online</string>
+    <string name="offline">Offline</string>
+    <string name="working">Working</string>
+    <string name="enabled">Enabled</string>
+    <string name="disabled">Disabled</string>
+    <string name="no_results">Nothing matches your search.</string>
+    <string name="time_just_now">Just now</string>
+    <string name="time_minutes_ago">%1$d min ago</string>
+    <string name="time_yesterday">Yesterday %1$s</string>
+    <string name="last_seen">Last seen %1$s</string>
+
+    <!-- Messages -->
+    <string name="inbox_unread">%1$d unread</string>
+    <string name="inbox_all_read">All caught up</string>
+    <string name="search_conversations">Search conversations</string>
+    <string name="no_messages">No conversations yet</string>
+    <string name="no_messages_hint">Start one with an agent or a person with the + button.</string>
+    <string name="new_chat">New conversation</string>
+    <string name="search_people_agents">Search agents and people</string>
+    <string name="section_agents">Agents</string>
+    <string name="section_people">People</string>
+    <string name="thread_empty">Say hello to %1$s.</string>
+    <string name="message_placeholder">Message %1$s</string>
+    <string name="send_failed_retry">tap to retry</string>
+
+    <!-- Agents -->
+    <string name="view_agents">Agents</string>
+    <string name="view_sessions">Sessions</string>
+    <string name="agents_summary">%1$d agents on %2$d machines</string>
+    <string name="sessions_summary">%1$d sessions · %2$d working</string>
+    <string name="search_agents">Search agents</string>
+    <string name="search_sessions">Search sessions</string>
+    <string name="all_machines">All machines</string>
+    <string name="some_machines_failed">Some machines did not answer: %1$s</string>
+    <string name="no_agents">No agents yet. Create one in the Console.</string>
+    <string name="no_sessions">No sessions yet.</string>
+    <string name="section_working">Working</string>
+    <string name="section_recent">Recent</string>
+    <string name="message_count">%1$d messages</string>
+    <string name="message_agent">Message</string>
+    <string name="agent_not_in_directory">This agent cannot be messaged from your account.</string>
+    <string name="section_details">Details</string>
+    <string name="field_status">Status</string>
+    <string name="field_model">Model</string>
+    <string name="field_work_dir">Work directory</string>
+    <string name="field_workspace">Workspace</string>
+    <string name="field_backend">Session backend</string>
+    <string name="field_channels">Channels</string>
+    <string name="field_schedules">Schedules</string>
+    <string name="field_skills">Skills</string>
+    <string name="field_system_prompt">System prompt</string>
+    <string name="session_empty">This session has no messages.</string>
+    <string name="session_placeholder">Send to this session</string>
+    <string name="session_read_only">This session runs in a terminal on its computer; follow it here, reply there.</string>
+
+    <!-- Devices -->
+    <string name="devices_summary">%1$d of %2$d computers online · %3$d phones</string>
+    <string name="section_machines">Computers and servers</string>
+    <string name="section_my_machines">My computers</string>
+    <string name="section_phones">Phones</string>
+    <string name="no_machines">No computers yet</string>
+    <string name="no_machines_hint">Pair a computer from the Console\'s Devices page.</string>
+    <string name="no_phones">No phones signed in.</string>
+    <string name="role_hub">Hub</string>
+    <string name="role_standby">Standby</string>
+    <string name="this_phone">This phone</string>
+    <string name="android_phone">Android phone</string>
+    <string name="iphone">iPhone</string>
+    <string name="signed_in_at">Signed in %1$s</string>
+    <string name="active_now">Active now</string>
+    <string name="sign_out_phone_title">Sign this phone out?</string>
+    <string name="sign_out_phone_body">%1$s will have to sign in again to reach this hub.</string>
+
+    <!-- Me -->
+    <string name="role_admin">Administrator</string>
+    <string name="role_member">Member</string>
+    <string name="section_hub">Hub</string>
+    <string name="hub_address">Hub address · tap to copy</string>
+    <string name="certificate_pinned">Pinned certificate · tap to copy</string>
+    <string name="certificate_ca">Checked by the system\'s certificate authorities</string>
+    <string name="section_this_phone">This phone</string>
+    <string name="this_phone_hint">How the hub\'s Devices page names this phone</string>
+    <string name="app_version">App version</string>
+    <string name="section_account">Account</string>
+    <string name="me_footer">AgentMux keeps your data on your own machines. This phone talks only to your hub.</string>
 </resources>

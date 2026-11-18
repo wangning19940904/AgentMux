@@ -115,6 +115,7 @@ import type {
   AuthSession,
   IdentifyResult,
   PairedDevice,
+  PhoneDevice,
   TerminalSessionView,
   ToolsResponse,
 	TTSCatalogStatus,
@@ -428,6 +429,10 @@ export const api = {
     postChecked<{ ok: boolean }>("/api/v1/accounts/reject", { id }, { local: true }),
   pairedDevices: () => getChecked<{ devices: PairedDevice[] }>("/api/v1/devices", { local: true }).then((result) => result.devices ?? []),
   removePairedDevice: (id: string) => delChecked(`/api/v1/devices?id=${encodeURIComponent(id)}`),
+  // phones lists the phone apps signed in (an administrator sees every
+  // account's, a member their own); signOutPhone ends one's session.
+  phones: () => getChecked<{ phones: PhoneDevice[] | null }>("/api/v1/devices/phones", { local: true }).then((result) => result.phones ?? []),
+  signOutPhone: (id: string) => delChecked(`/api/v1/devices/phones?id=${encodeURIComponent(id)}`),
   // assignDeviceOwner hands a device to an account; an empty accountID
   // returns it to administrators only. Administrator-only. The device
   // registry lives on the hub this Console talks to, so the call stays local

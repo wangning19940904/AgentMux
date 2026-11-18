@@ -56,6 +56,8 @@ var memberRoutePolicy = map[string][]string{
 	"/api/v1/devices":               {http.MethodGet, http.MethodPost, http.MethodDelete},
 	"/api/v1/devices/pairing-codes": {http.MethodPost},
 	"/api/v1/devices/reports":       {http.MethodGet},
+	// The phones signed in to their account.
+	"/api/v1/devices/phones": {http.MethodGet, http.MethodDelete},
 	// Where their phone reaches this hub.
 	"/api/v1/hub/client-link": {http.MethodGet},
 	// Direct messages: a member's own conversations, and the contacts of

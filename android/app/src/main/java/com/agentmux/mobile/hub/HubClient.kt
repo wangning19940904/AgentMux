@@ -6,6 +6,9 @@ import javax.net.ssl.SSLException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -40,8 +43,10 @@ class HubClient(
     val link: HubLink,
     private val sessions: SessionStore,
     http: OkHttpClient = OkHttpClient(),
+    /** Names the app and phone, so the hub's Devices page can list it. */
+    private val userAgent: String = "AgentMux-Android",
 ) {
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = false }
     private val http: OkHttpClient = PinnedTls.pin(
         http.newBuilder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -65,15 +70,99 @@ class HubClient(
         }
     }
 
+    // Mailbox.
+
     suspend fun mailbox(): MailOverview = get("/api/v1/mailbox")
 
-    private suspend inline fun <reified T> get(path: String): T = send(request(path).get())
+    suspend fun messages(peer: String): List<MailMessage> =
+        get<List<MailMessage>?>("/api/v1/mailbox/messages", mapOf("with" to peer)).orEmpty()
 
-    private fun request(path: String): Request.Builder {
+    suspend fun sendMessage(to: String, text: String): MailMessage =
+        post("/api/v1/mailbox/messages", json.encodeToString(SendMail.serializer(), SendMail(to, text)))
+
+    suspend fun directory(): MailDirectory = get("/api/v1/mailbox/directory")
+
+    // Machines and phones.
+
+    /** The hub's view of its machines; administrators only. */
+    suspend fun fleet(): FleetView = get("/api/v1/fleet")
+
+    /** The machines paired to the caller's account. */
+    suspend fun pairedDevices(): List<PairedDevice> = get<PairedDevices>("/api/v1/devices").devices.orEmpty()
+
+    suspend fun phones(): List<PhoneDevice> = get<Phones>("/api/v1/devices/phones").phones.orEmpty()
+
+    suspend fun signOutPhone(id: String) {
+        send<Unit>(request("/api/v1/devices/phones", mapOf("id" to id)).delete(), decode = false)
+    }
+
+    // Agents and sessions, read from every machine through the hub.
+
+    suspend fun agents(): FleetRead<AgentInstance> = fleetRead("/api/v1/agent-instances")
+
+    suspend fun sessions(): FleetRead<AgentSession> = fleetRead("/api/v1/sessions?provider=&surface=")
+
+    suspend fun sessionMessages(machineId: String, session: AgentSession): List<SessionMessage> {
+        val query = listOf(
+            "provider" to session.providerId, "surface" to session.surface, "session_id" to session.sessionId,
+            "source_path" to session.sourcePath.orEmpty(), "project_dir" to session.projectDir.orEmpty(),
+            "conversation_id" to session.conversationId.orEmpty(),
+        ).joinToString("&") { (key, value) -> key + "=" + java.net.URLEncoder.encode(value, "UTF-8") }
+        val response = fleet("query", listOf(machineId), FleetOperation("data", "/api/v1/sessions/messages?$query"))
+            .targets.firstOrNull()?.responses?.firstOrNull { it.key == "data" }
+            ?: throw HubException.Http(502, "The machine did not answer.")
+        if (!response.ok) throw HubException.Http(response.status, response.error ?: "HTTP ${response.status}")
+        val data = response.data ?: return emptyList()
+        return runCatching { json.decodeFromJsonElement<List<SessionMessage>?>(data) }.getOrNull().orEmpty()
+    }
+
+    suspend fun sendSessionMessage(machineId: String, session: AgentSession, text: String) {
+        val body = json.encodeToJsonElement(
+            SessionSend.serializer(),
+            SessionSend(session.channelId.orEmpty(), session.conversationId.orEmpty(), text),
+        )
+        val response = fleet("execute", listOf(machineId), FleetOperation("message", "/api/v1/sessions/messages", "POST", body))
+            .targets.firstOrNull()?.responses?.firstOrNull { it.key == "message" }
+            ?: throw HubException.Http(502, "The machine did not answer.")
+        if (!response.ok) throw HubException.Http(response.status, response.error ?: "HTTP ${response.status}")
+    }
+
+    private suspend inline fun <reified T> fleetRead(path: String): FleetRead<T> {
+        val batch = fleet("query", listOf("all"), FleetOperation("data", path))
+        val items = mutableListOf<OnMachine<T>>()
+        val failures = mutableListOf<String>()
+        for (target in batch.targets) {
+            val response = target.responses.firstOrNull { it.key == "data" }
+            if (response == null || !response.ok) {
+                failures += "${target.target.name}: ${response?.error ?: "unavailable"}"
+                continue
+            }
+            val data = response.data ?: continue
+            val list = runCatching { json.decodeFromJsonElement<List<T>?>(data) }.getOrNull().orEmpty()
+            list.mapTo(items) { OnMachine(target.target.id, target.target.name, it) }
+        }
+        return FleetRead(items, failures)
+    }
+
+    private suspend fun fleet(kind: String, targets: List<String>, operation: FleetOperation): FleetBatch {
+        val body = json.encodeToString(FleetBatchRequest.serializer(), FleetBatchRequest(targets, listOf(operation)))
+        return post("/api/v1/remote/fleet/$kind", body)
+    }
+
+    private suspend inline fun <reified T> get(path: String, query: Map<String, String> = emptyMap()): T =
+        send(request(path, query).get())
+
+    private suspend inline fun <reified T> post(path: String, body: String): T =
+        send(request(path).post(body.toRequestBody(JSON)))
+
+    private fun request(path: String, query: Map<String, String> = emptyMap()): Request.Builder {
+        val url = (link.url + path).toHttpUrl().newBuilder()
+        query.forEach { (key, value) -> url.addQueryParameter(key, value) }
         val builder = Request.Builder()
-            .url(link.url + path)
+            .url(url.build())
             .header(CONSOLE_HEADER, "1")
             .header("Accept", "application/json")
+            .header("User-Agent", userAgent)
         sessions.sessionToken?.let { builder.header("Cookie", "$SESSION_COOKIE=$it") }
         return builder
     }

@@ -282,6 +282,7 @@ func (s *Server) registerDeviceRoutes() {
 	s.mux.HandleFunc("GET /api/v1/link", s.handleLinkStatus)
 	s.mux.HandleFunc("POST /api/v1/link/join", s.handleLinkJoin)
 	s.mux.HandleFunc("POST /api/v1/link/leave", s.handleLinkLeave)
+	s.registerPhoneRoutes()
 	s.registerPassiveLinkRoutes()
 	s.registerHubStandbyRoutes()
 	if s.linkHub != nil {

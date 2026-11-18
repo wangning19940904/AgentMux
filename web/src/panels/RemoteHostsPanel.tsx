@@ -32,6 +32,7 @@ import {
 } from "../api";
 import { useI18n } from "../i18n";
 import { PhoneAppLink } from "../pwa/PhoneAppLink";
+import { PhoneDevices } from "./PhoneDevices";
 import { accountLabel } from "../signIn";
 import { DeleteRemoteHostDialog } from "./DeleteRemoteHostDialog";
 import {
@@ -1294,6 +1295,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
             </article>
           ))}
         </div>
+        <PhoneDevices watching={phoneOpen} />
       </section>
     </div>
   );
