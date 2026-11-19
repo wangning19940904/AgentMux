@@ -1101,6 +1101,8 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                 ? { health: "healthy", version: presence.version }
                 : probed;
             const updateAvailable = !linked && isRemoteUpdateAvailable(snapshot.version, localVersion);
+            // An offline machine keeps showing the last version it reported.
+            const displayVersion = snapshot.version || presence?.version || host.version;
             const checking = snapshot.health === "checking";
             const active = activeRemoteID() === host.id;
             const deviceID = pairedDeviceID(host);
@@ -1132,6 +1134,7 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
                         {linked
                           ? t(host.link_mode === "passive" ? "remote.linkPassiveSubtitle" : presence?.viaHub ? "remote.linkSubtitleViaHub" : "remote.linkSubtitle")
                           : `${host.user}@${host.host}:${host.port}`}
+                        {displayVersion && ` · v${displayVersion.replace(/^v/, "")}`}
                         {linked && host.reported_at && ` · ${t("remote.linkReported", { time: new Date(host.reported_at).toLocaleString() })}`}
                       </span>
                       {!linked && host.ssh_alias && host.ssh_alias !== host.name && (
