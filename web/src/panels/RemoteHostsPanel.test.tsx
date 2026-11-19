@@ -253,7 +253,7 @@ describe("machines that connect to the hub themselves", () => {
       fetched_at: "2026-11-15T01:00:00Z",
       machines: [
         { id: "dev_up", name: "up-box", online: true },
-        { id: "dev_down", name: "down-box", online: false, last_seen_at: "2026-11-14T01:00:00Z" },
+        { id: "dev_down", name: "down-box", online: false, last_seen_at: "2026-11-14T01:00:00Z", version: "0.1.1-dev.20261114.900" },
         { id: "dev_node", name: "other-node", online: true, version: "0.1.0" },
       ],
     });
@@ -263,6 +263,8 @@ describe("machines that connect to the hub themselves", () => {
     expect(row("up-box").textContent).toContain("连接到 Hub");
     expect(row("down-box").textContent).toContain("离线");
     expect(row("down-box").textContent).not.toContain("异常");
+    // An offline machine keeps the last version it reported.
+    expect(row("down-box").textContent).toContain("v0.1.1-dev.20261114.900");
     expect(row("other-node").textContent).toContain("经由 Hub 获知");
     expect(row("other-node").querySelectorAll("button")).toHaveLength(0);
   });
@@ -277,6 +279,8 @@ describe("machines that connect to the hub themselves", () => {
     const ssh = rows.find((row) => row.textContent?.includes("ecs_cn"))!;
     const row = rows.find((row) => row.textContent?.includes("home-box"))!;
     expect(row.textContent).toContain("主动连接到本机");
+    expect(row.textContent).toContain("v0.1.7");
+    expect(ssh.textContent).toContain("v0.1.7");
     expect(row.textContent).not.toContain("@");
     expect(Array.from(row.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["检查更新", "删除"]);
     expect(Array.from(ssh.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual(["更新", "编辑", "删除"]);
