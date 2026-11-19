@@ -89,7 +89,7 @@ func (s *Server) handleWorkerRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	// The hub is paired too, so a standby lists it among its machines; it
 	// answers the health probe for itself.
-	if targetPath == superagent.RelayStatusPath && targetID == s.hubPeerDeviceID() {
+	if targetPath == superagent.RelayStatusPath && s.ownDeviceIDs()[targetID] {
 		s.handleStatus(w, r)
 		return
 	}

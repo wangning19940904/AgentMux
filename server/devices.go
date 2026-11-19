@@ -33,10 +33,12 @@ type deviceBackend struct {
 	st   *store.Store
 	hub  *linkpkg.Hub
 	push *pushpkg.Service
-	// self returns the device record this hub registered for itself, or "".
-	// That record is this machine, not another one to manage, so it is left
-	// out; the other hub uses it to accept this one after a failover.
-	self func() string
+	// self returns the device records that are this machine: the one this
+	// hub registered for itself, which the other hub uses to accept this one
+	// after a failover, and this machine's own membership of a hub (a primary
+	// that was once the standby keeps it). They are this machine, not other
+	// ones to manage, so they are left out.
+	self func() map[string]bool
 	// hubRoles labels the devices that are hubs ("hub" or "standby"), or
 	// returns nil when this hub has no standby.
 	hubRoles func(ctx context.Context) map[string]string
@@ -62,7 +64,7 @@ type uplinkWaiter interface {
 }
 
 func (b *deviceBackend) isSelf(id string) bool {
-	return b.self != nil && id != "" && id == b.self()
+	return b.self != nil && id != "" && b.self()[id]
 }
 
 func (b *deviceBackend) roles(ctx context.Context) map[string]string {
@@ -256,7 +258,7 @@ func (s *Server) setupLink() {
 		}
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
-	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.hubPeerDeviceID, hubRoles: s.deviceHubLabels,
+	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.ownDeviceIDs, hubRoles: s.deviceHubLabels,
 		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence,
 		startingUplink: func() uplinkWaiter {
 			// A nil client must not become a non-nil interface.
@@ -320,9 +322,9 @@ func (s *Server) visibleDevices(ctx context.Context, principal *core.Principal) 
 	if err != nil || len(devices) == 0 {
 		return devices, err
 	}
-	// This hub's own record is this machine, not a paired one.
-	if self := s.hubPeerDeviceID(); self != "" {
-		devices = slices.DeleteFunc(devices, func(device core.Device) bool { return device.ID == self })
+	// This hub's own records are this machine, not paired ones.
+	if self := s.ownDeviceIDs(); len(self) > 0 {
+		devices = slices.DeleteFunc(devices, func(device core.Device) bool { return self[device.ID] })
 	}
 	accounts, err := s.st.ListAccounts(ctx)
 	if err != nil {
