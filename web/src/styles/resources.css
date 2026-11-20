@@ -1300,7 +1300,7 @@
   min-height: 32px;
   padding: 0 12px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   background: var(--bg-subtle);
   border-color: var(--border-strong);
 }

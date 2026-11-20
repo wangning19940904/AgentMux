@@ -1,3 +1,5 @@
+import { Boxes, Trash2 } from "lucide-react";
+import { RowDisclosure } from "../components/RowDisclosure";
 import { useState } from "react";
 import { api, MCPServer } from "../api";
 import { useI18n } from "../i18n";
@@ -85,56 +87,31 @@ export function MCPPanel() {
           </div>
         </form>}
         {servers.error && <div className="surface-body error">{servers.error}</div>}
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("common.name")}</th>
-                <th>{t("mcp.transport")}</th>
-                <th>{t("mcp.commandUrl")}</th>
-                <th>{t("common.status")}</th>
-                <th>{t("remote.currentMachine")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(servers.data ?? []).map((server) => (
-                <tr key={targetKey(server.target_id, server.name)}>
-                  <td>{server.name}</td>
-                  <td>
-                    <span className="pill">{server.transport}</span>
-                  </td>
-                  <td className="muted mono">{server.command || server.url || "—"}</td>
-                  <td>
-                    {server.enabled ? (
-                      <span className="status-badge success">
-                        <span className="status-dot" />
-                        {t("common.enabled")}
-                      </span>
-                    ) : (
-                      <span className="status-badge">
-                        <span className="status-dot" />
-                        {t("common.disabled")}
-                      </span>
-                    )}
-                  </td>
-                  <td><TargetBadge target_id={server.target_id} target_name={server.target_name} /></td>
-                  <td>
-                    <button className="ghost-action" onClick={() => remove(server.name, server.target_id)}>
-                      {t("common.delete")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {servers.data?.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="empty-state">
-                    {t("mcp.empty")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="resource-card-grid mcp-card-grid">
+          {(servers.data ?? []).map((server) => (
+            <RowDisclosure
+              className="resource-card mcp-card"
+              key={targetKey(server.target_id, server.name)}
+              name={server.name}
+              summary={<div className="resource-card-heading"><span className="brand-icon"><Boxes size={18} /></span><strong>{server.name}</strong></div>}
+              preview={<>
+                <code className="resource-card-command" title={server.command || server.url}>{server.command || server.url || "—"}</code>
+                <div className="resource-card-meta">
+                  <span className="pill">{server.transport}</span>
+                  <span className={`status-badge${server.enabled ? " success" : ""}`}><span className="status-dot" />{t(server.enabled ? "common.enabled" : "common.disabled")}</span>
+                  <TargetBadge target_id={server.target_id} target_name={server.target_name} />
+                </div>
+              </>}
+            >
+              <code className="resource-command-detail">{[server.command || server.url, ...(server.args ?? [])].filter(Boolean).join(" ") || "—"}</code>
+              <div className="table-actions">
+                <button className="ghost-action danger-action" onClick={() => remove(server.name, server.target_id)}>
+                  <Trash2 size={14} />{t("common.delete")}
+                </button>
+              </div>
+            </RowDisclosure>
+          ))}
+          {servers.data?.length === 0 && <div className="empty-state">{t("mcp.empty")}</div>}
         </div>
       </section>
     </div>

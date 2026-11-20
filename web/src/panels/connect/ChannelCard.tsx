@@ -45,22 +45,26 @@ export function ChannelCard({
   ].filter(Boolean);
   return (
     <RowDisclosure
-      className="connect-row"
+      className="connect-row resource-card channel-card"
       name={displayName}
+      preview={
+        <div className="channel-card-meta">
+          <span className={`status-badge ${badge.className}`}><span className="status-dot" />{badge.label}</span>
+          <TargetBadge target_id={channel.target_id} target_name={channel.target_name} />
+        </div>
+      }
       summary={
         <div className="connect-row-summary">
           <div className="agent-list-main">
-            <ChannelLogo channel={channel} />
-            <ChannelAvatar channel={channel} />
+            <span className="channel-card-avatar">
+              <ChannelAvatar channel={channel} />
+              <ChannelLogo channel={channel} />
+            </span>
             <span className="channel-card-copy">
               <strong title={displayName}>{displayName}</strong>
               <small title={subtitle}>{subtitle}</small>
             </span>
-            <span className={`status-badge ${badge.className}`}>
-              <span className="status-dot" />
-              {badge.label}
-            </span>
-            <TargetBadge target_id={channel.target_id} target_name={channel.target_name} />
+
           </div>
           {channel.error && <div className="session-notice error">{channel.error}</div>}
         </div>

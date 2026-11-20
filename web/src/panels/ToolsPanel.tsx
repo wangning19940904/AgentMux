@@ -558,7 +558,7 @@ function InstalledToolRows({
   const linkedSpecs = row.cli?.spec.linked_skills ?? [];
   return (
     <>
-      <tr className="catalog-row unified-tool-row">
+      <tr className="catalog-row unified-tool-row resource-card tool-resource-card">
         <td className="catalog-primary-cell" data-label={t("common.name")}>
           <span className="provider-icon">{row.cli ? <TerminalSquare size={16} /> : <Bot size={16} />}</span>
           <span className="catalog-primary-copy">

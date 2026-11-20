@@ -1,10 +1,11 @@
 import {
-  Activity, Bot, Boxes, Brain, CircleDollarSign, Clock3, FolderGit2, Gauge, MessageSquareText, MonitorDot,
-  RefreshCw, Sparkles, Workflow,
+  Activity, Bot, Brain, Clock3, FolderGit2, Gauge, MonitorDot, RefreshCw,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { api, type MenubarSettings, type SuperAgent, type UsageReport, type UsageTotals } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
+import { BrandIcon } from "../components/BrandIcon";
+import { SlidingSelection } from "../components/SlidingSelection";
 import { formatUsageCost, validCNYRate } from "../currency";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
@@ -215,96 +216,43 @@ export function UsagePanel() {
               </header>
               <div className="usage-summary-metrics">
                 <SummaryMetric
-                  icon={<Gauge size={17} />}
                   label={t("overview.totalTokens")}
                   value={totals ? formatTokens(tokens) : "—"}
                   detail={totals ? <>
-                    {t("overview.includedCache", { tokens: formatTokens(cacheTokens) })}
+                    {t("overview.input")} {formatTokens(totals.input_tokens)} · {t("overview.output")} {formatTokens(totals.output_tokens)}
                     {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: formatTokens(estimatedTokens), coverage: exactCoverage })}</>}
                   </> : undefined}
                 />
                 <SummaryMetric
-                  icon={<MessageSquareText size={17} />}
+                  label={t("usage.cacheRead")}
+                  value={totals ? formatTokens(totals.cache_read_tokens) : "—"}
+                  detail={totals ? `${t("usage.cacheWrite")} ${formatTokens(totals.cache_write_tokens)}` : undefined}
+                />
+                <SummaryMetric
                   label={t("overview.sessionConversations")}
                   value={totals ? formatTokens(totals.sessions ?? 0) : "—"}
                   detail={totals ? t("usage.requestsDetail", { count: formatTokens(totals.records ?? 0) }) : t("overview.sessionScope")}
                 />
                 <SummaryMetric
-                  icon={<CircleDollarSign size={17} />}
                   label={t("overview.estimatedAmount")}
-                  value={(
-                    <span className="usage-cost-values">
-                      <span>{totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}<small>RMB</small></span>
-                      <span>{totals ? formatUsageCost(totals.cost_usd, "usd", cnyRate, language) : "—"}<small>USD</small></span>
-                    </span>
-                  )}
-                  detail={t("overview.exchangeRate", { rate: cnyRate })}
+                  value={totals ? formatCost(totals.cost_usd) : "—"}
+                  detail={totals ? `${formatUsageCost(totals.cost_usd, currency === "cny" ? "usd" : "cny", cnyRate, language)} ${currency === "cny" ? "USD" : "RMB"}` : undefined}
                 />
-              </div>
-              <div className="usage-breakdown">
-                <Stat label={t("usage.uncachedInput")} value={totals ? formatTokens(totals.input_tokens) : "—"} />
-                <Stat label={t("overview.output")} value={totals ? formatTokens(totals.output_tokens) : "—"} />
-                <Stat label={t("usage.cacheRead")} value={totals ? formatTokens(totals.cache_read_tokens) : "—"} />
-                <Stat label={t("usage.cacheWrite")} value={totals ? formatTokens(totals.cache_write_tokens) : "—"} />
               </div>
               <details className="usage-pricing-note">
                 <summary>{t("overview.pricingDetails")}</summary>
+                <p>{t("overview.includedCache", { tokens: formatTokens(cacheTokens) })}</p>
+                <div className="usage-breakdown">
+                  <Stat label={t("usage.uncachedInput")} value={totals ? formatTokens(totals.input_tokens) : "—"} />
+                  <Stat label={t("overview.output")} value={totals ? formatTokens(totals.output_tokens) : "—"} />
+                  <Stat label={t("usage.cacheRead")} value={totals ? formatTokens(totals.cache_read_tokens) : "—"} />
+                  <Stat label={t("usage.cacheWrite")} value={totals ? formatTokens(totals.cache_write_tokens) : "—"} />
+                </div>
+                <p>{t("overview.exchangeRate", { rate: cnyRate })}</p>
                 <p>{t("overview.pricingFormula")}</p>
                 <p>{t("overview.pricingSource")}</p>
               </details>
             </section>
-
-            <div className={`overview-rankings${showMachines ? " with-machines" : ""}`}>
-              <UsageRanking
-                title={t("overview.frameworkRanking")}
-                icon={<Bot size={19} />}
-                emptyText={t("overview.noFrameworkUsage")}
-                totalTokens={tokens}
-                selected={view.filters.runtimes}
-                onToggle={(value) => toggleFilter("runtimes", value)}
-                items={(report?.by_runtime ?? []).map((runtime) => {
-                  const Icon = runtimeIcon(runtime.runtime);
-                  return { id: runtime.runtime, label: runtimeLabel(runtime.runtime, t), tokens: runtime.tokens, icon: <Icon size={17} /> };
-                })}
-              />
-              <UsageRanking
-                title={t("overview.modelRanking")}
-                icon={<Brain size={19} />}
-                emptyText={t("overview.noModelUsage")}
-                totalTokens={tokens}
-                selected={view.filters.models}
-                onToggle={(value) => toggleFilter("models", value)}
-                items={(report?.by_model ?? []).map((model) => ({
-                  id: model.model, label: labelModel(model.model), tokens: model.tokens, icon: <Brain size={17} />,
-                }))}
-              />
-              <UsageRanking
-                title={t("usage.agentRanking")}
-                icon={<FolderGit2 size={19} />}
-                emptyText={t("usage.noAgentUsage")}
-                totalTokens={tokens}
-                selected={view.filters.agents}
-                onToggle={(value) => toggleFilter("agents", value)}
-                items={(report?.by_agent ?? []).map((agent) => ({
-                  id: agent.agent, label: labelAgent(agent.agent), title: agent.agent, tokens: agent.tokens,
-                  icon: agent.agent.startsWith("agent:") || agent.agent.startsWith("channel:") ? <Bot size={17} /> : <FolderGit2 size={17} />,
-                }))}
-              />
-              {showMachines && (
-                <UsageRanking
-                  title={t("usage.machineRanking")}
-                  icon={<MonitorDot size={19} />}
-                  emptyText={t("usage.noMachineUsage")}
-                  totalTokens={tokens}
-                  selected={view.filters.machines}
-                  onToggle={(value) => toggleFilter("machines", value)}
-                  items={machines.map((machine) => ({
-                    id: machine.target_id, label: labelMachine(machine.target_id, machine.target_name),
-                    tokens: totalTokens(machine.totals), icon: <MonitorDot size={17} />,
-                  }))}
-                />
-              )}
-            </div>
           </div>
 
           <div className="usage-trend-card">
@@ -315,7 +263,7 @@ export function UsagePanel() {
               </div>
               <div className="usage-trend-actions">
                 <span className="usage-trend-total">{formatTokens(tokens)}</span>
-                <div className="trend-dimension-toggle" role="group" aria-label={t("overview.trendBreakdown")}>
+                <SlidingSelection className="trend-dimension-toggle" selected={trendDimension} role="group" aria-label={t("overview.trendBreakdown")}>
                   {TREND_DIMENSIONS.filter((dimension) => dimension !== "machine" || showMachines).map((dimension) => (
                     <button
                       key={dimension}
@@ -327,10 +275,62 @@ export function UsagePanel() {
                       {t(`overview.trend.${dimension}`)}
                     </button>
                   ))}
-                </div>
+                </SlidingSelection>
               </div>
             </div>
             <UsageTrendChart keys={timeline} series={trendSeries} period={period} totalTokens={tokens} loading={usage.loading && !report} />
+          </div>
+
+          <div className={`overview-rankings${showMachines ? " with-machines" : ""}`}>
+            <UsageRanking
+              title={t("overview.frameworkRanking")}
+              icon={<Bot size={19} />}
+              emptyText={t("overview.noFrameworkUsage")}
+              totalTokens={tokens}
+              selected={view.filters.runtimes}
+              onToggle={(value) => toggleFilter("runtimes", value)}
+              items={(report?.by_runtime ?? []).map((runtime) => ({
+                id: runtime.runtime, label: runtimeLabel(runtime.runtime, t), tokens: runtime.tokens,
+                icon: <BrandIcon name={runtime.runtime} />,
+              }))}
+            />
+            <UsageRanking
+              title={t("overview.modelRanking")}
+              icon={<Brain size={19} />}
+              emptyText={t("overview.noModelUsage")}
+              totalTokens={tokens}
+              selected={view.filters.models}
+              onToggle={(value) => toggleFilter("models", value)}
+              items={(report?.by_model ?? []).map((model) => ({
+                id: model.model, label: labelModel(model.model), tokens: model.tokens, icon: <BrandIcon name={model.model} kind="model" />,
+              }))}
+            />
+            <UsageRanking
+              title={t("usage.agentRanking")}
+              icon={<FolderGit2 size={19} />}
+              emptyText={t("usage.noAgentUsage")}
+              totalTokens={tokens}
+              selected={view.filters.agents}
+              onToggle={(value) => toggleFilter("agents", value)}
+              items={(report?.by_agent ?? []).map((agent) => ({
+                id: agent.agent, label: labelAgent(agent.agent), title: agent.agent, tokens: agent.tokens,
+                icon: agent.agent.startsWith("agent:") || agent.agent.startsWith("channel:") ? <Bot size={17} /> : <FolderGit2 size={17} />,
+              }))}
+            />
+            {showMachines && (
+              <UsageRanking
+                title={t("usage.machineRanking")}
+                icon={<MonitorDot size={19} />}
+                emptyText={t("usage.noMachineUsage")}
+                totalTokens={tokens}
+                selected={view.filters.machines}
+                onToggle={(value) => toggleFilter("machines", value)}
+                items={machines.map((machine) => ({
+                  id: machine.target_id, label: labelMachine(machine.target_id, machine.target_name),
+                  tokens: totalTokens(machine.totals), icon: <MonitorDot size={17} />,
+                }))}
+              />
+            )}
           </div>
         </div>
       </section>
@@ -367,11 +367,11 @@ export function UsagePanel() {
   );
 }
 
-function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail?: ReactNode }) {
+function SummaryMetric({ label, value, detail }: { label: string; value: ReactNode; detail?: ReactNode }) {
   return (
     <div className="usage-summary-metric">
-      <span className="usage-summary-metric-label">{icon}{label}</span>
       <strong>{value}</strong>
+      <span className="usage-summary-metric-label">{label}</span>
       {detail && <small>{detail}</small>}
     </div>
   );
@@ -420,7 +420,7 @@ function UsageRanking({ title, icon, emptyText, totalTokens: total, items, selec
         </div>
       </header>
       <div className="framework-ranking-list" id={listID}>
-        {visible.length > 0 ? visible.map((item, index) => {
+        {visible.length > 0 ? visible.map((item) => {
           const active = selected.includes(item.id);
           return (
             <button
@@ -431,7 +431,6 @@ function UsageRanking({ title, icon, emptyText, totalTokens: total, items, selec
               title={t(active ? "usage.rankingClearFilter" : "usage.rankingFilter", { name: item.title ?? item.label })}
               onClick={() => onToggle(item.id)}
             >
-              <span className={`framework-rank-number rank-${index + 1}`}>{index + 1}</span>
               <span className="framework-rank-icon">{item.icon}</span>
               <span className="framework-rank-copy">
                 <strong>{item.label}</strong>
@@ -500,13 +499,13 @@ function UsageDetails({ report, periodLabel, resetKey, showMachines, formatCost,
           <h2>{t("usage.details")}</h2>
           <p className="subtle-copy">{t("usage.periodRows", { count: sorted.length })}</p>
         </div>
-        <div className="segmented" role="group" aria-label={t("usage.detailsBy")}>
+        <SlidingSelection className="segmented" selected={activeTab} role="group" aria-label={t("usage.detailsBy")}>
           {tabs.map((item) => (
             <button key={item.id} type="button" className={activeTab === item.id ? "active" : ""} aria-pressed={activeTab === item.id} onClick={() => setTab(item.id)}>
               {item.label}
             </button>
           ))}
-        </div>
+        </SlidingSelection>
       </div>
       <div className="table-wrap">
         <table className="usage-details-table">
@@ -570,25 +569,4 @@ function UsageDetails({ report, periodLabel, resetKey, showMachines, formatCost,
       )}
     </section>
   );
-}
-
-function runtimeIcon(runtime: string) {
-  switch (runtime.trim().toLowerCase()) {
-    case "claude":
-    case "claudecode":
-    case "claude-desktop":
-    case "claude-unknown":
-    case "gemini":
-      return Sparkles;
-    case "cursor":
-      return Workflow;
-    case "iflow":
-      return Activity;
-    case "kimi":
-      return Brain;
-    case "opencode":
-      return Boxes;
-    default:
-      return Bot;
-  }
 }

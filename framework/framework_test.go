@@ -610,25 +610,28 @@ func TestBrokenCLIInstallIsExplained(t *testing.T) {
 	mockFrameworkLatestVersion(t, "claudecode", "2.1.211")
 	bin := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "Caskroom", "claude", "bin", "claude")
-	if err := os.Symlink(missing, filepath.Join(bin, "claude")); err != nil {
+	brokenLink := filepath.Join(bin, "claude")
+	if err := os.Symlink(missing, brokenLink); err != nil {
 		t.Fatal(err)
 	}
 	// A wrapper earlier on PATH that execs the dangling link, like a user's
 	// ~/.local/bin shim in front of Homebrew.
 	front := t.TempDir()
-	writeFrameworkExecutable(t, filepath.Join(front, "claude"), "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\nexec '"+filepath.Join(bin, "claude")+"' \"$@\"\n")
+	writeFrameworkExecutable(t, filepath.Join(front, "claude"), "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\nexec '"+brokenLink+"' \"$@\"\n")
 	t.Setenv("PATH", front+string(os.PathListSeparator)+"/usr/bin:/bin")
 	ForgetVersion("claudecode")
 
 	check := CheckUpdate(context.Background(), "claudecode")
-	if !strings.Contains(check.Error, "`claude --version` fails") || !strings.Contains(check.Error, "No such file or directory") {
+	// Shells phrase missing-executable errors differently. Verify the failing
+	// executable path in the diagnostic.
+	if !strings.Contains(check.Error, "`claude --version` fails") || !strings.Contains(check.Error, brokenLink) {
 		t.Fatalf("check error = %q", check.Error)
 	}
 	status := Detect(mustLookup(t, "claudecode"), Prereqs{})
 	if got := unrunnableCLIError(mustLookup(t, "claudecode"), status); got != check.Error {
 		t.Fatalf("unrunnable error = %q, check error = %q", got, check.Error)
 	}
-	if _, advanced, broken := versionAdvancedAfterFailure(mustLookup(t, "claudecode"), UpdateCheck{CurrentVersion: "2.1.210"}); advanced || !strings.Contains(broken, "No such file or directory") {
+	if _, advanced, broken := versionAdvancedAfterFailure(mustLookup(t, "claudecode"), UpdateCheck{CurrentVersion: "2.1.210"}); advanced || !strings.Contains(broken, brokenLink) {
 		t.Fatalf("after failure: advanced=%v broken=%q", advanced, broken)
 	}
 }

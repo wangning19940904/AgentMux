@@ -2249,3 +2249,30 @@
   .avatar-picker { flex-direction: column; }
   .avatar-picker-current { flex-direction: row; width: auto; }
 }
+
+
+/* Session history has a denser type scale than configuration pages. */
+.sessions-page,
+.session-drawer {
+  --fs-ui: 11.5px;
+  --fs-xs: var(--fs-ui);
+  --fs-sm: var(--fs-ui);
+  --fs-md: var(--fs-ui);
+  --fs-lg: var(--fs-ui);
+  --fs-xl: var(--fs-ui);
+  --fs-2xl: var(--fs-ui);
+  --control-h: 24px;
+  font-size: var(--fs-ui);
+}
+.sessions-page .session-list button { min-height: 38px; padding: 6px 8px; gap: 7px; }
+.sessions-page .session-title-line { gap: 6px; }
+.sessions-page .session-list-icon { width: 22px; height: 22px; border-radius: 6px; }
+.sessions-page .session-list-icon > svg { width: 15px; height: 15px; }
+.sessions-page .session-list button { grid-template-columns: 22px minmax(0, 1fr); }
+.session-drawer .transcript { gap: 8px; padding: 12px; background: var(--bg-muted); }
+.session-drawer .message-content { font-size: var(--fs-ui); line-height: 1.45; }
+.session-drawer .message-content :is(p, ul, ol, pre, blockquote) { margin-block: 6px; }
+.session-drawer .tool-message-summary { padding: 7px 10px; }
+.session-drawer .tool-message-body { padding: 0 10px 10px; }
+.session-drawer .detail-header { padding: 12px; }
+.session-drawer .message { gap: 5px; padding: 8px 10px; box-shadow: none; }

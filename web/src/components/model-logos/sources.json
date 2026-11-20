@@ -1,0 +1,9 @@
+{
+  "openai.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/openai.svg",
+  "deepseek-color.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/deepseek-color.svg",
+  "grok.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/grok.svg",
+  "qwen-color.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/qwen-color.svg",
+  "doubao-color.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/doubao-color.svg",
+  "chatglm-color.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/chatglm-color.svg",
+  "gemini-color.svg": "https://github.com/yetone/magpie/blob/e4e9eb0928becfa4e48484dde85ef5032671d582/internal/gui/assets/icons/gemini-color.svg"
+}

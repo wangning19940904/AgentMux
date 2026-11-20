@@ -107,12 +107,27 @@ describe("usage dashboard", () => {
     vi.mocked(api.menubarSettings).mockResolvedValue({ cny_rate: 6.7249, currency: "cny" } as Awaited<ReturnType<typeof api.menubarSettings>>);
     await mount();
     const summary = container.querySelector(".usage-summary-card")!;
+    expect(summary.querySelectorAll(".usage-summary-metric")).toHaveLength(4);
     expect(summary.querySelector(".usage-summary-metric > strong")!.textContent).toBe("3.52K");
     expect(summary.textContent).toContain("其中缓存 3.40K Token，已计入总量");
     const breakdown = Array.from(summary.querySelectorAll(".usage-breakdown .stat"), (node) => node.textContent);
     expect(breakdown).toEqual(["非缓存输入100", "输出20", "缓存读取3.00K", "缓存写入400"]);
     expect(summary.textContent).toContain("¥67.25");
     expect(summary.textContent).toContain("1 USD = 6.7249 RMB");
+  });
+
+  it("shows framework and model logos on rankings that still filter the dashboard", async () => {
+    const usage = report(300, {
+      by_runtime: [{ runtime: "codex-app", tokens: 300, cost_usd: 3 }],
+      by_model: [{ model: "gpt-6.2-sol", tokens: 300, cost_usd: 3 }],
+    });
+    vi.mocked(api.usage).mockResolvedValue(usage);
+    await mount();
+    const logos = [...container.querySelectorAll<HTMLImageElement>(".framework-rank-row .brand-icon img")];
+    expect(logos.map((image) => image.src)).toEqual([expect.stringContaining("codex.png"), expect.stringContaining("openai.svg")]);
+    const row = logos[0].closest<HTMLButtonElement>("button")!;
+    await click(row);
+    expect(api.usage).toHaveBeenLastCalledWith("hourly", "2026-10-14", "2026-10-14", { ...NO_FILTER, runtimes: ["codex-app"] });
   });
 
   it("opens on today by the hour and refreshes while the range is still changing", async () => {

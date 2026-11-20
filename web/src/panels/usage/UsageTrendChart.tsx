@@ -117,21 +117,27 @@ export function UsageTrendChart({ keys, series, period, totalTokens, loading }: 
           onKeyDown={onKeyDown}
         >
           <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
-            {[0, 0.5, 1].map((ratio) => (
-              <line key={ratio} x1="0" x2={WIDTH} y1={TOP + plotHeight * ratio} y2={TOP + plotHeight * ratio} className="usage-chart-grid" />
-            ))}
+            <line x1="0" x2={WIDTH} y1={HEIGHT} y2={HEIGHT} className="usage-chart-grid" />
             {selected !== null && (
               <rect x={selected * step} y={0} width={step} height={HEIGHT} className="usage-chart-cursor" />
             )}
             {columns.map((segments, position) => segments.map((segment) => (
-              <rect
-                key={`${keys[position]}-${segment.id}`}
-                x={position * step + (step - barWidth) / 2}
-                y={segment.y}
-                width={barWidth}
-                height={Math.max(segment.height, 0.75)}
-                className={`usage-chart-bar ${slotClass(segment.slot)}${selected !== null && selected !== position ? " dimmed" : ""}`}
-              />
+              <g key={`${keys[position]}-${segment.id}`} className={slotClass(segment.slot)}>
+                <rect
+                  x={position * step + (step - barWidth) / 2}
+                  y={segment.y}
+                  width={barWidth}
+                  height={Math.max(segment.height, 0.75)}
+                  className={`usage-chart-bar ${slotClass(segment.slot)}${selected !== null && selected !== position ? " dimmed" : ""}`}
+                />
+                <rect
+                  x={position * step + (step - barWidth) / 2}
+                  y={segment.y}
+                  width={barWidth}
+                  height={Math.min(segment.height, 4)}
+                  className={`usage-chart-bar-cap${selected !== null && selected !== position ? " dimmed" : ""}`}
+                />
+              </g>
             )))}
           </svg>
           {empty && <span className="usage-chart-empty">{loading ? t("common.loading") : t("usage.noUsageInRange")}</span>}

@@ -34,7 +34,7 @@ export function SidebarGroup<T extends string>({
         <ChevronDown className="sidebar-chevron" size={14} aria-hidden="true" />
       </button>
       <DisclosurePanel id={panelId} expanded={expanded}>
-        <SlidingSelection className="sidebar-subnav-list" selected={current} role="group" aria-label={label}>
+        <SlidingSelection className="sidebar-subnav-list" selected={current} previewOnHover role="group" aria-label={label}>
           {items.map(({ id: itemId, label: itemLabel, icon: ItemIcon }) => (
             <button
               key={itemId}
