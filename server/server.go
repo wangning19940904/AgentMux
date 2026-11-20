@@ -62,11 +62,19 @@ type Server struct {
 	// the standby's record, which need PostgreSQL; followsForTest makes this
 	// server send account operations to its hub, as a standby does, and
 	// nodeOfHubForTest makes its device sign-in go to its hub, as a node's.
-	primaryHubForTest  *bool
-	standbyForTest     string
-	followsForTest     bool
-	nodeOfHubForTest   bool
-	deviceAccount      deviceAccountState
+	primaryHubForTest *bool
+	standbyForTest    string
+	followsForTest    bool
+	nodeOfHubForTest  bool
+	deviceAccount     deviceAccountState
+	// deviceSaved guards the saved-accounts file (device_saved_accounts.go).
+	deviceSaved sync.Mutex
+	// approvals are the node sign-ins waiting for a hub (hub_account_approval.go).
+	approvals deviceApprovalBook
+	// hubAccounts caches, on a node, which accounts its hub is signed in as.
+	hubAccounts hubAccountsCache
+	// approvalSecrets keeps this machine's own requests' secrets, by ID.
+	approvalSecrets    sync.Map
 	linkHub            *linkpkg.Hub
 	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service

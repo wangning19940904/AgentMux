@@ -70,6 +70,7 @@ import {
   loadSessionWithRetry,
 } from "./signIn";
 import { SignInGate } from "./SignInGate";
+import { HubApprovalPrompt } from "./components/HubApprovalPrompt";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import {
   MEMBER_LANDING_TAB,
@@ -262,6 +263,7 @@ export function App() {
           themeMode={themeMode}
           setThemeMode={setThemeMode}
         />
+        <HubApprovalPrompt />
       </SignInGate>
       <ConfirmHost />
     </I18nProvider>
