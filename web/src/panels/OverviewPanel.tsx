@@ -1,19 +1,13 @@
+import { SlidingSelection } from "../components/SlidingSelection";
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
   Bot,
-  Boxes,
   Brain,
   Cable,
   CheckCircle2,
-  CircleDollarSign,
   Clock3,
   DatabaseZap,
-  Gauge,
-  MessageSquareText,
-  Sparkles,
-  Workflow,
 } from "lucide-react";
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { api, type ModelStat, type UsageBucket, type UsageReport } from "../api";
@@ -103,18 +97,14 @@ export function OverviewPanel() {
 
   return (
     <div className="page-stack">
-      <section className="surface overview-statistics">
-        <div className="surface-header statistics-header">
+      <section className="overview-statistics">
+        <div className="statistics-header">
           <div>
             <h2>{t("overview.statistics")}</h2>
             <p className="subtle-copy">{t("overview.statisticsHint")}</p>
           </div>
           <div className="statistics-header-actions">
-            <div className="activity-line overview-updated-at">
-              <Clock3 size={14} />
-              <span>{t("overview.lastUpdated")} {updatedAt}</span>
-            </div>
-            <div className="segmented statistics-range" aria-label={t("overview.statisticsRange")}>
+            <SlidingSelection className="segmented statistics-range" selected={range} role="group" aria-label={t("overview.statisticsRange")}>
               {STAT_RANGES.map((value) => (
                 <button
                   key={value}
@@ -126,165 +116,153 @@ export function OverviewPanel() {
                   {t(`range.${value}`)}
                 </button>
               ))}
-            </div>
+            </SlidingSelection>
+            <span className="overview-updated-at">{t("overview.lastUpdated")} {updatedAt}</span>
           </div>
         </div>
 
-        {usage.error && <div className="surface-body error">{usage.error}</div>}
-        {(usage.data?.warnings ?? []).map((warning) => <div className="surface-body warning" key={warning}>{warning}</div>)}
-        <div className={`surface-body statistics-body${usage.loading ? " is-loading" : ""}`}>
-          <div className="statistics-summary-grid">
-            <section className="statistics-summary-card usage-summary-card">
-              <header>
-                <span className="statistics-summary-title"><Gauge size={19} />{t("overview.usageCard")}</span>
-              </header>
-              <div className="usage-summary-metrics">
-                <SummaryMetric
-                  icon={<Gauge size={17} />}
-                  label={t("overview.totalTokens")}
-                  value={totals ? fmt(totalTokens) : "—"}
-                  detail={totals ? <>
-                    {t("overview.includedCache", { tokens: fmt(cacheTokens) })}
-                    {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage })}</>}
-                  </> : undefined}
-                />
-                <SummaryMetric icon={<MessageSquareText size={17} />} label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} detail={t("overview.sessionScope")} />
-                <SummaryMetric
-                  icon={<CircleDollarSign size={17} />}
-                  label={t("overview.estimatedAmount")}
-                  value={(
-                    <span className="usage-cost-values">
-                      <span>{totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}<small>RMB</small></span>
-                      <span>{totals ? formatUsageCost(totals.cost_usd, "usd", cnyRate, language) : "—"}<small>USD</small></span>
-                    </span>
-                  )}
-                  detail={t("overview.exchangeRate", { rate: cnyRate })}
-                />
-              </div>
-              <div className="usage-breakdown">
-                <Stat label={t("usage.uncachedInput")} value={totals ? fmt(totals.input_tokens) : "—"} />
-                <Stat label={t("overview.output")} value={totals ? fmt(totals.output_tokens) : "—"} />
-                <Stat label={t("usage.cacheRead")} value={totals ? fmt(totals.cache_read_tokens) : "—"} />
-                <Stat label={t("usage.cacheWrite")} value={totals ? fmt(totals.cache_write_tokens) : "—"} />
-              </div>
-              <details className="usage-pricing-note">
-                <summary>{t("overview.pricingDetails")}</summary>
-                <p>{t("overview.pricingFormula")}</p>
-                <p>{t("overview.pricingSource")}</p>
-              </details>
-            </section>
-
-            <div className="overview-rankings">
-              <UsageRanking
-                title={t("overview.frameworkRanking")}
-                icon={<Bot size={19} />}
-                emptyText={t("overview.noFrameworkUsage")}
-                totalTokens={totalTokens}
-                items={(usage.data?.by_runtime ?? []).map((runtime) => {
-                  const Icon = runtimeIcon(runtime.runtime);
-                  return { id: runtime.runtime, label: runtimeLabel(runtime.runtime, t), tokens: runtime.tokens, icon: <Icon size={17} /> };
-                })}
+        {usage.error && <div className="session-notice error" role="alert">{usage.error}</div>}
+        {(usage.data?.warnings ?? []).map((warning) => <div className="session-notice warning" key={warning}>{warning}</div>)}
+        <div className={`statistics-body${usage.loading ? " is-loading" : ""}`}>
+          <section className="usage-summary-card" aria-label={t("overview.usageCard")}>
+            <div className="usage-summary-metrics">
+              <SummaryMetric
+                label={t("overview.totalTokens")}
+                value={totals ? fmt(totalTokens) : "—"}
+                detail={totals ? <>
+                  {t("overview.includedCache", { tokens: fmt(cacheTokens) })}
+                  {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage })}</>}
+                </> : undefined}
               />
-              <UsageRanking
-                title={t("overview.modelRanking")}
-                icon={<Brain size={19} />}
-                emptyText={t("overview.noModelUsage")}
-                totalTokens={totalTokens}
-                items={(usage.data?.by_model ?? []).map((model) => ({
-                  id: model.model,
-                  label: model.model.trim() || t("overview.unknownModel"),
-                  tokens: model.tokens,
-                  icon: <Brain size={17} />,
-                }))}
+              <SummaryMetric label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} detail={t("overview.sessionScope")} />
+              <SummaryMetric
+                label={t("overview.estimatedAmount")}
+                value={(
+                  <span className="usage-cost-values">
+                    <span>{totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}<small>RMB</small></span>
+                    <span>{totals ? formatUsageCost(totals.cost_usd, "usd", cnyRate, language) : "—"}<small>USD</small></span>
+                  </span>
+                )}
+                detail={t("overview.exchangeRate", { rate: cnyRate })}
               />
             </div>
-          </div>
+            <div className="usage-breakdown">
+              <Stat label={t("usage.uncachedInput")} value={totals ? fmt(totals.input_tokens) : "—"} />
+              <Stat label={t("overview.output")} value={totals ? fmt(totals.output_tokens) : "—"} />
+              <Stat label={t("usage.cacheRead")} value={totals ? fmt(totals.cache_read_tokens) : "—"} />
+              <Stat label={t("usage.cacheWrite")} value={totals ? fmt(totals.cache_write_tokens) : "—"} />
+            </div>
+            <details className="usage-pricing-note">
+              <summary>{t("overview.pricingDetails")}</summary>
+              <p>{t("overview.pricingFormula")}</p>
+              <p>{t("overview.pricingSource")}</p>
+            </details>
+          </section>
 
           <div className="usage-trend-card">
             <div className="usage-trend-heading">
-              <div>
+              <div className="usage-trend-title">
                 <h3>{t("overview.tokenTrend")}</h3>
-                <span>{t(`range.${range}`)}</span>
-              </div>
-              <div className="usage-trend-actions">
                 <span className="usage-trend-total">{fmt(totalTokens)}</span>
-                <div className="trend-dimension-toggle" aria-label={t("overview.trendBreakdown")}>
-                  {(["total", "framework", "model", "machine"] as TrendDimension[]).map((dimension) => (
-                    <button
-                      key={dimension}
-                      className={trendDimension === dimension ? "active" : ""}
-                      type="button"
-                      aria-pressed={trendDimension === dimension}
-                      onClick={() => setTrendDimension(dimension)}
-                    >
-                      {t(`overview.trend.${dimension}`)}
-                    </button>
-                  ))}
-                </div>
               </div>
+              <SlidingSelection className="segmented trend-dimension-toggle" selected={trendDimension} role="group" aria-label={t("overview.trendBreakdown")}>
+                {(["total", "framework", "model", "machine"] as TrendDimension[]).map((dimension) => (
+                  <button
+                    key={dimension}
+                    className={trendDimension === dimension ? "active" : ""}
+                    type="button"
+                    aria-pressed={trendDimension === dimension}
+                    onClick={() => setTrendDimension(dimension)}
+                  >
+                    {t(`overview.trend.${dimension}`)}
+                  </button>
+                ))}
+              </SlidingSelection>
             </div>
             <UsageTrend buckets={hourlyBuckets} series={trendSeries} range={range} totalTokens={totalTokens} />
+          </div>
+
+          <div className="overview-rankings">
+            <UsageRanking
+              title={t("overview.frameworkRanking")}
+              icon={<Bot size={17} />}
+              emptyText={t("overview.noFrameworkUsage")}
+              totalTokens={totalTokens}
+              items={(usage.data?.by_runtime ?? []).map((runtime) => ({
+                id: runtime.runtime,
+                label: runtimeLabel(runtime.runtime, t),
+                tokens: runtime.tokens,
+              }))}
+            />
+            <UsageRanking
+              title={t("overview.modelRanking")}
+              icon={<Brain size={17} />}
+              emptyText={t("overview.noModelUsage")}
+              totalTokens={totalTokens}
+              items={(usage.data?.by_model ?? []).map((model) => ({
+                id: model.model,
+                label: model.model.trim() || t("overview.unknownModel"),
+                tokens: model.tokens,
+              }))}
+            />
           </div>
         </div>
       </section>
 
-      <div className="content-grid overview-content-grid">
-        <section className="surface overview-health-surface">
-          <div className="surface-header overview-health-header">
-            <div>
-              <h2>{t("overview.connectionHealth")}</h2>
-              <p className="subtle-copy">{t("overview.connectionHealthHint")}</p>
-            </div>
-            <span className={`status-badge ${healthLoading || healthConfiguredCount === 0 ? "" : healthAttentionCount > 0 ? "warning" : "success"}`}>
-              {healthLoading
-                ? <Clock3 size={13} />
-                : healthAttentionCount > 0
-                  ? <AlertTriangle size={13} />
-                  : <CheckCircle2 size={13} />}
-              {healthLoading
-                ? t("common.loading")
-                : healthAttentionCount > 0
-                ? t("overview.healthAttention", { count: healthAttentionCount })
-                : healthConfiguredCount === 0
-                  ? t("overview.healthNotConfigured")
-                  : t("overview.healthAllGood")}
-            </span>
+      <section className="overview-health-surface">
+        <div className="overview-health-header">
+          <div>
+            <h2>{t("overview.connectionHealth")}</h2>
+            <p className="subtle-copy">{t("overview.connectionHealthHint")}</p>
           </div>
-          <div className="overview-health-list">
-            <HealthSummaryRow
-              icon={<Cable size={19} />}
-              title={t("overview.channelConnections")}
-              summary={channelHealth}
-              loading={channels.loading}
-              error={channels.error}
-              summaryText={channelHealth.total > 0
-                ? t("overview.channelHealthSummary", {
-                  healthy: channelHealth.healthy,
-                  enabled: Math.max(0, channelHealth.total - channelHealth.inactive),
-                  inactive: channelHealth.inactive,
-                })
-                : t("overview.noChannelsConfigured")}
-              pendingLabel=""
-              onResolve={() => { window.location.hash = "#channels"; }}
-              t={t}
-            />
-            <HealthSummaryRow
-              icon={<DatabaseZap size={19} />}
-              title={t("overview.frameworkAvailability")}
-              summary={modelHealth}
-              loading={frameworkHealth.loading}
-              error={frameworkHealth.error}
-              summaryText={modelHealth.total > 0
-                ? t("overview.frameworkHealthSummary", { healthy: modelHealth.healthy, total: modelHealth.total })
-                : t("overview.noFrameworkTests")}
-              pendingLabel=""
-              onResolve={() => { window.location.hash = "#frameworks"; }}
-              t={t}
-            />
-          </div>
-        </section>
-
-      </div>
+          <span className={`status-badge ${healthLoading || healthConfiguredCount === 0 ? "" : healthAttentionCount > 0 ? "warning" : "success"}`}>
+            {healthLoading
+              ? <Clock3 size={13} />
+              : healthAttentionCount > 0
+                ? <AlertTriangle size={13} />
+                : <CheckCircle2 size={13} />}
+            {healthLoading
+              ? t("common.loading")
+              : healthAttentionCount > 0
+              ? t("overview.healthAttention", { count: healthAttentionCount })
+              : healthConfiguredCount === 0
+                ? t("overview.healthNotConfigured")
+                : t("overview.healthAllGood")}
+          </span>
+        </div>
+        <div className="overview-health-list">
+          <HealthSummaryRow
+            icon={<Cable size={19} />}
+            title={t("overview.channelConnections")}
+            summary={channelHealth}
+            loading={channels.loading}
+            error={channels.error}
+            summaryText={channelHealth.total > 0
+              ? t("overview.channelHealthSummary", {
+                healthy: channelHealth.healthy,
+                enabled: Math.max(0, channelHealth.total - channelHealth.inactive),
+                inactive: channelHealth.inactive,
+              })
+              : t("overview.noChannelsConfigured")}
+            pendingLabel=""
+            onResolve={() => { window.location.hash = "#channels"; }}
+            t={t}
+          />
+          <HealthSummaryRow
+            icon={<DatabaseZap size={19} />}
+            title={t("overview.frameworkAvailability")}
+            summary={modelHealth}
+            loading={frameworkHealth.loading}
+            error={frameworkHealth.error}
+            summaryText={modelHealth.total > 0
+              ? t("overview.frameworkHealthSummary", { healthy: modelHealth.healthy, total: modelHealth.total })
+              : t("overview.noFrameworkTests")}
+            pendingLabel=""
+            onResolve={() => { window.location.hash = "#frameworks"; }}
+            t={t}
+          />
+        </div>
+      </section>
 
     </div>
   );
@@ -354,17 +332,17 @@ function HealthSummaryRow({
   );
 }
 
-function SummaryMetric({ icon, label, value, detail }: { icon: ReactNode; label: string; value: ReactNode; detail?: ReactNode }) {
+function SummaryMetric({ label, value, detail }: { label: string; value: ReactNode; detail?: ReactNode }) {
   return (
     <div className="usage-summary-metric">
-      <span className="usage-summary-metric-label">{icon}{label}</span>
+      <span className="usage-summary-metric-label">{label}</span>
       <strong>{value}</strong>
       {detail && <small>{detail}</small>}
     </div>
   );
 }
 
-type UsageRankingItem = { id: string; label: string; tokens: number; icon: ReactNode };
+type UsageRankingItem = { id: string; label: string; tokens: number };
 
 function UsageRanking({ title, icon, emptyText, totalTokens, items }: {
   title: string;
@@ -380,32 +358,28 @@ function UsageRanking({ title, icon, emptyText, totalTokens, items }: {
     .sort((left, right) => right.tokens - left.tokens || left.id.localeCompare(right.id));
   const visible = expanded ? ranked : ranked.slice(0, 3);
   return (
-    <section className="statistics-summary-card framework-ranking-card" aria-label={title}>
+    <section className="framework-ranking-card" aria-label={title}>
       <header>
-        <span className="statistics-summary-title">{icon}{title}</span>
-        <div className="ranking-actions">
-          <span className="ranking-top-label">{expanded ? t("overview.rankingAll") : "TOP 3"}</span>
-          {ranked.length > 3 && (
-            <button className="ranking-expand" type="button" aria-expanded={expanded} aria-controls={listID} onClick={() => setExpanded(!expanded)}>
-              {expanded ? t("overview.rankingCollapse") : t("overview.rankingExpand", { count: ranked.length })}
-            </button>
-          )}
-        </div>
+        <h3 className="statistics-summary-title">{icon}{title}</h3>
+        {ranked.length > 3 && (
+          <button className="ranking-expand" type="button" aria-expanded={expanded} aria-controls={listID} onClick={() => setExpanded((open) => !open)}>
+            {expanded ? t("overview.rankingCollapse") : t("overview.rankingExpand", { count: ranked.length })}
+          </button>
+        )}
       </header>
       <div className="framework-ranking-list" id={listID}>
         {visible.length > 0 ? visible.map((item, index) => (
-          <UsageRank key={item.id} rank={index + 1} label={item.label} icon={item.icon} tokens={item.tokens} share={totalTokens > 0 ? item.tokens / totalTokens : 0} />
+          <UsageRank key={item.id} rank={index + 1} label={item.label} tokens={item.tokens} share={totalTokens > 0 ? item.tokens / totalTokens : 0} />
         )) : <div className="framework-ranking-empty">{emptyText}</div>}
       </div>
     </section>
   );
 }
 
-function UsageRank({ rank, label, icon, tokens, share }: { rank: number; label: string; icon: ReactNode; tokens: number; share: number }) {
+function UsageRank({ rank, label, tokens, share }: { rank: number; label: string; tokens: number; share: number }) {
   return (
     <div className="framework-rank-row">
-      <span className={`framework-rank-number rank-${rank}`}>{rank}</span>
-      <span className="framework-rank-icon">{icon}</span>
+      <span className="framework-rank-number">{rank}</span>
       <span className="framework-rank-copy">
         <strong title={label}>{label}</strong>
         <span>{fmt(tokens)} tokens</span>
@@ -413,31 +387,6 @@ function UsageRank({ rank, label, icon, tokens, share }: { rank: number; label: 
       <span className="framework-rank-share">{Math.round(share * 100)}%</span>
     </div>
   );
-}
-
-function runtimeIcon(runtime: string) {
-  switch (runtime.trim().toLowerCase()) {
-    case "claude":
-    case "claudecode":
-    case "claude-desktop":
-    case "claude-unknown":
-      return Sparkles;
-    case "codex":
-    case "codex-app":
-      return Bot;
-    case "cursor":
-      return Workflow;
-    case "gemini":
-      return Sparkles;
-    case "iflow":
-      return Activity;
-    case "kimi":
-      return Brain;
-    case "opencode":
-      return Boxes;
-    default:
-      return Bot;
-  }
 }
 
 function normalizeHourlyBuckets(buckets: UsageBucket[], from: string, to: string) {
@@ -649,14 +598,14 @@ function UsageTrend({
       )}
       <div className="usage-trend" role="img" aria-label={series.map((item) => `${item.label}: ${fmt(item.tokens)}`).join(", ")}>
         <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-          {[0.25, 0.5, 0.75, 1].map((ratio) => (
-            <line key={ratio} x1="0" y1={height * ratio} x2={width} y2={height * ratio} className="usage-grid-line" />
+          {[1 / 3, 2 / 3].map((ratio) => (
+            <line key={ratio} x1="0" y1={insetY + chartHeight * ratio} x2={width} y2={insetY + chartHeight * ratio} className="usage-grid-line" />
           ))}
           {plotted.length === 1 && plotted[0].area && <path d={plotted[0].area} className="usage-area" />}
           {plotted.map((item, seriesIndex) => (
             <g key={item.id} className={`usage-series color-${seriesIndex % 6}`}>
               {item.line && <path d={item.line} className="usage-line" />}
-              {showPoints && item.points.map((point, index) => (
+              {showPoints && item.points.map((point, index) => item.values[index] > 0 && (
                 <circle key={`${item.id}-${buckets[index]?.key ?? index}`} cx={point.x} cy={point.y} r="3.3" className="usage-point" />
               ))}
             </g>

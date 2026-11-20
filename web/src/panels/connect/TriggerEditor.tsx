@@ -9,6 +9,7 @@ import { useState } from "react";
 import { Channel, Trigger } from "../../api";
 import { useI18n } from "../../i18n";
 import { TargetBadge } from "../../components/TargetBadge";
+import { RowDisclosure } from "../../components/RowDisclosure";
 import {
   EVENT_OPTIONS,
   kindBadge,
@@ -40,34 +41,41 @@ export function TriggerCard({
   const lastStatus = trigger.last_status;
   const statusClass = lastStatus === "ok" ? "success" : lastStatus === "error" ? "danger" : "warning";
   return (
-    <div className="route-card">
-      <div className="agent-list-main">
-        <span className="provider-icon">{badge.icon}</span>
-        <span>
-          <strong>{trigger.name}</strong>
-          <small>
-            {badge.label}
-            {spec ? ` · ${spec}` : ""}
-            {trigger.channel_name ? ` → ${trigger.channel_name}${trigger.chat_id ? ` (${trigger.chat_id})` : ""}` : ""}
-          </small>
-        </span>
-        <span className={`status-badge ${trigger.enabled ? "success" : ""}`}>
-          <span className="status-dot" />
-          {trigger.enabled ? t("common.enabled") : t("common.disabled")}
-        </span>
-        <TargetBadge target_id={trigger.target_id} target_name={trigger.target_name} />
-        {lastStatus && (
-          <span className={`status-badge ${statusClass}`} title={trigger.last_error || ""}>
-            {t("connect.lastRun")}: {lastStatus}
-            {trigger.last_run ? ` · ${new Date(trigger.last_run).toLocaleString()}` : ""}
-          </span>
-        )}
-      </div>
+    <RowDisclosure
+      className="connect-row"
+      name={trigger.name}
+      summary={
+        <div className="connect-row-summary">
+          <div className="agent-list-main">
+            <span className="provider-icon">{badge.icon}</span>
+            <span>
+              <strong>{trigger.name}</strong>
+              <small>
+                {badge.label}
+                {spec ? ` · ${spec}` : ""}
+                {trigger.channel_name ? ` → ${trigger.channel_name}${trigger.chat_id ? ` (${trigger.chat_id})` : ""}` : ""}
+              </small>
+            </span>
+            <span className={`status-badge ${trigger.enabled ? "success" : ""}`}>
+              <span className="status-dot" />
+              {trigger.enabled ? t("common.enabled") : t("common.disabled")}
+            </span>
+            <TargetBadge target_id={trigger.target_id} target_name={trigger.target_name} />
+            {lastStatus && (
+              <span className={`status-badge ${statusClass}`} title={trigger.last_error || ""}>
+                {t("connect.lastRun")}: {lastStatus}
+                {trigger.last_run ? ` · ${new Date(trigger.last_run).toLocaleString()}` : ""}
+              </span>
+            )}
+          </div>
+          {trigger.last_error && <div className="session-notice error">{trigger.last_error}</div>}
+        </div>
+      }
+    >
       {trigger.prompt && <p className="subtle-copy trigger-prompt">{trigger.prompt}</p>}
       {trigger.kind === "webhook" && trigger.hook_path && (
         <HookEndpoint trigger={trigger} />
       )}
-      {trigger.last_error && <div className="session-notice error">{trigger.last_error}</div>}
       <div className="table-actions">
         {trigger.kind !== "event" && (
           <button className="ghost-action" disabled={busy === `run-${trigger.id}`} onClick={onRun}>
@@ -87,7 +95,7 @@ export function TriggerCard({
           {t("common.delete")}
         </button>
       </div>
-    </div>
+    </RowDisclosure>
   );
 }
 

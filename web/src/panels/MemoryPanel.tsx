@@ -12,6 +12,7 @@ export function MemoryPanel() {
   const [content, setContent] = useState("");
   const [newScope, setNewScope] = useState("global");
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   async function add() {
     if (!content.trim()) return;
@@ -19,6 +20,7 @@ export function MemoryPanel() {
     try {
       await api.putMemory({ scope: newScope, content });
       setContent("");
+      setAdding(false);
       entries.reload();
     } finally {
       setBusy(false);
@@ -36,38 +38,28 @@ export function MemoryPanel() {
 
       <section className="surface">
         <div className="surface-header">
-          <h2>{t("memory.add")}</h2>
-        </div>
-        <div className="surface-body">
-          <div className="form-row">
-            <input
-              placeholder={t("memory.scopePlaceholder")}
-              value={newScope}
-              onChange={(e) => setNewScope(e.target.value)}
-            />
+          <div className="control-row resource-filters">
+            <input aria-label={t("memory.filterScope")} placeholder={t("memory.filterScope")} value={scope} onChange={(e) => setScope(e.target.value)} />
+            <input aria-label={t("memory.searchText")} placeholder={t("memory.searchText")} value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <div className="form-row">
-            <textarea
-              placeholder={t("memory.contentPlaceholder")}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={3}
-            />
-          </div>
-          <button className="action" disabled={busy} onClick={add}>
-            {t("common.save")}
+          <button className="action" aria-expanded={adding} aria-controls="memory-editor" onClick={() => setAdding((open) => !open)}>
+            {adding ? t("common.close") : t("memory.add")}
           </button>
         </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("memory.search")}</h2>
+        {adding && <form id="memory-editor" className="inline-editor" onSubmit={(event) => { event.preventDefault(); void add(); }}>
+          <label className="field">
+            <span>{t("memory.scope")}</span>
+            <input value={newScope} placeholder={t("memory.scopePlaceholder")} onChange={(e) => setNewScope(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>{t("memory.content")}</span>
+            <textarea value={content} placeholder={t("memory.contentPlaceholder")} onChange={(e) => setContent(e.target.value)} rows={4} />
+          </label>
           <div className="control-row">
-            <input placeholder={t("memory.filterScope")} value={scope} onChange={(e) => setScope(e.target.value)} />
-            <input placeholder={t("memory.searchText")} value={q} onChange={(e) => setQ(e.target.value)} />
+            <button className="action" type="submit" disabled={busy || !content.trim()}>{t("common.save")}</button>
+            <button className="ghost-action" type="button" onClick={() => setAdding(false)}>{t("common.cancel")}</button>
           </div>
-        </div>
+        </form>}
         {entries.error && <div className="surface-body error">{entries.error}</div>}
         <div className="table-wrap">
           <table>

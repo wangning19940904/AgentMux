@@ -1,3 +1,4 @@
+import { SlidingSelection } from "../components/SlidingSelection";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -77,21 +78,13 @@ export function ObservabilityPanel() {
   return (
     <div className="page-stack observability-page">
       <section className="surface observability-hero">
-        <div>
-          <span className="observability-eyebrow">
-            <Activity size={15} />
-            {t("observability.liveTelemetry")}
-          </span>
-          <h2>{t("observability.title")}</h2>
-          <p className="subtle-copy">{t("observability.subtitle")}</p>
-        </div>
-        <div className="segmented observability-tabs" aria-label={t("observability.title")}>
+        <SlidingSelection className="segmented observability-tabs" selected={route.view} role="group" aria-label={t("observability.title")}>
           {OBSERVABILITY_VIEWS.map((view) => (
-            <button key={view} className={route.view === view ? "active" : ""} onClick={() => navigate(view)}>
+            <button key={view} type="button" className={route.view === view ? "active" : ""} aria-pressed={route.view === view} onClick={() => navigate(view)}>
               {t(`observability.${view}`)}
             </button>
           ))}
-        </div>
+        </SlidingSelection>
       </section>
 
       {route.view === "overview" && <ObservationOverview onOpenTrace={(traceID) => navigate("traces", traceID)} />}
@@ -365,15 +358,7 @@ function TraceExplorer({
           </div>
         </div>
 
-        {selectedTraceID ? (
-          <TraceDetail traceID={selectedTraceID} onClose={onCloseTrace} />
-        ) : (
-          <div className="trace-detail-empty">
-            <Network size={30} />
-            <strong>{t("observability.selectTrace")}</strong>
-            <span>{t("observability.selectTraceHint")}</span>
-          </div>
-        )}
+        {selectedTraceID && <TraceDetail traceID={selectedTraceID} onClose={onCloseTrace} />}
       </div>
     </section>
   );

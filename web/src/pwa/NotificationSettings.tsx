@@ -166,8 +166,8 @@ export function NotificationSettings() {
   const standalone = isStandalone();
 
   return (
-    <section className="surface notification-settings" aria-labelledby="notification-settings-title">
-      <div className="surface-header">
+    <section className="settings-group settings-notifications" aria-labelledby="notification-settings-title">
+      <div className="settings-heading">
         <div>
           <h2 id="notification-settings-title">{t("push.title")}</h2>
           <p className="subtle-copy">{t("push.subtitle")}</p>
@@ -187,7 +187,7 @@ export function NotificationSettings() {
           </button>
         )}
       </div>
-      <div className="surface-body notification-settings-body">
+      <div className="notification-settings-body">
         {phase === "loading" && <p className="subtle-copy">{t("common.loading")}</p>}
         {phase !== "loading" && blocker && (
           <div className={`notification-callout${blocker === "denied" ? " warning" : ""}`} role="note">
@@ -206,7 +206,7 @@ export function NotificationSettings() {
                   <strong>{t(`push.kind.${kind}`)}</strong>
                   <small>{t(`push.kind.${kind}.hint`)}</small>
                 </span>
-                <input type="checkbox" checked={record.kinds.includes(kind)} onChange={(event) => toggleKind(kind, event.target.checked)} />
+                <input type="checkbox" role="switch" checked={record.kinds.includes(kind)} onChange={(event) => toggleKind(kind, event.target.checked)} />
               </label>
             ))}
           </fieldset>

@@ -5,7 +5,6 @@ import {
   navigationGroupForTab,
   primaryGroupDestination,
   searchNavigationItems,
-  secondaryNavigationForTab,
   tabAllowedForRole,
 } from "./navigationModel";
 import { NAVIGATION_SEARCH_ALIASES } from "./navigationSearchAliases";
@@ -17,19 +16,13 @@ const groups = [
   { id: "system", items: [{ id: "machines" }, { id: "accounts" }] },
 ] as const;
 
-describe("horizontal navigation model", () => {
-  it("opens the owning secondary rail for a deep-linked child", () => {
-    expect(secondaryNavigationForTab([...groups], "meetings", "overview")).toEqual({
-      groupID: "connectivity",
-      open: true,
-    });
+describe("sidebar navigation model", () => {
+  it("finds the group to expand for a deep-linked child", () => {
+    expect(navigationGroupForTab(groups, "meetings")?.id).toBe("connectivity");
   });
 
-  it("closes the secondary rail on overview", () => {
-    expect(secondaryNavigationForTab([...groups], "overview", "overview")).toEqual({
-      groupID: null,
-      open: false,
-    });
+  it("treats overview as a separate destination", () => {
+    expect(navigationGroupForTab(groups, "overview")).toBeNull();
   });
 
   it("places account management in the system rail", () => {
@@ -61,12 +54,12 @@ describe("navigation by role", () => {
     expect(tabAllowedForRole("overview", "admin")).toBe(true);
   });
 
-  it("shows a member only their own account", () => {
+  it("limits member navigation to their account and client preferences", () => {
     const member = navigationForRole(consoleGroups, "member");
     expect(member.map((group) => group.id)).toEqual(["system"]);
-    expect(member.flatMap((group) => group.items.map((item) => item.id))).toEqual(["accounts"]);
+    expect(member.flatMap((group) => group.items.map((item) => item.id))).toEqual(["accounts", "settings"]);
     expect(MEMBER_LANDING_TAB).toBe("accounts");
-    for (const tab of ["overview", "agents", "machines", "settings", "channels", "usage"]) {
+    for (const tab of ["overview", "agents", "machines", "channels", "usage"]) {
       expect(tabAllowedForRole(tab, "member"), tab).toBe(false);
     }
   });

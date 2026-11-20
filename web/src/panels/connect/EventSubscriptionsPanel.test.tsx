@@ -7,11 +7,16 @@ import {
   EventSubscriptionsPanel,
   splitEventValues,
 } from "./EventSubscriptionsPanel";
-import { api } from "../../api";
+import { api, baseMachineScope, setMachineOverride } from "../../api";
 
 vi.mock("../../api", () => ({
-  fleetMode: () => false,
+  baseMachineScope: vi.fn(() => "local"),
+  setMachineOverride: vi.fn(),
   api: {
+    fleetTargets: vi.fn(async () => [
+      { id: "local", name: "Local" },
+      { id: "remote-1", name: "Remote machine" },
+    ]),
     eventSources: vi.fn(async () => [
       {
         ref: "channel:ch",
@@ -35,7 +40,31 @@ afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = undefined;
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
+  vi.mocked(baseMachineScope).mockReturnValue("local");
   document.body.replaceChildren();
+});
+it("opens local subscriptions in fleet mode and routes a selected machine before loading", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(baseMachineScope).mockReturnValue("all");
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<I18nProvider language="zh"><EventSubscriptionsPanel /></I18nProvider>));
+  expect(setMachineOverride).toHaveBeenCalledWith("local");
+  expect(api.eventSubscriptions).toHaveBeenCalled();
+  expect(container.textContent).toContain("新建订阅");
+  const picker = container.querySelector("select")!;
+  expect(picker.textContent).toContain("Remote machine");
+  await act(async () => {
+    picker.value = "remote-1";
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(setMachineOverride).toHaveBeenLastCalledWith("remote-1");
+  expect(api.eventSubscriptions).toHaveBeenCalledTimes(2);
+  await act(async () => root!.unmount());
+  root = undefined;
+  expect(setMachineOverride).toHaveBeenLastCalledWith(null);
 });
 
 it("shows local-save limitations and only transiently displays the secret", async () => {

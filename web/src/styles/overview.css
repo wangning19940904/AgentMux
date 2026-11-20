@@ -1,0 +1,352 @@
+:root {
+  --usage-surface: #f4f4f6;
+  --ranking-surface: #f9f9fb;
+  --health-surface: #f4f4f6;
+  --chart-grid: #ececf0;
+}
+
+:root[data-theme="dark"] {
+  --usage-surface: #2d2d33;
+  --ranking-surface: #1f1f23;
+  --health-surface: #2d2d33;
+  --chart-grid: #36363d;
+}
+
+.overview-statistics {
+  container: overview / inline-size;
+}
+
+.statistics-header,
+.usage-trend-heading,
+.overview-health-header {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 18px;
+}
+
+.statistics-header {
+  margin-bottom: 10px;
+}
+
+.statistics-header h2,
+.overview-health-header h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  line-height: 1.25;
+}
+
+.statistics-header-actions {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.overview-updated-at {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-range,
+.trend-dimension-toggle {
+  background: var(--bg-subtle);
+  border: 0;
+}
+
+.statistics-range button,
+.trend-dimension-toggle button {
+  min-width: 0;
+  min-height: 24px;
+  padding-inline: 10px;
+}
+
+.statistics-body {
+  gap: 18px;
+}
+
+.usage-summary-card,
+.overview-rankings,
+.overview-health-surface {
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 10px;
+}
+
+.usage-summary-card {
+  background: var(--usage-surface);
+}
+
+.usage-summary-metrics {
+  grid-template-columns: minmax(0, 1.22fr) minmax(0, .68fr) minmax(0, 1.15fr);
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.usage-summary-metric,
+.usage-summary-metric:first-child,
+.usage-summary-metric:last-child {
+  padding: 0;
+  border: 0;
+}
+
+.usage-summary-metric-label,
+.usage-summary-metric > small {
+  overflow: visible;
+  white-space: normal;
+  text-wrap: pretty;
+}
+
+.usage-summary-metric > strong,
+.usage-summary-metric:last-child > strong {
+  margin-top: 6px;
+  overflow: visible;
+  font-size: var(--fs-2xl);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.025em;
+}
+
+.usage-summary-metric:first-child > strong {
+  color: var(--accent-strong);
+  font-size: var(--fs-ui);
+  letter-spacing: -.045em;
+}
+
+.usage-cost-values {
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.usage-cost-values > span {
+  flex-wrap: wrap;
+}
+
+.usage-cost-values > span + span {
+  font-size: var(--fs-lg);
+  letter-spacing: 0;
+}
+
+.usage-breakdown {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 0;
+  border: 0;
+}
+
+.usage-breakdown .stat:nth-child(n) {
+  padding: 0;
+  border: 0;
+}
+
+.usage-breakdown .value {
+  margin-top: 4px;
+  overflow: visible;
+  font-size: var(--fs-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-pricing-note {
+  margin-top: 14px;
+}
+
+.usage-pricing-note > summary {
+  color: var(--accent-strong);
+}
+
+.usage-trend-card {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.usage-trend-title {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.usage-trend-heading h3 {
+  font-size: var(--fs-lg);
+}
+
+.usage-trend-heading .usage-trend-total {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-trend {
+  min-height: 0;
+  margin-top: 6px;
+}
+
+.usage-trend svg {
+  height: clamp(110px, 19vh, 150px);
+}
+
+.usage-trend-labels {
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.usage-grid-line {
+  stroke: var(--chart-grid);
+  stroke-dasharray: none;
+}
+
+.usage-area {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.trend-series-legend > span {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.trend-series-legend {
+  gap: 8px 16px;
+}
+
+.overview-rankings {
+  gap: 16px 24px;
+  background: var(--ranking-surface);
+}
+
+.framework-ranking-card {
+  min-width: 0;
+  background: transparent;
+}
+
+.framework-ranking-card > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+}
+
+.statistics-summary-title {
+  font-size: var(--fs-lg);
+}
+
+.ranking-expand {
+  padding-inline: 4px;
+  color: var(--accent-strong);
+  border: 0;
+}
+
+.framework-rank-row {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  padding: 3px 0;
+  background: transparent;
+  border: 0;
+}
+
+.framework-rank-row:hover {
+  background: transparent;
+}
+
+.framework-rank-copy strong {
+  font-size: var(--fs-md);
+}
+
+.framework-rank-share {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.framework-ranking-empty {
+  place-items: start;
+  min-height: 0;
+}
+
+.overview-health-surface {
+  background: var(--health-surface);
+}
+
+.overview-health-list {
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.overview-health-row {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.overview-health-row .overview-health-icon {
+  background: transparent;
+  border: 0;
+}
+
+.overview-health-row .overview-health-icon.success {
+  color: var(--green);
+}
+
+.overview-health-row .overview-health-icon.warning {
+  color: var(--amber);
+}
+
+.overview-health-surface .status-badge {
+  padding-inline: 0;
+  background: transparent;
+}
+
+.overview-health-copy > :is(span, small) {
+  white-space: normal;
+}
+
+@container overview (max-width: 455px) {
+  .statistics-header-actions {
+    width: 100%;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+    gap: 8px;
+  }
+
+  .overview-updated-at {
+    justify-self: end;
+  }
+
+  .usage-summary-card,
+  .overview-rankings {
+    padding: 16px;
+  }
+
+  .usage-summary-metrics {
+    grid-template-columns: .8fr 1.2fr;
+  }
+
+  .usage-summary-metric:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .usage-summary-metric:first-child > strong {
+    font-size: var(--fs-ui);
+  }
+
+  .usage-breakdown {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview-rankings {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-trend-labels {
+    font-size: var(--fs-ui);
+  }
+}
+
+@media (max-width: 420px) {
+  .overview-health-surface {
+    padding: 16px;
+  }
+}

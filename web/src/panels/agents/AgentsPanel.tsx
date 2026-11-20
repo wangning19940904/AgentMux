@@ -4,6 +4,7 @@ import { api, setMachineOverride, type AgentInstance, type SuperAgent } from "..
 import { useI18n } from "../../i18n";
 import { useCachedResource } from "../../useCachedResource";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
+import { RowDisclosure } from "../../components/RowDisclosure";
 import {
   EMPTY_AGENT,
   agentChannels,
@@ -535,7 +536,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             />
           </label>
           <div className="agent-registry-summary" aria-label={t("agents.registrySummaryLabel")}>
-            <span className="agent-filter-chip active">{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
+            <span className="agent-filter-chip">{t("agents.metricAgents", { count: registryMetrics.agentCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricMachines", { count: registryMetrics.machineCount })}</span>
             <span className="agent-filter-chip">{t("agents.metricChannels", { count: registryMetrics.channelCount })}</span>
           </div>
@@ -566,47 +567,50 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             const toggleOperation = `toggle:${itemKey}`;
             const deleteOperation = `delete:${itemKey}`;
             return (
-              <article
+              <RowDisclosure
                 className="agent-registry-row"
                 key={itemKey}
+                name={item.name}
                 onDoubleClick={() => editAgent(item)}
-              >
-                <div className="agent-list-main">
-                  {itemUnified ? (
-                    <button
-                      type="button"
-                      className="agent-avatar-button"
-                      title={t("agents.work.openChat")}
-                      aria-label={t("agents.work.openChatFor", { name: item.name })}
-                      onClick={() => openAgent(itemUnified, "work")}
-                      onDoubleClick={(event) => event.stopPropagation()}
-                    >
-                      <AgentAvatar avatar={itemUnified.avatar} channels={itemChannels} />
-                    </button>
-                  ) : <AgentAvatar channels={itemChannels} />}
-                  <span>
-                    <span className="agent-list-title-row">
-                      <strong>{item.name}</strong>
+                summary={
+                  <div className="agent-list-main">
+                    {itemUnified ? (
                       <button
-                        className={`agent-status-switch${item.enabled ? " enabled" : ""}`}
                         type="button"
-                        role="switch"
-                        aria-checked={item.enabled}
-                        aria-label={t(item.enabled ? "agents.disableAction" : "agents.enableAction", { name: item.name })}
-                        title={itemReadOnly ? t(readOnlyNoticeKey(item)) : t(item.enabled ? "common.enabled" : "common.disabled")}
-                        disabled={itemReadOnly || Boolean(rowBusy)}
-                        onClick={() => void toggleAgentEnabled(item)}
+                        className="agent-avatar-button"
+                        title={t("agents.work.openChat")}
+                        aria-label={t("agents.work.openChatFor", { name: item.name })}
+                        onClick={() => openAgent(itemUnified, "work")}
                         onDoubleClick={(event) => event.stopPropagation()}
                       >
-                        <span className="agent-status-switch-thumb">
-                          {rowBusy === toggleOperation && <RefreshCw className="spin" size={9} />}
-                        </span>
+                        <AgentAvatar avatar={itemUnified.avatar} channels={itemChannels} />
                       </button>
-                      {itemReadOnly && <span className="source-badge config compact">{t(agentSourceLabelKey(item))}</span>}
+                    ) : <AgentAvatar channels={itemChannels} />}
+                    <span>
+                      <span className="agent-list-title-row">
+                        <strong>{item.name}</strong>
+                        <button
+                          className={`agent-status-switch${item.enabled ? " enabled" : ""}`}
+                          type="button"
+                          role="switch"
+                          aria-checked={item.enabled}
+                          aria-label={t(item.enabled ? "agents.disableAction" : "agents.enableAction", { name: item.name })}
+                          title={itemReadOnly ? t(readOnlyNoticeKey(item)) : t(item.enabled ? "common.enabled" : "common.disabled")}
+                          disabled={itemReadOnly || Boolean(rowBusy)}
+                          onClick={() => void toggleAgentEnabled(item)}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                        >
+                          <span className="agent-status-switch-thumb">
+                            {rowBusy === toggleOperation && <RefreshCw className="spin" size={9} />}
+                          </span>
+                        </button>
+                        {itemReadOnly && <span className="source-badge config compact">{t(agentSourceLabelKey(item))}</span>}
+                      </span>
+                      <small className="agent-runtime"><RuntimeBadge runtime={item.runtime_id} emptyLabel={t("agents.noRuntime")} /></small>
                     </span>
-                    <small className="agent-runtime"><RuntimeBadge runtime={item.runtime_id} emptyLabel={t("agents.noRuntime")} /></small>
-                  </span>
-                </div>
+                  </div>
+                }
+              >
                 <div className="agent-list-meta">
                   <TargetBadge target_id={resourceTargetID(item)} target_name={item.target_name} />
                   <span className="pill agent-route-model-pill">{routeModelLabel}
@@ -648,7 +652,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                     {t("common.delete")}
                   </button>
                 </div>
-              </article>
+              </RowDisclosure>
             );
           })}
           {visibleRouted.map((agent) => {
@@ -657,26 +661,33 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             const agentKey = targetKey(agent.target_id, agent.id);
             const routedChannels = agentChannels(agent, channelItems);
             return (
-              <article className="agent-registry-row" key={`agent:${agentKey}`} onDoubleClick={() => openAgent(agent, "work")}>
-                <div className="agent-list-main">
-                  <button
-                    type="button"
-                    className="agent-avatar-button"
-                    title={t("agents.work.openChat")}
-                    aria-label={t("agents.work.openChatFor", { name: agent.name })}
-                    onClick={() => openAgent(agent, "work")}
-                    onDoubleClick={(event) => event.stopPropagation()}
-                  >
-                    <AgentAvatar avatar={agent.avatar} channels={routedChannels} />
-                  </button>
-                  <span>
-                    <span className="agent-list-title-row">
-                      <strong>{agent.name}</strong>
-                      <span className={`status-badge status-${agent.enabled ? "running" : "cancelled"}`}>{t(agent.enabled ? "common.enabled" : "common.disabled")}</span>
+              <RowDisclosure
+                className="agent-registry-row"
+                key={`agent:${agentKey}`}
+                name={agent.name}
+                onDoubleClick={() => openAgent(agent, "work")}
+                summary={
+                  <div className="agent-list-main">
+                    <button
+                      type="button"
+                      className="agent-avatar-button"
+                      title={t("agents.work.openChat")}
+                      aria-label={t("agents.work.openChatFor", { name: agent.name })}
+                      onClick={() => openAgent(agent, "work")}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                    >
+                      <AgentAvatar avatar={agent.avatar} channels={routedChannels} />
+                    </button>
+                    <span>
+                      <span className="agent-list-title-row">
+                        <strong>{agent.name}</strong>
+                        <span className={`status-badge status-${agent.enabled ? "running" : "cancelled"}`}>{t(agent.enabled ? "common.enabled" : "common.disabled")}</span>
+                      </span>
+                      <small className="agent-runtime"><RuntimeBadge runtime={router?.runtime_id ?? ""} emptyLabel={t("agents.noRuntime")} /></small>
                     </span>
-                    <small className="agent-runtime"><RuntimeBadge runtime={router?.runtime_id ?? ""} emptyLabel={t("agents.noRuntime")} /></small>
-                  </span>
-                </div>
+                  </div>
+                }
+              >
                 <div className="agent-list-meta">
                   <TargetBadge target_id={resourceTargetID(agent)} target_name={agent.target_name} />
                   {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
@@ -701,7 +712,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                     {t("common.delete")}
                   </button>
                 </div>
-              </article>
+              </RowDisclosure>
             );
           })}
         </div>

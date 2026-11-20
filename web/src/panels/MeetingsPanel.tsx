@@ -6,6 +6,7 @@ import type { ActiveMeeting, MeetingDetail, MeetingResponseMode, MeetingTimeline
 import { MeetingJoinControl } from "../MeetingControls";
 import { useMeetings } from "../MeetingContext";
 import { useI18n } from "../i18n";
+import { SlidingSelection } from "../components/SlidingSelection";
 
 function meetingKey(meeting: ActiveMeeting) {
   return `${meeting.target_id ?? ""}::${meeting.channel_id}::${meeting.id}`;
@@ -120,7 +121,7 @@ export function MeetingsPanel() {
       <MeetingPageToolbar />
       <section className="meeting-workspace">
         <aside className="surface meeting-list-pane">
-        <header><div><span className="eyebrow">LIVE</span><h2>{t("meetings.active")}</h2></div><span className="count-badge">{overview.meetings.length}</span></header>
+        <header><h2>{t("meetings.active")}</h2><span className="count-badge">{overview.meetings.length}</span></header>
         <div className="meeting-list">
           {overview.meetings.map((meeting) => {
             const active = meetingKey(meeting) === meetingKey(selected);
@@ -166,10 +167,10 @@ export function MeetingsPanel() {
             : <ActivityEntry key={`item-${entry.item.id}`} item={entry.item} language={language} />)}
         </div>
         <form className="meeting-composer" onSubmit={submit}>
-          <div className="meeting-composer-modes">
+          <SlidingSelection className="segmented meeting-composer-modes" selected={mode}>
             <button className={mode === "direct" ? "active" : ""} onClick={() => setMode("direct")} type="button"><MessageSquareText size={15} />{t("meetings.direct")}</button>
             <button className={mode === "agent" ? "active" : ""} onClick={() => setMode("agent")} type="button"><Bot size={15} />{t("meetings.askAgent")}</button>
-          </div>
+          </SlidingSelection>
           {mode === "agent" && <p className="meeting-composer-hint">{t("meetings.agentHint")}</p>}
           <div className="meeting-composer-row">
             <textarea aria-label={t("meetings.messagePlaceholder")} disabled={busy} onChange={(event) => setText(event.target.value)} placeholder={mode === "agent" ? t("meetings.questionPlaceholder") : t("meetings.messagePlaceholder")} rows={2} value={text} />

@@ -31,12 +31,9 @@ function stagesFor(settings: MenubarSettings): string[] {
 export function MenuBarPanel() {
   const { t } = useI18n();
   const { data, error, loading } = useAsync(() => api.menubarSettings(), []);
-  const appStatus = useAsync(() => api.localStatus(), []);
   const [settings, setSettings] = useState<MenubarSettings | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [updateInfo, setUpdateInfo] = useState<DesktopUpdateStatus | null>(null);
-  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "installing" | "error">("idle");
-  const [updateError, setUpdateError] = useState("");
+
 
   useEffect(() => {
     if (data) setSettings(data);
@@ -88,92 +85,10 @@ export function MenuBarPanel() {
   if (settings.show_tokens) previewParts.push("1.20B/90.71M");
   if (settings.show_messages) previewParts.push("128");
 
-  const currentVersion = (appStatus.data?.version || updateInfo?.current_version || "").replace(/^v/, "");
-
-  const checkForUpdates = async () => {
-    setUpdatePhase("checking");
-    setUpdateError("");
-    try {
-      setUpdateInfo(await checkDesktopUpdate(currentVersion));
-      setUpdatePhase("idle");
-    } catch (updateCheckError) {
-      setUpdatePhase("error");
-      setUpdateError(updateCheckError instanceof Error ? updateCheckError.message : String(updateCheckError));
-    }
-  };
-
-  const applyUpdate = async () => {
-    if (!updateInfo) return;
-    if (!updateInfo.supported) {
-      if (updateInfo.release_url) await openExternalURL(updateInfo.release_url);
-      return;
-    }
-    setUpdatePhase("installing");
-    setUpdateError("");
-    try {
-      const installed = await installDesktopUpdate();
-      setUpdateInfo(installed);
-    } catch (installError) {
-      setUpdatePhase("error");
-      setUpdateError(installError instanceof Error ? installError.message : String(installError));
-    }
-  };
-
   return (
-    <div className="page-stack">
-      <section className="surface software-update-surface">
-        <div className="surface-header">
-          <div>
-            <h2>{t("settings.softwareUpdate")}</h2>
-            <p className="subtle-copy">{t("settings.softwareUpdateHint")}</p>
-          </div>
-          <button
-            className="ghost-action"
-            type="button"
-            disabled={!currentVersion || updatePhase === "checking" || updatePhase === "installing"}
-            onClick={() => void checkForUpdates()}
-          >
-            <RefreshCw size={14} className={updatePhase === "checking" ? "spin" : ""} />
-            {updatePhase === "checking" ? t("settings.checking") : t("settings.checkForUpdates")}
-          </button>
-        </div>
-        <div className="surface-body software-update-body">
-          <img src="/agentmux-logo.png" alt="" aria-hidden="true" />
-          <div className="software-update-copy">
-            <strong>AgentMux {currentVersion ? `v${currentVersion}` : "—"}</strong>
-            {!updateInfo && <span>{t("settings.currentVersion")}</span>}
-            {updateInfo && !updateInfo.update_available && (
-              <span className="software-update-current">
-                <CheckCircle2 size={15} />
-                {t("settings.upToDate")}
-              </span>
-            )}
-            {updateInfo?.update_available && (
-              <span>{t("settings.updateAvailable", { version: `v${updateInfo.latest_version ?? ""}` })}</span>
-            )}
-            {!isDesktopApp() && <small>{t("settings.webUpdateHint")}</small>}
-          </div>
-          {updateInfo?.update_available && (
-            <button
-              className="action software-update-action"
-              type="button"
-              disabled={updatePhase === "installing"}
-              onClick={() => void applyUpdate()}
-            >
-              {updateInfo.supported ? <Download size={15} /> : <ExternalLink size={15} />}
-              {updatePhase === "installing"
-                ? t("settings.installing")
-                : updateInfo.supported
-                  ? t("settings.updateNow")
-                  : t("settings.openDownload")}
-            </button>
-          )}
-        </div>
-        {updateError && <div className="software-update-error">{t("settings.updateFailed")}: {updateError}</div>}
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
+    <div className="settings-stack">
+      <section className="settings-group settings-appearance">
+        <div className="settings-heading">
           <div>
             <h2>{t("settings.menuBarTitle")}</h2>
             <p className="subtle-copy">{t("menubar.subtitle")}</p>
@@ -183,7 +98,7 @@ export function MenuBarPanel() {
             {status === "saving" ? "…" : t("menubar.save")}
           </button>
         </div>
-        <div className="surface-body">
+        <div className="settings-group-body">
           <div className="menubar-preview">
             <span className="menubar-preview-chip">
               <img className="menubar-preview-logo" src="/agentmux-logo.png" alt={t("menubar.logo")} />
@@ -195,11 +110,11 @@ export function MenuBarPanel() {
         </div>
       </section>
 
-      <section className="surface">
-        <div className="surface-header">
+      <section className="settings-group">
+        <div className="settings-heading">
           <h2>{t("menubar.icon")}</h2>
         </div>
-        <div className="surface-body">
+        <div className="settings-group-body">
           <div className="field-grid">
             <label className="field">
               <span>{t("menubar.iconTheme")}</span>
@@ -253,15 +168,16 @@ export function MenuBarPanel() {
         </div>
       </section>
 
-      <section className="surface">
-        <div className="surface-header">
+      <section className="settings-group">
+        <div className="settings-heading">
           <h2>{t("menubar.display")}</h2>
         </div>
-        <div className="surface-body">
+        <div className="settings-group-body">
           <label className="switch-row">
             <span>{t("menubar.showStatusIcon")}</span>
             <input
               type="checkbox"
+              role="switch"
               checked={settings.show_status_icon}
               onChange={(e) => update({ show_status_icon: e.target.checked })}
             />
@@ -270,6 +186,7 @@ export function MenuBarPanel() {
             <span>{t("menubar.showMessages")}</span>
             <input
               type="checkbox"
+              role="switch"
               checked={settings.show_messages}
               onChange={(e) => update({ show_messages: e.target.checked })}
             />
@@ -278,6 +195,7 @@ export function MenuBarPanel() {
             <span>{t("menubar.showTokens")}</span>
             <input
               type="checkbox"
+              role="switch"
               checked={settings.show_tokens}
               onChange={(e) => update({ show_tokens: e.target.checked })}
             />
@@ -286,6 +204,7 @@ export function MenuBarPanel() {
             <span>{t("menubar.showCost")}</span>
             <input
               type="checkbox"
+              role="switch"
               checked={settings.show_cost}
               onChange={(e) => update({ show_cost: e.target.checked })}
             />
@@ -294,6 +213,7 @@ export function MenuBarPanel() {
             <span>{t("menubar.showCNY")}</span>
             <input
               type="checkbox"
+              role="switch"
               checked={settings.show_cny}
               onChange={(e) => update({ show_cny: e.target.checked })}
             />
@@ -313,16 +233,17 @@ export function MenuBarPanel() {
         </div>
       </section>
 
-      <section className="surface">
-        <div className="surface-header">
+      <section className="settings-group">
+        <div className="settings-heading">
           <h2>{t("menubar.breakdowns")}</h2>
         </div>
-        <div className="surface-body">
+        <div className="settings-group-body">
           {BREAKDOWNS.map((dim) => (
             <label key={dim} className="switch-row">
               <span>{t(`menubar.breakdown.${dim}`)}</span>
               <input
                 type="checkbox"
+                role="switch"
                 checked={settings.breakdowns.includes(dim)}
                 onChange={() => toggleBreakdown(dim)}
               />
@@ -344,5 +265,97 @@ export function MenuBarPanel() {
         </div>
       </section>
     </div>
+  );
+}
+
+export function AboutSettings() {
+  const { t } = useI18n();
+  const appStatus = useAsync(() => api.localStatus(), []);
+  const [updateInfo, setUpdateInfo] = useState<DesktopUpdateStatus | null>(null);
+  const [updatePhase, setUpdatePhase] = useState<"idle" | "checking" | "installing" | "error">("idle");
+  const [updateError, setUpdateError] = useState("");
+
+  const currentVersion = (appStatus.data?.version || updateInfo?.current_version || "").replace(/^v/, "");
+
+  const checkForUpdates = async () => {
+    setUpdatePhase("checking");
+    setUpdateError("");
+    try {
+      setUpdateInfo(await checkDesktopUpdate(currentVersion));
+      setUpdatePhase("idle");
+    } catch (updateCheckError) {
+      setUpdatePhase("error");
+      setUpdateError(updateCheckError instanceof Error ? updateCheckError.message : String(updateCheckError));
+    }
+  };
+
+  const applyUpdate = async () => {
+    if (!updateInfo) return;
+    if (!updateInfo.supported) {
+      if (updateInfo.release_url) await openExternalURL(updateInfo.release_url);
+      return;
+    }
+    setUpdatePhase("installing");
+    setUpdateError("");
+    try {
+      const installed = await installDesktopUpdate();
+      setUpdateInfo(installed);
+    } catch (installError) {
+      setUpdatePhase("error");
+      setUpdateError(installError instanceof Error ? installError.message : String(installError));
+    }
+  };
+
+  return (
+    <section className="settings-group settings-appearance">
+      <div className="settings-heading">
+        <div>
+          <h2>{t("settings.softwareUpdate")}</h2>
+          <p className="subtle-copy">{t("settings.softwareUpdateHint")}</p>
+        </div>
+        <button
+          className="ghost-action"
+          type="button"
+          disabled={!currentVersion || updatePhase === "checking" || updatePhase === "installing"}
+          onClick={() => void checkForUpdates()}
+        >
+          <RefreshCw size={14} className={updatePhase === "checking" ? "spin" : ""} />
+          {updatePhase === "checking" ? t("settings.checking") : t("settings.checkForUpdates")}
+        </button>
+      </div>
+      <div className="software-update-body">
+        <img src="/agentmux-logo.png" alt="" aria-hidden="true" />
+        <div className="software-update-copy">
+          <strong>AgentMux {currentVersion ? `v${currentVersion}` : "—"}</strong>
+          {!updateInfo && <span>{t("settings.currentVersion")}</span>}
+          {updateInfo && !updateInfo.update_available && (
+            <span className="software-update-current">
+              <CheckCircle2 size={15} />
+              {t("settings.upToDate")}
+            </span>
+          )}
+          {updateInfo?.update_available && (
+            <span>{t("settings.updateAvailable", { version: `v${updateInfo.latest_version ?? ""}` })}</span>
+          )}
+          {!isDesktopApp() && <small>{t("settings.webUpdateHint")}</small>}
+        </div>
+        {updateInfo?.update_available && (
+          <button
+            className="action software-update-action"
+            type="button"
+            disabled={updatePhase === "installing"}
+            onClick={() => void applyUpdate()}
+          >
+            {updateInfo.supported ? <Download size={15} /> : <ExternalLink size={15} />}
+            {updatePhase === "installing"
+              ? t("settings.installing")
+              : updateInfo.supported
+                ? t("settings.updateNow")
+                : t("settings.openDownload")}
+          </button>
+        )}
+      </div>
+      {updateError && <div className="software-update-error">{t("settings.updateFailed")}: {updateError}</div>}
+    </section>
   );
 }

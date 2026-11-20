@@ -91,18 +91,6 @@ export function navigationGroupForTab<G extends NavigationGroupLike>(
   return groups.find((group) => group.items.some((item) => item.id === tab)) ?? null;
 }
 
-export function secondaryNavigationForTab<G extends NavigationGroupLike>(
-  groups: ReadonlyArray<G>,
-  tab: string,
-  overviewTab: string,
-) {
-  const group = navigationGroupForTab(groups, tab);
-  return {
-    groupID: group?.id ?? null,
-    open: tab !== overviewTab && group !== null,
-  };
-}
-
 export function primaryGroupDestination<T extends string>(
   group: NavigationGroupLike<T>,
   currentTab: string,
@@ -112,10 +100,8 @@ export function primaryGroupDestination<T extends string>(
     : group.items[0]?.id ?? null;
 }
 
-// A member account reaches only its own account page (password and paired
-// devices); the server refuses everything else. The first entry is where a
-// member lands.
-export const MEMBER_TABS = ["accounts"] as const;
+// Members can manage their account and change this client's appearance and language.
+export const MEMBER_TABS = ["accounts", "settings"] as const;
 export const MEMBER_LANDING_TAB = MEMBER_TABS[0];
 
 export function tabAllowedForRole(tab: string, role: "admin" | "member"): boolean {

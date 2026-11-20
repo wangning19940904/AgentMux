@@ -212,7 +212,7 @@ export function FrameworkTableRows({
         </td>
         <td data-label={t("frameworks.availability")}>
           <div className="framework-health-cell">
-            <FrameworkSmokeResultView result={health} busy={testing} showModel />
+            {(health || testing || !record) && <FrameworkSmokeResultView result={health} busy={testing} showModel />}
             <FrameworkHealthRecordView record={record} />
             {item.registered && (
               <div className="framework-row-actions">
