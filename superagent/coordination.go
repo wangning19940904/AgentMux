@@ -632,7 +632,7 @@ func (s *Service) relayReport(ctx context.Context, agent core.SuperAgent, trigge
 	if ticket.Status == core.SuperAgentTicketFailed {
 		text = fmt.Sprintf("I could not finish “%s”: %s", ticket.Title, ticket.Error)
 	}
-	if err := s.sendReply(ctx, agent, ticket.SourceID, trigger.Reply, text); err != nil {
+	if _, err := s.deliver(ctx, agent, ticket.SourceID, trigger.Reply, text, ticketReportDelivery(*ticket)); err != nil {
 		_ = s.mutateTicket(ctx, ticket.ID, func(current *core.SuperAgentTicket) error {
 			current.ReplyError = err.Error()
 			return nil

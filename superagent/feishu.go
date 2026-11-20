@@ -31,7 +31,14 @@ type feishuReply struct {
 // stay with the channel, and a message nobody addressed falls through unless
 // the channel has no Agent to take it.
 func (s *Service) InterceptMessage(ctx context.Context, msg *core.Message) (bool, error) {
-	if msg == nil || msg.Callback != nil || strings.HasPrefix(strings.TrimSpace(msg.Text), "/") {
+	if msg == nil {
+		return false, nil
+	}
+	// Every message counts toward a chat being busy, for the quiet-chat delay.
+	if msg.ChatID != "" {
+		s.noteChatActivity(chatKey(msg.ChannelID, msg.ChatID), s.now())
+	}
+	if msg.Callback != nil || strings.HasPrefix(strings.TrimSpace(msg.Text), "/") {
 		return false, nil
 	}
 	claimed := false

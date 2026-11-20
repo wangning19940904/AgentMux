@@ -308,6 +308,35 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   </>
                 )}
 
+                {activity.data?.delivery && (activity.data.delivery.held.length > 0 || (activity.data.delivery.dropped ?? []).length > 0) && (
+                  <>
+                    <h4>{t("superAgents.held")}</h4>
+                    <p className="muted">{t("superAgents.heldHelp")}</p>
+                    <div className="orchestration-task-list super-agent-held">
+                      {activity.data.delivery.held.map((message) => (
+                        <article key={message.id}>
+                          <header>
+                            <strong>{message.text.slice(0, 120)}</strong>
+                            <span className="status-badge status-queued">{t(`superAgents.held.${message.reason}`)}</span>
+                          </header>
+                          <small>{message.recipient}{message.ticket_id ? ` · ${message.ticket_id}` : ""}{message.last_error ? ` · ${message.last_error}` : ""}</small>
+                          <time>{t("superAgents.heldAt")}: {time(message.held_at)}{message.until ? ` · ${t("superAgents.heldUntil")}: ${time(message.until)}` : ""}</time>
+                        </article>
+                      ))}
+                      {(activity.data.delivery.dropped ?? []).slice().reverse().map((message, index) => (
+                        <article key={`dropped-${index}`}>
+                          <header>
+                            <strong>{message.text.slice(0, 120)}</strong>
+                            <span className="status-badge status-cancelled">{t("superAgents.held.dropped")}</span>
+                          </header>
+                          <small>{message.recipient} · {message.reason}</small>
+                          <time>{time(message.at)}</time>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                )}
+
                 <h4>{t("superAgents.triggers")}</h4>
                 <div className="orchestration-task-list">
                   {(activity.data?.triggers ?? []).length === 0 && <p className="muted">{t("superAgents.noTriggers")}</p>}

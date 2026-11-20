@@ -1678,10 +1678,55 @@ export interface SuperAgent extends TargetMetadata {
   plan_approval?: "" | "off" | "always" | "above_low" | "above_medium";
   // Lets a Ticket's worker start helpers on other workers of the roster.
   dispatch?: boolean;
+  // Rules for messages the agent sends without a person asking in that turn.
+  delivery?: SuperAgentDelivery;
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+// An agent's rules for messages it sends on its own: Ticket reports,
+// follow-ups, supervision and replies to events nobody addressed to it.
+// Replies to a person's message always go at once. Each rule is off when unset.
+export interface SuperAgentDelivery {
+  // "HH:MM" in time_zone; a start after the end crosses midnight.
+  quiet_start?: string;
+  quiet_end?: string;
+  // IANA name; empty is the machine's own zone.
+  time_zone?: string;
+  // Messages per chat or recipient per day; 0 is no cap.
+  daily_cap?: number;
+  // Hold a message until its chat has been quiet this long.
+  quiet_chat_minutes?: number;
+  // What happens to messages quiet hours or the cap held: queue (empty) sends
+  // them when the window opens, digest folds them into one message per chat.
+  held?: "" | "queue" | "digest";
+  // One message per day about one item in one state.
+  once_per_day?: boolean;
+}
+
+export interface SuperAgentHeldMessage {
+  id: string;
+  recipient: string;
+  source_id: string;
+  text: string;
+  reason: "quiet_hours" | "daily_cap" | "chat_active" | "behind_held";
+  item?: string;
+  ticket_id?: string;
+  trigger_id?: string;
+  held_at: string;
+  until?: string;
+  attempts?: number;
+  last_error?: string;
+}
+
+export interface SuperAgentDroppedMessage {
+  recipient: string;
+  text: string;
+  reason: string;
+  ticket_id?: string;
+  at: string;
 }
 
 // An operator's text for one built-in prompt part. base is the version of the
@@ -2092,6 +2137,8 @@ export interface SuperAgentActivity {
   // lately. timer_warning says when the daily limit is holding due ones back.
   timers?: SuperAgentTimer[];
   timer_warning?: string;
+  // What the delivery rules hold back, dropped and counted today.
+  delivery?: { held: SuperAgentHeldMessage[]; dropped?: SuperAgentDroppedMessage[]; sent_today?: Record<string, number> };
 }
 
 export interface Orchestration {

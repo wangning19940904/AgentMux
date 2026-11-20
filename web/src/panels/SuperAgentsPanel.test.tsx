@@ -237,6 +237,43 @@ describe("SuperAgentsPanel", () => {
     expect(cancel).toHaveBeenCalledWith("stm_1");
   });
 
+  it("lists messages the delivery rules hold back or dropped", async () => {
+    vi.spyOn(api, "superAgentActivity").mockResolvedValue({
+      ...activity,
+      delivery: {
+        held: [{ id: "hld_1", recipient: "github:o/r#1", source_id: "gh", text: "The build is green.", reason: "quiet_hours", ticket_id: "t1", held_at: "2026-11-03T23:00:00Z", until: "2026-11-04T08:00:00Z" }],
+        dropped: [{ recipient: "github:o/r#1", text: "t1 still looks stalled", reason: "already sent today about ticket:t1", at: "2026-11-03T12:00:00Z" }],
+        sent_today: { "github:o/r#1": 2 },
+      },
+    });
+    renderPanel();
+    await until(() => hasText("The build is green."));
+    for (const text of ["Held messages", "Quiet hours", "github:o/r#1 · t1", "Goes", "t1 still looks stalled", "Dropped", "already sent today about ticket:t1"]) {
+      expect(hasText(text), text).toBe(true);
+    }
+  });
+
+  it("saves the rules for messages the agent sends on its own", async () => {
+    const save = vi.spyOn(api, "saveSuperAgent").mockResolvedValue(saved);
+    renderPanel();
+    await until(() => hasText("Repo keeper"));
+    click(button(/^Edit$/));
+    await until(() => hasText("Messages it sends on its own"));
+    click(control(/^Quiet hours/));
+    await until(() => valueOf(/^From/) === "22:00");
+    setValue(control(/^Until/), "07:30");
+    setValue(control(/^Time zone/), "Asia/Shanghai");
+    setValue(control(/^Daily cap per chat/), "5");
+    setValue(control(/^Wait for a quiet chat/), "3");
+    setValue(control(/^Held messages/), "digest");
+    click(control(/^Repeats/));
+    click(button(/^Save$/) as HTMLButtonElement);
+    await until(() => save.mock.calls.length > 0);
+    expect(save.mock.calls[0][0]).toMatchObject({
+      delivery: { quiet_start: "22:00", quiet_end: "07:30", time_zone: "Asia/Shanghai", daily_cap: 5, quiet_chat_minutes: 3, held: "digest", once_per_day: true },
+    });
+  });
+
   it("shows a ticket's criteria, open signals, latest review and independent review", async () => {
     vi.spyOn(api, "superAgentActivity").mockResolvedValue({
       ...activity,
