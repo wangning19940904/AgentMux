@@ -21,6 +21,7 @@ var setupConfigKeys = map[string][]string{
 	core.SuperAgentSourceFeishuDoc:     {"channel_id", "documents", "notify_chat_id", "instructions", "debounce_seconds"},
 	core.SuperAgentSourceEmail:         {"imap_host", "imap_port", "username", "mailbox", "smtp_host", "smtp_port", "from_address"},
 	core.SuperAgentSourceGitHub:        {"agent_login", "repo", "api_base", "delivery"},
+	core.SuperAgentSourceCallback:      {"channel_id", "notify_chat_id", "instructions"},
 }
 
 // SetupRequest is one instruction from a Console administrator. Draft is the
@@ -257,6 +258,7 @@ Trigger kinds and their config keys:
 - feishu_doc: channel_id (required), documents (required, URLs or tokens), notify_chat_id, instructions (what to do on a change), debounce_seconds. allowed_actors are open_ids; "*" is refused.
 - email: imap_host (required), imap_port, username (required), mailbox, smtp_host, smtp_port, from_address. allowed_actors are email addresses; "*" is refused.
 - github_webhook: agent_login (required, the agent's GitHub account), repo (owner/name), api_base, delivery ("poll" reads the account's notifications and needs no public address; "webhook" or empty needs GitHub to reach this machine). allowed_actors are GitHub logins; "*" is refused.
+- callback: an address another system posts requests to, with a secret AgentMux makes. channel_id and notify_chat_id (the Feishu chat that gets the results; both or neither), instructions (added to every request). allowed_actors are the caller names the requests may carry; "*" is refused.
 
 Rules:
 - An enabled trigger needs allowed_actors. You cannot look up a person's open_id from a name: ask for it, or ask whether everyone may use the trigger. Never invent ids, logins, addresses or channels.

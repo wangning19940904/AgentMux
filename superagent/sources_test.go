@@ -755,3 +755,93 @@ func TestParseRouterDecision(t *testing.T) {
 		}
 	}
 }
+
+func TestCallbackVerifiesThenStoresOneTriggerPerID(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	agent := h.agent
+	agent.Sources = append(agent.Sources, core.SuperAgentSource{
+		ID: "cb", Kind: core.SuperAgentSourceCallback, Enabled: true, AllowedActors: []string{"meego"},
+		Config: map[string]string{"webhook_secret": "s3cret", "channel_id": "ch", "notify_chat_id": "oc_1", "instructions": "Assess it first."},
+	})
+	if _, err := h.service.Save(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"id":"story-1:node-a","thread":"story-1","actor":"meego","title":"Login","text":"A node reached you."}`)
+	for name, delivery := range map[string]CallbackDelivery{
+		"forged signature": {Signature: sign("wrong", body), Body: body},
+		"wrong token":      {Token: "nope", Body: body},
+		"no credential":    {Body: body},
+	} {
+		if _, err := h.service.HandleCallback(ctx, "cb", delivery); !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := h.service.HandleCallback(ctx, "gh", CallbackDelivery{Token: "s3cret", Body: body}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another kind's address must not take callbacks: %v", err)
+	}
+	for _, bad := range []string{"not json", `{"id":"x"}`} {
+		if _, err := h.service.HandleCallback(ctx, "cb", CallbackDelivery{Token: "s3cret", Body: []byte(bad)}); !errors.Is(err, ErrBadCallback) {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
+	if len(h.store.triggers) != 0 {
+		t.Fatal("a refused delivery must store nothing")
+	}
+
+	first, err := h.service.HandleCallback(ctx, "cb", CallbackDelivery{Signature: sign("s3cret", body), Body: body})
+	if err != nil || !first {
+		t.Fatalf("signed delivery: %v %v", first, err)
+	}
+	again, err := h.service.HandleCallback(ctx, "cb", CallbackDelivery{Token: "s3cret", Body: body})
+	if err != nil || again {
+		t.Fatalf("a repeated id is success and stores nothing: %v %v", again, err)
+	}
+	if len(h.store.triggers) != 1 {
+		t.Fatalf("triggers = %+v", h.store.triggers)
+	}
+	trigger := h.store.triggers[0]
+	if trigger.ThreadKey != "callback:cb:story-1" || !trigger.Addressed || trigger.Actor != "meego" || trigger.Title != "Login" ||
+		trigger.Text != "A node reached you.\n\nAssess it first." || string(trigger.Reply) != `{"channel_id":"ch","chat_id":"oc_1"}` ||
+		trigger.Disposition != core.SuperAgentDispositionPending {
+		t.Fatalf("trigger = %+v", trigger)
+	}
+
+	// A caller that is not on the list is recorded, not acted on.
+	other := []byte(`{"text":"hello"}`)
+	if _, err := h.service.HandleCallback(ctx, "cb", CallbackDelivery{Token: "s3cret", Body: other}); err != nil {
+		t.Fatal(err)
+	}
+	filtered := h.store.triggers[1]
+	if filtered.Actor != defaultCallbackActor || filtered.Disposition != core.SuperAgentDispositionFiltered || !strings.HasPrefix(filtered.ThreadKey, "callback:cb:") {
+		t.Fatalf("filtered = %+v", filtered)
+	}
+}
+
+func TestCallbackSourceNeedsASecretAndAChannelForItsChat(t *testing.T) {
+	source := core.SuperAgentSource{Kind: core.SuperAgentSourceCallback, Enabled: true, AllowedActors: []string{"meego"}, Config: map[string]string{}}
+	if err := validateSource(source); err == nil || !strings.Contains(err.Error(), "webhook_secret") {
+		t.Fatalf("no secret: %v", err)
+	}
+	source.Config["webhook_secret"] = "s"
+	if err := validateSource(source); err != nil {
+		t.Fatal(err)
+	}
+	source.Config["notify_chat_id"] = "oc_1"
+	if err := validateSource(source); err == nil || !strings.Contains(err.Error(), "channel_id") {
+		t.Fatalf("a chat without a channel cannot be reached: %v", err)
+	}
+	source.AllowedActors = []string{"*"}
+	source.Config["channel_id"] = "ch"
+	if err := validateSource(source); err == nil {
+		t.Fatal(`"*" must be refused`)
+	}
+	chats := &chatStub{}
+	replies := &Replies{Chats: chats}
+	if err := replies.Send(context.Background(), source, []byte(`{"channel_id":"ch","chat_id":"oc_1"}`), "done"); err != nil || !slices.Equal(chats.calls, []string{"ch oc_1  done"}) {
+		t.Fatalf("reply: %v %v", err, chats.calls)
+	}
+	if err := replies.Send(context.Background(), source, []byte(`{}`), "quiet"); err != nil || len(chats.calls) != 1 {
+		t.Fatalf("without a chat the result is recorded only: %v %v", err, chats.calls)
+	}
+}

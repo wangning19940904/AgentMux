@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SuperAgentSource } from "../api";
-import { newSource } from "./superAgentModel";
+import { callbackExample, callbackPath, newSource, requiredKeys } from "./superAgentModel";
 import {
   emailProviderForAddress, emailProviderForConfig, githubForwardCommand, githubHookSettingsURL, githubPublicBase,
   githubTokenURL, githubWebBase, isReachableOrigin, isRepoName, tokenCanComment,
@@ -62,5 +62,16 @@ describe("trigger setup model", () => {
     expect(source.config.delivery).toBe("poll");
     expect(newSource("github_webhook", true).config.delivery).toBe("webhook");
     expect(newSource("email").config).toEqual({});
+  });
+
+  it("gives a custom callback its secret, and asks for a bot only once a chat is chosen", () => {
+    const source = newSource("callback");
+    expect(source.config.webhook_secret).toMatch(/^[0-9a-f]{64}$/);
+    expect(callbackPath(source)).toBe(`/hook/super-agent/callback/${source.id}`);
+    expect(requiredKeys(source)).toEqual(["webhook_secret"]);
+    expect(requiredKeys({ ...source, config: { ...source.config, notify_chat_id: "oc_1" } })).toEqual(["webhook_secret", "channel_id"]);
+    const example = callbackExample("http://127.0.0.1:8765/hook/super-agent/callback/src_1", "<secret>", "meego");
+    expect(example).toContain("Authorization: Bearer <secret>");
+    expect(example).toContain('"actor":"meego"');
   });
 });

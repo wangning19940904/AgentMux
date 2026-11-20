@@ -12,7 +12,7 @@ export type SourceField = {
   chats?: "one" | "many";
 };
 
-export const SOURCE_KINDS: SuperAgentSourceKind[] = ["feishu_message", "feishu_doc", "email", "github_webhook"];
+export const SOURCE_KINDS: SuperAgentSourceKind[] = ["feishu_message", "feishu_doc", "email", "github_webhook", "callback"];
 
 // Fields mirror what the backend requires for each kind (superagent/config.go).
 // A GitHub trigger's token or webhook secret is required by its delivery; see
@@ -48,6 +48,13 @@ export const SOURCE_FIELDS: Record<SuperAgentSourceKind, SourceField[]> = {
     { key: "github_token", labelKey: "superAgents.field.githubToken", secret: true },
     { key: "public_url", labelKey: "superAgents.field.publicURL", placeholder: "https://agentmux.example.com" },
     { key: "api_base", labelKey: "superAgents.field.apiBase", placeholder: "https://api.github.com" },
+  ],
+  // The chat needs the channel whose bot posts in it; requiredKeys adds it.
+  callback: [
+    { key: "webhook_secret", labelKey: "superAgents.field.webhookSecret", required: true, secret: true },
+    { key: "channel_id", labelKey: "superAgents.field.channel", channel: true },
+    { key: "notify_chat_id", labelKey: "superAgents.field.notifyChat", chats: "one" },
+    { key: "instructions", labelKey: "superAgents.field.callbackInstructions", multiline: true },
   ],
 };
 
@@ -92,6 +99,7 @@ export function generateSecret(): string {
 export function newSource(kind: SuperAgentSourceKind, reachableByGitHub = false): SuperAgentSource {
   const config: Record<string, string> = kind === "github_webhook"
     ? { delivery: reachableByGitHub ? "webhook" : "poll", webhook_secret: generateSecret() }
+    : kind === "callback" ? { webhook_secret: generateSecret() }
     : {};
   return { id: newSourceID(), kind, enabled: true, allowed_actors: [], config };
 }
@@ -103,6 +111,7 @@ export function githubPolls(source: SuperAgentSource): boolean {
 export function requiredKeys(source: SuperAgentSource): string[] {
   const keys = SOURCE_FIELDS[source.kind].filter((field) => field.required).map((field) => field.key);
   if (source.kind === "github_webhook") keys.push(githubPolls(source) ? "github_token" : "webhook_secret");
+  if (source.kind === "callback" && source.config.notify_chat_id?.trim()) keys.push("channel_id");
   return keys;
 }
 
@@ -157,6 +166,17 @@ export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRo
     }
   }
   return [...new Set(problems)];
+}
+
+export function callbackPath(source: SuperAgentSource): string {
+  return `/hook/super-agent/callback/${source.id}`;
+}
+
+// A request another system can adapt: the secret travels as a bearer token,
+// and the id makes a repeat harmless.
+export function callbackExample(address: string, secret: string, actor: string): string {
+  const body = JSON.stringify({ id: "order-42:created", thread: "order-42", actor, title: "Order 42", text: "What you want done" });
+  return `curl -X POST '${address}' -H 'Authorization: Bearer ${secret}' -H 'Content-Type: application/json' -d '${body}'`;
 }
 
 export function githubWebhookPath(source: SuperAgentSource): string {

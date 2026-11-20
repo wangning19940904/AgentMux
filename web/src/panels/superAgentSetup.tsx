@@ -10,7 +10,7 @@ import { useAsync } from "../useAsync";
 import { completeFeishuDraft, sleep } from "./connect/connectShared";
 import { useFeishuAutomation, useFeishuRegistration } from "./connect/feishuScan";
 import { FeishuActorPicker, FeishuChatPicker, FeishuScopeCheck, FeishuUserAuthorize, useFeishuDirectory } from "./superAgentFeishu";
-import { generateSecret, githubPolls, githubWebhookPath, isFeishuSource, parseActors, requiredKeys, sourceField } from "./superAgentModel";
+import { callbackExample, callbackPath, generateSecret, githubPolls, githubWebhookPath, isFeishuSource, parseActors, requiredKeys, sourceField } from "./superAgentModel";
 import {
   EMAIL_PROVIDERS, REDACTED, emailProviderByID, emailProviderConfig, emailProviderForAddress, emailProviderForConfig,
   githubForwardCommand, githubHookSettingsURL, githubPublicBase, githubTokenURL, githubWebBase, isReachableOrigin, isRepoName, tokenCanComment,
@@ -49,6 +49,8 @@ export function SourceEditor({ source, superAgentID, feishuChannels, onChange, o
         <FeishuSteps source={source} onChange={onChange} channels={feishuChannels} onChannelCreated={onFeishuChannelCreated} />
       ) : source.kind === "email" ? (
         <EmailSteps source={source} onChange={onChange} />
+      ) : source.kind === "callback" ? (
+        <CallbackSteps source={source} onChange={onChange} channels={feishuChannels} />
       ) : (
         <GitHubSteps source={source} superAgentID={superAgentID} onChange={onChange} />
       )}
@@ -852,4 +854,63 @@ function GitHubWebhookSetup({ source, onChange, localURL, apiProtected }: Source
 
 export function sourceHookAddress(source: SuperAgentSource): string {
   return `${githubPublicBase(source, window.location.origin)}${githubWebhookPath(source)}`;
+}
+
+// --- Custom callback --------------------------------------------------------
+
+// CallbackSteps shows the address and secret another system posts to, then
+// takes where results go and which caller names count.
+function CallbackSteps({ source, onChange, channels }: SourceProps & { channels: Channel[] }) {
+  const { t } = useI18n();
+  const setup = useAsync(() => api.superAgentGitHubSetup(), []);
+  const config = source.config;
+  const secret = config.webhook_secret ?? "";
+  const secretHidden = secret === REDACTED;
+  const channelID = config.channel_id ?? "";
+  const directory = useFeishuDirectory(channelID, parseActors(config.notify_chat_id ?? ""), []);
+  const channelLabels = feishuChannelLabels(channels);
+  const setConfig = (key: string, value: string) => onChange({ config: { ...config, [key]: value } });
+  const address = `${setup.data?.local_url ?? "http://127.0.0.1:8765"}${callbackPath(source)}`;
+  const actor = source.allowed_actors[0] ?? "my-system";
+  return (
+    <Steps>
+      <Step index={1} title={t("superAgents.setup.callback.addressTitle")} done={Boolean(secret)}>
+        <p>{t("superAgents.setup.callback.addressHelp")}</p>
+        <div className="setup-values">
+          <Value label={t("superAgents.setup.callback.address")} value={address} />
+          <div className="setup-value">
+            <span>{t("superAgents.setup.github.secret")}</span>
+            <code>{secretHidden ? t("superAgents.setup.callback.secretSaved") : secret ? "•".repeat(8) : "—"}</code>
+            <span className="setup-inline-actions">
+              <CopyButton value={secretHidden ? "" : secret} />
+              <button type="button" className="ghost-action" onClick={() => setConfig("webhook_secret", generateSecret())}><RefreshCw size={13} /> {t("superAgents.setup.github.regenerate")}</button>
+            </span>
+          </div>
+        </div>
+        <small className="muted">{t("superAgents.setup.callback.example")}</small>
+        <Command value={callbackExample(address, secretHidden ? "<secret>" : secret, actor)} display={callbackExample(address, "<secret>", actor)} />
+        <p className="setup-note">{t("superAgents.setup.callback.payloadNote")}</p>
+      </Step>
+      <Step index={2} title={t("superAgents.setup.feishu.resultsTitle")}>
+        <p>{t("superAgents.setup.callback.resultsHelp")}</p>
+        {channels.length > 0 && (
+          <label className="field">
+            <span>{t("superAgents.field.channel")}{requiredKeys(source).includes("channel_id") ? " *" : ""}</span>
+            <select value={channelID} onChange={(event) => setConfig("channel_id", event.target.value)}>
+              <option value="">{t("superAgents.chooseChannel")}</option>
+              {channels.map((item) => <option key={item.id} value={item.id}>{channelLabels.get(item.id)}</option>)}
+            </select>
+          </label>
+        )}
+        {channelID && (
+          <FeishuChatPicker label={t("superAgents.field.notifyChat")} single value={config.notify_chat_id ?? ""}
+            channelID={channelID} directory={directory} onChange={(value) => setConfig("notify_chat_id", value)} />
+        )}
+        <Field source={source} name="instructions" onChange={onChange} />
+      </Step>
+      <Step index={3} title={t("superAgents.setup.callback.whoTitle")} done={source.allowed_actors.length > 0}>
+        <SendersField source={source} onChange={onChange} />
+      </Step>
+    </Steps>
+  );
 }

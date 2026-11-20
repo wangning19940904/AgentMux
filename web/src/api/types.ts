@@ -1552,7 +1552,7 @@ export interface OrchestrationTask {
 
 // "channel" is a channel bound to the agent's brain. The daemon derives it from
 // the binding on every read and never stores it.
-export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook" | "channel";
+export type SuperAgentSourceKind = "feishu_message" | "feishu_doc" | "email" | "github_webhook" | "callback" | "channel";
 
 export interface SuperAgentWorker {
   id: string;

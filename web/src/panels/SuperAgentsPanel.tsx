@@ -8,7 +8,7 @@ import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { sourceHookAddress } from "./superAgentSetup";
-import { githubPolls, isChannelSource, newSuperAgent } from "./superAgentModel";
+import { callbackPath, githubPolls, isChannelSource, newSuperAgent } from "./superAgentModel";
 import { SuperAgentDrawer } from "./agents/SuperAgentForm";
 import { isOnAnotherMachine } from "./agents/agentUtils";
 import { WorkerFace, workerPersona } from "./agents/avatars";
@@ -214,6 +214,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                       <article key={source.id}>
                         <header><strong>{t(`superAgents.kind.${source.kind}`)}{isChannelSource(source) && source.name ? ` · ${source.name}` : ""}</strong><span className={`status-badge status-${health?.last_error ? "failed" : health?.warning ? "warning" : source.enabled ? "succeeded" : "cancelled"}`}>{t(source.enabled ? "common.enabled" : "common.disabled")}</span></header>
                         {isChannelSource(source) && <small>{t("agents.work.channelSourceHelp")}</small>}
+                        {source.kind === "callback" && <code>{callbackPath(source)}</code>}
                         {source.kind === "github_webhook" && (githubPolls(source) ? <small>{t("superAgents.setup.github.pollSummary")}</small> : <code>{sourceHookAddress(source)}</code>)}
                         {health?.last_error && <div className="error">{health.last_error}</div>}
                         {health?.warning && <div className="warning super-agent-source-warning" role="status">{health.warning}</div>}
