@@ -9,7 +9,7 @@ import (
 // It returns true only when allow/deny was successfully sent to the runtime;
 // ask and evaluation failures continue through the existing human workflow.
 func (e *Engine) resolveGuardInteraction(ctx context.Context, session AgentSession, event *Event, data map[string]string) bool {
-	if e == nil || e.guard == nil || event == nil || event.Interaction == nil {
+	if e == nil || e.guard == nil || session == nil || event == nil || event.Interaction == nil {
 		return false
 	}
 	interaction := event.Interaction
