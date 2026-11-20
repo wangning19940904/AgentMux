@@ -7,10 +7,12 @@ export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
 export * from "./mailbox";
+export * from "./frameworkOperations";
 import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, del, delChecked } from "./client";
 import type { Targeted } from "./fleet";
 import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
+import { FrameworkOperationBody, FrameworkOperationsUnsupported, followFrameworkOperationJob, startFrameworkOperationJob } from "./frameworkOperations";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
@@ -596,7 +598,8 @@ export const api = {
     confirmedCommand?: string,
   ) => {
     const body = { kind, action, acknowledge_internal: acknowledgeInternal, ...(confirmedCommand ? { confirmed_command: confirmedCommand } : {}) };
-    return targetID || fleetMode()
+    if (targetID) return installFrameworkOnTarget(body, targetID, onProgress);
+    return fleetMode()
       ? (onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 }), fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body }, targetID ? [targetID] : ["all"], { confirm: Boolean(targetID) ? false : undefined }).then((result) => { onProgress?.({ phase: "complete", percent: 100 }); return result.first; }))
       : onProgress
       ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", body, onProgress)
@@ -1077,3 +1080,25 @@ export const api = {
     return fleetCall<{ ok: boolean }>({ key: "session", method: "DELETE", path }, writeTargetIDs(session.target_id)).then((result) => result.first);
   },
 };
+
+// A framework action on one machine runs there in the background and is
+// polled, so its phase and command output stay visible even through the
+// fleet relay. Machines without background operations get the old single
+// request, which reports nothing until it finishes.
+async function installFrameworkOnTarget(
+  body: FrameworkOperationBody,
+  targetID: string,
+  onProgress?: (progress: OperationProgress) => void,
+): Promise<FrameworkInstallResult> {
+  let job;
+  try {
+    job = await startFrameworkOperationJob(body, targetID);
+  } catch (error) {
+    if (!(error instanceof FrameworkOperationsUnsupported)) throw error;
+    onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 });
+    const result = await fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body }, [targetID], { confirm: false });
+    onProgress?.({ phase: "complete", percent: 100 });
+    return result.first;
+  }
+  return followFrameworkOperationJob(job, targetID, onProgress);
+}

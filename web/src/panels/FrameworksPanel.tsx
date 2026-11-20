@@ -37,8 +37,14 @@ import { latestHealthResult, useFrameworkHealth } from "./frameworks/useFramewor
 import { FrameworkHealthChecksControl } from "./frameworks/FrameworkHealthRecord";
 import { FrameworkModelsDialog } from "./frameworks/FrameworkModelsDialog";
 import { frameworkUpdateCandidates } from "./frameworks/frameworkBulkUpdate";
-import { BulkUpdateButton, BulkUpdateProgress, BulkUpdateResults } from "../components/BulkUpdate";
-import { BulkUpdateResult, runBulkUpdates } from "../components/bulkUpdateModel";
+import { BulkUpdateButton, BulkUpdateResults } from "../components/BulkUpdate";
+import {
+  bulkRunProgress,
+  clearFrameworkBulkRun,
+  frameworkBulkRunning,
+  startFrameworkBulkUpdate,
+  useFrameworkBulkRun,
+} from "./frameworks/frameworkBulkStore";
 import {
   FrameworkAction,
   FrameworkOperation,
@@ -55,18 +61,23 @@ export function FrameworksPanel() {
   const frameworks = useFrameworksResource();
   const remoteHosts = useCachedResource("remoteHosts", () => api.remoteHosts());
   // Install, update and uninstall run in a module-level store so they survive
-  // navigating away; local state covers short-lived row actions and bulk updates.
+  // navigating away, and so does "Update all"; local state covers short-lived
+  // row actions.
   const operations = useFrameworkOperations();
+  const bulkRun = useFrameworkBulkRun();
+  const bulkProgress = bulkRunProgress(bulkRun);
+  const bulkCurrent = bulkRun?.running ? bulkRun.entries.find((entry) => entry.running && !entry.result) : undefined;
   const [localBusy, setBusy] = useState<Record<string, FrameworkBusyAction>>({});
-  const [localProgress, setProgress] = useState<Record<string, OperationProgress>>({});
   const busy = useMemo(() => ({
     ...Object.fromEntries(Object.values(operations).map((operation) => [operation.key, operation.action as FrameworkBusyAction])),
+    ...(bulkCurrent ? { [bulkCurrent.key]: "update" as FrameworkBusyAction } : {}),
     ...localBusy,
-  }), [operations, localBusy]);
-  const progress = useMemo(() => ({
-    ...localProgress,
+  }), [operations, bulkCurrent?.key, localBusy]);
+  const progress = useMemo<Record<string, OperationProgress>>(() => ({
+    ...(bulkCurrent?.progress ? { [bulkCurrent.key]: bulkCurrent.progress } : {}),
     ...Object.fromEntries(Object.values(operations).map((operation) => [operation.key, operation.progress])),
-  }), [operations, localProgress]);
+  }), [operations, bulkCurrent?.key, bulkCurrent?.progress]);
+  const handledBulkRun = useRef(0);
   const handledOutcomes = useRef(new Set<FrameworkOperation>());
   const [checks, setCheckState] = useState<Record<string, FrameworkUpdateCheck>>(() => cachedUpdateChecks());
   const [groupBy, setGroupByState] = useState<FrameworkGroupBy>(loadFrameworkGroupBy);
@@ -79,10 +90,7 @@ export function FrameworksPanel() {
   const [installerOpen, setInstallerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pendingCustom, setPendingCustom] = useState<{ entries: CustomCommandEntry[]; run: () => void } | null>(null);
-  const [bulkProgress, setBulkProgress] = useState<BulkUpdateProgress | null>(null);
-  const [bulkResults, setBulkResults] = useState<BulkUpdateResult<Framework>[]>([]);
   const [modelsFor, setModelsFor] = useState<Framework | null>(null);
-  const bulkRunning = useRef(false);
 
   const prereqs = frameworks.data?.prereqs;
   const items = frameworks.data?.frameworks ?? [];
@@ -174,7 +182,7 @@ export function FrameworksPanel() {
     || Object.values(frameworkAuth.loginFlows).some((flow) => flow.state === "waiting");
 
   useEffect(() => {
-    if (bulkRunning.current) return;
+    if (frameworkBulkRunning()) return;
     installedItems.forEach((item) => {
       const key = targetKey(item.target_id, item.spec.kind);
       if (!item.spec.update_supported || checks[key] || busy[key]) return;
@@ -191,25 +199,6 @@ export function FrameworksPanel() {
     });
   }
 
-  function beginProgress(key: string, phase: string) {
-    setProgress((current) => ({ ...current, [key]: { phase, percent: 4, started_at: Date.now() } }));
-  }
-
-  function updateProgress(key: string, update: OperationProgress) {
-    setProgress((current) => ({
-      ...current,
-      [key]: { ...update, started_at: current[key]?.started_at ?? Date.now() },
-    }));
-  }
-
-  function clearProgress(key: string) {
-    setProgress((current) => {
-      const next = { ...current };
-      delete next[key];
-      return next;
-    });
-  }
-
   async function checkUpdate(item: Framework, silent = false) {
     const key = targetKey(item.target_id, item.spec.kind);
     markBusy(key, "check");
@@ -217,7 +206,7 @@ export function FrameworksPanel() {
       setNotice("");
       setNoticeError(false);
       setResult(null);
-      setBulkResults([]);
+      clearFrameworkBulkRun();
     }
     try {
       const response = await api.checkFrameworkUpdate(item.spec.kind, item.target_id);
@@ -242,7 +231,7 @@ export function FrameworksPanel() {
     setNotice("");
     setNoticeError(false);
     setResult(null);
-    setBulkResults([]);
+    clearFrameworkBulkRun();
     if (action !== "update") forgetCheck(key);
     return startFrameworkOperation(item, action, acknowledgeInternal, confirmedCommand);
   }
@@ -293,46 +282,31 @@ export function FrameworksPanel() {
   }
 
   function requestUpdateMany(selection: Framework[]) {
-    if (bulkRunning.current || updateAllBlocked || selection.length === 0) return;
+    if (frameworkBulkRunning() || updateAllBlocked || selection.length === 0) return;
     // Capture the selection before starting: later scope changes must never
     // redirect a queued update to a different machine (or to the whole fleet).
     const targetID = selectedRemoteID || "local";
     const candidates = [...selection];
     confirmCustomCommands(candidates.map((item) => ({ item, action: "update" })), (confirmed) => {
-      void updateAllFrameworks(candidates, targetID, confirmed);
+      clearFrameworkBulkRun();
+      setNotice("");
+      setNoticeError(false);
+      setResult(null);
+      void startFrameworkBulkUpdate(candidates.map((item) => ({
+        item,
+        label: `${item.spec.display} · ${item.target_name || item.target_id || currentMachine}`,
+      })), targetID, confirmed);
     });
   }
 
-  async function updateAllFrameworks(candidates: Framework[], targetID: string, confirmed: Record<string, string>) {
-    if (bulkRunning.current) return;
-    bulkRunning.current = true;
-    setBulkProgress({ completed: 0, total: candidates.length });
-    setBulkResults([]);
-    setNotice("");
-    setNoticeError(false);
-    setResult(null);
-    try {
-      await runBulkUpdates(candidates, async (item) => {
-        const key = targetKey(item.target_id, item.spec.kind);
-        markBusy(key, "update");
-        beginProgress(key, "checking");
-        try {
-          return await api.installFramework(item.spec.kind, "update", (update) => updateProgress(key, update), false, item.target_id || targetID, confirmed[key]);
-        } finally {
-          clearProgress(key);
-          clearBusy(key);
-          forgetCheck(key);
-        }
-      }, (entry, completed) => {
-        setBulkResults((current) => [...current, entry]);
-        setBulkProgress({ completed, total: candidates.length });
-      });
-      await frameworks.reload();
-    } finally {
-      bulkRunning.current = false;
-      setBulkProgress(null);
-    }
-  }
+  // A finished "Update all" changed installed versions, possibly while this
+  // page was closed: drop their update checks and refresh the catalog once.
+  useEffect(() => {
+    if (!bulkRun || bulkRun.running || handledBulkRun.current === bulkRun.id) return;
+    handledBulkRun.current = bulkRun.id;
+    bulkRun.entries.forEach((entry) => forgetCheck(entry.key));
+    void frameworks.reload();
+  }, [bulkRun]);
 
   // Installs can take minutes, so the dialog closes as soon as one starts and
   // its progress continues in the catalog table.
@@ -362,7 +336,7 @@ export function FrameworksPanel() {
   function requestUninstall(item: Framework) {
     setNotice("");
     setResult(null);
-    setBulkResults([]);
+    clearFrameworkBulkRun();
     setUninstallCandidate(item);
   }
 
@@ -370,11 +344,12 @@ export function FrameworksPanel() {
     <div className="page-stack framework-page">
       {notice && <div className={`session-notice${noticeError || result && !result.ok ? " error" : ""}`} role="status">{notice}</div>}
 
-      <BulkUpdateResults progress={bulkProgress} results={bulkResults.map(({ item, result }) => ({
-        key: targetKey(item.target_id, item.spec.kind),
-        label: `${item.spec.display} · ${item.target_name || item.target_id || currentMachine}`,
-        result,
-      }))} />
+      <BulkUpdateResults
+        progress={bulkProgress}
+        results={bulkRun?.entries ?? []}
+        successLabel={t("common.updated")}
+        onDismiss={clearFrameworkBulkRun}
+      />
 
       <section className="surface framework-catalog-surface">
         <div className="surface-header framework-catalog-header">

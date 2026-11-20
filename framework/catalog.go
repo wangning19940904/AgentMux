@@ -114,6 +114,8 @@ var catalog = []Spec{
 		Kind: "claudecode", Display: "Claude Code", Company: "Anthropic", KindType: KindCLI,
 		Bin: "claude", VersionArgs: []string{"--version"},
 		NPMPackage: "@anthropic-ai/claude-code", UpdateCommand: []string{"claude", "update"},
+		// The native installer needs no npm, so neither does the version check.
+		LatestURL:        "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
 		InstallSupported: true, InstallRequiresNPM: true, UpdateSupported: true, UninstallSupported: true,
 		EnvRequired: []string{"ANTHROPIC_API_KEY"}, Supported: true,
 		Note: "Anthropic Claude Code CLI",

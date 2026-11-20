@@ -37,4 +37,24 @@ describe("bulk update controls", () => {
     expect(complete).toContain('role="status"');
     expect(complete).toContain('<details open="">');
   });
+
+  it("shows the running item's phase, output and log, the queue, and warnings", () => {
+    const results = [
+      { key: "a", label: "Codex · local", result: { ok: true, warning: "brew exited 1, but Codex is now 0.169.0" } },
+      { key: "b", label: "Claude Code · home", running: true, progress: { phase: "updating", detail: "==> Upgrading", percent: 30, log: "==> Fetching\n==> Upgrading\n" } },
+      { key: "c", label: "Cursor · ecs" },
+    ];
+    const html = renderToStaticMarkup(<I18nProvider language="zh">
+      <BulkUpdateResults results={results} progress={{ completed: 1, total: 3 }} />
+    </I18nProvider>);
+    expect(html).toContain("已完成 1/3");
+    expect(html).toContain("当前：Claude Code · home");
+    expect(html).toContain("==&gt; Upgrading");
+    expect(html).toContain("命令输出");
+    expect(html).toContain("==&gt; Fetching");
+    expect(html).toContain("排队中（1）");
+    expect(html).toContain("Cursor · ecs");
+    expect(html).toContain("已更新（有警告）");
+    expect(html).toContain("brew exited 1, but Codex is now 0.169.0");
+  });
 });

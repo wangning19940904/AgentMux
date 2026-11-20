@@ -1151,6 +1151,24 @@ export interface FrameworkInstallResult {
   log?: string;
   version?: string;
   error?: string;
+  // Set when the action succeeded with a problem worth reading, such as a
+  // package manager that exited non-zero after upgrading the CLI.
+  warning?: string;
+}
+
+// A framework install, update or uninstall running in the background on one
+// machine (GET/POST /api/v1/frameworks/operations).
+export interface FrameworkOperationJob {
+  id: string;
+  kind: string;
+  action: "install" | "update" | "uninstall";
+  state: "running" | "succeeded" | "failed";
+  progress: { phase: string; detail?: string; percent: number };
+  log?: string;
+  result?: FrameworkInstallResult;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string;
 }
 
 export interface FrameworkUpdateCheck {
@@ -1308,6 +1326,8 @@ export interface OperationProgress {
   detail?: string;
   percent: number;
   started_at?: number;
+  // The command's output so far, when the operation reports it.
+  log?: string;
 }
 
 export interface TTSVoice {

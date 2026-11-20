@@ -505,9 +505,11 @@ func TestCheckUpdateDetectsNewerCLIVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
+	// No npm: an app started from Finder may not see it, and Claude Code's
+	// native install does not need it, so the check reads the registry.
+	mockFrameworkLatestVersion(t, "claudecode", "2.1.211")
 	bin := t.TempDir()
 	writeFrameworkExecutable(t, filepath.Join(bin, "claude"), "#!/bin/sh\necho 'claude 2.1.210'\n")
-	writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '2.1.211'; exit 0; fi\nexit 1\n")
 	t.Setenv("PATH", bin)
 
 	res := CheckUpdate(context.Background(), "claudecode")
@@ -520,6 +522,7 @@ func TestUpdateRunsCataloguedCLICommandAndVerifiesVersion(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test")
 	}
+	mockFrameworkLatestVersion(t, "claudecode", "2.1.211")
 	bin := t.TempDir()
 	versionFile := filepath.Join(bin, "claude-version")
 	if err := os.WriteFile(versionFile, []byte("2.1.210\n"), 0o644); err != nil {
@@ -536,6 +539,107 @@ func TestUpdateRunsCataloguedCLICommandAndVerifiesVersion(t *testing.T) {
 	if !res.OK || res.Error != "" || res.Action != "update" || res.Command != "claude update" || res.Version != "2.1.211" {
 		t.Fatalf("update result = %+v", res)
 	}
+}
+
+// A package manager can exit non-zero after the upgrade itself succeeded, as
+// Homebrew does when it cannot generate shell completions for the new binary.
+// The installed version decides, and the exit status becomes a warning.
+func TestUpdateThatExitsNonZeroAfterUpgradingSucceedsWithWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test")
+	}
+	for _, tc := range []struct {
+		name    string
+		bumps   bool
+		wantOK  bool
+		version string
+	}{
+		{name: "upgraded", bumps: true, wantOK: true, version: "2.1.211"},
+		{name: "not upgraded", bumps: false, wantOK: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockFrameworkLatestVersion(t, "claudecode", "2.1.211")
+			bin := t.TempDir()
+			versionFile := filepath.Join(bin, "claude-version")
+			if err := os.WriteFile(versionFile, []byte("2.1.210\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			bump := ""
+			if tc.bumps {
+				bump = "echo '2.1.211' > '" + versionFile + "'; "
+			}
+			claudeScript := "#!/bin/sh\n" +
+				"if [ \"$1\" = \"update\" ]; then " + bump + "echo 'upgrading'; echo 'completions failed' >&2; exit 1; fi\n" +
+				"cat '" + versionFile + "'\n"
+			writeFrameworkExecutable(t, filepath.Join(bin, "claude"), claudeScript)
+			writeFrameworkExecutable(t, filepath.Join(bin, "npm"), "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then echo '2.1.211'; exit 0; fi\nexit 1\n")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			ForgetVersion("claudecode")
+			forgetLatestVersions("claudecode")
+
+			var streamed strings.Builder
+			res := UpdateWithProgressOptions(context.Background(), "claudecode", InstallOptions{
+				Output: func(chunk []byte) { streamed.Write(chunk) },
+			}, nil)
+			if res.OK != tc.wantOK {
+				t.Fatalf("update result = %+v, want ok=%v", res, tc.wantOK)
+			}
+			if !strings.Contains(streamed.String(), "upgrading") || !strings.Contains(streamed.String(), "completions failed") {
+				t.Fatalf("streamed output = %q, want stdout and stderr", streamed.String())
+			}
+			if tc.wantOK {
+				if res.Version != tc.version || res.Error != "" || !strings.Contains(res.Warning, "exit status 1") || !strings.Contains(res.Log, res.Warning) {
+					t.Fatalf("update result = %+v", res)
+				}
+				return
+			}
+			if res.Warning != "" || !strings.Contains(res.Error, "update failed: exit status 1") || strings.Contains(res.Error, "after the update") {
+				t.Fatalf("update result = %+v", res)
+			}
+		})
+	}
+}
+
+// A package manager can leave the CLI's link pointing at a binary that is
+// gone, as when macOS Gatekeeper moves a new binary to the Trash on its first
+// run. The check and a failed update both say so instead of "could not parse".
+func TestBrokenCLIInstallIsExplained(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink and shell script test")
+	}
+	mockFrameworkLatestVersion(t, "claudecode", "2.1.211")
+	bin := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "Caskroom", "claude", "bin", "claude")
+	if err := os.Symlink(missing, filepath.Join(bin, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	// A wrapper earlier on PATH that execs the dangling link, like a user's
+	// ~/.local/bin shim in front of Homebrew.
+	front := t.TempDir()
+	writeFrameworkExecutable(t, filepath.Join(front, "claude"), "#!/bin/sh\necho 'Traceback (most recent call last):' >&2\nexec '"+filepath.Join(bin, "claude")+"' \"$@\"\n")
+	t.Setenv("PATH", front+string(os.PathListSeparator)+"/usr/bin:/bin")
+	ForgetVersion("claudecode")
+
+	check := CheckUpdate(context.Background(), "claudecode")
+	if !strings.Contains(check.Error, "`claude --version` fails") || !strings.Contains(check.Error, "No such file or directory") {
+		t.Fatalf("check error = %q", check.Error)
+	}
+	status := Detect(mustLookup(t, "claudecode"), Prereqs{})
+	if got := unrunnableCLIError(mustLookup(t, "claudecode"), status); got != check.Error {
+		t.Fatalf("unrunnable error = %q, check error = %q", got, check.Error)
+	}
+	if _, advanced, broken := versionAdvancedAfterFailure(mustLookup(t, "claudecode"), UpdateCheck{CurrentVersion: "2.1.210"}); advanced || !strings.Contains(broken, "No such file or directory") {
+		t.Fatalf("after failure: advanced=%v broken=%q", advanced, broken)
+	}
+}
+
+func mustLookup(t *testing.T, kind string) Spec {
+	t.Helper()
+	spec, ok := Lookup(kind)
+	if !ok {
+		t.Fatalf("%s missing from catalog", kind)
+	}
+	return spec
 }
 
 func TestUpdateCodexUsesHomebrewCommandThroughSymlink(t *testing.T) {
@@ -680,5 +784,14 @@ func writeFrameworkExecutable(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPackageManagerDirsCoverHomebrewOnMac(t *testing.T) {
+	if got := defaultPackageManagerDirs("darwin"); len(got) != 2 || got[0] != "/opt/homebrew/bin" || got[1] != "/usr/local/bin" {
+		t.Fatalf("darwin dirs = %v", got)
+	}
+	if got := defaultPackageManagerDirs("linux"); got != nil {
+		t.Fatalf("linux dirs = %v", got)
 	}
 }

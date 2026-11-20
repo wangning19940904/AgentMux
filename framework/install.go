@@ -1,12 +1,14 @@
 package framework
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,12 +23,20 @@ type InstallResult struct {
 	Log     string `json:"log,omitempty"`
 	Version string `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Warning explains a run that succeeded with a problem worth reading,
+	// such as a package manager that exited non-zero after the CLI was
+	// already upgraded.
+	Warning string `json:"warning,omitempty"`
 }
 
 // ProgressFunc reports durable installation stages. Percent tracks stage
 // completion rather than package-manager download bytes, which are not exposed
 // consistently by every supported installer.
 type ProgressFunc func(phase, detail string, percent int)
+
+// OutputFunc receives an install or update command's combined output as the
+// command produces it, so a long package-manager run shows what it is doing.
+type OutputFunc func(chunk []byte)
 
 // InstallOptions carries explicit acknowledgement for restricted catalog
 // entries and the machine's install settings. Callers cannot supply a command
@@ -40,6 +50,8 @@ type InstallOptions struct {
 	// Forwarded marks a request relayed from another machine's Console. Such
 	// requests never run this machine's custom commands.
 	Forwarded bool
+	// Output, when set, receives command output while the command runs.
+	Output OutputFunc
 }
 
 // InstallWithProgressOptions installs a framework with explicit restricted-
@@ -183,7 +195,7 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 		runCtx, cancel = context.WithTimeout(ctx, cliUpdateTimeout)
 		defer cancel()
 	}
-	out, err := runCLIUpdateCommand(runCtx, command)
+	out, err := runCLIUpdateCommand(runCtx, command, options.Output)
 	res.Log = string(out)
 	if err != nil {
 		fallback, ok := npmFallbackUpdatePlan(spec, plan, res.Log, options.Settings)
@@ -193,7 +205,24 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 			}
 		}
 		if !ok {
+			// Package managers can fail after the upgrade itself, for example
+			// Homebrew when it cannot generate shell completions for the new
+			// binary. The installed version is what matters.
+			version, advanced, broken := versionAdvancedAfterFailure(spec, check)
+			if advanced {
+				res.Version = version
+				res.Warning = fmt.Sprintf("%s exited with an error (%v), but %s is now %s (was %s).", res.Command, err, spec.Display, version, check.CurrentVersion)
+				res.Log += "\n" + res.Warning + "\n"
+				res.OK = true
+				return res
+			}
 			res.Error = fmt.Sprintf("update failed: %v", err)
+			if broken != "" {
+				// The package manager may have removed the old version and
+				// left a link to a binary that is gone (for example one
+				// macOS Gatekeeper moved to the Trash on its first run).
+				res.Error += "; after the update " + broken
+			}
 			return res
 		}
 		// The native updater could not tell how the CLI was installed. npm
@@ -201,7 +230,7 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 		res.Log += fmt.Sprintf("\n%s could not detect its installation method; updating with npm instead.\n", res.Command)
 		res.Command = fallback.Command
 		reportProgress(progress, "updating", res.Command, 50)
-		out, err = runCLIUpdateCommand(runCtx, fallback.Argv)
+		out, err = runCLIUpdateCommand(runCtx, fallback.Argv, options.Output)
 		res.Log += string(out)
 		if err != nil {
 			res.Error = fmt.Sprintf("update failed: %v", err)
@@ -255,10 +284,60 @@ func updateAdvanced(spec Spec, check UpdateCheck, installed string) bool {
 	}
 }
 
-func runCLIUpdateCommand(ctx context.Context, command []string) ([]byte, error) {
+// versionAdvancedAfterFailure re-reads the installed version after a failed
+// update command and reports whether the CLI was upgraded anyway. When the
+// CLI no longer runs at all, broken says why.
+func versionAdvancedAfterFailure(spec Spec, check UpdateCheck) (version string, advanced bool, broken string) {
+	ForgetVersion(spec.Kind)
+	status := Detect(spec, DetectPrereqs())
+	version = normalizeSDKVersion(status.Version)
+	if !status.Installed {
+		return "", false, fmt.Sprintf("%s is no longer found on PATH", spec.Display)
+	}
+	if version == "" {
+		return "", false, unrunnableCLIError(spec, status)
+	}
+	if check.CurrentVersion == "" {
+		return version, false, ""
+	}
+	if spec.ExactLatest {
+		return version, check.LatestVersion != "" && version == check.LatestVersion && version != check.CurrentVersion, ""
+	}
+	return version, sdkVersionGreater(version, check.CurrentVersion), ""
+}
+
+func runCLIUpdateCommand(ctx context.Context, command []string, output OutputFunc) ([]byte, error) {
 	cmd := frameworkCommandContext(ctx, command[0], command[1:]...)
 	cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
-	return cmd.CombinedOutput()
+	return runCommandOutput(cmd, output)
+}
+
+// runCommandOutput is CombinedOutput that also hands each chunk to output.
+func runCommandOutput(cmd *exec.Cmd, output OutputFunc) ([]byte, error) {
+	if output == nil {
+		return cmd.CombinedOutput()
+	}
+	// One pointer for stdout and stderr makes exec copy both through a single
+	// pipe; the lock covers any other caller anyway.
+	writer := &outputWriter{output: output}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err := cmd.Run()
+	return writer.buffer.Bytes(), err
+}
+
+type outputWriter struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+	output OutputFunc
+}
+
+func (w *outputWriter) Write(chunk []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer.Write(chunk)
+	w.output(append([]byte(nil), chunk...))
+	return len(chunk), nil
 }
 
 func install(ctx context.Context, kind string, options InstallOptions, progress ProgressFunc) InstallResult {
@@ -348,7 +427,7 @@ func installCLIWithProgress(ctx context.Context, spec Spec, options InstallOptio
 	}
 	cmd := frameworkCommandContext(runCtx, command[0], command[1:]...)
 	cmd.Env = os.Environ()
-	out, err := cmd.CombinedOutput()
+	out, err := runCommandOutput(cmd, options.Output)
 	res.Log = string(out)
 	if err != nil {
 		res.Error = fmt.Sprintf("install failed: %v", err)
