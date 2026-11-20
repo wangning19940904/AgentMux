@@ -139,7 +139,7 @@ Codex 用量按调用入口区分为 CLI、Desktop、IDE 和 AgentMux 内部调�
 
 `codex exec --ephemeral` 不保存 rollout，必须由调用方保存 `turn.completed.usage` 才能统计；没有保留用量的历史调用不能恢复为精确 Token。AgentMux 支持读取 `$CODEX_HOME/usage/agentmux-exec/` 下的用量回执（默认 `~/.codex`），协议及覆盖范围见 [Codex ephemeral 用量接入](integrations/codex-exec-usage.md)。
 
-Cursor 用量默认不读取。请在 Console 的「用量账本 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
+Cursor 用量默认不读取。请在 Console 的「运行与分析 → 用量 → 用量数据源」中点击「连接 Cursor」并确认授权；AgentMux 会追加一个失败放行的用户级 `stop` Hook、回填近 90 天 Agent 会话，并把无法取得精确 Token 的本地记录标记为估算。Cursor 登录 Token 只在同步时从本机登录态读取，不写入 AgentMux 数据库或 API 响应。
 
 TRAE CLI 的账户登录会自动维护：运行中的 AgentMux 每 5 分钟检查已启用的 TRAE Agent，在凭证到期前 15 分钟尝试通过 TRAE 原生接口续期，开始会话和每次发送消息前也会检查。同一登录的并发刷新会合并，失败后退避重试；凭证仍有效时，临时网络故障不阻断对话。Token 的刷新和保存由 TRAE CLI 完成，不进入 AgentMux 数据库。如果 SSO 或刷新凭证已失效，框架页面会显示需要登录，调用也会给出明确提示；此时仍需在对应机器的「框架 → TRAE CLI」重新授权。后台维护随 AgentMux 停止而停止，不自动打开浏览器。
 
@@ -238,7 +238,7 @@ Agent 之间、人与 Agent 之间可以直接互发消息，不经过飞书等�
 
 ## 手机访问与通知
 
-Console 在窄屏上换成底部标签栏（总览、Agent、机器、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
+Console 在窄屏上换成底部标签栏（Agent、用量、设备、更多），「更多」里是全部页面和语言、主题等偏好。它也是一个可安装的 Web 应用：Service Worker 只缓存当前版本的页面外壳，所以打开很快、断网时也能打开，但**从不缓存 API 数据**；连不上 AgentMux 时顶部会明确提示页面不是实时数据。服务端更新后，Console 会提示「有新版本可用」，点「重新加载」即切换。
 
 **1. 给 Console 一个 HTTPS 地址。** 浏览器只在 `https://`（或本机 `localhost`）上允许安装和推送。`[hub] addr` 的端口只服务设备配对和连接，不提供 Console，所以手机要通过 HTTPS 访问管理端口（默认 `127.0.0.1:8765`），例如：
 

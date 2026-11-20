@@ -13,6 +13,7 @@ import {
   ChevronsRight,
   ExternalLink,
   Gauge,
+  HeartPulse,
   Languages,
   LayoutGrid,
   ListChecks,
@@ -104,8 +105,6 @@ const SIDEBAR_LAYOUT_VERSION = "two-level-sidebar-v1";
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; shortLabelKey?: string; icon: typeof LayoutGrid; items: NavItem[] };
 
-const OVERVIEW_ITEM: NavItem = { id: "overview", labelKey: "nav.overview", icon: LayoutGrid };
-
 const NAV_GROUPS: NavGroup[] = [
   {
     id: "agents",
@@ -138,11 +137,13 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.group.operations",
     shortLabelKey: "nav.short.operations",
     icon: Activity,
+    // The two dashboards lead the section: Usage is where it opens.
     items: [
+      { id: "usage", labelKey: "nav.usage", icon: Gauge },
+      { id: "health", labelKey: "nav.health", icon: HeartPulse },
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
       { id: "machine-status", labelKey: "nav.machineStatus", icon: MonitorDot },
       { id: "observability", labelKey: "nav.observability", icon: Activity },
-      { id: "usage", labelKey: "nav.usage", icon: Gauge },
       { id: "feedback", labelKey: "nav.feedback", icon: MessageSquareText },
       { id: "guard", labelKey: "nav.guard", icon: ShieldCheck },
     ],
@@ -159,7 +160,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
+const TABS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
   { id: "system", labelKey: "theme.system", icon: PanelLeft },
@@ -193,6 +194,8 @@ function tabFromHash(): Tab | null {
   if (value === "connect") return "channels";
   // Tenants are gone; account management took their place.
   if (value === "tenants") return "accounts";
+  // The Overview page became the Usage and Health dashboards.
+  if (value === "overview") return "usage";
   return TABS.some((item) => item.id === value) ? value as Tab : null;
 }
 
@@ -297,8 +300,8 @@ function Shell({
     ? { ...group, items: group.items.map((item) => item.id === "accounts" ? { ...item, labelKey: "nav.myAccount" } : item) }
     : group), [role]);
   const navTabs = useMemo(
-    () => [...(identityIsAdmin ? [OVERVIEW_ITEM] : []), ...navGroups.flatMap((group) => group.items)],
-    [identityIsAdmin, navGroups],
+    () => navGroups.flatMap((group) => group.items),
+    [navGroups],
   );
   const mobileTabs = useMemo(() => mobileTabItems(navTabs), [navTabs]);
   const identityName = session?.account ? accountLabel(session.account) : t("app.admin");
@@ -366,7 +369,7 @@ function Shell({
   const desktop = isDesktopApp();
   const ActiveIcon = active.icon;
   const SecondaryIcon = activeGroup?.icon ?? LayoutGrid;
-  const secondaryItems = activeGroup?.items ?? [OVERVIEW_ITEM];
+  const secondaryItems = activeGroup?.items ?? [];
   const secondaryPrefetchKey = secondaryItems.map((item) => item.id).join(",");
   // Warm the slower pages of the section in view once the current page settles,
   // so opening them shows data at once.
@@ -534,10 +537,6 @@ function Shell({
     return () => window.removeEventListener("agentmux:machine-scope-changed", refreshScope);
   }, []);
 
-  function selectOverview() {
-    setTab("overview");
-  }
-
   function requestNewAgent() {
     setCreateAgentRequested(true);
     setTab("agents");
@@ -663,18 +662,6 @@ function Shell({
         </div>
 
         <nav id="primary-navigation" className="nav primary-nav" aria-label={t("nav.primary")}>
-          {identityIsAdmin && <button
-            className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
-            onClick={selectOverview}
-            title={t(OVERVIEW_ITEM.labelKey)}
-            aria-label={t(OVERVIEW_ITEM.labelKey)}
-            aria-current={visibleTab === OVERVIEW_ITEM.id ? "page" : undefined}
-            disabled={navigationLocked}
-          >
-            <LayoutGrid size={18} />
-            <span>{t(OVERVIEW_ITEM.labelKey)}</span>
-          </button>}
-
           {navGroups.map((group) => {
             const GroupIcon = group.icon;
             const hasActive = group.items.some((item) => item.id === visibleTab);
@@ -730,7 +717,7 @@ function Shell({
         <header className="secondary-sidebar-header">
           <span className="secondary-sidebar-title">
             <SecondaryIcon size={16} />
-            <strong title={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>{activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}</strong>
+            <strong title={t(activeGroup?.labelKey ?? active.labelKey)}>{t(activeGroup?.labelKey ?? active.labelKey)}</strong>
           </span>
           <button
             className="secondary-collapse"
@@ -823,7 +810,7 @@ function Shell({
           )}
         </div>
 
-        <nav className="secondary-nav" aria-label={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>
+        <nav className="secondary-nav" aria-label={t(activeGroup?.labelKey ?? active.labelKey)}>
           {secondaryItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -852,7 +839,6 @@ function Shell({
 
       <MobileDrawer
         open={mobileNavOpen}
-        overview={identityIsAdmin ? OVERVIEW_ITEM : undefined}
         groups={navGroups}
         active={visibleTab}
         isDisabled={() => navigationLocked}

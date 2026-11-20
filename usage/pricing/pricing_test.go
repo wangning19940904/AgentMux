@@ -3,7 +3,10 @@ package pricing
 import (
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestContextTierIncludesCachedInputAndUsesStrictBoundary(t *testing.T) {
@@ -89,5 +92,47 @@ func TestLookupUsesMostSpecificModelMatch(t *testing.T) {
 	got, ok := p.lookup("openai/gpt-5.6-sol")
 	if !ok || got.Input != 2 {
 		t.Fatalf("lookup = %+v, %t; want longest model key", got, ok)
+	}
+}
+
+func TestFuzzyLookupIsStableAndRemembered(t *testing.T) {
+	p := New(t.TempDir(), true)
+	p.loaded = true
+	// Two keys of equal length are both contained in the model name; the
+	// choice must not depend on map iteration order.
+	if err := json.Unmarshal([]byte(`{
+		"gpt-x": {"input_cost_per_token": 1},
+		"x-pro": {"input_cost_per_token": 2},
+		"gpt": {"input_cost_per_token": 4}
+	}`), &p.table); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		p.resolved = nil
+		if got := p.Cost("vendor/gpt-x-pro", 1, 0, 0, 0); got != 1 {
+			t.Fatalf("run %d: cost = %v, want the alphabetically first longest key (gpt-x)", i, got)
+		}
+	}
+	// A remembered model no longer consults the table.
+	p.table = map[string]modelPrice{}
+	if got := p.Cost("vendor/gpt-x-pro", 1, 0, 0, 0); got != 1 {
+		t.Fatalf("remembered cost = %v", got)
+	}
+}
+
+func TestExpiredPriceCacheIsStillUsedOffline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, priceCacheFile)
+	if err := os.WriteFile(path, []byte(`{"custom-model": {"input_cost_per_token": 7}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * priceCacheTTL)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// Offline, with a cache past its TTL: the cached price still beats the
+	// built-in default (which would price this unknown model at 3e-6).
+	if got := New(dir, true).Cost("custom-model", 1, 0, 0, 0); got != 7 {
+		t.Fatalf("cost = %v, want the cached price", got)
 	}
 }

@@ -115,8 +115,8 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	})
 	mcpRegistry := mcp.New(st)
 	connect.SetMCPRegistry(mcpRegistry)
-	reporter := func(ctx context.Context, period string, since, until time.Time, location *time.Location) (any, error) {
-		return usageEngine.ReportRangeInLocation(ctx, period, since, until, location)
+	reporter := func(ctx context.Context, query usage.ReportQuery) (any, error) {
+		return usageEngine.ReportQuery(ctx, query)
 	}
 	srv := server.New(server.Dependencies{
 		Config: cfg, Version: version, Log: log, Store: st, EventRelay: relay,

@@ -199,3 +199,49 @@ func TestReportReconciliationMatchesAcrossDateBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcileCodexUsagePairsProxyRecordsWithoutASession(t *testing.T) {
+	transcript, _ := codexReconciliationFixture()
+	proxy := transcript
+	proxy.SessionID, proxy.RuntimeID, proxy.Project = "", "codex", ""
+	proxy.RequestID, proxy.Provenance = "preq-1:attempt:1", "agentmux.proxy"
+	proxy.Timestamp = transcript.Timestamp.Add(-100 * time.Millisecond)
+	// The transcript row survives: it knows the session, project and client.
+	if got := reconcileCodexUsage([]core.UsageRecord{proxy, transcript}); !reflect.DeepEqual(got, []core.UsageRecord{transcript}) {
+		t.Fatalf("proxy and transcript observations of one request = %+v", got)
+	}
+	// One proxy record stands for one request only.
+	second := transcript
+	second.SessionID = "other-session"
+	second.Timestamp = transcript.Timestamp.Add(time.Second)
+	if got := reconcileCodexUsage([]core.UsageRecord{proxy, transcript, second}); !reflect.DeepEqual(got, []core.UsageRecord{transcript, second}) {
+		t.Fatalf("one proxy record removed more than itself: %+v", got)
+	}
+	// Without a transcript counterpart in the window, or with other token
+	// counts, the proxy record is the only observation and stays.
+	late := transcript
+	late.Timestamp = transcript.Timestamp.Add(5 * time.Minute)
+	other := transcript
+	other.OutputTokens++
+	for name, counterpart := range map[string]core.UsageRecord{"outside window": late, "different tokens": other} {
+		records := []core.UsageRecord{proxy, counterpart}
+		if got := reconcileCodexUsage(records); !reflect.DeepEqual(got, records) {
+			t.Fatalf("%s: unmatched proxy record was dropped: %+v", name, got)
+		}
+	}
+	// A transcript row already paired with a live record is not paired again.
+	_, live := codexReconciliationFixture()
+	if got := reconcileCodexUsage([]core.UsageRecord{proxy, transcript, live}); !reflect.DeepEqual(got, []core.UsageRecord{proxy, live}) {
+		t.Fatalf("a transcript row was paired twice: %+v", got)
+	}
+}
+
+// Live records written before provenance was stored have a request ID and
+// no provenance. They are still the live twin of a transcript row.
+func TestReconcileCodexUsagePairsLiveRecordsWithoutProvenance(t *testing.T) {
+	transcript, live := codexReconciliationFixture()
+	live.Provenance = ""
+	if got := reconcileCodexUsage([]core.UsageRecord{transcript, live}); !reflect.DeepEqual(got, []core.UsageRecord{live}) {
+		t.Fatalf("legacy live record and its transcript twin = %+v", got)
+	}
+}

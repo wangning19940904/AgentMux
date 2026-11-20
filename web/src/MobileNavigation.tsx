@@ -15,7 +15,7 @@ export type MobileNavItem<T extends string> = { id: T; labelKey: string; icon: I
 export type MobileNavGroup<T extends string> = { id: string; labelKey: string; icon: Icon; items: MobileNavItem<T>[] };
 
 // The tab bar shows these destinations, in this order, when they exist.
-export const MOBILE_TAB_IDS = ["overview", "agents", "super-agents", "machines"] as const;
+export const MOBILE_TAB_IDS = ["agents", "super-agents", "usage", "machines"] as const;
 
 // A badge is a small count on a destination, such as unread messages.
 export type MobileNavBadges = Partial<Record<string, number>>;
@@ -91,7 +91,6 @@ export function MobileTabBar<T extends string>({
 
 export function MobileDrawer<T extends string>({
   open,
-  overview,
   groups,
   active,
   badges,
@@ -101,8 +100,6 @@ export function MobileDrawer<T extends string>({
   children,
 }: {
   open: boolean;
-  // Omitted where the overview is not available, such as for a member.
-  overview?: MobileNavItem<T>;
   groups: MobileNavGroup<T>[];
   active: T;
   badges?: MobileNavBadges;
@@ -173,7 +170,6 @@ export function MobileDrawer<T extends string>({
         </header>
         <div className="mobile-drawer-body">
           <nav aria-label={t("nav.primary")}>
-            {overview && <div className="mobile-drawer-group">{renderItem(overview)}</div>}
             {groups.map((group) => (
               <section key={group.id} className="mobile-drawer-group" aria-label={t(group.labelKey)}>
                 <h2>{t(group.labelKey)}</h2>

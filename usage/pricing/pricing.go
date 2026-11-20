@@ -84,7 +84,21 @@ type Pricer struct {
 	mu       sync.Mutex
 	table    map[string]modelPrice
 	loaded   bool
+	// resolved remembers the price chosen for each model name. A report prices
+	// every record, and a name that is not an exact table key otherwise costs a
+	// scan of the whole table (thousands of entries) per record.
+	resolved   map[string]modelPrice
+	checkedAt  time.Time
+	refreshing bool
 }
+
+const (
+	priceCacheFile = "litellm-prices.json"
+	priceCacheTTL  = 24 * time.Hour
+	// A long-running daemon looks at the cache file's age this often.
+	priceRecheckInterval = time.Hour
+	maxResolvedModels    = 4096
+)
 
 // New builds a Pricer. cacheDir defaults to ~/.cache/agentmux.
 func New(cacheDir string, offline bool) *Pricer {
@@ -97,11 +111,7 @@ func New(cacheDir string, offline bool) *Pricer {
 
 // Cost returns the USD cost for the given token counts under model.
 func (p *Pricer) Cost(model string, in, out, cacheRead, cacheWrite int64) float64 {
-	p.ensure()
-	mp, ok := p.lookup(model)
-	if !ok {
-		mp = fallback(model)
-	}
+	mp := p.price(model)
 	// Normalized input excludes cache reads/writes; all three contribute to
 	// request prompt length. Output tokens do not select a context tier.
 	promptTokens := in + cacheRead + cacheWrite
@@ -114,46 +124,115 @@ func (p *Pricer) Cost(model string, in, out, cacheRead, cacheWrite int64) float6
 		float64(cacheRead)*mp.CacheRead + float64(cacheWrite)*mp.CacheWrite
 }
 
-func (p *Pricer) ensure() {
+func (p *Pricer) price(model string) modelPrice {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.loaded {
-		return
+	p.ensureLocked()
+	if mp, ok := p.resolved[model]; ok {
+		return mp
 	}
-	p.loaded = true
-	p.table = map[string]modelPrice{}
-	cachePath := filepath.Join(p.cacheDir, "litellm-prices.json")
-	if data, err := os.ReadFile(cachePath); err == nil && fresh(cachePath) {
-		_ = json.Unmarshal(data, &p.table)
-		if len(p.table) > 0 {
+	mp, ok := p.lookup(model)
+	if !ok {
+		mp = fallback(model)
+	}
+	if p.resolved == nil || len(p.resolved) >= maxResolvedModels {
+		p.resolved = map[string]modelPrice{}
+	}
+	p.resolved[model] = mp
+	return mp
+}
+
+// ensureLocked loads the price table once and keeps it current. A cache file
+// past its TTL is still used: prices that are a few days old are closer to the
+// truth than the built-in fallbacks, and the refresh runs in the background so
+// a report never waits on the network.
+func (p *Pricer) ensureLocked() {
+	cachePath := filepath.Join(p.cacheDir, priceCacheFile)
+	if !p.loaded {
+		p.loaded = true
+		p.checkedAt = time.Now()
+		p.table = map[string]modelPrice{}
+		if data, err := os.ReadFile(cachePath); err == nil {
+			_ = json.Unmarshal(data, &p.table)
+		}
+		if p.offline {
 			return
 		}
-	}
-	if p.offline {
+		if len(p.table) == 0 {
+			// First run on this machine: there is nothing to price with yet.
+			if table := fetchTable(cachePath, p.cacheDir); len(table) > 0 {
+				p.table = table
+			}
+			return
+		}
+		if !fresh(cachePath) {
+			p.refreshLocked(cachePath)
+		}
 		return
 	}
-	if data := fetch(); data != nil {
-		_ = json.Unmarshal(data, &p.table)
-		_ = os.MkdirAll(p.cacheDir, 0o755)
-		_ = os.WriteFile(cachePath, data, 0o644)
+	if p.offline || p.refreshing || time.Since(p.checkedAt) < priceRecheckInterval {
+		return
+	}
+	p.checkedAt = time.Now()
+	if !fresh(cachePath) {
+		p.refreshLocked(cachePath)
 	}
 }
 
+func (p *Pricer) refreshLocked(cachePath string) {
+	p.refreshing = true
+	go func() {
+		table := fetchTable(cachePath, p.cacheDir)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.refreshing = false
+		if len(table) > 0 {
+			p.table = table
+			p.resolved = nil
+		}
+	}()
+}
+
+// fetchTable downloads the price table and stores it only when it parses, so
+// a truncated download never replaces a usable cache file.
+func fetchTable(cachePath, cacheDir string) map[string]modelPrice {
+	data := fetch()
+	if data == nil {
+		return nil
+	}
+	table := map[string]modelPrice{}
+	if err := json.Unmarshal(data, &table); err != nil || len(table) == 0 {
+		return nil
+	}
+	_ = os.MkdirAll(cacheDir, 0o755)
+	tmp := cachePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err == nil {
+		_ = os.Rename(tmp, cachePath)
+	}
+	return table
+}
+
+// lookup finds the table entry for model: an exact key, else the longest key
+// contained in the name (so "vendor/gpt-x" prices as "gpt-x"). Equal-length
+// candidates resolve to the alphabetically first key, so the same model never
+// changes price between reports.
 func (p *Pricer) lookup(model string) (modelPrice, bool) {
 	if mp, ok := p.table[model]; ok {
 		return mp, true
 	}
 	lower := strings.ToLower(model)
 	var best modelPrice
-	bestLength := 0
+	bestKey := ""
 	for k, v := range p.table {
 		key := strings.ToLower(k)
-		if strings.Contains(lower, key) && len(key) > bestLength {
-			best = v
-			bestLength = len(key)
+		if len(key) < len(bestKey) || !strings.Contains(lower, key) {
+			continue
+		}
+		if len(key) > len(bestKey) || key < bestKey {
+			best, bestKey = v, key
 		}
 	}
-	return best, bestLength > 0
+	return best, bestKey != ""
 }
 
 func fresh(path string) bool {
@@ -161,7 +240,7 @@ func fresh(path string) bool {
 	if err != nil {
 		return false
 	}
-	return time.Since(info.ModTime()) < 24*time.Hour
+	return time.Since(info.ModTime()) < priceCacheTTL
 }
 
 func fetch() []byte {

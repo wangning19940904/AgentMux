@@ -5,7 +5,6 @@ import {
   navigationGroupForTab,
   primaryGroupDestination,
   searchNavigationItems,
-  secondaryNavigationForTab,
   tabAllowedForRole,
 } from "./navigationModel";
 import { NAVIGATION_SEARCH_ALIASES } from "./navigationSearchAliases";
@@ -13,23 +12,18 @@ import { NAVIGATION_SEARCH_ALIASES } from "./navigationSearchAliases";
 const groups = [
   { id: "agents", items: [{ id: "agents" }, { id: "frameworks" }] },
   { id: "connectivity", items: [{ id: "channels" }, { id: "schedules" }, { id: "triggers" }, { id: "meetings" }] },
-  { id: "operations", items: [{ id: "sessions" }, { id: "usage" }] },
+  { id: "operations", items: [{ id: "usage" }, { id: "health" }, { id: "sessions" }] },
   { id: "system", items: [{ id: "machines" }, { id: "accounts" }] },
 ] as const;
 
 describe("horizontal navigation model", () => {
-  it("opens the owning secondary rail for a deep-linked child", () => {
-    expect(secondaryNavigationForTab([...groups], "meetings", "overview")).toEqual({
-      groupID: "connectivity",
-      open: true,
-    });
+  it("finds the owning group of a deep-linked child", () => {
+    expect(navigationGroupForTab([...groups], "meetings")?.id).toBe("connectivity");
+    expect(navigationGroupForTab([...groups], "unknown")).toBeNull();
   });
 
-  it("closes the secondary rail on overview", () => {
-    expect(secondaryNavigationForTab([...groups], "overview", "overview")).toEqual({
-      groupID: null,
-      open: false,
-    });
+  it("opens runtime analytics on its first dashboard", () => {
+    expect(primaryGroupDestination(groups[2], "agents")).toBe("usage");
   });
 
   it("places account management in the system rail", () => {
@@ -52,13 +46,13 @@ describe("navigation by role", () => {
   const consoleGroups = [
     { id: "agents", items: ["agents", "frameworks", "skills", "mcp", "memory"].map((id) => ({ id })) },
     { id: "connectivity", items: ["channels", "schedules", "triggers", "subscriptions", "meetings"].map((id) => ({ id })) },
-    { id: "operations", items: ["sessions", "machine-status", "observability", "usage", "feedback", "guard"].map((id) => ({ id })) },
+    { id: "operations", items: ["usage", "health", "sessions", "machine-status", "observability", "feedback", "guard"].map((id) => ({ id })) },
     { id: "system", items: ["machines", "accounts", "settings"].map((id) => ({ id })) },
   ];
 
   it("shows administrators everything", () => {
     expect(navigationForRole(consoleGroups, "admin")).toEqual(consoleGroups);
-    expect(tabAllowedForRole("overview", "admin")).toBe(true);
+    expect(tabAllowedForRole("health", "admin")).toBe(true);
   });
 
   it("shows a member only their own account", () => {
@@ -66,7 +60,7 @@ describe("navigation by role", () => {
     expect(member.map((group) => group.id)).toEqual(["system"]);
     expect(member.flatMap((group) => group.items.map((item) => item.id))).toEqual(["accounts"]);
     expect(MEMBER_LANDING_TAB).toBe("accounts");
-    for (const tab of ["overview", "agents", "machines", "settings", "channels", "usage"]) {
+    for (const tab of ["health", "agents", "machines", "settings", "channels", "usage"]) {
       expect(tabAllowedForRole(tab, "member"), tab).toBe(false);
     }
   });
@@ -74,7 +68,7 @@ describe("navigation by role", () => {
 
 describe("navigation search", () => {
   const items = [
-    { id: "overview", label: "Overview", groupLabel: "" },
+    { id: "usage", label: "用量", groupLabel: "运行与分析", keywords: NAVIGATION_SEARCH_ALIASES.usage },
     { id: "agents", label: "智能体", groupLabel: "智能体", keywords: NAVIGATION_SEARCH_ALIASES.agents },
     { id: "frameworks", label: "Agent 框架", groupLabel: "智能体", keywords: NAVIGATION_SEARCH_ALIASES.frameworks },
   ] as const;

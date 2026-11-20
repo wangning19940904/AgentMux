@@ -91,18 +91,6 @@ export function navigationGroupForTab<G extends NavigationGroupLike>(
   return groups.find((group) => group.items.some((item) => item.id === tab)) ?? null;
 }
 
-export function secondaryNavigationForTab<G extends NavigationGroupLike>(
-  groups: ReadonlyArray<G>,
-  tab: string,
-  overviewTab: string,
-) {
-  const group = navigationGroupForTab(groups, tab);
-  return {
-    groupID: group?.id ?? null,
-    open: tab !== overviewTab && group !== null,
-  };
-}
-
 export function primaryGroupDestination<T extends string>(
   group: NavigationGroupLike<T>,
   currentTab: string,

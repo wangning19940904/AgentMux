@@ -270,6 +270,10 @@ describe("fleet mergers", () => {
         by_model: [{ model: "gpt-5", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
       }],
       by_model: [], by_source: [], by_agent: [{ agent: "demo", tokens, cost_usd: tokens / 100 }], by_runtime: [{ runtime: "codex", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
+      // Filter choices are summed across machines; an older build sends none.
+      facets: tokens === 10
+        ? { models: [{ value: "gpt-5", tokens: 10 }, { value: "o4", tokens: 4 }], runtimes: [], agents: [] }
+        : { models: [{ value: "gpt-5", tokens: 21 }], runtimes: [], agents: [] },
     });
     const batch: FleetBatchResult<UsageReport> = { targets: [
       target("local", "Local", "usage", report(10, 2)),
@@ -284,7 +288,10 @@ describe("fleet mergers", () => {
     expect(merged.buckets[0].by_runtime?.[0].estimated_tokens).toBe(5);
     expect(merged.buckets[0].by_model).toEqual([{ model: "gpt-5", tokens: 30, cost_usd: expect.closeTo(0.3), estimated_tokens: 5 }]);
     expect(merged.by_machine?.[0].buckets?.[0].key).toBe("2026-08-30 10:00");
-    expect(merged.by_agent?.map((item) => item.agent)).toEqual(["Remote · demo", "Local · demo"]);
+    // One agent or project is one row, whichever machines it ran on.
+    expect(merged.by_agent).toEqual([expect.objectContaining({ agent: "demo", tokens: 30 })]);
+    expect(merged.facets?.models).toEqual([{ value: "gpt-5", tokens: 31 }, { value: "o4", tokens: 4 }]);
+    expect(merged.facets?.agents).toEqual([]);
     expect(merged.warnings).toContain("Down: offline");
   });
 

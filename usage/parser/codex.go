@@ -142,12 +142,20 @@ func (c *codexCollector) parseFile(path string, since time.Time) []core.UsageRec
 			continue
 		}
 		current := l.Payload.Info.TotalTokenUsage
-		if current.isZero() {
+		// An event with a total but no input, output or cached tokens (a
+		// context-window marker) is not a request. It must not become the
+		// baseline either: the next real total would look like a reset and be
+		// counted whole.
+		if current.isZero() || current.noTokens() {
 			continue
 		}
+		first := !havePrevious
 		delta, reset := current.deltaFrom(previous, havePrevious)
 		previous, havePrevious = current, true
-		if reset && !l.Payload.Info.LastTokenUsage.isZero() {
+		// A file that continues an earlier thread opens with that thread's
+		// running total. Only the last request is new; the rest was counted
+		// from the earlier file.
+		if (reset || first) && !l.Payload.Info.LastTokenUsage.isZero() {
 			delta = l.Payload.Info.LastTokenUsage
 		}
 		// Identical cumulative totals are repeated telemetry, not another model
@@ -188,6 +196,10 @@ func codexUncachedInput(input, cached int64) int64 {
 func (u codexUsageNumbers) isZero() bool {
 	return u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedInputTokens == 0 &&
 		u.ReasoningOutputTokens == 0 && u.TotalTokens == 0
+}
+
+func (u codexUsageNumbers) noTokens() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0 && u.CachedInputTokens == 0
 }
 
 func (u codexUsageNumbers) deltaFrom(previous codexUsageNumbers, havePrevious bool) (codexUsageNumbers, bool) {

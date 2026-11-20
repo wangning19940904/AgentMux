@@ -41,8 +41,10 @@ func usageCmd() *cobra.Command {
 			}
 
 			ctx := cmd.Context()
+			// A source that could not be read fully is reported, and the
+			// report still covers everything that was collected.
 			if err := eng.Collect(ctx, since); err != nil {
-				return err
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: usage collection was incomplete:", err)
 			}
 			if withSSH {
 				if err := eng.CollectSSH(ctx, since); err != nil {
@@ -80,8 +82,10 @@ func usageStatuslineCmd() *cobra.Command {
 			}
 			defer st.Close()
 			eng := usage.NewEngine(cfg, st, logger)
-			if err := eng.Collect(cmd.Context(), time.Now().Truncate(24*time.Hour)); err != nil {
-				return err
+			now := time.Now()
+			today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			if err := eng.Collect(cmd.Context(), today); err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: usage collection was incomplete:", err)
 			}
 			line, err := eng.Statusline(cmd.Context())
 			if err != nil {

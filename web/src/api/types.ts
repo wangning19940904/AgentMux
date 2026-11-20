@@ -61,6 +61,34 @@ export interface UsageReport {
   by_runtime?: RuntimeStat[];
   warnings?: string[];
   by_machine?: Array<{ target_id: string; target_name: string; totals: UsageTotals; buckets?: UsageBucket[] }>;
+  // The values of each filterable dimension found in the time range, before
+  // the dimension filters apply.
+  facets?: UsageFacets;
+}
+
+export interface UsageFacetValue {
+  value: string;
+  tokens: number;
+}
+
+export interface UsageFacets {
+  models: UsageFacetValue[];
+  runtimes: UsageFacetValue[];
+  agents: UsageFacetValue[];
+}
+
+// Restricts a usage report to the listed values of each dimension; an empty
+// list leaves the dimension unrestricted.
+export interface UsageReportFilter {
+  models?: string[];
+  runtimes?: string[];
+  agents?: string[];
+}
+
+// A machine a usage report can be read from.
+export interface UsageTarget {
+  id: string;
+  name: string;
 }
 
 export interface CursorHookStatus {
