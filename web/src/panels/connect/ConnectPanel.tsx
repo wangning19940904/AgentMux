@@ -49,11 +49,6 @@ export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
     return { active };
   }, [triggerItems]);
 
-  const pageTitle = view === "channels"
-    ? t("nav.channels")
-    : view === "schedules"
-      ? t("nav.schedules")
-      : t("nav.triggers");
   const pageHelp = view === "channels"
     ? t("connect.channelsHelp")
     : view === "schedules"
@@ -100,10 +95,9 @@ export function ConnectPanel({ view = "channels" }: { view?: ConnectView }) {
   return (
     <div className="page-stack connect-page">
       {view !== "channels" && (
-        <div className="surface">
+        <div className="surface connect-summary">
           <div className="surface-header">
             <div>
-              <h2>{pageTitle}</h2>
               <p className="subtle-copy">{pageHelp}</p>
             </div>
             <button className="ghost-action" onClick={() => Promise.all([channels.reload(), triggers.reload()])}>

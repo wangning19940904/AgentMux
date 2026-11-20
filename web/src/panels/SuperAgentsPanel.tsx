@@ -1,3 +1,4 @@
+import { SlidingSelection } from "../components/SlidingSelection";
 import { Bot, ListChecks, MessagesSquare, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -146,14 +147,14 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   {/* The drawer around an embedded agent already shows its name. */}
                   <div>{!embedded && <h3>{selected.name}</h3>}<p className="muted">{selected.description || t("superAgents.defaultDescription")}</p></div>
                   <div className="control-row">
-                    <div className="segmented super-agent-view-toggle" role="tablist" aria-label={t("superAgents.view.label")}>
+                    <SlidingSelection className="segmented super-agent-view-toggle" selected={view} role="tablist" aria-label={t("superAgents.view.label")}>
                       <button type="button" role="tab" aria-selected={view === "chat"} className={view === "chat" ? "active" : ""} onClick={() => chooseView("chat")}>
                         <MessagesSquare size={14} /><span>{t("superAgents.view.chat")}</span>
                       </button>
                       <button type="button" role="tab" aria-selected={view === "form"} className={view === "form" ? "active" : ""} onClick={() => chooseView("form")}>
                         <ListChecks size={14} /><span>{t("superAgents.view.form")}</span>
                       </button>
-                    </div>
+                    </SlidingSelection>
                     <button className="ghost-action" onClick={() => setDraft(structuredClone(selected))}>{embedded ? t("agents.work.edit") : t("common.edit")}</button>
                     {!embedded && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={async () => {
                       if (await confirmAction(t("superAgents.deleteConfirm", { name: selected.name }), { danger: true })) void run("delete", () => api.deleteSuperAgent(selected.id));

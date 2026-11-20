@@ -62,7 +62,6 @@ export function ChannelLogoGroup({
         return (
           <span className="agent-channel-badge" key={`${channel.target_id || "local"}::${channel.id}`} title={title} role="img" aria-label={title}>
             <ChannelLogo channel={channel} />
-            <span className="agent-channel-separator" aria-hidden="true">:</span>
             <ChannelAvatar channel={channel} size="compact" fallback={
               <span className="channel-avatar channel-avatar-compact fallback" aria-hidden="true"><Bot size={14} /></span>
             } />

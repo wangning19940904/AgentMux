@@ -1,3 +1,4 @@
+import { SlidingSelection } from "../components/SlidingSelection";
 import { Check, CheckCircle2, Copy, ExternalLink, Loader2, RefreshCw, ShieldCheck, Smartphone, Trash2, XCircle } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -537,14 +538,14 @@ function GitHubSteps({ source, superAgentID, onChange }: SourceProps & { superAg
           canInvite={Boolean(operatorLogin)} request={request} onJoined={() => void check()} />
       </Step>
       <Step index={4} title={t("superAgents.setup.github.deliveryTitle")} done={polls && Boolean(account)}>
-        <div className="segmented setup-delivery" role="group" aria-label={t("superAgents.setup.github.deliveryLabel")}>
+        <SlidingSelection className="segmented setup-delivery" selected={polls ? "poll" : "webhook"} role="group" aria-label={t("superAgents.setup.github.deliveryLabel")}>
           {(["poll", "webhook"] as const).map((delivery) => (
             <button key={delivery} type="button" className={(polls ? "poll" : "webhook") === delivery ? "active" : ""} aria-pressed={(polls ? "poll" : "webhook") === delivery}
               onClick={() => set({ delivery })}>
               {t(delivery === "poll" ? "superAgents.setup.github.deliveryPoll" : "superAgents.setup.github.deliveryWebhook")}
             </button>
           ))}
-        </div>
+        </SlidingSelection>
         {polls ? (
           <>
             <p>{t("superAgents.setup.github.pollHelp")}</p>

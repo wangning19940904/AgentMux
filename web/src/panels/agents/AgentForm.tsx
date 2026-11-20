@@ -15,6 +15,7 @@ import {
   type Trigger,
 } from "../../api";
 import { ChannelAvatar } from "../../ChannelAvatar";
+import { SlidingSelection } from "../../components/SlidingSelection";
 
 import {
   type DrawerMode,
@@ -532,7 +533,7 @@ export function AgentForm({
           <div className="field wide agent-prompt-field">
             <div className="field-label-row">
               <span>{promptView === "preview" ? t("agents.fullInjectedPrompt") : t("agents.systemPrompt")}</span>
-              <div className="markdown-mode-toggle" role="group" aria-label={t("agents.markdownViewMode")}>
+              <SlidingSelection className="segmented markdown-mode-toggle" selected={promptView} role="group" aria-label={t("agents.markdownViewMode")}>
                 <button
                   className={promptView === "edit" ? "active" : ""}
                   type="button"
@@ -551,7 +552,7 @@ export function AgentForm({
                   <Eye size={14} />
                   {t("agents.markdownPreview")}
                 </button>
-              </div>
+              </SlidingSelection>
             </div>
             {promptView === "edit" ? (
               <textarea

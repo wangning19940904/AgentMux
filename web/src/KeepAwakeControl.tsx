@@ -1,5 +1,6 @@
+import { SlidingSelection } from "./components/SlidingSelection";
 import { useEffect, useState } from "react";
-import { AlertTriangle, Coffee } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { api } from "./api";
 import type { KeepAwakeMode, KeepAwakeRequest, KeepAwakeStatus } from "./api";
 import { useI18n } from "./i18n";
@@ -172,7 +173,6 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
   return (
     <div className={`preference-keep-awake${enabled ? " active" : ""}`}>
       <label className="preference-keep-awake-title">
-        <Coffee size={16} />
         <span>
           <strong>{t("app.keepAwake")}</strong>
           <small>{summary}</small>
@@ -224,7 +224,9 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
         </div>
       )}
 
-      <div className="segmented keep-awake-mode" role="radiogroup" aria-label={t("app.keepAwakeModeLabel")}>
+      <div className="preference-keep-awake-row">
+        <span id="keep-awake-mode-label">{t("app.keepAwakeModeLabel")}</span>
+        <SlidingSelection className="segmented keep-awake-mode" selected={prefs.mode} role="radiogroup" aria-labelledby="keep-awake-mode-label">
         {(["display", "system"] as const).map((mode) => (
           <button
             key={mode}
@@ -239,6 +241,7 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
             <span>{t(mode === "display" ? "app.keepAwakeModeDisplay" : "app.keepAwakeModeSystem")}</span>
           </button>
         ))}
+        </SlidingSelection>
       </div>
 
       {simulateAvailable && (

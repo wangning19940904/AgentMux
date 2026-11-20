@@ -1,0 +1,776 @@
+/* Navigation, content and disclosures use progressively lighter surfaces. */
+
+:root {
+  --rail: #f4f4f6;
+  --app-shell: #f4f4f6;
+  --sidebar: var(--app-shell);
+  --page-canvas: #ffffff;
+  --bg: var(--page-canvas);
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f1f1f4;
+  --bg-muted: #f9f9fb;
+  --surface-subtle: #f9f9fb;
+  --text: #1c1c21;
+  --text-soft: #4b4b53;
+  --muted: #71717a;
+  --accent: #63636b;
+  --accent-strong: var(--text);
+  --accent-soft: #e9e9ee;
+  --disclosure-surface: #f4f4f6;
+  --seg-track: #e6e6eb;
+  --seg-thumb: #ffffff;
+  --seg-edge: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .08);
+
+  --fill-1: rgba(28, 28, 33, 0.035);
+  --fill-2: rgba(28, 28, 33, 0.06);
+  --fill-3: rgba(28, 28, 33, 0.10);
+
+  --shadow: none;
+  --radius-item: 10px;
+  --workspace-gutter: 24px;
+  --disclosure-duration: 250ms;
+  --disclosure-ease: cubic-bezier(.32, .72, 0, 1);
+}
+
+:root[data-theme="dark"] {
+  --rail: #1a1a1e;
+  --app-shell: #1a1a1e;
+  --page-canvas: #232327;
+  --bg-elevated: #2d2d33;
+  --bg-subtle: #2d2d33;
+  --bg-muted: #1f1f23;
+  --surface-subtle: #1f1f23;
+  --text: #ededf1;
+  --text-soft: #b9b9c1;
+  --muted: #9c9ca6;
+  --accent: #a1a1aa;
+  --accent-soft: #36363d;
+  --disclosure-surface: #2d2d33;
+  --seg-track: rgba(255, 255, 255, .035);
+  --seg-thumb: rgba(255, 255, 255, .15);
+  --seg-edge: none;
+
+  --fill-1: rgba(255, 255, 255, 0.045);
+  --fill-2: rgba(255, 255, 255, 0.075);
+  --fill-3: rgba(255, 255, 255, 0.115);
+  --shadow: none;
+}
+
+.workspace {
+  --border: transparent;
+  --border-strong: transparent;
+  background: var(--app-shell);
+}
+
+.sidebar {
+  background: var(--rail);
+}
+
+.workspace-canvas {
+  margin: 0;
+  background: var(--page-canvas);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.nav button.active {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.nav button:hover,
+.sidebar-tools button:hover,
+.brand-action-button:hover,
+.sidebar .sidebar-search:hover,
+.sidebar .sidebar-search:focus-within {
+  background: var(--fill-2);
+}
+
+button.account:hover,
+button.account[aria-current="page"] {
+  background: var(--fill-2);
+}
+
+.account::before {
+  background: var(--fill-3);
+}
+
+/* ---- Page header & content gutters ---- */
+.workspace-header {
+  flex-basis: 44px;
+  padding-inline: var(--workspace-gutter);
+  background: transparent;
+  border: 0;
+}
+
+.workspace-header h1 {
+  font-size: var(--fs-lg);
+}
+
+.main {
+  padding: 4px var(--workspace-gutter) 24px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 38%, transparent) transparent;
+}
+
+.page-stack,
+.section-grid {
+  gap: 20px;
+}
+
+.page-stack > .subtle-copy {
+  margin: 0;
+}
+
+.inline-editor {
+  display: grid;
+  gap: 12px;
+  max-width: 680px;
+  margin-bottom: 14px;
+  padding: 14px;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+
+.resource-filters {
+  flex: 1 1 320px;
+}
+
+.resource-filters input {
+  flex: 1 1 140px;
+  width: 0;
+  max-width: 240px;
+  min-width: 0;
+}
+
+.usage-page > .surface:first-child > .surface-header {
+  padding-top: 0;
+}
+
+.usage-controls {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px 16px;
+}
+
+.usage-controls > a {
+  order: 1;
+  margin-left: auto;
+}
+
+.usage-controls label {
+  gap: 6px;
+}
+
+.usage-currency-settings {
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+
+.usage-currency-settings summary {
+  width: fit-content;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.usage-currency-settings > .control-row {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+
+.usage-metrics-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 12px 14px;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+
+.usage-metrics-grid .metric-card {
+  min-height: 42px;
+  padding: 0;
+  background: transparent;
+}
+
+.observability-metrics,
+.feedback-kpis {
+  padding: 12px 14px;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+
+.observability-metrics .metric-card,
+.feedback-kpis .feedback-kpi {
+  min-height: 42px;
+  padding: 0;
+  background: transparent;
+}
+
+.observability-metrics .metric-icon {
+  background: transparent;
+  border: 0;
+}
+
+.settings-facts .observation-fact {
+  padding: 4px 0;
+  background: transparent;
+}
+
+.trace-summary-grid {
+  gap: 12px 20px;
+  padding: 12px 14px;
+  background: var(--bg-muted);
+  border-radius: 8px;
+}
+
+.trace-summary-grid .observation-fact {
+  padding: 0;
+  background: transparent;
+}
+
+.cursor-source-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+  padding: 0;
+}
+
+.cursor-source-card {
+  padding: 12px;
+}
+
+.connect-summary .agent-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 400px;
+  gap: 8px;
+}
+
+.connect-summary .summary-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+
+.main-accounts > .surface + .surface {
+  margin-top: 20px;
+}
+
+.main-accounts .agent-registry-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+@media (max-width: 820px) {
+  .usage-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .main-accounts .agent-registry-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .main-accounts .agent-registry-row .table-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* ---- Sections: unboxed ----
+ * A .surface is a page section; it has no fill and no inset, so its title
+ * and content line up with the page gutter. Dialogs keep their panel. */
+.surface:where(:not(dialog, .meeting-dialog, .remote-host-dialog, .remote-directory-picker)) {
+  min-width: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.surface:where(:not(dialog, .meeting-dialog, .remote-host-dialog, .remote-directory-picker)) > .surface-header {
+  min-height: 0;
+  padding: 6px 0 10px;
+}
+
+.surface:where(:not(dialog, .meeting-dialog, .remote-host-dialog, .remote-directory-picker)) > .surface-body {
+  padding: 0;
+}
+
+.surface:where(:not(dialog, .meeting-dialog, .remote-host-dialog, .remote-directory-picker)) > .surface-footer {
+  padding: 12px 0 0;
+  color: var(--muted);
+}
+
+.surface-header h2 {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.surface-header {
+  flex-wrap: wrap;
+}
+
+.surface-header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.main :is(th, td) {
+  padding: 9px 10px;
+}
+
+.provider-builder-head,
+.agent-drawer-actions {
+  border: 0;
+}
+
+.table-actions {
+  flex-wrap: wrap;
+}
+
+.table-actions > :is(button, a),
+.control-row > :is(button, a) {
+  flex-shrink: 0;
+}
+
+/* Stand-alone notices and placeholders that are themselves a .surface */
+.surface.surface-body,
+.surface.empty-state,
+.surface.panel-error {
+  padding: 14px 16px !important;
+  background: var(--fill-1) !important;
+  border-radius: var(--radius-item) !important;
+}
+
+/* Surfaces that are cards in a grid, not page sections */
+.surface.insight-card,
+.surface.integration-card,
+.surface.event-subscription-card,
+.surface.observability-settings-card,
+.surface.phone-app-link {
+  padding: 14px 16px;
+  background: var(--fill-1) !important;
+  border-radius: var(--radius-item) !important;
+}
+
+/* ---- Items: translucent fill instead of a frame ---- */
+.route-card,
+.connect-page .route-card,
+.summary-stat,
+.metric-card,
+.cursor-source-card,
+.agent-section,
+.framework-card,
+.tool-card,
+.tool-bundle-card,
+.tts-model-card,
+.mapping-card,
+.timeline-card,
+.feedback-kpi,
+.observation-fact,
+.meeting-list-item,
+.notification-devices li,
+.orchestration-task-list article,
+.framework-settings-item,
+.framework-install-option,
+.tool-target-choice,
+.machine-instance-option,
+.agent-channel-option,
+.meeting-channel-option,
+.channel-options,
+.session-advanced,
+.session-interaction,
+.preference-switch-row,
+.cursor-source-status-grid > div,
+.integration-coverage-grid > div,
+.trace-identifiers,
+.empty-state {
+  background: var(--fill-1);
+  border: 0;
+  border-radius: var(--radius-item);
+  box-shadow: none;
+}
+
+.agent-list button:hover,
+.meeting-list-item:hover {
+  background: var(--fill-2);
+}
+
+/* Selection used to be a coloured border; it is a stronger fill now. */
+.framework-card.installed,
+.tts-model-card.selected,
+.agent-conversation-option.selected,
+.super-agent-toggle:has(input:checked),
+.machine-instance-option[aria-pressed="true"],
+.meeting-list-item.active,
+.agent-list button.active {
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.remote-host-paths .status-badge.active,
+.model-picker-slider,
+.model-picker-slider[data-default] .model-picker-slider-fill {
+  box-shadow: none;
+}
+
+/* ---- Lists and inline details ---- */
+.main-agents .agent-registry-surface > .surface-header {
+  min-height: 0;
+  padding: 4px 0 10px;
+}
+
+.main-agents .agent-registry-list {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+}
+
+.disclosure-row.agent-registry-row,
+.disclosure-row.connect-row {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  min-width: 0;
+}
+
+.disclosure-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.disclosure-summary .agent-list-main strong {
+  display: block;
+  font-size: var(--fs-lg);
+}
+
+.disclosure-summary .disclosure-toggle {
+  min-width: 6em;
+  justify-content: flex-end;
+  color: var(--muted);
+}
+
+.disclosure-summary .disclosure-toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+.disclosure-toggle svg {
+  transition: transform var(--disclosure-duration) var(--disclosure-ease);
+}
+
+.disclosure-toggle[aria-expanded="true"] {
+  color: var(--accent-strong);
+}
+
+.disclosure-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.disclosure-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows var(--disclosure-duration) var(--disclosure-ease),
+    opacity 180ms ease,
+    visibility 0s var(--disclosure-duration);
+}
+
+.disclosure-body[aria-hidden="false"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.disclosure-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.disclosure-content {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 8px;
+  padding: 10px 12px;
+  background: var(--disclosure-surface);
+  border-radius: var(--radius-item);
+  transform: translateY(-5px);
+  transition: transform var(--disclosure-duration) var(--disclosure-ease);
+}
+
+.disclosure-body[aria-hidden="false"] .disclosure-content {
+  transform: translateY(0);
+}
+
+.disclosure-content :is(.agent-row-actions, .table-actions) {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  justify-self: start;
+  gap: 4px;
+}
+
+.disclosure-content .agent-list-meta {
+  gap: 6px 12px;
+}
+
+.disclosure-content :is(.agent-route-model-pill, .agent-work-pill, .target-badge) {
+  height: auto;
+  max-width: 100%;
+  padding-inline: 0;
+  color: var(--text-soft);
+  background: transparent;
+  font-weight: 500;
+}
+
+/* ---- Channel & trigger cards ---- */
+.connect-page .agent-mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.connect-row-summary {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connect-page .connect-row .agent-list-main {
+  flex-wrap: wrap;
+}
+
+.connect-row .agent-list-main > .channel-card-copy {
+  flex: 1 1 8em;
+  min-width: 0;
+}
+
+.connect-row .channel-health-meta {
+  padding: 0;
+}
+
+.connect-row .channel-avatar,
+.connect-page .route-card .channel-avatar,
+.provider-icon,
+.channel-avatar.fallback {
+  background: var(--fill-2);
+}
+
+.route-card > .session-notice {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.main thead th {
+  background: var(--bg-subtle);
+}
+
+/* ---- Controls ---- */
+.ghost-action,
+.meeting-dialog-close,
+.preference-action,
+.markdown-mode-toggle,
+.model-picker-trigger,
+.runtime-select-trigger {
+  color: var(--text-soft);
+  background: var(--fill-2);
+}
+
+.ghost-action:hover,
+.meeting-dialog-close:hover,
+.preference-action:hover,
+.model-picker-trigger:hover,
+.runtime-select-trigger:hover {
+  color: var(--text);
+  background: var(--fill-3);
+}
+
+.ghost-action.active {
+  background: var(--fill-3);
+}
+
+.workspace .ghost-action {
+  background: transparent;
+  border-color: transparent;
+}
+
+.workspace .ghost-action:not(:disabled):hover,
+.workspace .ghost-action.active {
+  background: var(--fill-2);
+}
+
+.workspace :is(button, summary, a[href]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea,
+.search-box,
+.agent-registry-search,
+.tools-search,
+.super-agent-chat-search {
+  background-color: var(--fill-2);
+  border: 0;
+  box-shadow: none;
+}
+
+/* Inputs inside a filled search shell are transparent. */
+.agent-registry-search input,
+.tools-search input,
+.search-box input,
+.sidebar-search input,
+.super-agent-chat-search input {
+  background: transparent !important;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus,
+.agent-registry-search:focus-within,
+.tools-search:focus-within,
+.search-box:focus-within {
+  background-color: var(--page-canvas);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.agent-registry-search input:focus,
+.tools-search input:focus,
+.search-box input:focus,
+.sidebar-search input:focus {
+  box-shadow: none;
+}
+
+select {
+  appearance: none;
+  min-height: var(--control-h);
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px;
+}
+
+.segmented,
+.trend-dimension-toggle {
+  background: var(--fill-2);
+}
+
+.segmented button.active,
+.trend-dimension-toggle button.active,
+:root[data-theme="dark"] .segmented button.active {
+  background: var(--page-canvas);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+:root[data-theme="dark"] .segmented button.active,
+:root[data-theme="dark"] .trend-dimension-toggle button.active {
+  background: var(--fill-3);
+}
+
+.agent-filter-chip {
+  padding-inline: 3px;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+}
+
+.agent-registry-summary .agent-filter-chip:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-status-switch {
+  background: var(--fill-3);
+  border: 0;
+  box-shadow: none;
+}
+
+.agent-status-switch.enabled {
+  background: color-mix(in srgb, var(--green) 42%, var(--green-soft));
+}
+
+.agent-status-switch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+/* ---- Badges ---- */
+.pill,
+.system-pill,
+.target-badge,
+.status-badge {
+  background: var(--fill-2);
+}
+
+.pill.on,
+.status-badge.success,
+.system-pill:not(.warning) {
+  background: var(--green-soft);
+}
+
+.pill.off,
+.status-badge.danger {
+  background: var(--red-soft);
+}
+
+.status-badge.warning,
+.system-pill.warning {
+  background: var(--amber-soft);
+}
+
+.pill.accent {
+  background: var(--accent-soft);
+}
+
+/* ---- Content blocks that used a side rule ---- */
+.markdown-preview blockquote,
+.message-content blockquote {
+  padding: 8px 12px;
+  background: var(--fill-1);
+  border-radius: 8px;
+}
+
+.markdown-preview pre,
+.message-content pre,
+.markdown-preview code,
+.hook-endpoint code,
+.remote-pairing-command code,
+.cli-auth-code code,
+.payload-preview,
+.tool-payload,
+.panel-error pre {
+  background: var(--fill-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-toggle svg,
+  .disclosure-body,
+  .disclosure-content {
+    transition: none;
+  }
+}
+
+/* ---- Floating layers keep elevation (shadow, not a frame) ---- */
+.sidebar-search-results,
+.sidebar-preference-popover,
+.runtime-select-options,
+.model-picker-popover,
+.provider-drawer,
+.agent-drawer,
+.remote-directory-picker,
+.meeting-dialog,
+.remote-host-dialog,
+dialog.surface {
+  background: var(--bg-elevated);
+  border: 0;
+  box-shadow: var(--shadow-floating);
+}

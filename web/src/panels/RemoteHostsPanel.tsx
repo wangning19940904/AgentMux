@@ -1,3 +1,4 @@
+import { SlidingSelection } from "../components/SlidingSelection";
 import {
   CheckCircle2,
   Fingerprint,
@@ -631,292 +632,263 @@ export function RemoteHostsPanel({ addRequest = 0 }: { addRequest?: number }) {
         />
       )}
 
-      {hostDialogOpen && form && (
+      {hostDialogOpen && (
         <section
           aria-labelledby="remote-host-dialog-title"
           aria-modal="true"
-          className="surface remote-host-dialog"
+          className={`surface remote-host-dialog${form ? "" : " remote-discovery-dialog"}`}
           role="dialog"
         >
           <div className="surface-header">
             <div>
-              <h2 id="remote-host-dialog-title">{form.id ? t("remote.edit") : t("remote.add")}</h2>
-              <p className="subtle-copy">{t("remote.formHint")}</p>
+              <h2 id="remote-host-dialog-title">
+                {replacementHost ? t("remote.changeSSHRoute") : t(form?.id ? "remote.edit" : "remote.add")}
+              </h2>
+              <p className="subtle-copy">
+                {replacementHost
+                  ? t("remote.changeSSHRouteHint", { name: replacementHost.name })
+                  : t(form ? "remote.formHint" : "remote.discoveredHint")}
+              </p>
             </div>
-            <button className="ghost-action" onClick={closeHostDialog} aria-label={t("common.close")}>
-              <X size={15} />
-              {t("common.close")}
-            </button>
+            <div className="remote-discovery-summary">
+              {!form && <>
+                <span className="pill">{discoveredHosts.length}</span>
+                <button className="ghost-action" type="button" disabled={discoveryLoading || Boolean(importingName)}
+                  onClick={() => void loadDiscovered()}>
+                  <RefreshCw size={14} className={discoveryLoading ? "spin" : ""} />
+                  {t("common.refresh")}
+                </button>
+              </>}
+              <button className="ghost-action" type="button" disabled={Boolean(importingName)}
+                onClick={closeHostDialog} aria-label={t("common.close")}>
+                <X size={15} />
+                {t("common.close")}
+              </button>
+            </div>
           </div>
-          {!form.id && (
-            <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
-              <button
-                aria-selected="false"
-                onClick={() => setForm(null)}
-                role="tab"
-                type="button"
-              >
+          {!form?.id && !replacementHost && (
+            <SlidingSelection className="segmented remote-host-dialog-tabs" selected={form ? "manual" : "discovered"}
+              role="tablist" aria-label={t("remote.add")}>
+              <button type="button" role="tab" className={form ? "" : "active"} aria-selected={!form}
+                tabIndex={form ? -1 : 0} onClick={() => setForm(null)}>
                 {t("remote.discovered")}
               </button>
-              <button aria-selected="true" className="active" role="tab" type="button">
+              <button type="button" role="tab" className={form ? "active" : ""} aria-selected={Boolean(form)}
+                disabled={Boolean(importingName)} tabIndex={form ? 0 : -1}
+                onClick={() => setForm((current) => current ?? emptyForm())}>
                 {t("remote.manualAdd")}
               </button>
-            </div>
+            </SlidingSelection>
           )}
-          {error && <div className="remote-feedback error">{error}</div>}
-          <form className="surface-body remote-host-form" onSubmit={save}>
-            <div className="field-grid">
-              <label className="field">
-                <span>{t("common.name")}</span>
-                <input
-                  required
-                  value={form.name}
-                  placeholder={t("remote.namePlaceholder")}
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>{t("remote.sshHost")}</span>
-                <input
-                  required
-                  value={form.host}
-                  placeholder="192.168.1.20"
-                  onChange={(event) => setForm({ ...form, host: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>{t("remote.sshPort")}</span>
-                <input
-                  required
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={form.port}
-                  onChange={(event) => setForm({ ...form, port: Number(event.target.value) })}
-                />
-              </label>
-              <label className="field">
-                <span>{t("remote.sshUser")}</span>
-                <input
-                  value={form.user}
-                  placeholder={t("remote.currentUser")}
-                  onChange={(event) => setForm({ ...form, user: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>{t("remote.keyPath")}</span>
-                <input
-                  value={form.key_path}
-                  placeholder="~/.ssh/id_ed25519"
-                  onChange={(event) => setForm({ ...form, key_path: event.target.value })}
-                />
-                <small>{t("remote.keyPathHint")}</small>
-              </label>
+          {form ? (
+            <>
+            {error && <div className="remote-feedback error">{error}</div>}
+            <form className="surface-body remote-host-form" onSubmit={save}>
+              <div className="field-grid">
+                <label className="field">
+                  <span>{t("common.name")}</span>
+                  <input
+                    required
+                    value={form.name}
+                    placeholder={t("remote.namePlaceholder")}
+                    onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("remote.sshHost")}</span>
+                  <input
+                    required
+                    value={form.host}
+                    placeholder="192.168.1.20"
+                    onChange={(event) => setForm({ ...form, host: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("remote.sshPort")}</span>
+                  <input
+                    required
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.port}
+                    onChange={(event) => setForm({ ...form, port: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("remote.sshUser")}</span>
+                  <input
+                    value={form.user}
+                    placeholder={t("remote.currentUser")}
+                    onChange={(event) => setForm({ ...form, user: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("remote.keyPath")}</span>
+                  <input
+                    value={form.key_path}
+                    placeholder="~/.ssh/id_ed25519"
+                    onChange={(event) => setForm({ ...form, key_path: event.target.value })}
+                  />
+                  <small>{t("remote.keyPathHint")}</small>
+                </label>
+                <label className="field">
+                  <span>{t("remote.remoteAddr")}</span>
+                  <input
+                    required
+                    value={form.remote_addr}
+                    placeholder="127.0.0.1:8765"
+                    onChange={(event) => setForm({ ...form, remote_addr: event.target.value })}
+                  />
+                  <small>{t("remote.remoteAddrHint")}</small>
+                </label>
+                <label className="field remote-token-field">
+                  <span>{t("remote.apiToken")}</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.api_token}
+                    placeholder={form.api_token_set ? t("remote.tokenSaved") : t("remote.tokenOptional")}
+                    onChange={(event) => setForm({ ...form, api_token: event.target.value })}
+                  />
+                  <small>{t("remote.apiTokenHint")}</small>
+                </label>
+              </div>
+              {form.api_token_set && (
+                <label className="switch-row remote-clear-token">
+                  <span>{t("remote.clearToken")}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.clear_api_token}
+                    onChange={(event) => setForm({ ...form, clear_api_token: event.target.checked })}
+                  />
+                </label>
+              )}
+              <div className="remote-form-actions">
+                {editedHost?.trusted && (
+                  <button className="ghost-action" type="button" onClick={() => openImportDialog(editedHost)}>
+                    {t("remote.changeSSHRoute")}
+                  </button>
+                )}
+                <button className="action" type="submit">
+                  <Save size={15} />
+                  {t("common.save")}
+                </button>
+              </div>
+            </form>
+            </>
+          ) : (
+            <>
+            <div className="surface-body remote-host-form">
               <label className="field">
                 <span>{t("remote.remoteAddr")}</span>
                 <input
-                  required
-                  value={form.remote_addr}
+                  value={importAddr}
                   placeholder="127.0.0.1:8765"
-                  onChange={(event) => setForm({ ...form, remote_addr: event.target.value })}
+                  disabled={Boolean(importingName)}
+                  onChange={(event) => {
+                    setImportAddr(event.target.value);
+                    setPendingImportFingerprints({});
+                  }}
                 />
                 <small>{t("remote.remoteAddrHint")}</small>
               </label>
-              <label className="field remote-token-field">
-                <span>{t("remote.apiToken")}</span>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={form.api_token}
-                  placeholder={form.api_token_set ? t("remote.tokenSaved") : t("remote.tokenOptional")}
-                  onChange={(event) => setForm({ ...form, api_token: event.target.value })}
-                />
-                <small>{t("remote.apiTokenHint")}</small>
-              </label>
             </div>
-            {form.api_token_set && (
-              <label className="switch-row remote-clear-token">
-                <span>{t("remote.clearToken")}</span>
-                <input
-                  type="checkbox"
-                  checked={form.clear_api_token}
-                  onChange={(event) => setForm({ ...form, clear_api_token: event.target.checked })}
-                />
-              </label>
+            {(message || error) && (
+              <div className={`remote-feedback ${error ? "error" : "success"}`}>
+                {error || message}
+              </div>
             )}
-            <div className="remote-form-actions">
-              {editedHost?.trusted && (
-                <button className="ghost-action" type="button" onClick={() => openImportDialog(editedHost)}>
-                  {t("remote.changeSSHRoute")}
-                </button>
-              )}
-              <button className="action" type="submit">
-                <Save size={15} />
-                {t("common.save")}
-              </button>
-            </div>
-          </form>
-        </section>
-      )}
-
-      {hostDialogOpen && !form && (
-      <section
-        aria-labelledby="remote-host-dialog-title"
-        aria-modal="true"
-        className="surface remote-host-dialog remote-discovery-dialog"
-        role="dialog"
-      >
-        <div className="surface-header">
-          <div>
-            <h2 id="remote-host-dialog-title">
-              {replacementHost ? t("remote.changeSSHRoute") : t("remote.add")}
-            </h2>
-            <p className="subtle-copy">
-              {replacementHost
-                ? t("remote.changeSSHRouteHint", { name: replacementHost.name })
-                : t("remote.discoveredHint")}
-            </p>
-          </div>
-          <div className="remote-discovery-summary">
-            <span className="pill">{discoveredHosts.length}</span>
-            <button
-              className="ghost-action"
-              type="button"
-              disabled={discoveryLoading || Boolean(importingName)}
-              onClick={() => void loadDiscovered()}
-            >
-              <RefreshCw size={14} className={discoveryLoading ? "spin" : ""} />
-              {t("common.refresh")}
-            </button>
-            <button className="ghost-action" disabled={Boolean(importingName)} onClick={closeHostDialog} aria-label={t("common.close")}>
-              <X size={15} />
-              {t("common.close")}
-            </button>
-          </div>
-        </div>
-        {!replacementHost && <div className="remote-host-dialog-tabs" role="tablist" aria-label={t("remote.add")}>
-          <button aria-selected="true" className="active" role="tab" type="button">
-            {t("remote.discovered")}
-          </button>
-          <button
-            aria-selected="false"
-            disabled={Boolean(importingName)}
-            onClick={() => setForm(emptyForm())}
-            role="tab"
-            type="button"
-          >
-            {t("remote.manualAdd")}
-          </button>
-        </div>}
-        <div className="surface-body remote-host-form">
-          <label className="field">
-            <span>{t("remote.remoteAddr")}</span>
-            <input
-              value={importAddr}
-              placeholder="127.0.0.1:8765"
-              disabled={Boolean(importingName)}
-              onChange={(event) => {
-                setImportAddr(event.target.value);
-                setPendingImportFingerprints({});
-              }}
-            />
-            <small>{t("remote.remoteAddrHint")}</small>
-          </label>
-        </div>
-        {(message || error) && (
-          <div className={`remote-feedback ${error ? "error" : "success"}`}>
-            {error || message}
-          </div>
-        )}
-        {!discoveryLoading && discoveredHosts.some((host) => host.proxy_jump || host.proxy_command) && (
-          <div className="remote-proxy-note">
-            <ShieldAlert size={17} />
-            <div>
-              <strong>{t("remote.proxyRequired")}</strong>
-              <span>{t("remote.proxySupported")}</span>
-            </div>
-          </div>
-        )}
-        <div className="remote-host-list remote-discovered-list">
-          {discoveryLoading && <div className="empty-state">{t("common.loading")}</div>}
-          {!discoveryLoading && discoveryError && (
-            <div className="remote-discovery-error">
-              <ShieldAlert size={17} />
-              <span>{t("remote.discoveryError")}: {discoveryError}</span>
-            </div>
-          )}
-          {!discoveryLoading && !discoveryError && discoveredHosts.length === 0 && (
-            <div className="empty-state remote-discovery-empty">
-              <KeyRound size={25} />
-              <strong>{t("remote.noneDiscovered")}</strong>
-              <span>{t("remote.noneDiscoveredHint")}</span>
-            </div>
-          )}
-          {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
-            const configured = replacementHost ? undefined : configuredHost(host);
-            const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
-            const pendingFingerprint = pendingImportFingerprints[host.name];
-            const importing = importingName === host.name;
-            return (
-              <article key={host.name} className="remote-host-card remote-discovered-card">
-                <div className="remote-host-icon">
-                  <KeyRound size={19} />
+            {!discoveryLoading && discoveredHosts.some((host) => host.proxy_jump || host.proxy_command) && (
+              <div className="remote-proxy-note">
+                <ShieldAlert size={17} />
+                <div>
+                  <strong>{t("remote.proxyRequired")}</strong>
+                  <span>{t("remote.proxySupported")}</span>
                 </div>
-                <div className="remote-host-main">
-                  <header>
-                    <div>
-                      <strong>{host.name}</strong>
-                      <span>{host.user}@{host.host}:{host.port}</span>
+              </div>
+            )}
+            <div className="remote-host-list remote-discovered-list">
+              {discoveryLoading && <div className="empty-state">{t("common.loading")}</div>}
+              {!discoveryLoading && discoveryError && (
+                <div className="remote-discovery-error">
+                  <ShieldAlert size={17} />
+                  <span>{t("remote.discoveryError")}: {discoveryError}</span>
+                </div>
+              )}
+              {!discoveryLoading && !discoveryError && discoveredHosts.length === 0 && (
+                <div className="empty-state remote-discovery-empty">
+                  <KeyRound size={25} />
+                  <strong>{t("remote.noneDiscovered")}</strong>
+                  <span>{t("remote.noneDiscoveredHint")}</span>
+                </div>
+              )}
+              {!discoveryLoading && !discoveryError && discoveredHosts.map((host) => {
+                const configured = replacementHost ? undefined : configuredHost(host);
+                const requiresProxy = Boolean(host.proxy_jump || host.proxy_command);
+                const pendingFingerprint = pendingImportFingerprints[host.name];
+                const importing = importingName === host.name;
+                return (
+                  <article key={host.name} className="remote-host-card remote-discovered-card">
+                    <div className="remote-host-icon">
+                      <KeyRound size={19} />
                     </div>
-                    <span className={`status-badge ${requiresProxy ? "warning" : "neutral"}`}>
-                      {requiresProxy ? <ShieldAlert size={13} /> : <CheckCircle2 size={13} />}
-                      {requiresProxy ? t("remote.proxyRequired") : t("remote.readyToImport")}
-                    </span>
-                  </header>
-                  <div className="remote-host-facts">
-                    <span><KeyRound size={13} />{host.key_path || t("remote.agentOrDefaultKey")}</span>
-                    <span>{host.source}</span>
-                    {host.proxy_jump && <span>ProxyJump: {host.proxy_jump}</span>}
-                    {host.proxy_command && <span>ProxyCommand</span>}
-                  </div>
-                  {pendingFingerprint && (
-                    <div className="host-key-confirmation">
-                      <Fingerprint size={18} />
-                      <div>
-                        <strong>{t("remote.confirmFingerprint")}</strong>
-                        <code>{pendingFingerprint}</code>
-                        <span>{t("remote.confirmFingerprintHint")}</span>
+                    <div className="remote-host-main">
+                      <header>
+                        <div>
+                          <strong>{host.name}</strong>
+                          <span>{host.user}@{host.host}:{host.port}</span>
+                        </div>
+                        <span className={`status-badge ${requiresProxy ? "warning" : "neutral"}`}>
+                          {requiresProxy ? <ShieldAlert size={13} /> : <CheckCircle2 size={13} />}
+                          {requiresProxy ? t("remote.proxyRequired") : t("remote.readyToImport")}
+                        </span>
+                      </header>
+                      <div className="remote-host-facts">
+                        <span><KeyRound size={13} />{host.key_path || t("remote.agentOrDefaultKey")}</span>
+                        <span>{host.source}</span>
+                        {host.proxy_jump && <span>ProxyJump: {host.proxy_jump}</span>}
+                        {host.proxy_command && <span>ProxyCommand</span>}
                       </div>
-                      <button className="action" disabled={Boolean(importingName)} onClick={() => void importDiscovered(host, true)}>
-                        {t("remote.trustInstallAndConnect")}
+                      {pendingFingerprint && (
+                        <div className="host-key-confirmation">
+                          <Fingerprint size={18} />
+                          <div>
+                            <strong>{t("remote.confirmFingerprint")}</strong>
+                            <code>{pendingFingerprint}</code>
+                            <span>{t("remote.confirmFingerprintHint")}</span>
+                          </div>
+                          <button className="action" disabled={Boolean(importingName)} onClick={() => void importDiscovered(host, true)}>
+                            {t("remote.trustInstallAndConnect")}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="remote-host-actions">
+                      <button
+                        className={configured?.trusted ? "ghost-action" : "action"}
+                        type="button"
+                        disabled={Boolean(configured?.trusted) || Boolean(importingName)}
+                        onClick={() => void importDiscovered(host)}
+                      >
+                        {configured?.trusted ? <CheckCircle2 size={14} /> : <Plus size={14} />}
+                        {importing
+                          ? t("remote.importing")
+                          : replacementHost
+                            ? t("remote.useSSHRoute")
+                            : configured?.trusted
+                            ? t("remote.imported")
+                            : configured
+                              ? t("remote.finishImport")
+                              : t("remote.import")}
                       </button>
                     </div>
-                  )}
-                </div>
-                <div className="remote-host-actions">
-                  <button
-                    className={configured?.trusted ? "ghost-action" : "action"}
-                    type="button"
-                    disabled={Boolean(configured?.trusted) || Boolean(importingName)}
-                    onClick={() => void importDiscovered(host)}
-                  >
-                    {configured?.trusted ? <CheckCircle2 size={14} /> : <Plus size={14} />}
-                    {importing
-                      ? t("remote.importing")
-                      : replacementHost
-                        ? t("remote.useSSHRoute")
-                        : configured?.trusted
-                        ? t("remote.imported")
-                        : configured
-                          ? t("remote.finishImport")
-                          : t("remote.import")}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
+                  </article>
+                );
+              })}
+            </div>
+            </>
+          )}
+        </section>
       )}
 
       <section className="surface remote-machines-surface">

@@ -16,7 +16,7 @@
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -46,25 +46,25 @@
   margin-bottom: 8px;
   padding: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
 .notification-notice {
   color: var(--green);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
 }
 
 .notification-error {
   color: var(--red);
-  font-size: 12.5px;
+  font-size: var(--fs-md);
 }
 
 .notification-devices h3,
 .notification-install h3 {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -100,7 +100,7 @@
 
 .notification-devices li small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 
@@ -119,7 +119,7 @@
 
 .phone-app-link.inline {
   margin: 0 18px 18px;
-  font-size: 13px;
+  font-size: var(--fs-md);
 }
 
 .phone-app-link.inline header .table-actions {
@@ -152,7 +152,7 @@
   gap: 4px;
   margin: 0;
   padding-left: 18px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
@@ -161,7 +161,7 @@
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 4px 12px;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-md);
 }
 
 .phone-app-link-facts dt {
@@ -187,6 +187,6 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
 }

@@ -8,4 +8,7 @@
 @import "./styles/observability.css";
 @import "./styles/design-system.css";
 @import "./styles/notifications.css";
+@import "./styles/flat.css";
 @import "./styles/mobile.css";
+@import "./styles/overview.css";
+@import "./styles/navigation-settings.css";

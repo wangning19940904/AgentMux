@@ -28,11 +28,11 @@ export function FrameworkHealthRecordView({ record }: { record?: FrameworkHealth
   const resets = record.resets_at ? new Date(record.resets_at).toLocaleString() : "";
   return (
     <span className="framework-health-record" data-state={state}>
-      <span className={`framework-health-state ${STATE_CLASS[state] ?? "muted"}`}>
+      <span className={`framework-health-state ${STATE_CLASS[state] ?? "muted"}`} title={record.reason}>
         <StateIcon state={state} />
         <span className="framework-health-label">{t(`frameworks.health.state.${state}`)}</span>
       </span>
-      {state !== "ok" && record.reason && (
+      {state !== "ok" && state !== "unknown" && record.reason && (
         <small className="framework-health-detail" title={record.reason}>{record.reason}</small>
       )}
       {resets && state === "usage_limit" && <small className="muted">{t("frameworks.health.resetsAt", { time: resets })}</small>}
