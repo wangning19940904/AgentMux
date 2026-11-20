@@ -679,6 +679,17 @@ token 架构：管理面优先把一次性 Console session 嵌入 sandboxed ifra
 | 桌面应用 | `make desktop` | 需要 Wails v2 工具链 |
 | macOS 菜单栏 | `make menubar` | SwiftUI, 仅 macOS |
 | 签名 macOS | `make sign-macos` | 需要 Developer ID + notarytool profile |
+| 全量检查 | `make check` | Go 测试、vet、staticcheck、`go mod tidy -diff`、WebUI 测试与构建 |
+| 按改动检查 | `make check BASE=main` | 只跑自与 `main` 的 merge base 以来改动所需的检查,并行执行 |
+
+`make check BASE=<ref>` 收集自 merge base 以来已提交、未提交和未跟踪的文件，
+按 [`scripts/checkplan/plan.go`](scripts/checkplan/plan.go) 中唯一的路径→检查表
+选出检查，先打印计划再并行运行，最后给出通过/失败汇总：Go 改动只测改动的包、
+导入它们的包以及测试导入它们的包，并总是带上 `internal/archguard`；`go.mod`/`go.sum`
+改动跑 `tidy-check` 与全部 Go 检查；`web/` 改动跑 WebUI 测试与构建；纯文档改动不跑
+检查(仓库暂无链接检查)；`Makefile`、检查表本身或 CI 配置改动跑全部检查。
+`make check-plan BASE=<ref>` 只打印计划，`ALL=1` 或不带 `BASE` 保持全量检查。
+CI 对 pull request 用同一张表(`BASE=origin/<目标分支>`)，推送到 main 仍跑全量。
 
 本地 macOS 调试安装统一覆盖 `/Applications/AgentMux.app`，按
 [本地安装约定](AGENTS.md) 完整替换应用包。需要回滚备份时只保留一个 ZIP；

@@ -34,6 +34,10 @@ jobs:
       AGENTMUX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A pull request checks only what its changes need, which takes the
+          # merge base with the target branch.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -49,4 +53,8 @@ jobs:
         working-directory: web
         run: npm ci --registry=https://registry.npmjs.org
       - name: Check Go and Web
-        run: make check
+        # Pull requests run the checks their changes need (scripts/checkplan);
+        # pushes to main run every check.
+        env:
+          CHECK_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: make check BASE="$CHECK_BASE"
