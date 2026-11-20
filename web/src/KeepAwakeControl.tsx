@@ -1,6 +1,6 @@
 import { SlidingSelection } from "./components/SlidingSelection";
 import { useEffect, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "./api";
 import type { KeepAwakeMode, KeepAwakeRequest, KeepAwakeStatus } from "./api";
 import { useI18n } from "./i18n";
@@ -10,6 +10,8 @@ const MAX_MINUTES = 1440;
 /** Preset durations in minutes; 0 keeps the Mac awake until turned off. */
 export const KEEP_AWAKE_PRESETS = [30, 60, 120, 240, 480, 0] as const;
 const CUSTOM = "custom";
+/** The minutes column of the custom picker steps in 5-minute increments. */
+const MINUTE_STEP = 5;
 
 export interface KeepAwakePrefs {
   duration: number;
@@ -63,12 +65,127 @@ function formatRemaining(seconds: number, t: ReturnType<typeof useI18n>["t"]): s
     : t("app.keepAwakeRemainingHoursMinutes", { hours, minutes: rest });
 }
 
+function clampMinutes(total: number): number {
+  return Math.min(MAX_MINUTES, Math.max(0, total));
+}
+
+/** Keeps the last two digits typed, so typing over a padded "05" still works. */
+function parseDigits(raw: string): number {
+  const digits = raw.replace(/\D/g, "").slice(-2);
+  return digits ? Number(digits) : 0;
+}
+
+interface DurationPickerProps {
+  /** Draft duration in minutes; not applied until confirmed. */
+  value: number;
+  disabled: boolean;
+  canConfirm: boolean;
+  onChange: (minutes: number) => void;
+  onConfirm: () => void;
+}
+
+/** An hours and minutes picker whose value only takes effect on Confirm. */
+export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange, onConfirm }: DurationPickerProps) {
+  const { t } = useI18n();
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+
+  const columns = [
+    {
+      key: "hours",
+      name: t("app.keepAwakePickerHours"),
+      unit: t("app.hoursShort"),
+      display: String(hours),
+      canDecrease: hours > 0,
+      canIncrease: value < MAX_MINUTES,
+      step: (direction: 1 | -1) => onChange(clampMinutes(value + direction * 60)),
+      set: (next: number) => onChange(clampMinutes(next * 60 + minutes)),
+    },
+    {
+      key: "minutes",
+      name: t("app.keepAwakePickerMinutes"),
+      unit: t("app.minutesShort"),
+      display: String(minutes).padStart(2, "0"),
+      canDecrease: value > 0,
+      canIncrease: value < MAX_MINUTES,
+      // Snap to the 5-minute grid, carrying into the hours column.
+      step: (direction: 1 | -1) => onChange(clampMinutes(
+        direction > 0
+          ? Math.floor(value / MINUTE_STEP) * MINUTE_STEP + MINUTE_STEP
+          : Math.ceil(value / MINUTE_STEP) * MINUTE_STEP - MINUTE_STEP,
+      )),
+      set: (next: number) => onChange(clampMinutes(hours * 60 + Math.min(next, 59))),
+    },
+  ];
+
+  return (
+    <div className="keep-awake-picker" role="group" aria-label={t("app.keepAwakeDuration")}>
+      <div className="keep-awake-picker-columns">
+        {columns.map((column, index) => (
+          <div key={column.key} className="keep-awake-picker-column-wrap">
+            {index > 0 && <span className="keep-awake-picker-separator" aria-hidden="true">:</span>}
+            <div className="keep-awake-picker-column">
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={t("app.keepAwakeIncrease", { unit: column.name })}
+                disabled={disabled || !column.canIncrease}
+                onClick={() => column.step(1)}
+              >
+                <ChevronUp size={14} />
+              </button>
+              <label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={column.display}
+                  disabled={disabled}
+                  aria-label={column.name}
+                  onFocus={(event) => event.target.select()}
+                  onChange={(event) => column.set(parseDigits(event.target.value))}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                      event.preventDefault();
+                      column.step(event.key === "ArrowUp" ? 1 : -1);
+                    } else if (event.key === "Enter" && canConfirm) {
+                      onConfirm();
+                    }
+                  }}
+                />
+                <span>{column.unit}</span>
+              </label>
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={t("app.keepAwakeDecrease", { unit: column.name })}
+                disabled={disabled || !column.canDecrease}
+                onClick={() => column.step(-1)}
+              >
+                <ChevronDown size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="keep-awake-picker-actions">
+        <button type="button" className="action" disabled={disabled || !canConfirm} onClick={onConfirm}>
+          <Check size={13} />
+          <span>{t("app.keepAwakeConfirm")}</span>
+        </button>
+        {value < 1 && <small className="keep-awake-picker-hint">{t("app.keepAwakeDurationTooShort")}</small>}
+      </div>
+    </div>
+  );
+}
+
 export function KeepAwakeControl({ onError }: { onError: (message: string) => void }) {
   const { t } = useI18n();
   const [status, setStatus] = useState<KeepAwakeStatus | null>(null);
   const [prefs, setPrefs] = useState<KeepAwakePrefs>(() => loadKeepAwakePrefs());
   const [custom, setCustom] = useState(() => !KEEP_AWAKE_PRESETS.includes(prefs.duration as typeof KEEP_AWAKE_PRESETS[number]));
-  const [customMinutes, setCustomMinutes] = useState(() => String(prefs.duration || 90));
+  // The custom picker's value, applied only when the user confirms it.
+  const [draft, setDraft] = useState(() => prefs.duration || 90);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -87,7 +204,7 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
           setPrefs(running);
           const isPreset = KEEP_AWAKE_PRESETS.includes(running.duration as typeof KEEP_AWAKE_PRESETS[number]);
           setCustom(!isPreset);
-          if (!isPreset) setCustomMinutes(String(running.duration));
+          if (!isPreset) setDraft(running.duration);
         }
       })
       .catch((error) => {
@@ -135,20 +252,22 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
 
   function selectDuration(value: string) {
     if (value === CUSTOM) {
+      // Start the picker from the current duration; nothing changes until Confirm.
       setCustom(true);
-      const minutes = Number(customMinutes);
-      if (Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_MINUTES) change({ duration: minutes });
+      if (prefs.duration > 0) setDraft(prefs.duration);
       return;
     }
+    const minutes = Number(value);
     setCustom(false);
-    change({ duration: Number(value) });
+    if (minutes > 0) setDraft(minutes);
+    change({ duration: minutes });
   }
 
-  const parsedCustom = Number(customMinutes);
-  const customValid = Number.isInteger(parsedCustom) && parsedCustom >= 1 && parsedCustom <= MAX_MINUTES;
+  const draftValid = draft >= 1 && draft <= MAX_MINUTES;
+  const draftPending = custom && draftValid && draft !== prefs.duration;
 
-  function commitCustom() {
-    if (customValid && parsedCustom !== prefs.duration) change({ duration: parsedCustom });
+  function confirmDraft() {
+    if (draftPending) change({ duration: draft });
   }
 
   if (!status?.supported) return null;
@@ -181,9 +300,10 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
           type="checkbox"
           role="switch"
           checked={enabled}
-          disabled={busy || (!enabled && custom && !customValid)}
+          disabled={busy}
           aria-label={t("app.keepAwake")}
-          onChange={(event) => void apply(event.target.checked, prefs)}
+          // Turning on with an unconfirmed custom duration uses what the picker shows.
+          onChange={(event) => void apply(event.target.checked, event.target.checked && draftPending ? { ...prefs, duration: draft } : prefs)}
         />
       </label>
 
@@ -202,26 +322,13 @@ export function KeepAwakeControl({ onError }: { onError: (message: string) => vo
         </select>
       </div>
       {custom && (
-        <div className="preference-keep-awake-controls">
-          <label>
-            <input
-              type="number"
-              min={1}
-              max={MAX_MINUTES}
-              step={1}
-              value={customMinutes}
-              disabled={busy}
-              aria-label={t("app.keepAwakeDuration")}
-              aria-invalid={!customValid}
-              onChange={(event) => setCustomMinutes(event.target.value)}
-              onBlur={commitCustom}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") commitCustom();
-              }}
-            />
-            <span>{t("app.minutesShort")}</span>
-          </label>
-        </div>
+        <KeepAwakeDurationPicker
+          value={draft}
+          disabled={busy}
+          canConfirm={draftPending}
+          onChange={setDraft}
+          onConfirm={confirmDraft}
+        />
       )}
 
       <div className="preference-keep-awake-row">

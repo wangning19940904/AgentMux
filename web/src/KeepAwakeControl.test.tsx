@@ -90,6 +90,70 @@ it("toggles keep-awake and re-applies preference changes while it is on", async 
   }
 });
 
+it("applies a custom hours and minutes duration only on Confirm", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.spyOn(api, "keepAwakeStatus").mockResolvedValue(idle);
+  const setKeepAwake = vi.spyOn(api, "setKeepAwake").mockImplementation(async (request) => ({
+    ...idle,
+    enabled: request.enabled,
+    duration_minutes: request.duration_minutes ?? 0,
+    remaining_seconds: (request.duration_minutes ?? 0) * 60,
+  }));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const input = (name: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!;
+  const button = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+  const confirm = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === "Confirm")!;
+  const stored = () => JSON.parse(localStorage.getItem("agentmux.keepAwake.prefs") || "{}");
+  try {
+    await act(async () => {
+      root.render(<I18nProvider language="en"><KeepAwakeControl onError={() => undefined} /></I18nProvider>);
+    });
+    const select = container.querySelector<HTMLSelectElement>("select")!;
+    await act(async () => {
+      select.value = "custom";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    // The picker starts from the current duration, so there is nothing to confirm yet.
+    expect(input("Hours").value).toBe("1");
+    expect(input("Minutes").value).toBe("00");
+    expect(confirm().disabled).toBe(true);
+
+    await act(async () => { button("Increase Hours").click(); });
+    await act(async () => { button("Decrease Minutes").click(); });
+    expect(input("Hours").value).toBe("1");
+    expect(input("Minutes").value).toBe("55");
+    expect(stored().duration).toBeUndefined();
+
+    // While off, Confirm saves the duration for the next time it is turned on.
+    await act(async () => { confirm().click(); });
+    expect(setKeepAwake).not.toHaveBeenCalled();
+    expect(stored().duration).toBe(115);
+    expect(confirm().disabled).toBe(true);
+
+    await act(async () => { container.querySelector<HTMLInputElement>('input[role="switch"]')!.click(); });
+    expect(setKeepAwake).toHaveBeenLastCalledWith({ enabled: true, duration_minutes: 115, mode: "display", simulate_activity: false });
+
+    // While on, Confirm re-applies the new duration immediately.
+    await act(async () => { button("Decrease Hours").click(); });
+    expect(setKeepAwake).toHaveBeenCalledTimes(1);
+    await act(async () => { confirm().click(); });
+    expect(setKeepAwake).toHaveBeenLastCalledWith({ enabled: true, duration_minutes: 55, mode: "display", simulate_activity: false });
+
+    // Zero is not a valid custom duration.
+    await act(async () => {
+      const minutes = input("Minutes");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(minutes, "0");
+      minutes.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input("Minutes").value).toBe("00");
+    expect(confirm().disabled).toBe(true);
+    expect(container.textContent).toContain("Pick at least 1 minute.");
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});
+
 it("renders nothing where keep-awake is unsupported", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.spyOn(api, "keepAwakeStatus").mockResolvedValue({ ...idle, supported: false });
