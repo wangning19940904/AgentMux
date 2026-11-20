@@ -50,14 +50,14 @@ export function FrameworkGroupRow({
               <span className="pill framework-type">{spec.kind_type.toUpperCase()}</span>
             </span>
           </span>
-          <span className="framework-group-summary">
+          {machineCount > 1 && <span className="framework-group-summary">
             <span>{t("resources.machineCount", { count: machineCount })}</span>
             {latestVersion && <span className="mono">{t("frameworks.latestVersion")} v{latestVersion}</span>}
             {outdatedCount > 0
               ? <span className="framework-update-state warning">{t("frameworks.groupOutdated", { count: outdatedCount })}</span>
               : null}
-          </span>
-          {outdatedCount > 0 && (
+          </span>}
+          {machineCount > 1 && outdatedCount > 0 && (
             <button className="ghost-action" disabled={updateDisabled} onClick={onUpdateOutdated} type="button">
               <Download size={14} />{t("frameworks.updateGroup", { count: outdatedCount })}
             </button>
@@ -166,7 +166,7 @@ export function FrameworkTableRows({
         </td>
         <td data-label={t("frameworks.availability")}>
           <div className="framework-health-cell">
-            <FrameworkSmokeResultView result={health} busy={testing} showModel />
+            {(health || testing || !record) && <FrameworkSmokeResultView result={health} busy={testing} showModel />}
             <FrameworkHealthRecordView record={record} />
             {item.registered && (
               <div className="framework-row-actions">

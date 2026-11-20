@@ -40,6 +40,14 @@ it("waits for binding data before editing and preserves a late-arriving binding 
   try {
     await act(async () => root.render(<I18nProvider language="zh"><AgentsPanel /></I18nProvider>));
     const edit = () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "编辑")!;
+    const details = container.querySelector<HTMLButtonElement>(".disclosure-toggle")!;
+    const panel = container.querySelector<HTMLDivElement>(".disclosure-body")!;
+    expect(panel.id).toBe(details.getAttribute("aria-controls"));
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    expect(panel.inert).toBe(true);
+    await act(async () => details.click());
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.inert).toBe(false);
     expect(container.textContent).toContain("grok-4.7 · xhigh · 快速");
     expect(container.textContent).toContain("渠道加载中");
     expect(container.textContent).not.toContain("未绑定渠道");
@@ -132,6 +140,7 @@ it("shows every kind of agent on one page, with its workers and activity", async
     expect(rows[1].textContent).toContain("Answers with Ops router");
     expect(container.textContent).toContain("2 Agents");
     expect(container.textContent).not.toContain("worker");
+    await act(async () => rows[0].querySelector<HTMLButtonElement>(".disclosure-toggle")!.click());
     const open = [...rows[0].querySelectorAll("button")].find((button) => button.textContent === "Workers & activity")!;
     await act(async () => open.click());
     const drawer = container.querySelector('[aria-labelledby="agent-work-title"]')!;
@@ -230,6 +239,7 @@ it("lists an agent that lives on another machine and opens it there", async () =
 
     // Editing opens the agent in place, talking to its machine; the list
     // keeps showing every machine.
+    await act(async () => row.querySelector<HTMLButtonElement>(".disclosure-toggle")!.click());
     await act(async () => button("Edit").click());
     await vi.waitFor(() => expect(container.querySelector("#super-agent-drawer-title")?.textContent).toBe("Ops"));
     expect(routerScopes).toEqual(["dev_1"]);

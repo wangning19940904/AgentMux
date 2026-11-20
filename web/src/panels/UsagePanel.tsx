@@ -98,15 +98,9 @@ export function UsagePanel() {
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack usage-page">
       <section className="surface">
         <div className="surface-header">
-          <div>
-            <h2>{t("usage.title")}</h2>
-            <p className="subtle-copy">
-              {t("usage.range")}: {t(`range.${range}`)} · {t("usage.groupBy")}: {t(`period.${period}`)}
-            </p>
-          </div>
           <div className="control-row usage-controls">
             <a className="ghost-action" href="#observability/traces">
               <Activity size={14} />
@@ -144,6 +138,11 @@ export function UsagePanel() {
                 ))}
               </select>
             </label>
+          </div>
+        </div>
+        <details className="usage-currency-settings">
+          <summary>{t("usage.currency")} · {t(currency === "cny" ? "currency.cny" : "currency.usd")}</summary>
+          <div className="control-row">
             <label className="control-row">
               <span className="muted">{t("usage.currency")}</span>
               <select
@@ -179,32 +178,9 @@ export function UsagePanel() {
             </button>
             {currencyStatus === "saved" && <span className="muted">{t("menubar.saved")}</span>}
             {currencyStatus === "error" && <span className="error">{t("menubar.saveError")}</span>}
-          </div>
-        </div>
-      </section>
 
-      <section className="surface cursor-usage-sources">
-        <div className="surface-header">
-          <div>
-            <h2>{t("usage.sourcesTitle")}</h2>
-            <p className="subtle-copy">{t("usage.sourcesHint")}</p>
           </div>
-          <button className="ghost-action" type="button" onClick={cursorSources.reload}><RefreshCw size={14} />{t("common.refresh")}</button>
-        </div>
-        {cursorSources.error && <div className="surface-body error">{cursorSources.error}</div>}
-        {sourceError && <div className="surface-body error">{sourceError}</div>}
-        <div className="cursor-source-grid">
-          {(cursorSources.data ?? []).map((source) => (
-            <CursorSourceCard
-              key={targetKey(source.target_id, source.source)}
-              source={source}
-              busy={sourceBusy}
-              onAction={runCursorAction}
-              t={t}
-            />
-          ))}
-          {!cursorSources.loading && (cursorSources.data ?? []).length === 0 && <div className="empty-state">{t("usage.sourcesEmpty")}</div>}
-        </div>
+        </details>
       </section>
 
       {error && <div className="surface surface-body error">{error}</div>}
@@ -321,6 +297,29 @@ export function UsagePanel() {
           </section>
         </>
       )}
+      <section className="surface cursor-usage-sources">
+        <div className="surface-header">
+          <div>
+            <h2>{t("usage.sourcesTitle")}</h2>
+            <p className="subtle-copy">{t("usage.sourcesHint")}</p>
+          </div>
+          <button className="ghost-action" type="button" onClick={cursorSources.reload}><RefreshCw size={14} />{t("common.refresh")}</button>
+        </div>
+        {cursorSources.error && <div className="surface-body error">{cursorSources.error}</div>}
+        {sourceError && <div className="surface-body error">{sourceError}</div>}
+        <div className="cursor-source-grid">
+          {(cursorSources.data ?? []).map((source) => (
+            <CursorSourceCard
+              key={targetKey(source.target_id, source.source)}
+              source={source}
+              busy={sourceBusy}
+              onAction={runCursorAction}
+              t={t}
+            />
+          ))}
+          {!cursorSources.loading && (cursorSources.data ?? []).length === 0 && <div className="empty-state">{t("usage.sourcesEmpty")}</div>}
+        </div>
+      </section>
     </div>
   );
 }

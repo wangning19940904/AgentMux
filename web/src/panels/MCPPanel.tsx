@@ -11,6 +11,7 @@ export function MCPPanel() {
   const servers = useAsync(() => api.mcp(), []);
   const [draft, setDraft] = useState<MCPServer>(EMPTY);
   const [busy, setBusy] = useState(false);
+  const [registering, setRegistering] = useState(false);
 
   async function save() {
     if (!draft.name.trim()) return;
@@ -18,6 +19,7 @@ export function MCPPanel() {
     try {
       await api.upsertMCP(draft);
       setDraft(EMPTY);
+      setRegistering(false);
       servers.reload();
     } finally {
       setBusy(false);
@@ -35,25 +37,38 @@ export function MCPPanel() {
 
       <section className="surface">
         <div className="surface-header">
-          <h2>{t("mcp.register")}</h2>
-        </div>
-        <div className="surface-body">
-          <div className="form-row">
-            <input
-              placeholder={t("mcp.namePlaceholder")}
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            />
-            <select
-              value={draft.transport}
-              onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
-            >
-              <option value="stdio">stdio</option>
-              <option value="sse">sse</option>
-              <option value="http">http</option>
-            </select>
+          <div className="control-row">
+            <h2>{t("mcp.registered")}</h2>
+            <span className="pill">{servers.data?.length ?? 0}</span>
           </div>
-          <div className="form-row">
+          <button className="action" aria-expanded={registering} aria-controls="mcp-editor" onClick={() => setRegistering((open) => !open)}>
+            {registering ? t("common.close") : t("mcp.register")}
+          </button>
+        </div>
+        {registering && <form id="mcp-editor" className="inline-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+          <div className="field-grid">
+            <label className="field">
+              <span>{t("common.name")}</span>
+              <input
+                placeholder={t("mcp.namePlaceholder")}
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>{t("mcp.transport")}</span>
+              <select
+                value={draft.transport}
+                onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
+              >
+                <option value="stdio">stdio</option>
+                <option value="sse">sse</option>
+                <option value="http">http</option>
+              </select>
+            </label>
+          </div>
+          <label className="field">
+            <span>{t("mcp.commandUrl")}</span>
             <input
               placeholder={draft.transport === "stdio" ? t("mcp.commandPlaceholder") : t("mcp.urlPlaceholder")}
               value={draft.transport === "stdio" ? draft.command : draft.url}
@@ -63,18 +78,12 @@ export function MCPPanel() {
                   : setDraft({ ...draft, url: e.target.value })
               }
             />
+          </label>
+          <div className="control-row">
+            <button className="action" type="submit" disabled={busy || !draft.name.trim()}>{t("common.save")}</button>
+            <button className="ghost-action" type="button" onClick={() => setRegistering(false)}>{t("common.cancel")}</button>
           </div>
-          <button className="action" disabled={busy} onClick={save}>
-            {t("common.save")}
-          </button>
-        </div>
-      </section>
-
-      <section className="surface">
-        <div className="surface-header">
-          <h2>{t("mcp.registered")}</h2>
-          <span className="pill on">{servers.data?.length ?? 0}</span>
-        </div>
+        </form>}
         {servers.error && <div className="surface-body error">{servers.error}</div>}
         <div className="table-wrap">
           <table>

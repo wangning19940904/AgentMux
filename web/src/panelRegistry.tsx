@@ -10,7 +10,6 @@ const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<Compone
   frameworks: lazy(() => import("./panels/FrameworksPanel").then((module) => ({ default: module.FrameworksPanel }))),
   observability: lazy(() => import("./panels/ObservabilityPanel").then((module) => ({ default: module.ObservabilityPanel }))),
   usage: lazy(() => import("./panels/UsagePanel").then((module) => ({ default: module.UsagePanel }))),
-  settings: lazy(() => import("./panels/MenuBarPanel").then((module) => ({ default: module.MenuBarPanel }))),
   "machine-status": lazy(() => import("./panels/MachineStatusPanel").then((module) => ({ default: module.MachineStatusPanel }))),
   sessions: lazy(() => import("./panels/SessionsPanel").then((module) => ({ default: module.SessionsPanel }))),
   meetings: lazy(() => import("./panels/MeetingsPanel").then((module) => ({ default: module.MeetingsPanel }))),

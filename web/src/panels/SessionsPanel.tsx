@@ -366,7 +366,6 @@ export function SessionsPanel() {
       <section className="surface">
         <div className="surface-header sessions-toolbar">
           <div>
-            <h2>{t("sessions.title")}</h2>
             <span className="muted">{t("sessions.resultCount", { count: filtered.length })}</span>
           </div>
           <div className="control-row">

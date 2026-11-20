@@ -1,3 +1,4 @@
+import { SlidingSelection } from "../SlidingSelection";
 import { RefreshCw } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useEffect, type ReactNode } from "react";
@@ -66,17 +67,19 @@ export function SegmentedTabs<T extends string>({
   options: { id: T; label: ReactNode }[];
 }) {
   return (
-    <div className="segmented">
+    <SlidingSelection className="segmented" selected={value} role="group">
       {options.map((option) => (
         <button
           key={option.id}
+          type="button"
           className={value === option.id ? "active" : ""}
+          aria-pressed={value === option.id}
           onClick={() => onChange(option.id)}
         >
           {option.label}
         </button>
       ))}
-    </div>
+    </SlidingSelection>
   );
 }
 

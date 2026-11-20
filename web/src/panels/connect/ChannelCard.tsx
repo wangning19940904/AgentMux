@@ -8,6 +8,7 @@ import { ChannelAvatar } from "../../ChannelAvatar";
 import { ChannelLogo } from "../agents/ChannelLogo";
 import { useI18n } from "../../i18n";
 import { TargetBadge } from "../../components/TargetBadge";
+import { RowDisclosure } from "../../components/RowDisclosure";
 import {
   formatChannelTime,
   stateBadge,
@@ -43,21 +44,28 @@ export function ChannelCard({
     channel.last_inbound_at ? `${t("connect.lastInbound")}: ${formatChannelTime(channel.last_inbound_at)}` : "",
   ].filter(Boolean);
   return (
-    <div className="route-card">
-      <div className="agent-list-main">
-        <ChannelLogo channel={channel} />
-        <ChannelAvatar channel={channel} />
-        <span className="channel-card-copy">
-          <strong title={displayName}>{displayName}</strong>
-          <small title={subtitle}>{subtitle}</small>
-        </span>
-        <span className={`status-badge ${badge.className}`}>
-          <span className="status-dot" />
-          {badge.label}
-        </span>
-        <TargetBadge target_id={channel.target_id} target_name={channel.target_name} />
-      </div>
-      {channel.error && <div className="session-notice error">{channel.error}</div>}
+    <RowDisclosure
+      className="connect-row"
+      name={displayName}
+      summary={
+        <div className="connect-row-summary">
+          <div className="agent-list-main">
+            <ChannelLogo channel={channel} />
+            <ChannelAvatar channel={channel} />
+            <span className="channel-card-copy">
+              <strong title={displayName}>{displayName}</strong>
+              <small title={subtitle}>{subtitle}</small>
+            </span>
+            <span className={`status-badge ${badge.className}`}>
+              <span className="status-dot" />
+              {badge.label}
+            </span>
+            <TargetBadge target_id={channel.target_id} target_name={channel.target_name} />
+          </div>
+          {channel.error && <div className="session-notice error">{channel.error}</div>}
+        </div>
+      }
+    >
       {healthTimes.length > 0 && <div className="channel-health-meta">{healthTimes.join(" · ")}</div>}
       <div className="table-actions">
         <button className="ghost-action" onClick={onEdit}>
@@ -80,6 +88,6 @@ export function ChannelCard({
           {t("common.delete")}
         </button>
       </div>
-    </div>
+    </RowDisclosure>
   );
 }

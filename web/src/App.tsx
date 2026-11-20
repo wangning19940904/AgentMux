@@ -1,6 +1,5 @@
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ErrorInfo, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   Activity,
   Blocks,
@@ -9,16 +8,12 @@ import {
   Brain,
   Cable,
   CalendarClock,
+  ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   ExternalLink,
   Gauge,
-  Languages,
   LayoutGrid,
-  Moon,
-  PanelLeft,
-  PanelLeftClose,
-  PanelLeftOpen,
   PanelTop,
   RefreshCw,
   Plus,
@@ -29,22 +24,22 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
-  Sun,
   UsersRound,
   Video,
   Zap,
 } from "lucide-react";
-import { KeepAwakeControl } from "./KeepAwakeControl";
 import { MeetingInvitationOverlay } from "./MeetingControls";
 import { MeetingProvider } from "./MeetingContext";
 import { RegisteredPanel } from "./panelRegistry";
 import { SidebarSearchPopover } from "./components/SidebarSearchPopover";
+import { SidebarGroup } from "./components/SidebarGroup";
+import { SETTINGS_SECTIONS, settingsSectionFromHash, type SettingsSection } from "./settingsNavigation";
 import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
 import { ConnectionBanner } from "./pwa/ConnectionBanner";
-import { NotificationSettings } from "./pwa/NotificationSettings";
 
 const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
+const SettingsPanel = lazy(() => import("./panels/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
 import { I18nProvider, Language, ThemeMode, useI18n } from "./i18n";
 import {
@@ -53,12 +48,9 @@ import {
   FLEET_WARNING_EVENT,
   currentFleetWarnings,
   isFleetStaleNotice,
-  getLaunchAtLogin,
   isDesktopApp,
-  LaunchAtLoginStatus,
   openLocalWebUI,
   setActiveMachineScope,
-  setLaunchAtLogin,
   type AuthSession,
 } from "./api";
 import { currentOfflineTargets, resetFleetWarnings } from "./api/fleetWarnings";
@@ -90,18 +82,12 @@ import {
   PRIMARY_SIDEBAR_STORAGE_KEY,
   PRIMARY_SIDEBAR_WIDTH,
   readSidebarWidth,
-  SECONDARY_SIDEBAR_COLLAPSED_KEY,
-  SECONDARY_SIDEBAR_STORAGE_KEY,
-  SECONDARY_SIDEBAR_WIDTH,
 } from "./sidebarSizing";
 
 type Tab = NavigationTabID;
 
-const SIDEBAR_LAYOUT_VERSION_KEY = "agentmux:sidebar-layout-version";
-const SIDEBAR_LAYOUT_VERSION = "two-level-sidebar-v1";
-
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
-type NavGroup = { id: string; labelKey: string; shortLabelKey?: string; icon: typeof LayoutGrid; items: NavItem[] };
+type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
 
 const OVERVIEW_ITEM: NavItem = { id: "overview", labelKey: "nav.overview", icon: LayoutGrid };
 
@@ -121,7 +107,6 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "connectivity",
     labelKey: "nav.group.connectivity",
-    shortLabelKey: "nav.short.connectivity",
     icon: Cable,
     items: [
       { id: "channels", labelKey: "nav.channels", icon: Cable },
@@ -134,7 +119,6 @@ const NAV_GROUPS: NavGroup[] = [
   {
     id: "operations",
     labelKey: "nav.group.operations",
-    shortLabelKey: "nav.short.operations",
     icon: Activity,
     items: [
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
@@ -158,17 +142,6 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
-
-const THEME_OPTIONS: { id: ThemeMode; labelKey: string; icon: typeof Sun }[] = [
-  { id: "system", labelKey: "theme.system", icon: PanelLeft },
-  { id: "light", labelKey: "theme.light", icon: Sun },
-  { id: "dark", labelKey: "theme.dark", icon: Moon },
-];
-
-const LANG_OPTIONS: { id: Language; labelKey: string }[] = [
-  { id: "en", labelKey: "lang.en" },
-  { id: "zh", labelKey: "lang.zh" },
-];
 
 function initialLanguage(): Language {
   const stored = localStorage.getItem("agentmux:language");
@@ -200,6 +173,7 @@ function initialTab(): Tab {
 
 export function App() {
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [settingsSection, setSettingsSection] = useState(() => settingsSectionFromHash(window.location.hash));
   const activeRouteRef = useRef(tab);
   const [language, setLanguage] = useState<Language>(initialLanguage);
   const [themeMode, setThemeMode] = useState<ThemeMode>(initialThemeMode);
@@ -230,6 +204,7 @@ export function App() {
         if (activeRouteRef.current !== hashTab) resetFleetWarnings();
         activeRouteRef.current = hashTab;
         setTab(hashTab);
+        if (hashTab === "settings") setSettingsSection(settingsSectionFromHash(window.location.hash));
       }
     };
     window.addEventListener("hashchange", onHashChange);
@@ -238,12 +213,17 @@ export function App() {
 
   // Every tab owns a hash route (#tab or #tab/subview); panels with internal
   // sub-navigation (observability) extend the same scheme.
-  function selectTab(next: Tab) {
+  function selectTab(next: Tab, section: SettingsSection = "general") {
     if (activeRouteRef.current !== next) resetFleetWarnings();
     activeRouteRef.current = next;
     setTab(next);
     if (next === "observability") {
       if (!window.location.hash.startsWith("#observability")) window.location.hash = "#observability/overview";
+      return;
+    }
+    if (next === "settings") {
+      setSettingsSection(section);
+      window.location.hash = section === "general" ? "#settings" : `#settings/${section}`;
       return;
     }
     window.location.hash = `#${next}`;
@@ -254,6 +234,7 @@ export function App() {
       <SignInGate>
         <Shell
           tab={tab}
+          settingsSection={settingsSection}
           setTab={selectTab}
           language={language}
           setLanguage={setLanguage}
@@ -268,6 +249,7 @@ export function App() {
 
 function Shell({
   tab,
+  settingsSection,
   setTab,
   language,
   setLanguage,
@@ -275,7 +257,8 @@ function Shell({
   setThemeMode,
 }: {
   tab: Tab;
-  setTab: (tab: Tab) => void;
+  settingsSection: SettingsSection;
+  setTab: (tab: Tab, section?: SettingsSection) => void;
   language: Language;
   setLanguage: (language: Language) => void;
   themeMode: ThemeMode;
@@ -290,7 +273,7 @@ function Shell({
   // Admin-only requests wait until the session confirms the role, so a member
   // never fires them while the session is still loading.
   const adminReady = identityIsAdmin && (identity.state === "ready" || nativeDesktopAdmin);
-  // A member reaches only their own account (password and devices).
+  // Members also have client-only appearance and language settings.
   const navGroups = useMemo(() => navigationForRole(NAV_GROUPS, role).map((group) => role === "member"
     ? { ...group, items: group.items.map((item) => item.id === "accounts" ? { ...item, labelKey: "nav.myAccount" } : item) }
     : group), [role]);
@@ -306,40 +289,23 @@ function Shell({
     () => navTabs.find((item) => item.id === visibleTab) ?? TABS.find((item) => item.id === visibleTab) ?? TABS[0],
     [navTabs, visibleTab],
   );
-  const activeGroup = useMemo(
-    () => navigationGroupForTab(navGroups, visibleTab),
-    [navGroups, visibleTab],
-  );
-  const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() => {
-    if (localStorage.getItem(SIDEBAR_LAYOUT_VERSION_KEY) !== SIDEBAR_LAYOUT_VERSION) {
-      localStorage.setItem(SIDEBAR_LAYOUT_VERSION_KEY, SIDEBAR_LAYOUT_VERSION);
-      localStorage.setItem(PRIMARY_SIDEBAR_STORAGE_KEY, String(PRIMARY_SIDEBAR_WIDTH.default));
-      localStorage.setItem(SECONDARY_SIDEBAR_STORAGE_KEY, String(SECONDARY_SIDEBAR_WIDTH.default));
-      return PRIMARY_SIDEBAR_WIDTH.default;
-    }
-    return readSidebarWidth(
-      localStorage,
-      PRIMARY_SIDEBAR_STORAGE_KEY,
-      PRIMARY_SIDEBAR_WIDTH.default,
-      PRIMARY_SIDEBAR_WIDTH.min,
-      PRIMARY_SIDEBAR_WIDTH.max,
-    );
-  });
-  const [secondarySidebarWidth, setSecondarySidebarWidth] = useState(() =>
-    readSidebarWidth(
-      localStorage,
-      SECONDARY_SIDEBAR_STORAGE_KEY,
-      SECONDARY_SIDEBAR_WIDTH.default,
-      SECONDARY_SIDEBAR_WIDTH.min,
-      SECONDARY_SIDEBAR_WIDTH.max,
-    ),
+  const sidebarGroups = useMemo(() => navGroups.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => item.id !== "settings"),
+  })).filter((group) => group.items.length > 0), [navGroups]);
+  const activeGroup = navigationGroupForTab(sidebarGroups, visibleTab);
+  const activeSettingsSection = identityIsAdmin ? settingsSection : "general";
+  const activeGroupId = visibleTab === "settings" ? "settings" : activeGroup?.id;
+  const [closedGroupId, setClosedGroupId] = useState<string | null>(null);
+  const [primarySidebarWidth, setPrimarySidebarWidth] = useState(() =>
+    readSidebarWidth(localStorage, PRIMARY_SIDEBAR_STORAGE_KEY, PRIMARY_SIDEBAR_WIDTH.default,
+      PRIMARY_SIDEBAR_WIDTH.min, PRIMARY_SIDEBAR_WIDTH.max),
   );
   const [primaryCollapsed, setPrimaryCollapsed] = useState(() =>
     localStorage.getItem(PRIMARY_SIDEBAR_COLLAPSED_KEY) === "true",
   );
-  const [secondaryCollapsed, setSecondaryCollapsed] = useState(() =>
-    localStorage.getItem(SECONDARY_SIDEBAR_COLLAPSED_KEY) === "true",
-  );
+  const expandedGroupId = !primaryCollapsed && activeGroupId !== closedGroupId ? activeGroupId : undefined;
+  const mainRef = useRef<HTMLElement>(null);
   const [quickActionError, setQuickActionError] = useState("");
   const [fleetWarnings, setFleetWarnings] = useState<string[]>(currentFleetWarnings);
   const [dismissedFleetWarnings, setDismissedFleetWarnings] = useState("");
@@ -355,19 +321,12 @@ function Shell({
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
   const searchAnchorRef = useRef<HTMLDivElement>(null);
   const closeSearchResults = useCallback(() => setSearchOpen(false), []);
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
-  const [preferencesPanelStyle, setPreferencesPanelStyle] = useState<CSSProperties>({ visibility: "hidden" });
-  const preferencesButtonRef = useRef<HTMLButtonElement>(null);
-  const preferencesPanelRef = useRef<HTMLDivElement>(null);
   const desktop = isDesktopApp();
   const ActiveIcon = active.icon;
-  const SecondaryIcon = activeGroup?.icon ?? LayoutGrid;
-  const secondaryItems = activeGroup?.items ?? [OVERVIEW_ITEM];
   const shellStyle = {
     "--primary-sidebar-width": `${primaryCollapsed ? PRIMARY_SIDEBAR_COLLAPSED_WIDTH : primarySidebarWidth}px`,
-    "--secondary-sidebar-width": `${secondarySidebarWidth}px`,
   } as CSSProperties;
   const searchResults = useMemo(() => {
     const searchableTabs = navTabs
@@ -385,29 +344,6 @@ function Shell({
     return searchNavigationItems(searchableTabs, searchQuery);
   }, [language, navGroups, navTabs, navigationLocked, searchQuery, t]);
   const showSearchResults = searchOpen && searchQuery.trim().length > 0;
-
-  const positionPreferencesPanel = useCallback(() => {
-    const anchor = preferencesButtonRef.current;
-    if (!anchor) return;
-    const rect = anchor.getBoundingClientRect();
-    const viewportPadding = 12;
-    const panelGap = 8;
-    const panelWidth = Math.min(270, Math.max(0, window.innerWidth - viewportPadding * 2));
-    const left = Math.min(
-      Math.max(viewportPadding, rect.left),
-      Math.max(viewportPadding, window.innerWidth - panelWidth - viewportPadding),
-    );
-    const spaceBelow = window.innerHeight - rect.bottom - panelGap - viewportPadding;
-    const openAbove = spaceBelow < 360 && rect.top > window.innerHeight / 2;
-    setPreferencesPanelStyle({
-      ...(openAbove
-        ? { bottom: window.innerHeight - rect.top + panelGap }
-        : { top: rect.bottom + panelGap }),
-      left,
-      width: panelWidth,
-      maxHeight: Math.max(120, openAbove ? rect.top - panelGap - viewportPadding : spaceBelow),
-    });
-  }, []);
 
   useEffect(() => {
     // Members reach only this hub; a remote machine selection left over from
@@ -429,53 +365,24 @@ function Shell({
   }, [identity.state, role, setTab, tab]);
 
   useEffect(() => {
+    mainRef.current?.scrollTo?.({ top: 0, left: 0, behavior: "auto" });
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileNavOpen(false);
-  }, [visibleTab]);
+    setClosedGroupId(null);
+  }, [activeSettingsSection, visibleTab]);
 
   useEffect(() => {
     localStorage.setItem(PRIMARY_SIDEBAR_STORAGE_KEY, String(primarySidebarWidth));
   }, [primarySidebarWidth]);
 
   useEffect(() => {
-    localStorage.setItem(SECONDARY_SIDEBAR_STORAGE_KEY, String(secondarySidebarWidth));
-  }, [secondarySidebarWidth]);
-
-  useEffect(() => {
     localStorage.setItem(PRIMARY_SIDEBAR_COLLAPSED_KEY, String(primaryCollapsed));
+    if (primaryCollapsed) setSearchOpen(false);
   }, [primaryCollapsed]);
-
-  useEffect(() => {
-    localStorage.setItem(SECONDARY_SIDEBAR_COLLAPSED_KEY, String(secondaryCollapsed));
-    if (secondaryCollapsed) setSearchOpen(false);
-  }, [secondaryCollapsed]);
 
   useEffect(() => {
     setActiveSearchIndex((current) => Math.min(current, Math.max(0, searchResults.length - 1)));
   }, [searchResults.length]);
-
-  useEffect(() => {
-    if (!preferencesOpen) return;
-    positionPreferencesPanel();
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (preferencesButtonRef.current?.contains(target) || preferencesPanelRef.current?.contains(target)) return;
-      setPreferencesOpen(false);
-    };
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setPreferencesOpen(false);
-    };
-    window.addEventListener("resize", positionPreferencesPanel);
-    window.addEventListener("scroll", positionPreferencesPanel, true);
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("resize", positionPreferencesPanel);
-      window.removeEventListener("scroll", positionPreferencesPanel, true);
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [preferencesOpen, positionPreferencesPanel, primarySidebarWidth, primaryCollapsed]);
 
   useEffect(() => {
     const receiveWarnings = (event: Event) => {
@@ -534,10 +441,18 @@ function Shell({
     setTab("agents");
   }
 
-  function selectGroup(group: NavGroup) {
-    setSecondaryCollapsed(false);
-    const destination = primaryGroupDestination(group, visibleTab);
+  function toggleGroup(id: string, destination?: Tab | null) {
+    if (expandedGroupId === id) {
+      setClosedGroupId(id);
+      return;
+    }
+    setPrimaryCollapsed(false);
+    setClosedGroupId(null);
     if (destination) setTab(destination);
+  }
+
+  function selectSettingsSection(section: SettingsSection) {
+    setTab("settings", section);
   }
 
   function openWebUI() {
@@ -583,44 +498,11 @@ function Shell({
   return (
     <MeetingProvider enabled={adminReady}>
     <div
-      className={`app-shell${secondaryCollapsed ? "" : " secondary-open"}${primaryCollapsed ? " primary-collapsed" : ""}${desktop ? " native-desktop" : ""}`}
+      className={`app-shell${primaryCollapsed ? " primary-collapsed" : ""}${desktop ? " native-desktop" : ""}`}
       style={shellStyle}
     >
       <aside className="sidebar">
         <div className="brand-actions titlebar-actions">
-          <button
-            ref={preferencesButtonRef}
-            className="brand-action-button preference-trigger"
-            type="button"
-            title={t("app.settings")}
-            aria-label={t("app.settings")}
-            aria-haspopup="dialog"
-            aria-expanded={preferencesOpen}
-            aria-controls="sidebar-preference-panel"
-            onClick={() => setPreferencesOpen((open) => !open)}
-          >
-            <Settings size={17} />
-            <span>{t("app.settings")}</span>
-          </button>
-          {preferencesOpen && createPortal(
-            <div
-              ref={preferencesPanelRef}
-              id="sidebar-preference-panel"
-              className="preference-panel sidebar-preference-popover"
-              style={preferencesPanelStyle}
-              role="dialog"
-              aria-label={t("app.settings")}
-            >
-              <PreferenceControls
-                admin={identityIsAdmin}
-                language={language}
-                setLanguage={setLanguage}
-                themeMode={themeMode}
-                setThemeMode={setThemeMode}
-              />
-            </div>,
-            document.body,
-          )}
           {desktop && (
             <button
               className="brand-action-button"
@@ -653,6 +535,84 @@ function Shell({
           </div>
         </div>
 
+        <div
+          ref={searchAnchorRef}
+          className="sidebar-search-container"
+        >
+          <div className="sidebar-search search-box">
+            <Search size={15} aria-hidden="true" />
+            <input
+              type="search"
+              role="combobox"
+              aria-label={t("app.search")}
+              aria-autocomplete="list"
+              aria-controls="sidebar-search-results"
+              aria-expanded={showSearchResults}
+              aria-activedescendant={showSearchResults && searchResults.length
+                ? `sidebar-search-result-${searchResults[activeSearchIndex]?.id ?? searchResults[0].id}`
+                : undefined}
+              autoComplete="off"
+              placeholder={t("app.search")}
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchOpen(true);
+                setActiveSearchIndex(0);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {searchQuery && (
+              <button
+                className="sidebar-search-clear"
+                type="button"
+                title={t("app.searchClear")}
+                aria-label={t("app.searchClear")}
+                onClick={() => {
+                  setSearchQuery("");
+                  setSearchOpen(false);
+                  setActiveSearchIndex(0);
+                }}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
+          </div>
+          {showSearchResults && !primaryCollapsed && (
+            <SidebarSearchPopover
+              anchorRef={searchAnchorRef}
+              layoutKey={`${primarySidebarWidth}:${primaryCollapsed}`}
+              onClose={closeSearchResults}
+              id="sidebar-search-results"
+              aria-label={t("app.searchResults")}
+            >
+              {searchResults.length ? searchResults.map((item, index) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    id={`sidebar-search-result-${item.id}`}
+                    key={item.id}
+                    className={index === activeSearchIndex ? "active" : ""}
+                    type="button"
+                    role="option"
+                    aria-selected={index === activeSearchIndex}
+                    onMouseEnter={() => setActiveSearchIndex(index)}
+                    onClick={() => selectSearchResult(item)}
+                  >
+                    <Icon size={16} aria-hidden="true" />
+                    <span>
+                      <strong>{item.label}</strong>
+                      {item.groupLabel && <small>{item.groupLabel}</small>}
+                    </span>
+                  </button>
+                );
+              }) : (
+                <div className="sidebar-search-empty" role="status">{t("app.searchEmpty")}</div>
+              )}
+            </SidebarSearchPopover>
+          )}
+        </div>
+
         <nav id="primary-navigation" className="nav primary-nav" aria-label={t("nav.primary")}>
           {identityIsAdmin && <button
             className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
@@ -666,26 +626,34 @@ function Shell({
             <span>{t(OVERVIEW_ITEM.labelKey)}</span>
           </button>}
 
-          {navGroups.map((group) => {
-            const GroupIcon = group.icon;
-            const hasActive = group.items.some((item) => item.id === visibleTab);
-            return (
-              <button
-                key={group.id}
-                className={`nav-item nav-primary-item${hasActive ? " active" : ""}`}
-                onClick={() => selectGroup(group)}
-                aria-expanded={hasActive && !secondaryCollapsed}
-                aria-controls="secondary-navigation"
-                aria-label={t(group.labelKey)}
-                aria-current={hasActive ? "true" : undefined}
-                title={t(group.labelKey)}
-                disabled={navigationLocked}
-              >
-                <GroupIcon size={18} />
-                <span>{t(group.shortLabelKey ?? group.labelKey)}</span>
-              </button>
-            );
-          })}
+          {sidebarGroups.map((group) => (
+            <SidebarGroup
+              key={group.id}
+              id={group.id}
+              label={t(group.labelKey)}
+              icon={group.icon}
+              items={group.items.map((item) => ({ ...item, label: t(item.labelKey) }))}
+              current={activeGroupId === group.id ? visibleTab : ""}
+              expanded={expandedGroupId === group.id}
+              disabled={navigationLocked}
+              onToggle={() => toggleGroup(group.id, primaryGroupDestination(group, visibleTab))}
+              onSelect={setTab}
+            />
+          ))}
+
+          <SidebarGroup
+            id="settings"
+            label={t("app.settings")}
+            icon={Settings}
+            items={(identityIsAdmin ? SETTINGS_SECTIONS : SETTINGS_SECTIONS.slice(0, 1)).map((item) => ({
+              ...item, label: t(item.labelKey),
+            }))}
+            current={visibleTab === "settings" ? activeSettingsSection : ""}
+            expanded={expandedGroupId === "settings"}
+            disabled={navigationLocked}
+            onToggle={() => toggleGroup("settings", visibleTab === "settings" ? null : "settings")}
+            onSelect={selectSettingsSection}
+          />
         </nav>
 
         <MobileTabBar
@@ -717,128 +685,6 @@ function Shell({
         />}
       </aside>
 
-      <aside id="secondary-navigation" className="secondary-sidebar" hidden={secondaryCollapsed}>
-        <header className="secondary-sidebar-header">
-          <span className="secondary-sidebar-title">
-            <SecondaryIcon size={16} />
-            <strong title={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>{activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}</strong>
-          </span>
-          <button
-            className="secondary-collapse"
-            type="button"
-            title={t("nav.collapse")}
-            aria-label={t("nav.collapse")}
-            aria-expanded="true"
-            aria-controls="secondary-navigation"
-            onClick={() => setSecondaryCollapsed(true)}
-          >
-            <PanelLeftClose size={16} />
-          </button>
-        </header>
-
-        <div
-          ref={searchAnchorRef}
-          className="sidebar-search-container secondary-search-container"
-        >
-          <div className="sidebar-search search-box">
-            <Search size={15} aria-hidden="true" />
-            <input
-              type="search"
-              role="combobox"
-              aria-label={t("app.search")}
-              aria-autocomplete="list"
-              aria-controls="secondary-sidebar-search-results"
-              aria-expanded={showSearchResults}
-              aria-activedescendant={showSearchResults && searchResults.length
-                ? `secondary-sidebar-search-result-${searchResults[activeSearchIndex]?.id ?? searchResults[0].id}`
-                : undefined}
-              autoComplete="off"
-              placeholder={t("app.search")}
-              value={searchQuery}
-              onChange={(event) => {
-                setSearchQuery(event.target.value);
-                setSearchOpen(true);
-                setActiveSearchIndex(0);
-              }}
-              onFocus={() => setSearchOpen(true)}
-              onKeyDown={handleSearchKeyDown}
-            />
-            {searchQuery && (
-              <button
-                className="sidebar-search-clear"
-                type="button"
-                title={t("app.searchClear")}
-                aria-label={t("app.searchClear")}
-                onClick={() => {
-                  setSearchQuery("");
-                  setSearchOpen(false);
-                  setActiveSearchIndex(0);
-                }}
-              >
-                <span aria-hidden="true">×</span>
-              </button>
-            )}
-          </div>
-          {showSearchResults && !secondaryCollapsed && (
-            <SidebarSearchPopover
-              anchorRef={searchAnchorRef}
-              layoutKey={`${primarySidebarWidth}:${secondarySidebarWidth}:${primaryCollapsed}`}
-              onClose={closeSearchResults}
-              id="secondary-sidebar-search-results"
-              aria-label={t("app.searchResults")}
-            >
-              {searchResults.length ? searchResults.map((item, index) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    id={`secondary-sidebar-search-result-${item.id}`}
-                    key={item.id}
-                    className={index === activeSearchIndex ? "active" : ""}
-                    type="button"
-                    role="option"
-                    aria-selected={index === activeSearchIndex}
-                    onMouseEnter={() => setActiveSearchIndex(index)}
-                    onClick={() => selectSearchResult(item)}
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                    <span>
-                      <strong>{item.label}</strong>
-                      {item.groupLabel && <small>{item.groupLabel}</small>}
-                    </span>
-                  </button>
-                );
-              }) : (
-                <div className="sidebar-search-empty" role="status">{t("app.searchEmpty")}</div>
-              )}
-            </SidebarSearchPopover>
-          )}
-        </div>
-
-        <nav className="secondary-nav" aria-label={activeGroup ? t(activeGroup.labelKey) : t(OVERVIEW_ITEM.labelKey)}>
-          {secondaryItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                className={`secondary-nav-item${visibleTab === item.id ? " active" : ""}`}
-                onClick={() => setTab(item.id)}
-                disabled={navigationLocked}
-              >
-                <Icon size={16} />
-                <span>{t(item.labelKey)}</span>
-              </button>
-            );
-          })}
-        </nav>
-
-        <SidebarResizeHandle
-          label={t("nav.resizeSecondary")}
-          value={secondarySidebarWidth}
-          limits={SECONDARY_SIDEBAR_WIDTH}
-          onChange={setSecondarySidebarWidth}
-        />
-      </aside>
-
       <MobileDrawer
         open={mobileNavOpen}
         overview={identityIsAdmin ? OVERVIEW_ITEM : undefined}
@@ -850,37 +696,19 @@ function Shell({
           setTab(id);
         }}
         onClose={closeMobileNav}
-      >
-        <PreferenceControls
-          admin={identityIsAdmin}
-          language={language}
-          setLanguage={setLanguage}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-        />
-      </MobileDrawer>
+      />
 
       <div className="workspace">
         <div className="workspace-canvas">
           <header className="workspace-header">
           <div className="title-row">
-            {secondaryCollapsed && (
-              <button
-                className="secondary-collapse secondary-expand"
-                type="button"
-                title={t("nav.expand")}
-                aria-label={t("nav.expand")}
-                aria-expanded="false"
-                aria-controls="secondary-navigation"
-                onClick={() => setSecondaryCollapsed(false)}
-              >
-                <PanelLeftOpen size={16} />
-              </button>
-            )}
             <ActiveIcon size={20} />
             <h1>{t(active.labelKey)}</h1>
-            {visibleTab === "agents" && (
-              <span className="workspace-header-description">{t("agents.subtitle")}</span>
+            {visibleTab === "settings" && (
+              <span className="settings-breadcrumb">
+                <ChevronRight size={13} aria-hidden="true" />
+                {t(SETTINGS_SECTIONS.find((item) => item.id === activeSettingsSection)!.labelKey)}
+              </span>
             )}
             <span className={`system-pill${fleetWarnings.length || identity.state === "error" ? " warning" : ""}`} role="status">
               <span className="status-dot" />
@@ -909,7 +737,7 @@ function Shell({
         <ConnectionBanner />
         <MeetingInvitationOverlay />
 
-        <main className={`main main-${visibleTab}`}>
+        <main ref={mainRef} className={`main main-${visibleTab}`}>
           {quickActionError && <small className="brand-action-error" role="status">{quickActionError}</small>}
           {fleetWarnings.length > 0 && dismissedFleetWarnings !== fleetWarningKey && fleetRecovered === fleetWarningKey && (
             <div className="session-notice" role="status">
@@ -950,7 +778,15 @@ function Shell({
                 </section>
               ) : (
                 <>
-				  {visibleTab === "settings" && <NotificationSettings />}
+				  {visibleTab === "settings" && <SettingsPanel
+                    section={activeSettingsSection}
+                    onSectionChange={selectSettingsSection}
+                    admin={identityIsAdmin}
+                    language={language}
+                    setLanguage={setLanguage}
+                    themeMode={themeMode}
+                    setThemeMode={setThemeMode}
+                  />}
 				  <RegisteredPanel
 				    tab={visibleTab}
 				    createRequested={createAgentRequested}
@@ -1139,103 +975,4 @@ class PanelErrorBoundary extends Component<PanelErrorBoundaryProps, PanelErrorBo
 
     return this.props.children;
   }
-}
-
-function PreferenceControls({
-  admin,
-  language,
-  setLanguage,
-  themeMode,
-  setThemeMode,
-}: {
-  // Machine controls such as keep-awake are for administrators only.
-  admin: boolean;
-  language: Language;
-  setLanguage: (language: Language) => void;
-  themeMode: ThemeMode;
-  setThemeMode: (mode: ThemeMode) => void;
-}) {
-  const { t } = useI18n();
-  const [launchAtLogin, setLaunchAtLoginStatus] = useState<LaunchAtLoginStatus | null>(null);
-  const [launchAtLoginBusy, setLaunchAtLoginBusy] = useState(false);
-  const [preferenceError, setPreferenceError] = useState("");
-  const desktop = isDesktopApp();
-
-  useEffect(() => {
-    if (!desktop) return;
-    let active = true;
-    getLaunchAtLogin()
-      .then((status) => {
-        if (active) setLaunchAtLoginStatus(status);
-      })
-      .catch((error) => {
-        if (active) setPreferenceError(error instanceof Error ? error.message : String(error));
-      });
-    return () => {
-      active = false;
-    };
-  }, [desktop]);
-
-  async function updateLaunchAtLogin(enabled: boolean) {
-    setLaunchAtLoginBusy(true);
-    setPreferenceError("");
-    try {
-      setLaunchAtLoginStatus(await setLaunchAtLogin(enabled));
-    } catch (error) {
-      setPreferenceError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLaunchAtLoginBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="segmented lang-toggle" aria-label="Language">
-        <Languages size={16} />
-        {LANG_OPTIONS.map((item) => (
-          <button
-            key={item.id}
-            className={language === item.id ? "active" : ""}
-            onClick={() => setLanguage(item.id)}
-          >
-            {t(item.labelKey)}
-          </button>
-        ))}
-      </div>
-
-      <div className="segmented theme-toggle" aria-label="Theme">
-        {THEME_OPTIONS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              className={themeMode === item.id ? "active" : ""}
-              onClick={() => setThemeMode(item.id)}
-              title={t(item.labelKey)}
-            >
-              <Icon size={15} />
-              <span>{t(item.labelKey)}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {desktop && launchAtLogin?.supported && (
-        <label className="switch-row preference-switch-row">
-          <span>
-            <strong>{t("app.launchAtLogin")}</strong>
-            <small>{t("app.launchAtLoginHint")}</small>
-          </span>
-          <input
-            type="checkbox"
-            checked={launchAtLogin.enabled}
-            disabled={launchAtLoginBusy}
-            onChange={(event) => updateLaunchAtLogin(event.target.checked)}
-          />
-        </label>
-      )}
-      {admin && <KeepAwakeControl onError={setPreferenceError} />}
-      {preferenceError && <small className="preference-error">{preferenceError}</small>}
-    </>
-  );
 }

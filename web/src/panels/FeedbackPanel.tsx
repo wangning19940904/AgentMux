@@ -76,7 +76,9 @@ export function FeedbackPanel() {
           </div>
         </div>
         {report.error && <div className="surface-body error">{report.error}</div>}
-        <div className="feedback-layout">
+        {items.length === 0 ? (
+          <div className="empty-state">{t(report.loading ? "common.loading" : "feedback.empty")}</div>
+        ) : <div className="feedback-layout">
           <div className="feedback-list">
             {items.map((item) => (
               <button key={targetKey(item.target_id, item.id)} className={selectedID === targetKey(item.target_id, item.id) ? "active" : ""} onClick={() => select(item)}>
@@ -107,7 +109,7 @@ export function FeedbackPanel() {
               </>
             ) : <div className="empty-state">{t("feedback.select")}</div>}
           </div>
-        </div>
+        </div>}
       </section>
     </div>
   );

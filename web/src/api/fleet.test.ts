@@ -22,6 +22,16 @@ describe("machine scope", () => {
 
 });
 
+it("renders an empty fleet feedback report when a daemon returns null items", async () => {
+  vi.stubGlobal("localStorage", { getItem: () => "all" });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    targets: [target("local", "Local", "feedback", { items: null, counts: { positive: 0, progress: 0, negative: 0 }, total: 0 })],
+  }))));
+  await expect(api.feedback()).resolves.toEqual({
+    items: [], counts: { positive: 0, progress: 0, negative: 0 }, total: 0,
+  });
+});
+
 afterEach(() => {
   resetFleetWarnings();
   vi.unstubAllGlobals();

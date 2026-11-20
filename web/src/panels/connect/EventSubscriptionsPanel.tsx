@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   api,
-  fleetMode,
+  baseMachineScope,
+  setMachineOverride,
   type EventDelivery,
   type EventSubscription,
   type EventSubscriptionInput,
@@ -23,16 +24,36 @@ export function splitEventValues(value: string): string[] {
 }
 export function EventSubscriptionsPanel() {
   const { t } = useI18n();
-  if (fleetMode())
-    return (
-      <section className="surface">
-        <div className="surface-body">
-          <h2>{t("nav.subscriptions")}</h2>
-          <p>{t("events.chooseMachine")}</p>
+  const fleet = baseMachineScope() === "all";
+  const targets = useAsync(() => fleet ? api.fleetTargets() : Promise.resolve([]), [fleet]);
+  const [machine, setMachine] = useState("local");
+
+  // Route the form's effects before they load, just as an agent's machine view does.
+  useLayoutEffect(() => {
+    if (!fleet) return;
+    setMachineOverride(machine);
+    return () => setMachineOverride(null);
+  }, [fleet, machine]);
+
+  return (
+    <div className="page-stack">
+      {fleet && (
+        <div className="control-row">
+          <label className="subscription-machine-picker">
+            <span>{t("remote.currentMachine")}</span>
+            <select value={machine} onChange={(event) => setMachine(event.target.value)}>
+              <option value="local">{t("remote.localMachine")}</option>
+              {(targets.data ?? []).filter((target) => target.id !== "local").map((target) => (
+                <option key={target.id} value={target.id}>{target.name}</option>
+              ))}
+            </select>
+          </label>
+          {targets.error && <span className="error" role="status">{targets.error}</span>}
         </div>
-      </section>
-    );
-  return <Subscriptions />;
+      )}
+      <Subscriptions key={machine} />
+    </div>
+  );
 }
 function Subscriptions() {
   const { t } = useI18n();
@@ -154,7 +175,7 @@ function Subscriptions() {
               <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                 {secret}
               </pre>
-              <button onClick={() => setSecret("")}>
+              <button className="ghost-action" onClick={() => setSecret("")}>
                 {t("events.dismissSecret")}
               </button>
             </div>
@@ -348,10 +369,11 @@ function Subscriptions() {
                   <p className="session-notice error">{sub.last_error}</p>
                 )}
                 <div className="table-actions">
-                  <button disabled={busy} onClick={() => edit(sub)}>
+                  <button className="ghost-action" disabled={busy} onClick={() => edit(sub)}>
                     {t("common.edit")}
                   </button>
                   <button
+                    className="ghost-action"
                     disabled={busy}
                     onClick={() =>
                       void run(() =>
@@ -365,6 +387,7 @@ function Subscriptions() {
                     {t(sub.paused ? "events.resume" : "events.pause")}
                   </button>
                   <button
+                    className="ghost-action"
                     disabled={busy || sub.paused}
                     onClick={() =>
                       void run(async () => {
@@ -376,6 +399,7 @@ function Subscriptions() {
                     {t("events.test")}
                   </button>
                   <button
+                    className="ghost-action"
                     disabled={busy}
                     onClick={() =>
                       void run(async () => {
@@ -387,7 +411,7 @@ function Subscriptions() {
                     {t("events.rotate")}
                   </button>
                   <button
-                    className="danger"
+                    className="ghost-action danger-action"
                     disabled={busy}
                     onClick={() =>
                       void run(() => api.deleteEventSubscription(sub.id))
@@ -458,6 +482,7 @@ function Subscriptions() {
               </div>
               <div className="table-actions">
                 <button
+                  className="ghost-action"
                   disabled={busy || !delivery.event}
                   onClick={() =>
                     void run(async () =>
@@ -469,6 +494,7 @@ function Subscriptions() {
                 </button>
                 {["dead", "retry", "blocked"].includes(delivery.status) && (
                   <button
+                    className="ghost-action"
                     disabled={busy || !delivery.event}
                     onClick={() =>
                       void run(() => api.retryEventDelivery(delivery.id))
@@ -485,12 +511,14 @@ function Subscriptions() {
           )}
           <div className="table-actions">
             <button
+              className="ghost-action"
               disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - 25))}
             >
               {t("events.previous")}
             </button>
             <button
+              className="ghost-action"
               disabled={!deliveries.data?.has_more}
               onClick={() => setOffset(offset + 25)}
             >
@@ -498,16 +526,9 @@ function Subscriptions() {
             </button>
           </div>
           {detail && (
-            <details open>
+            <details className="event-delivery-detail" open>
               <summary>{detail.id}</summary>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  maxHeight: 420,
-                  overflow: "auto",
-                }}
-              >
+              <pre>
                 {JSON.stringify(detail, null, 2)}
               </pre>
             </details>

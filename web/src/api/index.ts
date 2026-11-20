@@ -946,8 +946,8 @@ export const api = {
       for (const target of batch.targets) {
         const response = operationFor<FeedbackReport>(target.responses, "feedback");
         if (!response?.ok || !response.data) continue;
-        report.items.push(...response.data.items.map((item) => ({ ...item, target_id: target.target.id, target_name: target.target.name })));
-        for (const semantic of ["positive", "progress", "negative"] as const) report.counts[semantic] += response.data.counts[semantic] || 0;
+        report.items.push(...(response.data.items ?? []).map((item) => ({ ...item, target_id: target.target.id, target_name: target.target.name })));
+        for (const semantic of ["positive", "progress", "negative"] as const) report.counts[semantic] += response.data.counts?.[semantic] || 0;
         report.total += response.data.total || 0;
       }
       report.items.sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
