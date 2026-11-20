@@ -33,6 +33,10 @@ import (
 //	POST /api/v1/auth/device/sign-in   — sign this machine in
 //	POST /api/v1/auth/device/setup     — create the first administrator and sign in with it
 //	POST /api/v1/auth/device/sign-out  — sign this machine out
+//	POST /api/v1/auth/device/forget    — drop a saved account from this machine
+//
+// A node (authority "hub") signs in with the account its hub is signed in
+// as, or leaves the hub for an account of its own (device_hub_signin.go).
 //
 // Only the machine itself may use them: the bridge token, or the local
 // Console on a machine without a bridge.
@@ -218,6 +222,10 @@ func (s *Server) registerDeviceAccountRoutes() {
 	s.mux.HandleFunc("POST /api/v1/auth/device/sign-in", s.handleDeviceSignIn)
 	s.mux.HandleFunc("POST /api/v1/auth/device/setup", s.handleDeviceSetup)
 	s.mux.HandleFunc("POST /api/v1/auth/device/sign-out", s.handleDeviceSignOut)
+	s.mux.HandleFunc("POST /api/v1/auth/device/forget", s.handleDeviceForget)
+	s.mux.HandleFunc("POST /api/v1/auth/device/approval", s.handleDeviceApprovalRequest)
+	s.mux.HandleFunc("GET /api/v1/auth/device/approval", s.handleDeviceApprovalStatus)
+	s.mux.HandleFunc("POST /api/v1/auth/device/leave-hub", s.handleDeviceLeaveHub)
 }
 
 // deviceAccountView answers GET /api/v1/auth/device and rides along in
@@ -231,6 +239,14 @@ type deviceAccountView struct {
 	// SetupAllowed is true when the first administrator may be created from
 	// this machine: not on a node, whose hub holds the accounts.
 	SetupAllowed bool `json:"setup_allowed"`
+	// SavedAccounts are the accounts that signed this machine in before,
+	// kept on this machine so the sign-in screen can offer them again.
+	SavedAccounts []savedDeviceAccount `json:"saved_accounts"`
+	// HubAccounts, on a node, are the accounts its hub's machines are
+	// signed in as: the only ones it may sign in with while linked.
+	HubAccounts []hubAccount `json:"hub_accounts,omitempty"`
+	// HubUnreachable: a node could not ask its hub just now.
+	HubUnreachable bool `json:"hub_unreachable,omitempty"`
 }
 
 func (s *Server) deviceAccountView(ctx context.Context) deviceAccountView {
@@ -238,9 +254,18 @@ func (s *Server) deviceAccountView(ctx context.Context) deviceAccountView {
 	if err != nil {
 		authority = deviceAuthorityPrimary
 	}
-	view := deviceAccountView{Authority: authority, SetupAllowed: authority != deviceAuthorityHub}
+	view := deviceAccountView{
+		Authority: authority, SetupAllowed: authority != deviceAuthorityHub, SavedAccounts: s.deviceSavedAccounts(ctx),
+	}
 	if account := s.currentDeviceAccount(ctx); account != nil {
 		view.SignedIn, view.Account = true, account.Identity()
+	}
+	if authority == deviceAuthorityHub && !view.SignedIn {
+		accounts, err := s.nodeHubAccounts(ctx)
+		view.HubAccounts, view.HubUnreachable = accounts, err != nil
+		if view.HubAccounts == nil {
+			view.HubAccounts = []hubAccount{}
+		}
 	}
 	return view
 }
@@ -292,6 +317,11 @@ func (s *Server) handleDeviceIdentify(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeviceRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.requireMachineController(w, r) {
+		return
+	}
+	if s.nodeOfHub(r.Context()) {
+		writeAccountOpError(w, accountFailure(http.StatusForbidden, accountCodeNotHubAccount,
+			"a machine linked to the hub signs in with the hub's account; to use another account, leave the hub"))
 		return
 	}
 	var req accountRequest
@@ -387,12 +417,14 @@ func (s *Server) finishDeviceSignIn(w http.ResponseWriter, r *http.Request, resu
 	}
 	authority, _ := s.deviceAuthority(r.Context())
 	previous, _ := s.loadDeviceAccount()
+	signedInAt := time.Now().UTC()
 	if err := s.saveDeviceAccount(deviceAccountRecord{
-		Account: *result.Account, Token: result.Token, Authority: authority, SignedInAt: time.Now().UTC(),
+		Account: *result.Account, Token: result.Token, Authority: authority, SignedInAt: signedInAt,
 	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "keep this machine's account: "+err.Error())
 		return
 	}
+	s.rememberDeviceAccount(*result.Account, signedInAt)
 	if previous != nil && previous.Token != result.Token {
 		_, _ = s.runDeviceAccountOp(r.Context(), accountOp{Op: accountOpSignOut, SessionToken: previous.Token})
 	}
@@ -427,7 +459,15 @@ func (s *Server) handleDeviceSignOut(w http.ResponseWriter, r *http.Request) {
 	writeOK(w)
 }
 
+// deviceAgentPrefix starts the user agent of a machine's own session; the
+// rest is its host name.
+const deviceAgentPrefix = "AgentMux device "
+
 func deviceUserAgent() string {
 	host, _ := os.Hostname()
-	return "AgentMux device " + strings.TrimSuffix(host, ".local")
+	return deviceAgentFor(host)
+}
+
+func deviceAgentFor(host string) string {
+	return deviceAgentPrefix + strings.TrimSuffix(strings.TrimSpace(host), ".local")
 }

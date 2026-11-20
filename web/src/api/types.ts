@@ -571,6 +571,38 @@ export interface DeviceAccount {
   authority: "local" | "primary" | "hub";
   // setup_allowed: the first administrator may be created from here.
   setup_allowed: boolean;
+  // saved_accounts: accounts that signed this machine in before, kept on
+  // this machine (names only, never a password). Older daemons leave it out.
+  saved_accounts?: SavedAccount[];
+  // hub_accounts: on a node, the accounts its hub's machines are signed in
+  // as, the only ones it may use while linked. hub_unreachable: the node
+  // could not ask its hub just now.
+  hub_accounts?: HubAccount[];
+  hub_unreachable?: boolean;
+}
+
+// HubAccount is an account a hub machine is signed in as.
+export interface HubAccount {
+  account: AccountIdentity;
+  machine?: string;
+}
+
+// DeviceApproval is a machine's request to sign in with an account, waiting
+// for a hub signed in as that account to approve it.
+export interface DeviceApproval {
+  id: string;
+  login: string;
+  machine: string;
+  state: "pending" | "approved" | "denied";
+  created_at: string;
+  expires_at: string;
+}
+
+// SavedAccount is an account the sign-in screen offers again.
+export interface SavedAccount {
+  login: string;
+  display_name?: string;
+  last_signed_in_at?: string;
 }
 
 // LoginState is what the first sign-in step learns about a login name.

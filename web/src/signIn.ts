@@ -1,10 +1,11 @@
-import type { AccountIdentity, AuthSession, IdentifyResult } from "./api";
+import type { AccountIdentity, AuthSession, IdentifyResult, SavedAccount } from "./api";
 
-// Sign-in and identity helpers. In a browser, accounts exist only once an
-// administrator creates the first one; until then the Console opens exactly
-// as before. The packaged desktop app is its machine's own app: the machine
-// is signed in to one account, and the app shows nothing but sign-in (or the
-// first administrator's setup) until it is.
+// Sign-in and identity helpers. Nobody uses the Console without signing in:
+// a browser signs in to an account, or creates the first administrator where
+// none exists yet. The packaged desktop app, and the Console of a node
+// linked to a hub, are their machine's own app: the machine is signed in to
+// one account, and they show nothing but sign-in until it is. The CLI and
+// the bridge token stay the machine's administrator.
 
 // "device-sign-in" is the desktop app of a machine that is not signed in.
 export type SignInGateState = "checking" | "signed-out" | "device-sign-in" | "open";
@@ -30,7 +31,12 @@ export function resolveSignInGate(
     // A daemon from before device sign-in reports no device: open as before.
     return session.device && !session.device.signed_in ? "device-sign-in" : "open";
   }
-  return session.sign_in_required ? "signed-out" : "open";
+  // A node's own Console signs its machine in with the hub's account.
+  if (session.device?.authority === "hub") return session.device.signed_in ? "open" : "device-sign-in";
+  if (session.sign_in_required) return "signed-out";
+  // No account exists yet: the first administrator is created before use.
+  if (!session.accounts_enabled && !session.account) return "signed-out";
+  return "open";
 }
 
 // ConsoleRole is what the Console renders for. An administrator manages
@@ -128,6 +134,9 @@ export function signInErrorKey(error: unknown): string {
   if (code === "accounts_exist") return "auth.accountsExist";
   if (code === "setup_required") return "auth.registrationClosed";
   if (code === "authority_unreachable") return "auth.authorityUnreachable";
+  if (code === "not_hub_account") return "auth.notHubAccount";
+  if (code === "approval_denied") return "auth.approvalDenied";
+  if (code === "approval_expired") return "auth.approvalExpired";
   if (status === 401) return "auth.wrongCredentials";
   if (status === 429) return "auth.tooManyAttempts";
   return "auth.failed";
@@ -143,7 +152,15 @@ export function signInErrorKey(error: unknown): string {
 //   closed    → no account exists yet; only the administrator can start
 //   setup     → no account exists yet, and this machine creates the first
 //               administrator (the desktop app of a hub)
-export type SignInStep = "identify" | "password" | "register" | "pending" | "closed" | "setup";
+//   choose    → pick one of the accounts saved on this machine or browser
+//   create    → a new account, login name included, before identify decides
+//               whether it is a registration or the first administrator
+//   hub       → a node: sign in with its hub's account, or leave the hub
+//   approval  → a node waits for a hub to approve its sign-in
+//   leave     → a node leaves its hub for an account of its own
+export type SignInStep =
+  | "identify" | "password" | "register" | "pending" | "closed" | "setup" | "choose" | "create"
+  | "hub" | "approval" | "leave";
 
 export function nextSignInStep(
   result: Pick<IdentifyResult, "state" | "registration_open"> & { setup_required?: boolean },
@@ -160,4 +177,84 @@ export function nextSignInStep(
 export function identifyUnsupported(error: unknown): boolean {
   const status = errorStatus(error);
   return status === 404 || status === 405;
+}
+
+// Saved accounts. The desktop app's machine keeps its list itself
+// (device_saved_accounts.go); a browser keeps its own in local storage. Only
+// the login and display name are kept, never a password.
+const BROWSER_SAVED_ACCOUNTS_KEY = "agentmux.signIn.savedAccounts";
+const MAX_SAVED_ACCOUNTS = 8;
+
+function readStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function cleanSavedAccounts(value: unknown): SavedAccount[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || typeof (entry as SavedAccount).login !== "string") return [];
+    const { login, display_name, last_signed_in_at } = entry as SavedAccount;
+    return [{
+      login,
+      display_name: typeof display_name === "string" && display_name ? display_name : undefined,
+      last_signed_in_at: typeof last_signed_in_at === "string" ? last_signed_in_at : undefined,
+    }];
+  });
+}
+
+export function loadBrowserSavedAccounts(): SavedAccount[] {
+  try {
+    return cleanSavedAccounts(JSON.parse(readStorage()?.getItem(BROWSER_SAVED_ACCOUNTS_KEY) ?? "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function writeBrowserSavedAccounts(accounts: SavedAccount[]) {
+  try {
+    readStorage()?.setItem(BROWSER_SAVED_ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch {
+    // Storage may be full or blocked: the browser just won't remember.
+  }
+}
+
+// rememberSavedAccount puts the account that just signed in first.
+export function rememberSavedAccount(
+  accounts: SavedAccount[],
+  account: Pick<AccountIdentity, "login" | "display_name">,
+  now = new Date(),
+): SavedAccount[] {
+  const entry: SavedAccount = { login: account.login, display_name: account.display_name || undefined, last_signed_in_at: now.toISOString() };
+  return [entry, ...accounts.filter((saved) => saved.login !== account.login)].slice(0, MAX_SAVED_ACCOUNTS);
+}
+
+export function rememberBrowserAccount(account: Pick<AccountIdentity, "login" | "display_name">) {
+  writeBrowserSavedAccounts(rememberSavedAccount(loadBrowserSavedAccounts(), account));
+}
+
+export function forgetBrowserAccount(login: string) {
+  writeBrowserSavedAccounts(loadBrowserSavedAccounts().filter((saved) => saved.login !== login));
+}
+
+// accountInitials are the one or two letters an account's avatar shows.
+export function accountInitials(account: Pick<AccountIdentity, "login" | "display_name">): string {
+  const label = accountLabel(account).trim();
+  const words = label.split(/[\s._-]+/).filter(Boolean);
+  // Two Latin words ("Ning Wang", "ning.wang") give two letters; anything
+  // else, a CJK name included, its first character.
+  if (words.length >= 2 && /^[a-z]/i.test(words[0]) && /^[a-z]/i.test(words[1])) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  return (Array.from(label)[0] ?? "?").toUpperCase();
+}
+
+// accountHue gives each login a steady avatar color.
+export function accountHue(login: string): number {
+  let hash = 0;
+  for (const char of login) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  return hash % 360;
 }

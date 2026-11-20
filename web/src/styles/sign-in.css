@@ -1,0 +1,731 @@
+/* Sign-in, account choice and registration (SignInGate.tsx). */
+.sign-in-screen {
+  --sign-in-card-width: 400px;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 48px 16px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  background:
+    radial-gradient(1200px 520px at 50% -12%, color-mix(in srgb, var(--surface) 92%, transparent), transparent 70%),
+    var(--app-shell);
+}
+
+/* The desktop window has no title bar: the empty background moves it. */
+.sign-in-desktop {
+  --wails-draggable: drag;
+}
+
+.sign-in-desktop .sign-in-card,
+.sign-in-desktop button,
+.sign-in-desktop input {
+  --wails-draggable: no-drag;
+}
+
+.sign-in-column {
+  display: grid;
+  gap: 18px;
+  justify-items: center;
+  width: 100%;
+  max-width: var(--sign-in-card-width);
+  animation: sign-in-rise 220ms ease-out both;
+}
+
+.sign-in-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.sign-in-brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.sign-in-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(20, 20, 22, 0.04), 0 12px 32px rgba(20, 20, 22, 0.06);
+}
+
+:root[data-theme="dark"] .sign-in-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+.sign-in-checking {
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  color: var(--muted);
+}
+
+.sign-in-header {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 26px 28px 4px;
+  text-align: center;
+}
+
+.sign-in-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 6px;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.sign-in-header h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.sign-in-header p {
+  max-width: 320px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.sign-in-body {
+  display: grid;
+  gap: 14px;
+  padding: 20px 28px 26px;
+}
+
+.sign-in-card-footer {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 14px 28px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-subtle);
+  border-radius: 0 0 14px 14px;
+}
+
+.sign-in-footer {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Fields */
+.sign-in-field {
+  display: grid;
+  gap: 6px;
+}
+
+.sign-in-field > span:first-child {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.sign-in-field em {
+  margin-left: 4px;
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 450;
+}
+
+.sign-in-field > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sign-in-field input {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding-inline: 11px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+.sign-in-field input::placeholder {
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.sign-in-password {
+  position: relative;
+  display: block;
+}
+
+.sign-in-password input {
+  padding-right: 38px;
+}
+
+.sign-in-reveal {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.sign-in-reveal:hover {
+  color: var(--text);
+  background: var(--bg-subtle);
+}
+
+/* Buttons */
+.sign-in-submit,
+.sign-in-secondary {
+  justify-content: center;
+  width: 100%;
+  min-height: 36px;
+  font-size: 12.5px;
+  border-radius: 8px;
+}
+
+.sign-in-submit:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.sign-in-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.sign-in-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sign-in-back {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.sign-in-spin {
+  animation: sign-in-spin 900ms linear infinite;
+}
+
+/* Messages */
+.sign-in-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 11px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.sign-in-message > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.sign-in-error {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+.sign-in-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.sign-in-hint > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* Who is signing in */
+.sign-in-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 8px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.sign-in-who-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.sign-in-who-text strong,
+.sign-in-who-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sign-in-who-text strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sign-in-who-text small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sign-in-who .sign-in-link {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+/* Avatars */
+.sign-in-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: hsl(var(--avatar-hue) 32% 32%);
+  font-weight: 650;
+  line-height: 1;
+  background: hsl(var(--avatar-hue) 40% 90%);
+  border: 1px solid hsl(var(--avatar-hue) 30% 82%);
+  border-radius: 50%;
+}
+
+:root[data-theme="dark"] .sign-in-avatar {
+  color: hsl(var(--avatar-hue) 45% 82%);
+  background: hsl(var(--avatar-hue) 22% 26%);
+  border-color: hsl(var(--avatar-hue) 18% 34%);
+}
+
+/* Saved accounts */
+.sign-in-local {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--green);
+  background: var(--green-soft);
+  border: 1px solid color-mix(in srgb, var(--green) 20%, transparent);
+  border-radius: 10px;
+}
+
+.sign-in-local > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.sign-in-local > span {
+  display: grid;
+  gap: 2px;
+}
+
+.sign-in-local strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sign-in-local small {
+  color: var(--text-soft);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.sign-in-accounts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.sign-in-accounts li {
+  position: relative;
+}
+
+.sign-in-accounts li + li {
+  border-top: 1px solid var(--border);
+}
+
+.sign-in-account {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 44px 10px 12px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.sign-in-account:hover,
+.sign-in-account:focus-visible {
+  background: var(--bg-muted);
+}
+
+.sign-in-account:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-strong) 35%, transparent);
+  outline-offset: -2px;
+}
+
+.sign-in-account-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sign-in-account-text strong,
+.sign-in-account-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sign-in-account-text strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sign-in-account-text small {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.sign-in-account-text small:empty {
+  display: none;
+}
+
+.sign-in-account-go {
+  flex: none;
+  color: var(--muted);
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+
+.sign-in-account:hover .sign-in-account-go {
+  color: var(--text);
+  transform: translateX(2px);
+}
+
+/* The remove button sits over the row's right edge, where the chevron
+   steps aside for it on hover. */
+.sign-in-forget {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.sign-in-accounts li:hover .sign-in-forget,
+.sign-in-forget:focus-visible {
+  opacity: 1;
+}
+
+.sign-in-accounts li:hover .sign-in-account-go {
+  opacity: 0;
+}
+
+.sign-in-forget:hover {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 25%, transparent);
+}
+
+@media (hover: none) {
+  .sign-in-forget {
+    opacity: 1;
+  }
+
+  .sign-in-account-go {
+    opacity: 0;
+  }
+}
+
+.sign-in-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sign-in-divider::before,
+.sign-in-divider::after {
+  flex: 1;
+  height: 1px;
+  content: "";
+  background: var(--border);
+}
+
+.sign-in-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sign-in-choices .ghost-action {
+  justify-content: center;
+  min-height: 34px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+@media (max-width: 420px) {
+  .sign-in-screen {
+    padding-block: 28px;
+  }
+
+  .sign-in-header,
+  .sign-in-body,
+  .sign-in-card-footer {
+    padding-inline: 20px;
+  }
+
+  .sign-in-choices {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes sign-in-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes sign-in-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sign-in-column,
+  .sign-in-spin {
+    animation: none;
+  }
+}
+
+/* A node's sign-in: the hub's account, waiting for approval, leaving. */
+.sign-in-hub-accounts li {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.sign-in-hub-account {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.sign-in-hub-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sign-in-hub-actions .action,
+.sign-in-hub-actions .ghost-action {
+  justify-content: center;
+  min-height: 32px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.sign-in-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px 12px;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  background: var(--bg-muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+}
+
+.sign-in-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid color-mix(in srgb, var(--amber) 25%, transparent);
+  border-radius: 10px;
+}
+
+.sign-in-warning > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.sign-in-warning > span {
+  display: grid;
+  gap: 2px;
+}
+
+.sign-in-warning strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sign-in-warning small {
+  color: var(--text-soft);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.sign-in-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.sign-in-check input {
+  flex: none;
+  width: 14px;
+  min-height: 0;
+  height: 14px;
+  margin: 2px 0 0;
+}
+
+.action.sign-in-danger:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.action.sign-in-danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--red) 85%, black);
+  border-color: color-mix(in srgb, var(--red) 85%, black);
+}
+
+@media (max-width: 420px) {
+  .sign-in-hub-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A hub's prompt for machines asking to sign in with its account. */
+.hub-approvals {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+}
+
+.hub-approval {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 12px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-floating);
+  animation: sign-in-rise 200ms ease-out both;
+}
+
+.hub-approval-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-soft);
+  background: var(--bg-subtle);
+  border-radius: 9px;
+}
+
+.hub-approval-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.hub-approval-text strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.hub-approval-text small {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.hub-approval-text .hub-approval-error {
+  color: var(--red);
+}
+
+.hub-approval-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -52,6 +52,12 @@ var memberRoutePolicy = map[string][]string{
 	"/api/v1/capabilities": {http.MethodGet},
 	// Their own account.
 	"/api/v1/auth/password": {http.MethodPost},
+	// Signing their machine out, from its own desktop app: the handler
+	// still requires the machine itself (device_account.go).
+	"/api/v1/auth/device/sign-out": {http.MethodPost},
+	// Approving a machine that asks to sign in with their account.
+	"/api/v1/auth/approvals":        {http.MethodGet},
+	"/api/v1/auth/approvals/decide": {http.MethodPost},
 	// The devices they paired. Device handlers narrow every call to them.
 	"/api/v1/devices":               {http.MethodGet, http.MethodPost, http.MethodDelete},
 	"/api/v1/devices/pairing-codes": {http.MethodPost},

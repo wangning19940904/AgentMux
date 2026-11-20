@@ -118,6 +118,7 @@ import type {
   AccountRole,
   AuthSession,
   IdentifyResult,
+  DeviceApproval,
   PairedDevice,
   PhoneDevice,
   TerminalSessionView,
@@ -421,6 +422,19 @@ export const api = {
   deviceSetup: (payload: { login: string; display_name?: string; password: string }) =>
     postChecked<{ account: AccountIdentity; existing?: boolean }>("/api/v1/auth/device/setup", payload, { local: true }),
   deviceSignOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/device/sign-out", {}, { local: true }),
+  deviceForget: (login: string) => postChecked<{ ok: boolean }>("/api/v1/auth/device/forget", { login }, { local: true }),
+  // A node signs in with its hub's account: by password, or once a hub
+  // approves. Any other account means leaving the hub first.
+  deviceRequestApproval: (login: string) =>
+    postChecked<{ approval: DeviceApproval }>("/api/v1/auth/device/approval", { login }, { local: true }),
+  deviceApprovalStatus: (id: string) =>
+    getChecked<{ approval?: DeviceApproval; account?: AccountIdentity }>(`/api/v1/auth/device/approval?id=${encodeURIComponent(id)}`, { local: true }),
+  deviceLeaveHub: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: AccountIdentity }>("/api/v1/auth/device/leave-hub", payload, { local: true }),
+  // Sign-ins from other machines waiting for the signed-in account.
+  pendingApprovals: () => getChecked<{ approvals: DeviceApproval[] }>("/api/v1/auth/approvals", { local: true }),
+  decideApproval: (id: string, approve: boolean) =>
+    postChecked<{ approval: DeviceApproval }>("/api/v1/auth/approvals/decide", { id, approve }, { local: true }),
   signOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/sign-out", {}, { local: true }),
   setupFirstAdmin: (payload: { login: string; display_name?: string; password: string }) =>
     // existing: accounts already existed at the authority (another hub of
