@@ -22,6 +22,7 @@ import (
 	"github.com/wangning19940904/AgentMux/framework/health"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
+	"github.com/wangning19940904/AgentMux/liveturns"
 	"github.com/wangning19940904/AgentMux/mailbox"
 	orchestrationpkg "github.com/wangning19940904/AgentMux/orchestration"
 	pushpkg "github.com/wangning19940904/AgentMux/push"
@@ -46,6 +47,7 @@ type Server struct {
 	sender             core.ChannelDeliverySender
 	invoker            core.Invoker
 	openAIResponses    *openAIResponseRegistry
+	liveTurns          *liveturns.Registry // invocations that run on after their caller leaves
 	openAIFiles        *openAIFileRegistry
 	connect            *core.ConnectService
 	memory             core.MemoryStore
@@ -170,6 +172,7 @@ func New(deps Dependencies) *Server {
 		hostMetrics:       hostmetrics.New(hostmetrics.Options{}),
 		ttsModels:         ttspkg.NewManager("", log),
 		openAIResponses:   newOpenAIResponseRegistry(),
+		liveTurns:         liveturns.New(),
 		openAIFiles:       newOpenAIFileRegistry(),
 		orchestrations:    deps.Orchestrations,
 		feishuAutomations: map[string]*feishuAutomationSession{},
@@ -276,6 +279,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		return err
 	}
 	defer s.keepAwake.Stop()
+	defer s.liveTurns.Close()
 	defer s.hostMetrics.Close()
 	if s.remote != nil {
 		defer s.remote.Close()

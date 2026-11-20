@@ -328,6 +328,21 @@ type SuperAgentTicket struct {
 	// given for that; empty when the agent did not allow dispatch.
 	Helpers     []SuperAgentHelper `json:"helpers,omitempty"`
 	DispatchKey string             `json:"dispatch_key,omitempty"`
+
+	// Turn is the running turn of a Ticket whose worker keeps it going
+	// without this AgentMux process, so a restart rejoins it instead of
+	// starting it over. It is cleared when the turn ends.
+	Turn *SuperAgentTicketTurn `json:"turn,omitempty"`
+}
+
+// SuperAgentTicketTurn is a worker turn AgentMux can rejoin. Delivered is how
+// many of the Ticket's Inputs the turn was given; later ones wait for the
+// next turn.
+type SuperAgentTicketTurn struct {
+	InvocationID string    `json:"invocation_id"`
+	HostID       string    `json:"host_id,omitempty"`
+	Delivered    int       `json:"delivered"`
+	StartedAt    time.Time `json:"started_at"`
 }
 
 // SuperAgentTicketSignal is one stretch of time in which a supervision

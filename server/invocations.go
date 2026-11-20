@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/liveturns"
 )
 
 const maxInvocationRequestBytes = 1 << 20
@@ -95,6 +97,21 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 	if !decoded {
 		return
 	}
+	// ?detach=1 keeps the turn running when the client disconnects, as the
+	// hub asks of its remote workers. The client rejoins with
+	// GET /api/v1/invocations/{id}/events and stops the turn with
+	// POST /api/v1/invocations/{id}/cancel.
+	if r.URL.Query().Get("detach") == "1" && s.liveTurns != nil {
+		id, err := s.liveTurns.Start(r.Context(), func(ctx context.Context, sink core.InvocationEventSink) (core.InvocationResult, error) {
+			return streamer.InvokeStream(ctx, req, sink)
+		})
+		if err != nil {
+			writeErr(w, invocationErrorStatus(err), err.Error())
+			return
+		}
+		s.liveTurns.Serve(w, r, id, 0)
+		return
+	}
 
 	streamCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -172,6 +189,34 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+}
+
+// handleInvocationEvents rejoins a detached invocation: it replays the events
+// after the "after" sequence number, then follows the turn to its end.
+func (s *Server) handleInvocationEvents(w http.ResponseWriter, r *http.Request) {
+	if s.liveTurns == nil {
+		writeErr(w, http.StatusNotFound, liveturns.ErrNotFound.Error())
+		return
+	}
+	var after int64
+	if raw := strings.TrimSpace(r.URL.Query().Get("after")); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeErr(w, http.StatusBadRequest, "after must be a sequence number")
+			return
+		}
+		after = parsed
+	}
+	s.liveTurns.Serve(w, r, r.PathValue("id"), after)
+}
+
+// handleInvocationCancel stops a detached invocation.
+func (s *Server) handleInvocationCancel(w http.ResponseWriter, r *http.Request) {
+	if s.liveTurns == nil || !s.liveTurns.Cancel(r.PathValue("id")) {
+		writeErr(w, http.StatusNotFound, liveturns.ErrNotFound.Error())
+		return
+	}
+	writeOK(w)
 }
 
 func writeInvocationSSE(w io.Writer, flusher http.Flusher, event core.InvocationStreamEvent) error {

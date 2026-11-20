@@ -252,7 +252,9 @@ func New(options Options) *Service {
 }
 
 // Start recovers interrupted work and begins routing. A Ticket that was running
-// when the daemon stopped resumes on the same conversation with a recovery note.
+// when the daemon stopped rejoins its turn when its worker kept it going (a
+// remote worker); otherwise it resumes on the same conversation with a
+// recovery note.
 func (s *Service) Start(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	s.ctx, s.cancel = ctx, cancel
@@ -261,9 +263,13 @@ func (s *Service) Start(parent context.Context) error {
 		cancel()
 		return fmt.Errorf("recover super agent tickets: %w", err)
 	}
+	var rejoin []core.SuperAgentTicket
 	for _, ticket := range interrupted {
-		ticket.Status = core.SuperAgentTicketQueued
-		ticket.Inputs = append([]string{recoveryNote}, ticket.Inputs...)
+		if s.canRejoin(ticket) {
+			rejoin = append(rejoin, ticket)
+			continue
+		}
+		requeueInterrupted(&ticket)
 		ticket.UpdatedAt = s.now().UTC()
 		closeSignals(&ticket, ticket.UpdatedAt)
 		if err := s.store.UpsertSuperAgentTicket(ctx, ticket); err != nil {
@@ -271,6 +277,9 @@ func (s *Service) Start(parent context.Context) error {
 			return fmt.Errorf("recover super agent ticket %s: %w", ticket.ID, err)
 		}
 		s.recordTicket(ctx, ticket)
+	}
+	for _, ticket := range rejoin {
+		s.rejoinTicket(ctx, ticket)
 	}
 	if created, err := s.UnifyAgents(ctx); err != nil {
 		// Chats do not depend on the agent records: the channel engine still
@@ -1140,23 +1149,105 @@ func (s *Service) startQueued(ctx context.Context) error {
 		if needsWorkspace(ticket) {
 			holders[s.workspaceKey(*ticket.Workspace)] = ticket
 		}
-		s.wg.Add(1)
-		go func(agent core.SuperAgent, ticketID string) {
-			defer s.wg.Done()
-			defer func() {
-				s.mu.Lock()
-				delete(s.running, agent.ID+"|"+ticketID)
-				delete(s.stopping, ticketID)
-				delete(s.turnStarts, ticketID)
-				s.mu.Unlock()
-				cancel()
-				s.endHelpers(ticketID)
-				s.notify()
-			}()
-			s.runTicket(runCtx, ctx, agent, ticketID)
-		}(*agent, ticket.ID)
+		run, ticketID := *agent, ticket.ID
+		s.goTurn(run.ID, ticketID, cancel, func() { s.runTicket(runCtx, ctx, run, ticketID) })
 	}
 	return nil
+}
+
+// goTurn runs a Ticket's turn, already entered in s.running with cancel, and
+// clears up after it.
+func (s *Service) goTurn(agentID, ticketID string, cancel context.CancelFunc, run func()) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			delete(s.running, agentID+"|"+ticketID)
+			delete(s.stopping, ticketID)
+			delete(s.turnStarts, ticketID)
+			s.mu.Unlock()
+			cancel()
+			s.endHelpers(ticketID)
+			s.notify()
+		}()
+		run()
+	}()
+}
+
+// requeueInterrupted sends a Ticket whose turn was lost back to the queue.
+// The worker resumes its conversation and is told why.
+func requeueInterrupted(ticket *core.SuperAgentTicket) {
+	ticket.Status = core.SuperAgentTicketQueued
+	ticket.Inputs = append([]string{recoveryNote}, ticket.Inputs...)
+	ticket.Turn = nil
+}
+
+// canRejoin reports whether a Ticket found running at start has a turn its
+// worker kept going.
+func (s *Service) canRejoin(ticket core.SuperAgentTicket) bool {
+	_, resumable := s.workers.(TurnResumer)
+	return resumable && ticket.Turn != nil && ticket.Turn.InvocationID != "" && ticket.Worker.HostID != "" &&
+		ticket.Turn.HostID == ticket.Worker.HostID
+}
+
+// rejoinTicket follows a turn the previous process started. The Ticket stays
+// running throughout, so the people waiting on it see no change.
+func (s *Service) rejoinTicket(ctx context.Context, ticket core.SuperAgentTicket) {
+	agent, err := s.store.GetSuperAgent(ctx, ticket.SuperAgentID)
+	if err != nil || agent == nil || !agent.Enabled {
+		if err := s.mutateTicket(ctx, ticket.ID, func(current *core.SuperAgentTicket) error {
+			if current.Status == core.SuperAgentTicketRunning {
+				requeueInterrupted(current)
+			}
+			return nil
+		}); err != nil {
+			s.log.Error("recover super agent ticket", "ticket", ticket.ID, "err", err)
+		}
+		return
+	}
+	// The turn keeps the deadline it started with.
+	timeout := workerTimeout
+	if started := ticket.Turn.StartedAt; !started.IsZero() {
+		timeout = max(workerTimeout-s.now().Sub(started), time.Minute)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	s.mu.Lock()
+	s.running[agent.ID+"|"+ticket.ID] = cancel
+	s.turnStarts[ticket.ID] = ticket.Turn.StartedAt
+	if ticket.Turn.StartedAt.IsZero() {
+		s.turnStarts[ticket.ID] = s.now().UTC()
+	}
+	s.mu.Unlock()
+	s.log.Info("super agent rejoins a turn that ran on through the restart", "ticket", ticket.ID, "invocation", ticket.Turn.InvocationID)
+	s.goTurn(agent.ID, ticket.ID, cancel, func() { s.resumeTicket(runCtx, ctx, *agent, ticket.ID) })
+}
+
+// resumeTicket finishes a turn rejoined after a restart. If the worker no
+// longer has it, the Ticket is recovered as before.
+func (s *Service) resumeTicket(runCtx, ctx context.Context, agent core.SuperAgent, ticketID string) {
+	ticket, err := s.store.GetSuperAgentTicket(ctx, ticketID)
+	if err != nil || ticket == nil || ticket.Status != core.SuperAgentTicketRunning || ticket.Turn == nil {
+		return
+	}
+	turn := *ticket.Turn
+	placement, _ := s.placeTicket(ctx, *ticket)
+	answer, runErr := s.workers.(TurnResumer).Resume(runCtx, ticket.Worker, turn.InvocationID, RunOptions{
+		Progress: s.progressRecorder(*ticket), Detach: ctx,
+	})
+	if errors.Is(runErr, ErrTurnGone) && ctx.Err() == nil {
+		s.log.Info("super agent ticket's turn did not survive the restart; it starts over", "ticket", ticketID)
+		if err := s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
+			if current.Status == core.SuperAgentTicketRunning {
+				requeueInterrupted(current)
+			}
+			return nil
+		}); err != nil {
+			s.log.Error("recover super agent ticket", "ticket", ticketID, "err", err)
+		}
+		return
+	}
+	s.finishTurn(runCtx, ctx, agent, *ticket, placement, turn.Delivered, answer, runErr)
 }
 
 // runTicket executes one turn. runCtx ends with a stop or the turn's deadline;
@@ -1172,6 +1263,9 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		}
 		current.Status = core.SuperAgentTicketRunning
 		current.Attempts++
+		// A turn rejoinable from an earlier attempt is over; this one is
+		// recorded once its worker names it.
+		current.Turn = nil
 		if current.StartedAt.IsZero() {
 			current.StartedAt = s.now().UTC()
 		}
@@ -1198,9 +1292,32 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		s.log.Warn("place super agent ticket", "ticket", ticketID, "err", err)
 	}
 	s.appendTicketLog(ticket, ticketInputsFile, input)
+	startedAt := s.now().UTC()
 	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input, RunOptions{
 		Dir: placement.ConversationDir, BaseRef: s.baseCommit(ctx, ticket), Progress: s.progressRecorder(ticket),
+		Detach: ctx,
+		Started: func(invocationID string) {
+			// Saved so a restart rejoins the turn instead of repeating it.
+			err := s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
+				if current.Status == core.SuperAgentTicketRunning {
+					current.Turn = &core.SuperAgentTicketTurn{
+						InvocationID: invocationID, HostID: ticket.Worker.HostID, Delivered: delivered, StartedAt: startedAt,
+					}
+				}
+				return nil
+			})
+			if err != nil && ctx.Err() == nil {
+				s.log.Warn("record super agent turn", "ticket", ticketID, "err", err)
+			}
+		},
 	})
+	s.finishTurn(runCtx, ctx, agent, ticket, placement, delivered, answer, runErr)
+}
+
+// finishTurn records a turn's outcome and tells people about it. delivered is
+// how many of the Ticket's inputs the turn was given.
+func (s *Service) finishTurn(runCtx, ctx context.Context, agent core.SuperAgent, ticket core.SuperAgentTicket, placement ticketPlacement, delivered int, answer string, runErr error) {
+	ticketID := ticket.ID
 	if ctx.Err() != nil {
 		return
 	}
@@ -1219,6 +1336,7 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 		if current.Status != core.SuperAgentTicketRunning {
 			return nil // Stopped while this turn was finishing.
 		}
+		current.Turn = nil
 		replyTo = current.Reply
 		now := s.now().UTC()
 		if runErr != nil {
@@ -1311,6 +1429,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	}
 	now := s.now().UTC()
 	ticket.Status = core.SuperAgentTicketStopped
+	ticket.Turn = nil
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
 	closeSignals(ticket, now)

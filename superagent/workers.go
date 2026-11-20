@@ -11,10 +11,12 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/liveturns"
 	"github.com/wangning19940904/AgentMux/remote"
 )
 
@@ -39,7 +41,24 @@ type RunOptions struct {
 	BaseRef string
 	// Progress, when set, receives the turn's events as they happen.
 	Progress func(core.InvocationStreamEvent)
+	// Started, when set, receives the id of a remote turn as soon as it has
+	// one, so a restarted AgentMux can rejoin it with Resume.
+	Started func(invocationID string)
+	// Detach is the context of the process running the turn's caller. When
+	// it has ended along with the turn's context, AgentMux is shutting down
+	// and a remote turn is left running to be rejoined; otherwise ending the
+	// turn's context stops it.
+	Detach context.Context
 }
+
+// TurnResumer rejoins a turn a worker kept running while AgentMux was away.
+type TurnResumer interface {
+	Resume(ctx context.Context, worker core.SuperAgentWorker, invocationID string, options RunOptions) (string, error)
+}
+
+// ErrTurnGone means the worker no longer has the turn: it ended long ago, its
+// machine restarted, or it runs a daemon that cannot keep turns.
+var ErrTurnGone = errors.New("the worker no longer has this turn")
 
 // retryableError marks a failure of the path to a worker, not of its work.
 type retryableError struct{ err error }
@@ -79,7 +98,7 @@ type Fleet struct {
 
 func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error) {
 	if worker.HostID != "" {
-		return f.runRemote(ctx, worker, conversationID, input, options.Progress)
+		return f.runRemote(ctx, worker, conversationID, input, options)
 	}
 	request := core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: options.Dir, WorktreeBaseRef: options.BaseRef}
 	var result core.InvocationResult
@@ -217,9 +236,12 @@ func (f *Fleet) remoteAgent(ctx context.Context, worker core.SuperAgentWorker) (
 }
 
 // runRemote streams the invocation because a synchronous request would look
-// idle to the tunnel for the length of a turn. Closing the stream on cancel is
-// what stops the remote turn: the remote handler's context ends with it.
-func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, progress func(core.InvocationStreamEvent)) (string, error) {
+// idle to the tunnel for the length of a turn. The remote daemon runs it
+// detached: losing the stream does not stop it, so a broken stream is
+// rejoined, and a restarted AgentMux rejoins it with Resume. Ending ctx stops
+// the remote turn, unless options.Detach has ended too, which means this
+// process is shutting down and leaves the turn for the next one.
+func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error) {
 	host, client, err := f.remoteClient(worker.HostID)
 	if err != nil {
 		return "", err
@@ -228,33 +250,176 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 	if err != nil {
 		return "", err
 	}
-	streamCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	request, err := remoteRequest(streamCtx, host, http.MethodPost, "/api/v1/invocations/stream", bytes.NewReader(body))
+	turn := &remoteTurn{host: host, client: client, options: options}
+	answer, err := turn.follow(ctx, func(ctx context.Context) (*http.Request, error) {
+		request, err := remoteRequest(ctx, host, http.MethodPost, "/api/v1/invocations/stream", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		// A daemon without detached turns ignores this.
+		request.URL.RawQuery = "detach=1"
+		return request, nil
+	}, 0)
+	turn.release(ctx)
+	return answer, err
+}
+
+// Resume rejoins a remote turn this process, or one before it, started. The
+// events already seen are not reported to options.Progress again.
+func (f *Fleet) Resume(ctx context.Context, worker core.SuperAgentWorker, invocationID string, options RunOptions) (string, error) {
+	if worker.HostID == "" {
+		return "", ErrTurnGone
+	}
+	host, client, err := f.remoteClient(worker.HostID)
 	if err != nil {
 		return "", err
 	}
-	request.Header.Set("Content-Type", "application/json")
+	turn := &remoteTurn{host: host, client: client, options: options, id: invocationID}
+	answer, err := turn.rejoin(ctx, time.Now())
+	turn.release(ctx)
+	return answer, err
+}
+
+const (
+	// remoteRejoinWindow is how long a broken stream is retried. A
+	// restarted hub needs its machines to link again first.
+	remoteRejoinWindow = 3 * time.Minute
+	remoteRejoinDelay  = 2 * time.Second
+	remoteCancelTime   = 10 * time.Second
+)
+
+// remoteTurn is one turn on a remote daemon, followed across broken streams.
+type remoteTurn struct {
+	host    remote.Host
+	client  *http.Client
+	options RunOptions
+	// id is the remote invocation id, known from the first event; seq is the
+	// last event seen.
+	id  string
+	seq int64
+}
+
+// follow opens the stream newRequest makes and reads it to the turn's
+// outcome, rejoining by id when the stream breaks. Events up to quiet are
+// not reported as progress, because they were seen before.
+func (t *remoteTurn) follow(ctx context.Context, newRequest func(context.Context) (*http.Request, error), quiet int64) (string, error) {
+	answer, err := t.stream(ctx, newRequest, quiet)
+	var broken streamBroken
+	if !errors.As(err, &broken) {
+		return answer, err
+	}
+	if t.id == "" {
+		return "", retryableError(broken)
+	}
+	answer, err = t.rejoin(ctx, time.Now())
+	if errors.Is(err, ErrTurnGone) {
+		// An older daemon stops the turn when its stream breaks.
+		return "", retryableError(broken)
+	}
+	return answer, err
+}
+
+// rejoin attaches to the turn by id until it ends, retrying broken streams
+// for remoteRejoinWindow from since.
+func (t *remoteTurn) rejoin(ctx context.Context, since time.Time) (string, error) {
+	var last error
+	for {
+		seen := t.seq
+		answer, err := t.stream(ctx, func(ctx context.Context) (*http.Request, error) {
+			path := "/api/v1/invocations/" + url.PathEscape(t.id) + "/events"
+			request, err := remoteRequest(ctx, t.host, http.MethodGet, path, nil)
+			if err != nil {
+				return nil, err
+			}
+			request.URL.RawQuery = url.Values{"after": {strconv.FormatInt(t.seq, 10)}}.Encode()
+			return request, nil
+		}, -1)
+		var broken streamBroken
+		if !errors.As(err, &broken) {
+			return answer, err
+		}
+		last = broken.err
+		if time.Since(since) > remoteRejoinWindow {
+			return "", retryableError{fmt.Errorf("remote %s: could not rejoin the turn: %w", t.host.Name, last)}
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(remoteRejoinDelay):
+		}
+		if t.seq > seen {
+			// The stream got somewhere before it broke: the window starts
+			// again.
+			since = time.Now()
+		}
+	}
+}
+
+// streamBroken is a stream that ended or failed without the turn's outcome.
+type streamBroken struct{ err error }
+
+func (e streamBroken) Error() string { return e.err.Error() }
+func (e streamBroken) Unwrap() error { return e.err }
+
+// stream makes one request and reads its events. quiet is the last sequence
+// number not to report as progress; -1 takes it from the rejoin response.
+func (t *remoteTurn) stream(ctx context.Context, newRequest func(context.Context) (*http.Request, error), quiet int64) (string, error) {
+	streamCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	request, err := newRequest(streamCtx)
+	if err != nil {
+		return "", err
+	}
 	request.Header.Set("Accept", "text/event-stream")
-	response, err := client.Do(request)
+	response, err := t.client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", retryableError{fmt.Errorf("remote %s: %w", host.Name, err)}
+		return "", streamBroken{fmt.Errorf("remote %s: %w", t.host.Name, err)}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		message := fmt.Errorf("remote %s: %s", host.Name, remoteErrorMessage(response))
-		// A conflict means the remote is still finishing this conversation,
-		// typically after our side lost the tunnel; a later attempt continues it.
-		if response.StatusCode == http.StatusConflict || response.StatusCode >= http.StatusBadGateway {
+		message := fmt.Errorf("remote %s: %s", t.host.Name, remoteErrorMessage(response))
+		switch {
+		case request.Method == http.MethodGet && response.StatusCode < http.StatusInternalServerError && response.StatusCode != http.StatusConflict:
+			// The daemon does not have the turn, or this daemon or the
+			// hub's relay predates rejoining.
+			return "", ErrTurnGone
+		case response.StatusCode == http.StatusConflict:
+			// The remote is still finishing this conversation, typically
+			// after a turn that could not be rejoined; a later attempt
+			// continues it.
+			return "", retryableError{message}
+		case response.StatusCode >= http.StatusBadGateway:
+			// The hub's relay or the tunnel failed, not the remote.
+			if request.Method == http.MethodGet {
+				return "", streamBroken{message}
+			}
 			return "", retryableError{message}
 		}
 		return "", message
 	}
+	if quiet < 0 {
+		quiet, _ = strconv.ParseInt(response.Header.Get(liveturns.SeqHeader), 10, 64)
+	}
 	idle := time.AfterFunc(remoteIdleTimeout, func() { cancel(errors.New("no data from the remote daemon")) })
 	defer idle.Stop()
+	progress := func(seq int64, event core.InvocationStreamEvent) {
+		if seq > t.seq {
+			t.seq = seq
+		}
+		if t.id == "" && event.InvocationID != "" {
+			t.id = event.InvocationID
+			if t.options.Started != nil {
+				t.options.Started(t.id)
+			}
+		}
+		if t.options.Progress != nil && (seq == 0 || seq > quiet) {
+			t.options.Progress(event)
+		}
+	}
 	return readInvocationStream(response.Body, func() { idle.Reset(remoteIdleTimeout) }, progress, func(cause error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -262,15 +427,40 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 		if reason := context.Cause(streamCtx); reason != nil {
 			cause = reason
 		}
-		return retryableError{fmt.Errorf("remote %s: stream ended early: %w", host.Name, cause)}
+		return streamBroken{fmt.Errorf("remote %s: stream ended early: %w", t.host.Name, cause)}
 	})
+}
+
+// release cancels the remote turn when ctx ended for a reason other than
+// this process shutting down: a stop or the turn's deadline.
+func (t *remoteTurn) release(ctx context.Context) {
+	if ctx.Err() == nil || t.id == "" {
+		return
+	}
+	if t.options.Detach != nil && t.options.Detach.Err() != nil {
+		return
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), remoteCancelTime)
+	defer cancel()
+	request, err := remoteRequest(cancelCtx, t.host, http.MethodPost, "/api/v1/invocations/"+url.PathEscape(t.id)+"/cancel", nil)
+	if err != nil {
+		return
+	}
+	response, err := t.client.Do(request)
+	if err != nil {
+		return
+	}
+	_ = response.Body.Close()
 }
 
 // readInvocationStream reads the invocation SSE contract. Only a terminal event
 // counts as an outcome: a stream that ends without one means the path failed.
-func readInvocationStream(body io.Reader, activity func(), progress func(core.InvocationStreamEvent), interrupted func(error) error) (string, error) {
+// Each event comes with its SSE id, the turn's sequence number, or 0 from a
+// daemon that sends none.
+func readInvocationStream(body io.Reader, activity func(), progress func(int64, core.InvocationStreamEvent), interrupted func(error) error) (string, error) {
 	reader := bufio.NewReaderSize(body, 64*1024)
 	var data strings.Builder
+	var seq int64
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
@@ -278,6 +468,8 @@ func readInvocationStream(body io.Reader, activity func(), progress func(core.In
 		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
+		case strings.HasPrefix(trimmed, "id:"):
+			seq, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(trimmed, "id:")), 10, 64)
 		case strings.HasPrefix(trimmed, "data:"):
 			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(trimmed, "data:"), " "))
 		case trimmed == "" && data.Len() > 0:
@@ -287,8 +479,9 @@ func readInvocationStream(body io.Reader, activity func(), progress func(core.In
 			}
 			data.Reset()
 			if progress != nil {
-				progress(event)
+				progress(seq, event)
 			}
+			seq = 0
 			switch event.Type {
 			case "completed":
 				if event.Result != nil {
