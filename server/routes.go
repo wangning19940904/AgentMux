@@ -127,5 +127,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+consoleEnterPath, s.handleConsoleEnter)
 	s.registerModuleRoutes()
 	s.registerObservabilityRoutes()
+	s.registerDiagnosticsRoutes()
 	s.registerWeb(s.mux)
 }

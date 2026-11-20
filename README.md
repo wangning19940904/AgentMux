@@ -297,7 +297,19 @@ amux dispatch start|read --token <ticket token> ...  # a Ticket's worker starts 
 amux hub pair|devices|remove     # manage machines connected to this hub
 amux accounts list|create|disable|enable|set-role|reset-password|assign-device
 amux join <token> | amux leave   # connect this machine to a hub, or leave it
+amux diagnose [-o <dir|file.zip>] [--include-content] [--turns 100]  # write a redacted diagnostics zip
 ```
+
+### 诊断包
+
+`amux diagnose` 在本机写一个用于排查问题的 zip，**不上传任何内容**。命令会列出包内每个文件及大小，以及 zip 写到了哪里；发给别人之前请先打开看看。
+
+- **内容**：`manifest.json`（生成时间、哪些来源读到了、哪些没读到及原因）、`system.json`（AgentMux 版本与构建、操作系统与架构）、`config.json`（生效配置，已脱敏）；守护进程在运行时附带 `daemon/` 下的状态、框架健康与版本、渠道与智能体状态、Hub 连接、已接入机器与远程机器、Hub 复制状态和系统指标；能连上数据库时附带 `database/` 下的渠道与智能体摘要、最近的对话轮次（状态、耗时、错误）和最近的错误（失败的轮次、触发器、观测错误）。
+- **脱敏**：不读取任何凭据文件、SSH 密钥或 Cookie；名字像密钥的字段（token、secret、password、api_key……）以及 `env`、`headers` 中的值替换为 `[REDACTED]`；配置、数据库和环境变量里的已知密钥无论出现在哪里都会被替换；主目录写作 `~`。
+- **消息内容**：提示词、标题、预览等默认只保留字数；加 `--include-content` 才会包含。
+- **离线**：守护进程没运行时命令会明确说明，并照常收集版本、系统、配置和本机已安装的框架；数据库连不上时同样跳过并在 `manifest.json` 里注明。命令只读数据库，不会启动或迁移它。
+
+Console 管理员也可以在 **设置 → 关于 → 诊断信息** 下载同样的 zip（`GET /api/v1/diagnostics`，可选 `?include_content=1`）。
 
 ## HTTP API(节选)
 

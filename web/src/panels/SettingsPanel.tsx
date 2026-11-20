@@ -6,6 +6,7 @@ import { KeepAwakeControl } from "../KeepAwakeControl";
 import { useI18n, type Language, type ThemeMode } from "../i18n";
 import { NotificationSettings } from "../pwa/NotificationSettings";
 import { AboutSettings, MenuBarPanel } from "./MenuBarPanel";
+import { DiagnosticsSettings } from "./DiagnosticsSettings";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../settingsNavigation";
 
 const LANGUAGE_OPTIONS = [
@@ -65,7 +66,7 @@ export function SettingsPanel({
             {item.id === "general" && <GeneralSettings {...preferences} />}
             {item.id === "menubar" && <MenuBarPanel />}
             {item.id === "notifications" && <NotificationSettings />}
-            {item.id === "about" && <AboutSettings />}
+            {item.id === "about" && <div className="settings-stack"><AboutSettings /><DiagnosticsSettings /></div>}
           </div>
         );
       })}
