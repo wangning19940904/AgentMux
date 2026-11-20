@@ -421,8 +421,9 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
               </div>
               <div className="table-actions">
                 <span className={`source-badge ${agentSourceClass(draft)}`}>{t(agentSourceLabelKey(draft))}</span>
-                <button className="ghost-action icon-action" onClick={closeDrawer} title={t("common.close")}>
-                  <X size={15} />
+                <button className="ghost-action drawer-close" type="button" onClick={closeDrawer}>
+                  <X size={15} aria-hidden="true" />
+                  {t("common.close")}
                 </button>
               </div>
             </div>
@@ -490,7 +491,7 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                 </div>
               </div>
               <div className="table-actions">
-                <button className="ghost-action icon-action" onClick={closeWork} title={t("common.close")}><X size={15} /></button>
+                <button className="ghost-action drawer-close" type="button" onClick={closeWork}><X size={15} aria-hidden="true" />{t("common.close")}</button>
               </div>
             </div>
             <div className="surface-body provider-builder-body agent-drawer-body">

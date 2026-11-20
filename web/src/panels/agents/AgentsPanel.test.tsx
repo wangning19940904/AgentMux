@@ -237,7 +237,7 @@ it("lists an agent that lives on another machine and opens it there", async () =
     expect(container.querySelector('.super-agent-form select[aria-label="Machine"]')).toBeNull();
     expect(container.querySelector("article strong")?.textContent).toBe("Ops");
 
-    const close = [...container.querySelectorAll<HTMLButtonElement>(".provider-drawer button")].find((item) => item.title === "Close")!;
+    const close = container.querySelector<HTMLButtonElement>(".provider-drawer .drawer-close")!;
     await act(async () => close.click());
     expect(container.querySelector("#super-agent-drawer-title")).toBeNull();
     expect(activeMachineScope()).toBe("all");

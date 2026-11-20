@@ -229,7 +229,7 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
             </div>
           </div>
           <div className="table-actions">
-            <button className="ghost-action icon-action" onClick={onClose} title={t("common.close")}><X size={15} /></button>
+            <button className="ghost-action drawer-close" type="button" onClick={onClose}><X size={15} aria-hidden="true" />{t("common.close")}</button>
           </div>
         </div>
         <div className="surface-body provider-builder-body agent-drawer-body super-agent-form">

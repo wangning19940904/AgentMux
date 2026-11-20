@@ -1265,3 +1265,24 @@
 .machine-instance-option[aria-pressed="true"] { border-color: currentColor; background: var(--bg-subtle); }
 .machine-instance-option:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 
+
+/* Drawers fill most of a narrow window; keep their header clear of the
+   macOS window buttons, which sit over the top-left corner. */
+.native-desktop .provider-drawer {
+  max-width: calc(100vw - 88px);
+}
+
+/* A labelled, outlined close button so the way out of a drawer is obvious. */
+.ghost-action.drawer-close {
+  min-height: 32px;
+  padding: 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+
+.ghost-action.drawer-close:hover {
+  background: color-mix(in srgb, var(--text) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--text) 32%, var(--border-strong));
+}
