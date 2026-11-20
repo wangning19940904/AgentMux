@@ -14,6 +14,7 @@ import { OperationProgress as OperationProgressView } from "../../components/Ope
 import { useI18n } from "../../i18n";
 import type { FrameworkLoginFlow } from "./frameworkAuthModel";
 import { TargetBadge } from "../../components/TargetBadge";
+import { frameworkCheckActionable } from "./frameworkBulkUpdate";
 import { FrameworkSmokeResultView } from "./FrameworkSmokeResult";
 import { FrameworkHealthRecordView } from "./FrameworkHealthRecord";
 import { frameworkAccountSummary, frameworkCompanyName, frameworkSupportsLogin } from "./frameworkPresentation";
@@ -156,7 +157,8 @@ export function FrameworkTableRows({
 }) {
   const { t } = useI18n();
   const { spec } = item;
-  const hasUpdate = Boolean(check?.update_available);
+  const hasUpdate = frameworkCheckActionable(check);
+  const repair = Boolean(check?.repairable);
   const updateStatus = frameworkUpdateStatusLabel(check, t);
   const updateStatusClass = check?.error || check?.update_available ? "warning" : "success";
   const authActive = loginFlow?.state === "waiting";
@@ -165,7 +167,7 @@ export function FrameworkTableRows({
   const authenticated = auth?.state === "authenticated";
   const canLogout = Boolean(authenticated && auth?.logout_supported);
   const account = frameworkAccountSummary(auth);
-  const buttonLabel = busy === "update" ? t("frameworks.installing") : t("tools.update");
+  const buttonLabel = busy === "update" ? t("frameworks.installing") : repair ? t("frameworks.repair") : t("tools.update");
 
   return (
     <>
@@ -548,9 +550,13 @@ function frameworkAuthStatusLabel(
   return t("tools.authUnknown");
 }
 
-function frameworkUpdateStatusLabel(check: FrameworkUpdateCheck | undefined, t: (key: string) => string) {
+function frameworkUpdateStatusLabel(check: FrameworkUpdateCheck | undefined, t: (key: string, vars?: Record<string, string>) => string) {
   if (!check) return "";
   if (check.error) return t("tools.updateCheckFailed");
+  if (check.update_available && check.managed_by) {
+    const app = check.managed_by.replace(/\.app$/, "");
+    return `${t("frameworks.latestVersion")} · v${check.latest_version || "?"} · ${t("frameworks.updatesWithApp", { app })}`;
+  }
   if (check.update_available) return `${t("frameworks.latestVersion")} · v${check.latest_version || "?"}`;
   return t("tools.upToDate");
 }

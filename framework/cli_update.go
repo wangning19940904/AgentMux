@@ -58,10 +58,14 @@ const (
 	cliInstallHomebrewCask
 	cliInstallHomebrewFormula
 	cliInstallNPMGlobal
+	// cliInstallAppBundle is a CLI shipped inside a macOS application, such
+	// as the Codex copy bundled with ChatGPT.app. It updates with that app.
+	cliInstallAppBundle
 )
 
 // cliInstallation describes a detected installation. Prefix is the Homebrew
-// prefix or the npm global prefix; Token is the Homebrew cask or formula.
+// prefix, the npm global prefix or the application bundle; Token is the
+// Homebrew cask or formula.
 type cliInstallation struct {
 	Method cliInstallMethod
 	Prefix string
@@ -79,6 +83,13 @@ var homebrewTokenRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@._+-]*$`)
 // global prefix is still upgraded by the package manager that owns it.
 func detectCLIInstallation(resolved, npmPackage, goos string) cliInstallation {
 	path := filepath.ToSlash(filepath.Clean(resolved))
+	if index := strings.Index(path, ".app/Contents/"); index > 0 && !strings.Contains(path[:index], "/Caskroom/") {
+		// A CLI inside an application bundle belongs to that application.
+		// Its own updater cannot tell how it was installed, and npm would put
+		// a second copy elsewhere that the link on PATH never reaches. A
+		// Homebrew cask that ships an app is still upgraded by Homebrew.
+		return cliInstallation{Method: cliInstallAppBundle, Prefix: filepath.FromSlash(path[:index+len(".app")])}
+	}
 	if strings.Contains(path, "/node_modules/") {
 		// A package inside a Node installation, even one Homebrew installed
 		// (Cellar/node/...), belongs to that Node's package manager, never to
@@ -162,12 +173,67 @@ func cliUpdateCommandFor(spec Spec, inst cliInstallation, brewLookup func(string
 			return []string{brew, "upgrade", "--cask", inst.Token}, true, nil
 		}
 		return []string{brew, "upgrade", inst.Token}, true, nil
+	case cliInstallAppBundle:
+		return nil, false, appBundleUpdateError(spec, inst)
 	case cliInstallNPMGlobal:
 		// The prefix pins the install to the copy on PATH even when the npm
 		// found first belongs to another Node (nvm, Homebrew node, ...).
 		return []string{"npm", "install", "-g", spec.NPMPackage + "@latest", "--prefix=" + inst.Prefix}, true, nil
 	}
 	return nil, false, nil
+}
+
+// installedCLI classifies the installation of the CLI found on PATH. found is
+// false when there is no executable to judge.
+func installedCLI(spec Spec) (inst cliInstallation, found bool) {
+	if spec.Bin == "" {
+		return cliInstallation{}, false
+	}
+	executable, err := resolveCLIExecutable(spec.Bin)
+	if err != nil {
+		return cliInstallation{}, false
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return cliInstallation{}, false
+	}
+	return detectCLIInstallation(resolved, spec.NPMPackage, runtime.GOOS), true
+}
+
+// appBundleName is the application a bundled CLI belongs to, such as
+// "ChatGPT.app".
+func appBundleName(inst cliInstallation) string {
+	return filepath.Base(inst.Prefix)
+}
+
+func appBundleUpdateError(spec Spec, inst cliInstallation) error {
+	return fmt.Errorf(
+		"%s on this machine is the copy bundled with %s (%s), so it is updated together with that app, not by its own updater or npm. "+
+			"Update %s, or point `%s` on PATH at a separately installed copy",
+		spec.Display, appBundleName(inst), inst.Prefix, strings.TrimSuffix(appBundleName(inst), ".app"), spec.Bin,
+	)
+}
+
+// cliRepairable reports whether an installed CLI whose version command fails
+// can be reinstalled in place by its update command: the catalog updates it
+// with npm, or the copy on PATH belongs to an npm global prefix or Homebrew.
+// A broken CLI cannot run its own native updater.
+func cliRepairable(spec Spec) bool {
+	if spec.KindType != KindCLI || len(spec.UpdateCommand) == 0 {
+		return false
+	}
+	if isNPMInstall(spec.UpdateCommand) {
+		return true
+	}
+	inst, found := installedCLI(spec)
+	if !found {
+		return false
+	}
+	switch inst.Method {
+	case cliInstallNPMGlobal, cliInstallHomebrewCask, cliInstallHomebrewFormula:
+		return true
+	}
+	return false
 }
 
 // resolvedCLIUpdateCommand returns the catalog-owned update command, adjusted
@@ -185,16 +251,11 @@ func resolvedCLIUpdateCommand(spec Spec) ([]string, error) {
 	if spec.Bin == "" || isNPMInstall(command) {
 		return command, nil
 	}
-	executable, err := resolveCLIExecutable(spec.Bin)
-	if err != nil {
+	inst, found := installedCLI(spec)
+	if !found {
 		// The update reports the missing executable when it runs.
 		return command, nil
 	}
-	resolved, err := filepath.EvalSymlinks(executable)
-	if err != nil {
-		return command, nil
-	}
-	inst := detectCLIInstallation(resolved, spec.NPMPackage, runtime.GOOS)
 	adjusted, ok, err := cliUpdateCommandFor(spec, inst, exec.LookPath)
 	if err != nil {
 		return nil, err

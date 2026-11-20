@@ -1240,6 +1240,10 @@ export interface FrameworkUpdateCheck {
   update_available: boolean;
   checked_at?: string;
   error?: string;
+  /** The CLI does not run, but its update command can reinstall it in place. */
+  repairable?: boolean;
+  /** The application that ships and updates this copy, e.g. "ChatGPT.app". */
+  managed_by?: string;
 }
 
 export interface CLIManagedTool {

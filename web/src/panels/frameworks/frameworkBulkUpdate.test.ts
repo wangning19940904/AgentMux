@@ -39,4 +39,12 @@ describe("framework update candidates", () => {
     expect(frameworkUpdateCandidates(items, checks)).toEqual([items[0]]);
     expect(frameworkUpdateCandidates([], {})).toEqual([]);
   });
+
+  it("repairs broken installs and leaves app-bundled copies to their app", () => {
+    const items = Array.from({ length: 3 }, (_, index) => framework(`framework-${index}`));
+    const checks = checksFor(items);
+    checks["local::framework-0"] = { kind: "framework-0", installed: true, update_available: false, error: "Missing optional dependency", repairable: true };
+    checks["local::framework-1"].managed_by = "ChatGPT.app";
+    expect(frameworkUpdateCandidates(items, checks)).toEqual([items[0], items[2]]);
+  });
 });

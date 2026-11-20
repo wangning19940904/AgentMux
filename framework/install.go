@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -72,10 +74,11 @@ func UpdateWithProgressOptions(ctx context.Context, kind string, options Install
 	// An explicit update always asks the registry again rather than trusting
 	// the page's cached answer.
 	check, latestErr := checkUpdate(ctx, kind, options.Settings, true)
-	if check.Error != "" && latestErr == nil {
+	repair := check.Repairable && latestErr == nil
+	if check.Error != "" && latestErr == nil && !repair {
 		return InstallResult{Kind: kind, Action: "update", Error: check.Error}
 	}
-	if latestErr == nil && !check.UpdateAvailable {
+	if latestErr == nil && !repair && !check.UpdateAvailable {
 		return InstallResult{
 			Kind:    kind,
 			Action:  "update",
@@ -101,6 +104,15 @@ func UpdateWithProgressOptions(ctx context.Context, kind string, options Install
 		// pre-check, and verify the result without a target version.
 		check.Error = ""
 		check.LatestVersion = ""
+	}
+	if repair {
+		// The CLI does not run, so its current version is unknown; any
+		// version it reports after reinstalling counts as repaired.
+		note := fmt.Sprintf("%s\nReinstalling %s to repair it.\n", check.Error, check.Display)
+		check.Error = ""
+		res := updateCLIWithProgress(ctx, spec, check, options, progress)
+		res.Log = note + res.Log
+		return res
 	}
 	res := updateCLIWithProgress(ctx, spec, check, options, progress)
 	if latestErr != nil {
@@ -239,18 +251,15 @@ func updateCLIWithProgress(ctx context.Context, spec Spec, check UpdateCheck, op
 	}
 
 	reportProgress(progress, "verifying", "", 88)
-	// The installed binary (or the wrapper in front of it) may keep its size
-	// and mtime across an update, so do not trust a cached version.
-	ForgetVersion(spec.Kind)
 	forgetLatestVersions(spec.Kind)
-	status := Detect(spec, DetectPrereqs())
+	status := detectInstalledVersion(spec)
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
 		res.Error = "update command completed but CLI was not found on PATH"
 		return res
 	}
 	if res.Version == "" {
-		res.Error = "update command completed but the installed version could not be verified"
+		res.Error = "update command completed but the installed version could not be verified: " + unrunnableCLIError(spec, status)
 		return res
 	}
 	if !updateAdvanced(spec, check, res.Version) {
@@ -307,9 +316,54 @@ func versionAdvancedAfterFailure(spec Spec, check UpdateCheck) (version string, 
 }
 
 func runCLIUpdateCommand(ctx context.Context, command []string, output OutputFunc) ([]byte, error) {
-	cmd := frameworkCommandContext(ctx, command[0], command[1:]...)
-	cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
-	return runCommandOutput(cmd, output)
+	run := func() ([]byte, error) {
+		cmd := frameworkCommandContext(ctx, command[0], command[1:]...)
+		cmd.Env = cliUpdateEnvironment(os.Environ(), runtime.GOOS)
+		return runCommandOutput(cmd, output)
+	}
+	out, err := run()
+	if err == nil || filepath.Base(command[0]) != "npm" {
+		return out, err
+	}
+	stale, ok := staleNPMRetiredDir(string(out))
+	if !ok {
+		return out, err
+	}
+	// npm moves the old package to a retired sibling before installing the
+	// new one, and always picks the same name for it. A run that was
+	// interrupted leaves that folder behind, and every later install fails
+	// with ENOTEMPTY (and npm's rollback can leave the package half-restored).
+	// The folder is npm's own leftover copy, so remove it and try once more.
+	if removeErr := os.RemoveAll(stale); removeErr != nil {
+		return out, err
+	}
+	note := []byte(fmt.Sprintf("\nRemoved %s, left behind by an interrupted npm run; retrying.\n", stale))
+	if output != nil {
+		output(note)
+	}
+	retryOut, retryErr := run()
+	return append(append(out, note...), retryOut...), retryErr
+}
+
+var npmRenameNotEmptyRE = regexp.MustCompile(`ENOTEMPTY: directory not empty, rename '([^']+)' -> '([^']+)'`)
+
+// staleNPMRetiredDir finds the retired package folder an npm ENOTEMPTY
+// failure names. Only a sibling of the package called .<name>-<8 characters>,
+// the form npm uses, is accepted.
+func staleNPMRetiredDir(log string) (string, bool) {
+	match := npmRenameNotEmptyRE.FindStringSubmatch(log)
+	if match == nil {
+		return "", false
+	}
+	pkg, dest := filepath.Clean(match[1]), filepath.Clean(match[2])
+	if !filepath.IsAbs(pkg) || filepath.Dir(pkg) != filepath.Dir(dest) {
+		return "", false
+	}
+	retired := regexp.MustCompile(`^\.` + regexp.QuoteMeta(filepath.Base(pkg)) + `-[A-Za-z0-9]{8}$`)
+	if !retired.MatchString(filepath.Base(dest)) {
+		return "", false
+	}
+	return dest, true
 }
 
 // runCommandOutput is CombinedOutput that also hands each chunk to output.
@@ -435,20 +489,48 @@ func installCLIWithProgress(ctx context.Context, spec Spec, options InstallOptio
 	}
 
 	reportProgress(progress, "verifying", "", 88)
-	ForgetVersion(spec.Kind)
 	forgetLatestVersions(spec.Kind)
-	status := Detect(spec, DetectPrereqs())
+	status := detectInstalledVersion(spec)
 	res.Version = normalizeSDKVersion(status.Version)
 	if !status.Installed {
 		res.Error = "install command completed but CLI was not found on PATH"
 		return res
 	}
 	if res.Version == "" {
-		res.Error = "install command completed but the installed version could not be verified"
+		res.Error = "install command completed but the installed version could not be verified: " + unrunnableCLIError(spec, status)
 		return res
 	}
 	res.OK = true
 	return res
+}
+
+// Right after an install or update, the first run of a CLI can be much slower
+// than usual: macOS scans a newly written native binary before it may start,
+// and Node-based launchers load a fresh package. Routine detection would time
+// out and report the version as unknown, so verification waits longer and
+// tries again before concluding that the CLI does not run.
+var (
+	verifyVersionTimeout  = 45 * time.Second
+	verifyVersionAttempts = 3
+	verifyVersionDelay    = 2 * time.Second
+)
+
+// detectInstalledVersion detects a CLI that was just installed or updated.
+// The binary (or a wrapper in front of it) may keep its size and mtime across
+// an update, so a cached version is never trusted.
+func detectInstalledVersion(spec Spec) Status {
+	var status Status
+	for attempt := 0; attempt < verifyVersionAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(verifyVersionDelay)
+		}
+		ForgetVersion(spec.Kind)
+		status = detectWithTimeout(spec, verifyVersionTimeout)
+		if !status.Installed || normalizeSDKVersion(status.Version) != "" {
+			return status
+		}
+	}
+	return status
 }
 
 func reportProgress(progress ProgressFunc, phase, detail string, percent int) {

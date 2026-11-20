@@ -942,6 +942,8 @@ export const zh: Record<keyof typeof en, string> = {
     "frameworks.uninstallUnsupported": "当前安装方式无法安全地自动卸载。",
     "frameworks.currentVersion": "当前版本",
     "frameworks.latestVersion": "最新版本",
+    "frameworks.updatesWithApp": "随 {app} 更新",
+    "frameworks.repair": "修复",
     "frameworks.installFailed": "安装失败",
     "frameworks.installLog": "安装日志",
     "frameworks.installSettings": "安装设置",
