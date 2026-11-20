@@ -50,6 +50,15 @@ const SuperAgentTriggerSupervision = "supervision"
 // thread the plan was proposed on.
 const SuperAgentTriggerPlan = "plan"
 
+// SuperAgentTriggerDailyReport asks the brain to write its daily report from
+// the facts AgentMux gathered about the day. It comes from AgentMux, on the
+// agent's own report thread, and its answer goes to the report's place.
+const SuperAgentTriggerDailyReport = "daily_report"
+
+// SuperAgentDailyReportThread is the thread every daily report of an agent
+// is written on, so the brain sees its earlier reports there.
+const SuperAgentDailyReportThread = "report:daily"
+
 // Supervision modes say what AgentMux does with the signals it derives from
 // an agent's open Tickets. Empty is observe.
 const (
@@ -155,6 +164,29 @@ type SuperAgent struct {
 	// Dispatch lets a Ticket's worker hand sub-tasks to other workers on the
 	// roster and read their results, within the host's limits. Off by default.
 	Dispatch bool `json:"dispatch,omitempty"`
+
+	// DailyReport has the brain write a short report of the day once a day.
+	// Nil or not enabled sends none.
+	DailyReport *SuperAgentDailyReport `json:"daily_report,omitempty"`
+}
+
+// SuperAgentDailyReport is when an agent writes its daily report and where it
+// goes. The report covers the time since the previous one.
+type SuperAgentDailyReport struct {
+	Enabled bool `json:"enabled"`
+	// At is the local time of day, "HH:MM". Empty is 09:00.
+	At string `json:"at,omitempty"`
+	// Timezone is an IANA zone such as "Asia/Shanghai". Empty is the
+	// daemon's zone.
+	Timezone string `json:"timezone,omitempty"`
+	// To is the place the report is sent, as a post's "to" names it: chat:<id>
+	// for a Feishu group, person:<login> or agent:<id> for a direct message,
+	// or github:<owner/repo>#<number>. Empty keeps the report in the agent's
+	// activity only.
+	To string `json:"to,omitempty"`
+	// Always sends a report on a day with nothing to say. By default such a
+	// day is skipped.
+	Always bool `json:"always,omitempty"`
 }
 
 // SuperAgentPrompt is an operator's text for one built-in prompt part. Base

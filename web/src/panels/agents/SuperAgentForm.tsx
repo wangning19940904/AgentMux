@@ -472,6 +472,7 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
                   <span className="super-agent-check"><input type="checkbox" checked={draft.dispatch ?? false} onChange={(event) => onChange({ ...draft, dispatch: event.target.checked })} /> {t("superAgentForm.dispatchOn")}</span>
                   <small>{t("superAgentForm.dispatchHelp")}</small>
                 </label>
+                <DailyReportFields draft={draft} machine={machine} onChange={onChange} />
                 {(promptParts.data ?? []).length > 0 && (
                   <div className="field" role="group" aria-labelledby="saf-worker-prompts">
                     <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>
@@ -522,6 +523,55 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
           </div>
         </div>
       </aside>
+    </div>
+  );
+}
+
+function DailyReportFields({ draft, machine, onChange }: { draft: SuperAgent; machine: string; onChange: (draft: SuperAgent) => void }) {
+  const { t } = useI18n();
+  const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState("");
+  const report = draft.daily_report ?? { enabled: false };
+  const update = (patch: Partial<NonNullable<SuperAgent["daily_report"]>>) => onChange({ ...draft, daily_report: { ...report, ...patch } });
+  const runNow = async () => {
+    if (!draft.id) return;
+    setRunning(true);
+    setStatus("");
+    try {
+      await api.runSuperAgentDailyReport(draft.id, machine === "local" ? undefined : machine);
+      setStatus(t("superAgentForm.dailyReport.started"));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <div className="field" role="group" aria-labelledby="saf-daily-report">
+      <span id="saf-daily-report">{t("superAgentForm.dailyReport")}</span>
+      <span className="super-agent-check"><input type="checkbox" checked={report.enabled} onChange={(event) => update({ enabled: event.target.checked })} /> {t("superAgentForm.dailyReport.on")}</span>
+      {report.enabled && (
+        <>
+          <label className="field"><span>{t("superAgentForm.dailyReport.at")}</span>
+            <input type="time" value={report.at || "09:00"} onChange={(event) => update({ at: event.target.value })} />
+          </label>
+          <label className="field"><span>{t("superAgentForm.dailyReport.timezone")}</span>
+            <input value={report.timezone ?? ""} placeholder="Asia/Shanghai" onChange={(event) => update({ timezone: event.target.value })} />
+          </label>
+          <label className="field"><span>{t("superAgentForm.dailyReport.to")}</span>
+            <input value={report.to ?? ""} placeholder="chat:oc_… / person:<login>" onChange={(event) => update({ to: event.target.value })} />
+            <small>{t("superAgentForm.dailyReport.toHelp")}</small>
+          </label>
+          <span className="super-agent-check"><input type="checkbox" checked={report.always ?? false} onChange={(event) => update({ always: event.target.checked })} /> {t("superAgentForm.dailyReport.always")}</span>
+        </>
+      )}
+      <small>{t("superAgentForm.dailyReportHelp")}</small>
+      {draft.id && (
+        <span>
+          <button type="button" disabled={running} onClick={() => void runNow()}>{t("superAgentForm.dailyReport.runNow")}</button>
+          {status && <small role="status"> {status}</small>}
+        </span>
+      )}
     </div>
   );
 }

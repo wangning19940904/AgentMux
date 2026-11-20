@@ -1062,6 +1062,8 @@ export const api = {
   stopSuperAgentTicket: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/tickets/stop", id, targetID),
   retrySuperAgentTicket: (id: string) => post<{ ok: boolean }>("/api/v1/super-agents/tickets/retry", { id }),
   cancelSuperAgentTimer: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/timers/cancel", id, targetID),
+  // Writes an agent's daily report now, covering the time since the last one.
+  runSuperAgentDailyReport: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/daily-report/run", id, targetID),
   // What every agent on every machine is doing now, one entry per machine.
   // A machine without agents (or too old to list their work) is left out.
   superAgentWork: async (): Promise<MachineWork[]> => {
