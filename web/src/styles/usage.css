@@ -1,0 +1,629 @@
+/*
+ * Usage and Health dashboards.
+ *
+ * The chart's series colours are a fixed categorical order checked for
+ * colour-blind separation against both surfaces; "Other" is neutral. A series
+ * keeps its slot when filters reorder the chart.
+ */
+:root {
+  --series-0: #2a78d6;
+  --series-1: #eb6834;
+  --series-2: #1baf7a;
+  --series-3: #eda100;
+  --series-4: #e87ba4;
+  --series-other: #b9b9bf;
+}
+
+:root[data-theme="dark"] {
+  --series-0: #3987e5;
+  --series-1: #d95926;
+  --series-2: #199e70;
+  --series-3: #c98500;
+  --series-4: #d55181;
+  --series-other: #5f5f66;
+}
+
+.series-0 { --series: var(--series-0); }
+.series-1 { --series: var(--series-1); }
+.series-2 { --series: var(--series-2); }
+.series-3 { --series: var(--series-3); }
+.series-4 { --series: var(--series-4); }
+.series-other { --series: var(--series-other); }
+
+/* --- filter bar ------------------------------------------------------------ */
+
+/* The filter menus open below the header card and must not be clipped by it. */
+.usage-dashboard-header.surface {
+  position: relative;
+  z-index: 20;
+  overflow: visible;
+  contain: none;
+}
+
+.usage-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-filter {
+  position: relative;
+}
+
+.usage-filter-button,
+.usage-filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  max-width: 280px;
+  padding: 0 9px;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.usage-filter-button:hover,
+.usage-filter-select:hover {
+  background: var(--bg-muted);
+}
+
+.usage-filter-button:focus-visible,
+.usage-filter-option:focus-visible,
+.framework-rank-row:focus-visible,
+.usage-chart-plot:focus-visible,
+.health-summary-tile:focus-visible {
+  outline: 2px solid var(--series-0);
+  outline-offset: 1px;
+}
+
+.usage-filter-label {
+  color: var(--muted);
+}
+
+.usage-filter-summary {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-filter-button.active {
+  border-color: color-mix(in srgb, var(--text) 38%, var(--border-strong));
+}
+
+.usage-filter-select > span {
+  color: var(--muted);
+}
+
+.usage-filter-select select {
+  min-height: 0;
+  padding: 0 2px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.usage-filter-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-floating);
+}
+
+.usage-filter-options {
+  display: grid;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.usage-filter-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.usage-filter-option:hover {
+  background: var(--bg-muted);
+}
+
+.usage-filter-option.selected .usage-filter-option-label {
+  font-weight: 650;
+}
+
+.usage-filter-check {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text);
+}
+
+.usage-filter-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-filter-option small {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-filter-search input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.usage-filter-empty {
+  padding: 14px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.usage-filter-footer,
+.usage-filter-custom {
+  margin-top: 6px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.usage-filter-custom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: end;
+}
+
+.usage-filter-custom-title {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.usage-filter-custom.selected .usage-filter-custom-title {
+  color: var(--text);
+}
+
+.usage-filter-custom label {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.usage-filter-custom input[type="date"] {
+  width: 100%;
+  min-height: 30px;
+}
+
+.usage-filter-custom .action {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+.usage-pending-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* --- summary and rankings --------------------------------------------------- */
+
+.usage-dashboard .overview-statistics {
+  transition: opacity 160ms ease;
+}
+
+.usage-dashboard .overview-statistics.is-loading,
+.usage-trend-wrap.is-loading {
+  opacity: 0.6;
+}
+
+.usage-summary-range {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.overview-rankings > .statistics-summary-card:nth-child(odd) {
+  border-left: 0;
+}
+
+.overview-rankings > .statistics-summary-card:nth-child(n + 3) {
+  border-top: 1px solid var(--border);
+}
+
+.overview-rankings:not(.with-machines) > .statistics-summary-card:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+button.framework-rank-row {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.framework-rank-row.selected {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+}
+
+.framework-rank-share {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- trend chart ------------------------------------------------------------- */
+
+.trend-series-swatch {
+  grid-row: 1 / 3;
+  width: 9px;
+  height: 9px;
+  background: var(--series);
+  border-radius: 2px;
+}
+
+.trend-series-legend > span {
+  grid-template-columns: 9px auto;
+}
+
+.trend-series-legend strong {
+  font-size: 11px;
+}
+
+.trend-series-legend small {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 8px;
+  margin-top: 14px;
+}
+
+.usage-chart-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 200px;
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.usage-chart-plot {
+  position: relative;
+  height: 200px;
+  border-radius: 4px;
+  touch-action: pan-y;
+}
+
+.usage-chart-plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.usage-chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.usage-chart-cursor {
+  fill: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.usage-chart-bar {
+  fill: var(--series);
+}
+
+.usage-chart-bar.dimmed {
+  opacity: 0.55;
+}
+
+.usage-chart-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  color: var(--muted);
+  font-size: 12px;
+  transform: translate(-50%, -50%);
+}
+
+.usage-chart-tooltip {
+  position: absolute;
+  top: 4px;
+  z-index: 5;
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+  max-width: 260px;
+  margin-left: 10px;
+  padding: 8px 10px;
+  font-size: 11px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-floating);
+  pointer-events: none;
+}
+
+.usage-chart-tooltip.align-right {
+  margin-right: 10px;
+  margin-left: 0;
+}
+
+.usage-chart-tooltip-title {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart-tooltip-row {
+  display: grid;
+  grid-template-columns: 12px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-chart-tooltip-row strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart-tooltip-row span {
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-chart-tooltip-row.total {
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+
+.usage-chart-tooltip-row.total:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.trend-series-key {
+  width: 12px;
+  height: 3px;
+  background: var(--series);
+  border-radius: 2px;
+}
+
+.usage-chart-ticks {
+  position: relative;
+  grid-column: 2;
+  height: 22px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-chart-ticks span {
+  position: absolute;
+  top: 6px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.usage-chart-ticks span:first-child {
+  transform: translateX(-20%);
+}
+
+.usage-chart-ticks span:last-child:not(:first-child) {
+  transform: translateX(-80%);
+}
+
+/* --- details ------------------------------------------------------------------ */
+
+.usage-details-table th.numeric,
+.usage-details-table td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-details-table td:first-child {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- health ------------------------------------------------------------------- */
+
+.health-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  border-top: 1px solid var(--border);
+}
+
+.health-summary-tile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  color: inherit;
+  text-decoration: none;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 0 -1px -1px 0;
+}
+
+.health-summary-tile:hover {
+  background: var(--bg-muted);
+}
+
+.health-summary-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.health-summary-copy strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.health-summary-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-section .surface-header {
+  align-items: flex-start;
+}
+
+.health-list {
+  display: grid;
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.health-row .status-badge {
+  justify-self: start;
+}
+
+.health-row-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.health-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.health-row-title strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.health-row-title small,
+.health-row-when {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.health-row-when {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.health-row-detail {
+  color: var(--amber);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  /* The date range takes a row; the other filters share rows in pairs. */
+  .usage-filter-bar > * {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+
+  .usage-filter-bar > :first-child {
+    flex-basis: 100%;
+  }
+
+  .usage-filter-button,
+  .usage-filter-select {
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+
+  .usage-filter-panel {
+    width: 100%;
+  }
+
+  .health-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-dashboard .overview-statistics {
+    transition: none;
+  }
+}

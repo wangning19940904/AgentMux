@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -151,5 +152,33 @@ func TestParseSince(t *testing.T) {
 	}
 	if _, err := ParseSince("garbage"); err == nil {
 		t.Fatalf("expected error for garbage")
+	}
+}
+
+func TestAggregateFoldsTheAgentTailWithoutLosingTotals(t *testing.T) {
+	var recs []core.UsageRecord
+	for i := 0; i < maxAgentStats+50; i++ {
+		recs = append(recs, core.UsageRecord{
+			Source: "codex", SessionID: fmt.Sprintf("s%d", i), Project: fmt.Sprintf("/work/p%04d", i),
+			Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), InputTokens: int64(1000 - i), CostUSD: 1,
+		})
+	}
+	report := Aggregate("daily", recs)
+	if len(report.ByAgent) != maxAgentStats+1 {
+		t.Fatalf("agents = %d, want %d and one row for the rest", len(report.ByAgent), maxAgentStats)
+	}
+	other := report.ByAgent[maxAgentStats]
+	if other.Agent != OtherAgents || other.Records != 50 || other.Sessions != 50 {
+		t.Fatalf("tail row = %+v", other)
+	}
+	var tokens int64
+	for _, stat := range report.ByAgent {
+		tokens += stat.Tokens
+	}
+	if tokens != report.Totals.InputTokens {
+		t.Fatalf("agent rows sum to %d, report total is %d", tokens, report.Totals.InputTokens)
+	}
+	if report.ByAgent[0].Agent != "/work/p0000" {
+		t.Fatalf("largest agent = %q", report.ByAgent[0].Agent)
 	}
 }

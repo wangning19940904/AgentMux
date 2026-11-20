@@ -4,8 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
+
+	usagepkg "github.com/wangning19940904/AgentMux/usage"
 )
 
 func TestHandleUsageParsesInclusiveLocalDateRange(t *testing.T) {
@@ -15,8 +18,8 @@ func TestHandleUsageParsesInclusiveLocalDateRange(t *testing.T) {
 
 	var gotPeriod string
 	var gotSince, gotUntil time.Time
-	s := &Server{usageFn: func(_ context.Context, period string, since, until time.Time, _ *time.Location) (any, error) {
-		gotPeriod, gotSince, gotUntil = period, since, until
+	s := &Server{usageFn: func(_ context.Context, query usagepkg.ReportQuery) (any, error) {
+		gotPeriod, gotSince, gotUntil = query.Period, query.Since, query.Until
 		return map[string]bool{"ok": true}, nil
 	}}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?period=weekly&from=2026-07-01&to=2026-07-07", nil)
@@ -39,7 +42,7 @@ func TestHandleUsageParsesInclusiveLocalDateRange(t *testing.T) {
 }
 
 func TestHandleUsageRejectsReversedDateRange(t *testing.T) {
-	s := &Server{usageFn: func(_ context.Context, _ string, _, _ time.Time, _ *time.Location) (any, error) {
+	s := &Server{usageFn: func(_ context.Context, _ usagepkg.ReportQuery) (any, error) {
 		t.Fatal("reporter should not be called")
 		return nil, nil
 	}}
@@ -55,8 +58,8 @@ func TestHandleUsageRejectsReversedDateRange(t *testing.T) {
 
 func TestHandleUsagePassesRequestedReportingTimezone(t *testing.T) {
 	var gotLocation *time.Location
-	s := &Server{usageFn: func(_ context.Context, _ string, _, _ time.Time, location *time.Location) (any, error) {
-		gotLocation = location
+	s := &Server{usageFn: func(_ context.Context, query usagepkg.ReportQuery) (any, error) {
+		gotLocation = query.Location
 		return map[string]bool{"ok": true}, nil
 	}}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?period=daily&from=2026-08-30&to=2026-08-30&timezone=Asia%2FShanghai", nil)
@@ -67,5 +70,28 @@ func TestHandleUsagePassesRequestedReportingTimezone(t *testing.T) {
 	}
 	if gotLocation == nil || gotLocation.String() != "Asia/Shanghai" {
 		t.Fatalf("location = %v", gotLocation)
+	}
+}
+
+func TestHandleUsagePassesDimensionFilters(t *testing.T) {
+	var got usagepkg.ReportFilter
+	s := &Server{usageFn: func(_ context.Context, query usagepkg.ReportQuery) (any, error) {
+		got = query.Filter
+		return map[string]bool{"ok": true}, nil
+	}}
+	// An empty value is a real choice: the unknown model.
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/v1/usage?model=gpt-6&model=&runtime=codex-app&agent=agent%3Aa1&source=codex", nil)
+	response := httptest.NewRecorder()
+	s.handleUsage(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	want := usagepkg.ReportFilter{
+		Models: []string{"gpt-6", ""}, Runtimes: []string{"codex-app"},
+		Agents: []string{"agent:a1"}, Sources: []string{"codex"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("filter = %+v, want %+v", got, want)
 	}
 }

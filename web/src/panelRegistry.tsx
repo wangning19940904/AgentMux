@@ -7,11 +7,11 @@ import { prefetchFrameworks } from "./panels/frameworks/frameworkPageCache";
 const AgentsPanel = lazy(() => import("./panels/AgentsPanel").then((module) => ({ default: module.AgentsPanel })));
 
 const STATIC_PANELS: Partial<Record<NavigationTabID, LazyExoticComponent<ComponentType>>> = {
-  overview: lazy(() => import("./panels/OverviewPanel").then((module) => ({ default: module.OverviewPanel }))),
   work: lazy(() => import("./panels/WorkPanel").then((module) => ({ default: module.WorkPanel }))),
   frameworks: lazy(() => loadFrameworksPanel().then((module) => ({ default: module.FrameworksPanel }))),
   observability: lazy(() => import("./panels/ObservabilityPanel").then((module) => ({ default: module.ObservabilityPanel }))),
-  usage: lazy(() => import("./panels/UsagePanel").then((module) => ({ default: module.UsagePanel }))),
+  usage: lazy(() => loadUsagePanel().then((module) => ({ default: module.UsagePanel }))),
+  health: lazy(() => loadHealthPanel().then((module) => ({ default: module.HealthPanel }))),
   "machine-status": lazy(() => import("./panels/MachineStatusPanel").then((module) => ({ default: module.MachineStatusPanel }))),
   sessions: lazy(() => import("./panels/SessionsPanel").then((module) => ({ default: module.SessionsPanel }))),
   meetings: lazy(() => import("./panels/MeetingsPanel").then((module) => ({ default: module.MeetingsPanel }))),
@@ -27,12 +27,26 @@ function loadFrameworksPanel() {
   return import("./panels/FrameworksPanel");
 }
 
+function loadUsagePanel() {
+  return import("./panels/UsagePanel");
+}
+
+function loadHealthPanel() {
+  return import("./panels/HealthPanel");
+}
+
 // Pages whose data takes a while to gather (every machine is asked) start
 // loading their code and data as soon as their navigation entry is pointed at.
 const PREFETCHERS: Partial<Record<NavigationTabID, () => void>> = {
   frameworks: () => {
     void loadFrameworksPanel();
     prefetchFrameworks();
+  },
+  usage: () => {
+    void loadUsagePanel().then((module) => module.prefetchDefaultUsage());
+  },
+  health: () => {
+    void loadHealthPanel().then((module) => module.prefetchHealth());
   },
 };
 

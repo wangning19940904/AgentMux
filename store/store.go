@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -703,7 +704,8 @@ func (s *Store) QueryUsageRequestIndex(ctx context.Context, source string, since
 	return result, rows.Err()
 }
 
-// QueryUsageRange returns canonical usage records inside [since, until).
+// QueryUsageRange returns canonical usage records inside [since, until),
+// ordered by time, then source and session.
 func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]core.UsageRecord, error) {
 	q := `SELECT ` + usageRecordSelectColumns + ` FROM usage_records`
 	args := []any{}
@@ -719,7 +721,6 @@ func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]
 	if len(filters) > 0 {
 		q += ` WHERE ` + strings.Join(filters, ` AND `)
 	}
-	q += ` ORDER BY timestamp,source,session_id`
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -737,5 +738,21 @@ func (s *Store) QueryUsageRange(ctx context.Context, since, until time.Time) ([]
 		r.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Ordered here rather than by the database: sorting text columns under a
+	// locale collation took ten times longer than reading the rows, and
+	// spilled to disk for a month of records.
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := &out[i], &out[j]
+		if !a.Timestamp.Equal(b.Timestamp) {
+			return a.Timestamp.Before(b.Timestamp)
+		}
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		return a.SessionID < b.SessionID
+	})
+	return out, nil
 }

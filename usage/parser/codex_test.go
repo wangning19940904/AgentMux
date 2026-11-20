@@ -146,3 +146,75 @@ func TestCodexCollectorSkipsFilesOlderThanSince(t *testing.T) {
 		t.Fatalf("full scan must read the file: %#v", full)
 	}
 }
+
+func writeCodexRollout(t *testing.T, events ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"timestamp":"2026-11-18T07:00:00Z","type":"session_meta","payload":{"id":"thread-1","cwd":"/tmp/p"}}` + "\n"
+	for _, event := range events {
+		content += event + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rollout-test.jsonl"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func codexTokenCount(at, total, last string) string {
+	return `{"timestamp":"` + at + `","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":` + total + `,"last_token_usage":` + last + `}}}`
+}
+
+// A file that continues an earlier thread opens with the thread's running
+// total. Only its last request is new.
+func TestCodexCollectorDoesNotRecountAContinuedThread(t *testing.T) {
+	root := writeCodexRollout(t,
+		codexTokenCount("2026-11-18T07:10:08Z",
+			`{"input_tokens":41000000,"cached_input_tokens":40000000,"output_tokens":70000,"total_tokens":41070000}`,
+			`{"input_tokens":300000,"cached_input_tokens":290000,"output_tokens":500,"total_tokens":300500}`),
+		codexTokenCount("2026-11-18T07:11:00Z",
+			`{"input_tokens":41200000,"cached_input_tokens":40150000,"output_tokens":70300,"total_tokens":41270300}`,
+			`{"input_tokens":200000,"cached_input_tokens":150000,"output_tokens":300,"total_tokens":200300}`))
+	collector, _ := NewCollector("codex", root)
+	records, err := collector.Collect(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, record := range records {
+		total += record.InputTokens + record.CacheReadTokens + record.OutputTokens
+	}
+	if len(records) != 2 || total != 300500+200300 {
+		t.Fatalf("records = %d, tokens = %d; the earlier thread's %d tokens must not be counted again", len(records), total, 41070000-300500)
+	}
+}
+
+// A marker event carries a total but no token counts. It is not a request
+// and must not become the baseline the next request is measured against.
+func TestCodexCollectorIgnoresTotalOnlyMarkerEvents(t *testing.T) {
+	zero := `{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":0}`
+	root := writeCodexRollout(t,
+		codexTokenCount("2026-11-13T07:20:00Z",
+			`{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"total_tokens":1050}`,
+			`{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"total_tokens":1050}`),
+		codexTokenCount("2026-11-13T07:20:43Z",
+			`{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"total_tokens":950000}`, zero),
+		// No last_token_usage here: only the delta can tell what is new.
+		codexTokenCount("2026-11-13T07:21:00Z",
+			`{"input_tokens":1600,"cached_input_tokens":900,"output_tokens":80,"total_tokens":1680}`, zero))
+	collector, _ := NewCollector("codex", root)
+	records, err := collector.Collect(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %+v, want the two requests and no row for the marker", records)
+	}
+	second := records[1]
+	if got := second.InputTokens + second.CacheReadTokens + second.OutputTokens; got != 630 {
+		t.Fatalf("request after the marker = %d tokens, want the 630 it added, not the whole total", got)
+	}
+}

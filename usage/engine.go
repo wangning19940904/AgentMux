@@ -6,6 +6,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -51,9 +52,13 @@ func NewEngine(cfg *config.Config, st *store.Store, log *slog.Logger) *Engine {
 }
 
 // Collect runs all configured local collectors and persists priced records.
+// A source that fails does not stop the others, and whatever it did read is
+// kept. The failure is returned so the caller reads the same window again
+// rather than moving past records that were never stored.
 func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 	e.collectMu.Lock()
 	defer e.collectMu.Unlock()
+	var failures []error
 	for _, src := range e.cfg.Usage.Sources {
 		// Cursor reads credentials and local message metadata only after the
 		// explicit Connect action. Its manager owns that consent-gated path.
@@ -70,8 +75,8 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 		}
 		recs, err := col.Collect(ctx, since)
 		if err != nil {
-			e.log.Warn("collect failed", "source", src, "err", err)
-			continue
+			e.log.Warn("collect failed", "source", src, "err", err, "records_kept", len(recs))
+			failures = append(failures, fmt.Errorf("%s: %w", src, err))
 		}
 		e.price(recs)
 		if err := e.st.UpsertUsage(ctx, recs); err != nil {
@@ -79,7 +84,7 @@ func (e *Engine) Collect(ctx context.Context, since time.Time) error {
 		}
 		e.log.Debug("collected", "source", src, "records", len(recs))
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // Run once per source and host on startup, independently of the collection
@@ -151,27 +156,78 @@ func (e *Engine) Start(ctx context.Context, backfill time.Duration) {
 		backfill = 30 * 24 * time.Hour
 	}
 	since := e.initialCollectSince(ctx, backfill)
-	if err := e.Collect(ctx, since); err != nil && ctx.Err() == nil {
-		e.log.Warn("initial usage collection failed", "err", err)
-	} else if err == nil {
-		e.saveCollectCheckpoint(ctx)
+	// Each pass reads from the start of the last pass that succeeded, not from
+	// "now". Parsers keep only records stamped at or after that time, so a
+	// fixed look-back loses whatever was written before a pass that ran late:
+	// after the machine slept, or when one pass took longer than the look-back.
+	var progress collectProgress
+	collect := func(since time.Time) {
+		started := time.Now().UTC()
+		err := e.Collect(ctx, since)
+		if err != nil && ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			e.log.Warn("usage collection failed", "err", err)
+		}
+		if progress.finish(started, err) {
+			e.saveCollectCheckpoint(ctx, started)
+		}
 	}
+	collect(since)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
-			// Re-read a small overlap. Store request IDs and the legacy composite
-			// key make this idempotent while tolerating late transcript writes.
-			if err := e.Collect(ctx, now.UTC().Add(-2*time.Minute)); err != nil && ctx.Err() == nil {
-				e.log.Warn("incremental usage collection failed", "err", err)
-			} else if err == nil {
-				e.saveCollectCheckpoint(ctx)
-			}
+		case <-ticker.C:
+			collect(nextCollectSince(progress.last, since))
 		}
 	}
+}
+
+// collectProgress tracks how far collection has reliably read.
+type collectProgress struct {
+	last         time.Time // start of the last pass collection moved past
+	failingSince time.Time // start of the first failed pass since a success
+}
+
+// maxCollectRetry is how long a failing pass keeps the window open. A fault
+// that clears (a file caught mid-write, a locked database) is read again in
+// full. One that does not clear must not make every pass re-read a window
+// that grows without end, so after this long collection moves on; whatever
+// the failing source did return has been stored either way.
+const maxCollectRetry = time.Hour
+
+// finish records a pass that started at started and reports whether
+// collection may move past it.
+func (p *collectProgress) finish(started time.Time, err error) bool {
+	if err == nil {
+		p.failingSince = time.Time{}
+	} else {
+		if p.failingSince.IsZero() {
+			p.failingSince = started
+		}
+		if started.Sub(p.failingSince) < maxCollectRetry {
+			return false
+		}
+	}
+	p.last = started
+	return true
+}
+
+// collectOverlap is re-read on every pass. Store request IDs and the legacy
+// composite key make this idempotent while tolerating late transcript writes.
+const collectOverlap = 2 * time.Minute
+
+// nextCollectSince resumes from the last successful pass, or from the initial
+// window while no pass has succeeded yet.
+func nextCollectSince(lastCollected, initial time.Time) time.Time {
+	if lastCollected.IsZero() {
+		return initial
+	}
+	return lastCollected.Add(-collectOverlap)
 }
 
 // initialCollectSince resolves the start time for the first collection: the
@@ -198,11 +254,13 @@ func (e *Engine) initialCollectSince(ctx context.Context, backfill time.Duration
 	return resume
 }
 
-func (e *Engine) saveCollectCheckpoint(ctx context.Context) {
+// saveCollectCheckpoint records when the pass that just succeeded started:
+// records written while it ran may not have been read.
+func (e *Engine) saveCollectCheckpoint(ctx context.Context, started time.Time) {
 	if e.st == nil {
 		return
 	}
-	if err := e.st.SetSetting(ctx, usageCollectCheckpointKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil && ctx.Err() == nil {
+	if err := e.st.SetSetting(ctx, usageCollectCheckpointKey, started.UTC().Format(time.RFC3339Nano)); err != nil && ctx.Err() == nil {
 		e.log.Warn("persist usage collect checkpoint failed", "err", err)
 	}
 }
@@ -271,18 +329,43 @@ func (e *Engine) ReportRange(ctx context.Context, period string, since, until ti
 // reported date range use location, so fleet reports align across hosts whose
 // process-local timezone differs.
 func (e *Engine) ReportRangeInLocation(ctx context.Context, period string, since, until time.Time, location *time.Location) (*Report, error) {
+	return e.ReportQuery(ctx, ReportQuery{Period: period, Since: since, Until: until, Location: location})
+}
+
+// ReportQuery selects what a report covers: a period to bucket by, an
+// absolute time range [Since, Until) (zero = unbounded), the timezone bucket
+// labels use, and optional dimension filters.
+type ReportQuery struct {
+	Period   string
+	Since    time.Time
+	Until    time.Time
+	Location *time.Location
+	Filter   ReportFilter
+}
+
+// reconciliationFetchMargin is how far outside the requested range records are
+// read so that both observations of one request are seen together. It covers
+// the widest pairing window of the reconcilers.
+const reconciliationFetchMargin = claudeReplyGap
+
+// ReportQuery aggregates the records a query selects. The report's facets
+// list every model, framework and agent seen in the time range before the
+// dimension filters apply, so a client can offer them as filter choices.
+func (e *Engine) ReportQuery(ctx context.Context, query ReportQuery) (*Report, error) {
+	location := query.Location
 	if location == nil {
 		location = time.Local
 	}
+	since, until := query.Since, query.Until
 	// Fetch the delivery overlap before matching. Otherwise one observation
 	// just before midnight and its counterpart just after midnight would
 	// survive separately in adjacent daily reports.
 	querySince, queryUntil := since, until
 	if !querySince.IsZero() {
-		querySince = querySince.Add(-usageReconciliationWindow)
+		querySince = querySince.Add(-reconciliationFetchMargin)
 	}
 	if !queryUntil.IsZero() {
-		queryUntil = queryUntil.Add(usageReconciliationWindow)
+		queryUntil = queryUntil.Add(reconciliationFetchMargin)
 	}
 	recs, err := e.st.QueryUsageRange(ctx, querySince, queryUntil)
 	if err != nil {
@@ -290,6 +373,7 @@ func (e *Engine) ReportRangeInLocation(ctx context.Context, period string, since
 	}
 	recs = reconcileCodexUsage(recs)
 	recs = reconcileCursorUsage(recs)
+	recs = reconcileClaudeUsage(recs)
 	bounded := recs[:0]
 	for _, record := range recs {
 		if (!since.IsZero() && record.Timestamp.Before(since)) || (!until.IsZero() && !record.Timestamp.Before(until)) {
@@ -298,11 +382,16 @@ func (e *Engine) ReportRangeInLocation(ctx context.Context, period string, since
 		bounded = append(bounded, record)
 	}
 	recs = bounded
+	// Filters apply after reconciliation: a duplicate observation must be
+	// dropped even when only its counterpart matches the filter.
+	facets := usageFacets(recs)
+	recs = query.Filter.apply(recs)
 	e.reprice(recs)
 	for i := range recs {
 		recs[i].Timestamp = recs[i].Timestamp.In(location)
 	}
-	report := Aggregate(period, recs)
+	report := Aggregate(query.Period, recs)
+	report.Facets = facets
 	if !since.IsZero() {
 		report.From = since.In(location).Format("2006-01-02")
 	}

@@ -37,6 +37,7 @@ type claudeLine struct {
 	Cwd        string `json:"cwd"`
 	Entrypoint string `json:"entrypoint"`
 	Message    struct {
+		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
 			InputTokens              int64 `json:"input_tokens"`
@@ -65,7 +66,7 @@ func (c *claudeCollector) Collect(ctx context.Context, since time.Time) ([]core.
 			return ctx.Err()
 		default:
 		}
-		recs := c.parseFile(path, since)
+		recs := c.parseFile(path, claudeProject(projectsDir, path), since)
 		out = append(out, recs...)
 		return nil
 	})
@@ -75,13 +76,27 @@ func (c *claudeCollector) Collect(ctx context.Context, since time.Time) ([]core.
 	return out, err
 }
 
-func (c *claudeCollector) parseFile(path string, since time.Time) []core.UsageRecord {
+// claudeProject is the project directory a transcript belongs to: the first
+// path element under projects/. A sub-agent's transcript lives deeper, in
+// <project>/<session>/subagents/, and belongs to the same project.
+func claudeProject(projectsDir, path string) string {
+	rel, err := filepath.Rel(projectsDir, path)
+	if err != nil {
+		return filepath.Base(filepath.Dir(path))
+	}
+	first, _, nested := strings.Cut(filepath.ToSlash(rel), "/")
+	if !nested {
+		return filepath.Base(filepath.Dir(path))
+	}
+	return first
+}
+
+func (c *claudeCollector) parseFile(path, project string, since time.Time) []core.UsageRecord {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	project := filepath.Base(filepath.Dir(path))
 	var out []core.UsageRecord
 	runtime := ClaudeRuntime("")
 	sc := bufio.NewScanner(f)
@@ -106,10 +121,15 @@ func (c *claudeCollector) parseFile(path string, since time.Time) []core.UsageRe
 			u.CacheReadInputTokens == 0 && u.CacheCreationInputTokens == 0 {
 			continue
 		}
+		// Claude Code writes one line per content block of a reply (thinking,
+		// text, each tool call), and every line repeats the reply's ID and its
+		// whole usage. The ID makes them one request in the store; without it
+		// each line was counted as a request of its own.
 		out = append(out, core.UsageRecord{
 			Source:           "claude",
 			RuntimeID:        runtime,
 			SessionID:        l.SessionID,
+			RequestID:        l.Message.ID,
 			Project:          project,
 			Model:            l.Message.Model,
 			Timestamp:        ts,

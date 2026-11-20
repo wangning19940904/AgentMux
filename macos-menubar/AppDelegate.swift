@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let client = UsageClient()
     private var timer: Timer?
+    // Daily buckets of the most recent days, for the "By date" breakdown.
+    private var recentDays: [UsageBucket] = []
     private var parentTimer: Timer?
     private var settings = MenubarSettings.defaults
     private let parentPID: pid_t? = {
@@ -70,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         client.fetchSettings { [weak self] settings in
             guard let self = self else { return }
             self.settings = settings
-            self.client.fetchDaily { [weak self] report in
+            self.client.fetchDays(1) { [weak self] report in
                 guard let self = self else { return }
                 guard let report = report else {
                     self.applyStatusTitle(self.hasStatusContent ? "⚠️" : "")
@@ -79,6 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 self.applyStatusTitle(self.statusTitle(report: report))
                 self.rebuildMenu(report: report)
+                // "By date" lists the most recent days, which today's report
+                // does not hold.
+                guard settings.breakdowns.contains("date"), settings.top_n > 1 else { return }
+                self.client.fetchDays(settings.top_n) { [weak self] recent in
+                    guard let self = self, let recent = recent else { return }
+                    self.recentDays = recent.buckets
+                    self.rebuildMenu(report: report)
+                }
             }
         }
     }
@@ -209,7 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "date":
             title = "By date"
             // Buckets ascend by key; the most recent days are most useful.
-            rows = report.buckets.suffix(topN).reversed().map {
+            let days = recentDays.isEmpty ? report.buckets : recentDays
+            rows = days.suffix(topN).reversed().map {
                 ($0.key,
                  $0.totals.input_tokens + $0.totals.output_tokens,
                  $0.totals.records,

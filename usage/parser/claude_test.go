@@ -57,3 +57,43 @@ func TestCollectorSinceFilter(t *testing.T) {
 		t.Fatalf("since filter: got %d, want 0", len(recs))
 	}
 }
+
+// One reply spans several transcript lines, one per content block, and every
+// line repeats the reply's usage. They must reach the store as one request.
+func TestClaudeCollectorIdentifiesARepliesLinesAsOneRequest(t *testing.T) {
+	root := t.TempDir()
+	projDir := filepath.Join(root, "projects", "my-proj")
+	subagents := filepath.Join(projDir, "session-1", "subagents")
+	if err := os.MkdirAll(subagents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	usage := `"usage":{"input_tokens":3,"output_tokens":40,"cache_read_input_tokens":9000,"cache_creation_input_tokens":20}`
+	lines := `{"type":"assistant","timestamp":"2026-01-01T10:00:00Z","sessionId":"abc","message":{"id":"msg_1","model":"opus",` + usage + `}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-01-01T10:00:02Z","sessionId":"abc","message":{"id":"msg_1","model":"opus",` + usage + `}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-01-01T10:00:09Z","sessionId":"abc","message":{"id":"msg_2","model":"opus",` + usage + `}}` + "\n"
+	if err := os.WriteFile(filepath.Join(projDir, "s.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := `{"type":"assistant","timestamp":"2026-01-01T10:00:05Z","sessionId":"abc","message":{"id":"msg_sub","model":"haiku","usage":{"input_tokens":1}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(subagents, "agent-1.jsonl"), []byte(sub), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	col, _ := NewCollector("claude", root)
+	recs, err := col.Collect(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int{}
+	for _, rec := range recs {
+		ids[rec.RequestID]++
+		// A sub-agent's transcript sits in <project>/<session>/subagents/ and
+		// belongs to the project, not to a project called "subagents".
+		if rec.Project != "my-proj" {
+			t.Errorf("project of %s = %q, want my-proj", rec.RequestID, rec.Project)
+		}
+	}
+	if len(recs) != 4 || ids["msg_1"] != 2 || ids["msg_2"] != 1 || ids["msg_sub"] != 1 {
+		t.Fatalf("request IDs = %v; every line must carry its reply's ID so the store keeps one row per reply", ids)
+	}
+}
