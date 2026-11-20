@@ -13,6 +13,7 @@ import {
   ChevronsRight,
   ExternalLink,
   Gauge,
+  HeartPulse,
   LayoutGrid,
   ListChecks,
   PanelTop,
@@ -62,6 +63,7 @@ import {
   loadSessionWithRetry,
 } from "./signIn";
 import { SignInGate } from "./SignInGate";
+import { HubApprovalPrompt } from "./components/HubApprovalPrompt";
 import { ConfirmHost } from "./components/ConfirmDialog";
 import {
   MEMBER_LANDING_TAB,
@@ -89,8 +91,6 @@ type Tab = NavigationTabID;
 
 type NavItem = { id: Tab; labelKey: string; icon: typeof LayoutGrid };
 type NavGroup = { id: string; labelKey: string; icon: typeof LayoutGrid; items: NavItem[] };
-
-const OVERVIEW_ITEM: NavItem = { id: "overview", labelKey: "nav.overview", icon: LayoutGrid };
 
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -122,11 +122,13 @@ const NAV_GROUPS: NavGroup[] = [
     id: "operations",
     labelKey: "nav.group.operations",
     icon: Activity,
+    // The two dashboards lead the section: Usage is where it opens.
     items: [
+      { id: "usage", labelKey: "nav.usage", icon: Gauge },
+      { id: "health", labelKey: "nav.health", icon: HeartPulse },
       { id: "sessions", labelKey: "nav.sessions", icon: MessageSquareText },
       { id: "machine-status", labelKey: "nav.machineStatus", icon: MonitorDot },
       { id: "observability", labelKey: "nav.observability", icon: Activity },
-      { id: "usage", labelKey: "nav.usage", icon: Gauge },
       { id: "feedback", labelKey: "nav.feedback", icon: MessageSquareText },
       { id: "guard", labelKey: "nav.guard", icon: ShieldCheck },
     ],
@@ -143,7 +145,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-const TABS: NavItem[] = [OVERVIEW_ITEM, ...NAV_GROUPS.flatMap((group) => group.items)];
+const TABS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 function initialLanguage(): Language {
   const stored = localStorage.getItem("agentmux:language");
@@ -166,6 +168,8 @@ function tabFromHash(): Tab | null {
   if (value === "connect") return "channels";
   // Tenants are gone; account management took their place.
   if (value === "tenants") return "accounts";
+  // The Overview page became the Usage and Health dashboards.
+  if (value === "overview") return "usage";
   return TABS.some((item) => item.id === value) ? value as Tab : null;
 }
 
@@ -243,6 +247,7 @@ export function App() {
           themeMode={themeMode}
           setThemeMode={setThemeMode}
         />
+        <HubApprovalPrompt />
       </SignInGate>
       <ConfirmHost />
     </I18nProvider>
@@ -280,8 +285,8 @@ function Shell({
     ? { ...group, items: group.items.map((item) => item.id === "accounts" ? { ...item, labelKey: "nav.myAccount" } : item) }
     : group), [role]);
   const navTabs = useMemo(
-    () => [...(identityIsAdmin ? [OVERVIEW_ITEM] : []), ...navGroups.flatMap((group) => group.items)],
-    [identityIsAdmin, navGroups],
+    () => navGroups.flatMap((group) => group.items),
+    [navGroups],
   );
   const mobileTabs = useMemo(() => mobileTabItems(navTabs), [navTabs]);
   const identityName = session?.account ? accountLabel(session.account) : t("app.admin");
@@ -327,7 +332,7 @@ function Shell({
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
   const desktop = isDesktopApp();
   const ActiveIcon = active.icon;
-  const prefetchItems = activeGroup?.items ?? [OVERVIEW_ITEM];
+  const prefetchItems = activeGroup?.items ?? [];
   const prefetchKey = prefetchItems.map((item) => item.id).join(",");
   useEffect(() => {
     const timer = window.setTimeout(() => prefetchItems.forEach((item) => prefetchPanel(item.id)), 1_500);
@@ -439,10 +444,6 @@ function Shell({
     window.addEventListener("agentmux:machine-scope-changed", refreshScope);
     return () => window.removeEventListener("agentmux:machine-scope-changed", refreshScope);
   }, []);
-
-  function selectOverview() {
-    setTab("overview");
-  }
 
   function requestNewAgent() {
     setCreateAgentRequested(true);
@@ -622,18 +623,6 @@ function Shell({
         </div>
 
         <nav id="primary-navigation" className="nav primary-nav" aria-label={t("nav.primary")}>
-          {identityIsAdmin && <button
-            className={`nav-item nav-primary-item${visibleTab === OVERVIEW_ITEM.id ? " active" : ""}`}
-            onClick={selectOverview}
-            title={t(OVERVIEW_ITEM.labelKey)}
-            aria-label={t(OVERVIEW_ITEM.labelKey)}
-            aria-current={visibleTab === OVERVIEW_ITEM.id ? "page" : undefined}
-            disabled={navigationLocked}
-          >
-            <LayoutGrid size={18} />
-            <span>{t(OVERVIEW_ITEM.labelKey)}</span>
-          </button>}
-
           {sidebarGroups.map((group) => (
             <SidebarGroup
               key={group.id}
@@ -696,7 +685,6 @@ function Shell({
 
       <MobileDrawer
         open={mobileNavOpen}
-        overview={identityIsAdmin ? OVERVIEW_ITEM : undefined}
         groups={navGroups}
         active={visibleTab}
         isDisabled={() => navigationLocked}

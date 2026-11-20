@@ -599,7 +599,7 @@ func TestHubOwnRecordIsHiddenAndHubsAreLabelled(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	ctx := context.Background()
 	ids := map[string]string{}
-	for _, name := range []string{"laptop", "standby-mac", "this-mac"} {
+	for _, name := range []string{"laptop", "standby-mac", "this-mac", "this-mac-membership"} {
 		code, err := st.CreateDevicePairingCode(ctx, name)
 		if err != nil {
 			t.Fatal(err)
@@ -617,7 +617,9 @@ func TestHubOwnRecordIsHiddenAndHubsAreLabelled(t *testing.T) {
 	s := &Server{st: st, remote: manager}
 	s.linkHub = linkpkg.NewHub(st, nil)
 	s.devices = &deviceBackend{st: st, hub: s.linkHub,
-		self:     func() string { return ids["this-mac"] },
+		// Its own record, and its membership of the other hub from when it
+		// was the standby.
+		self:     func() map[string]bool { return map[string]bool{ids["this-mac"]: true, ids["this-mac-membership"]: true} },
 		hubRoles: func(context.Context) map[string]string { return map[string]string{ids["standby-mac"]: "standby"} }}
 	s.remote.SetLinkBackend(s.devices)
 
@@ -625,8 +627,13 @@ func TestHubOwnRecordIsHiddenAndHubsAreLabelled(t *testing.T) {
 	for _, view := range s.remote.List() {
 		views[view.Name] = view
 	}
-	if _, ok := views["this-mac"]; ok {
-		t.Fatalf("this hub's own record is listed as another machine: %+v", views)
+	for _, name := range []string{"this-mac", "this-mac-membership"} {
+		if _, ok := views[name]; ok {
+			t.Fatalf("this hub's own record %s is listed as another machine: %+v", name, views)
+		}
+		if _, ok := s.devices.Device(ctx, ids[name]); ok {
+			t.Fatalf("this hub's own record %s resolves as a machine", name)
+		}
 	}
 	if views["standby-mac"].HubRole != "standby" || views["laptop"].HubRole != "" {
 		t.Fatalf("hub labels = %+v", views)
@@ -639,8 +646,8 @@ func TestHubOwnRecordIsHiddenAndHubsAreLabelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, target := range targets {
-		if target.ID == ids["this-mac"] {
-			t.Fatal("this hub's own record is a fleet target")
+		if target.ID == ids["this-mac"] || target.ID == ids["this-mac-membership"] {
+			t.Fatalf("this hub's own record %s is a fleet target", target.Name)
 		}
 	}
 }

@@ -172,10 +172,29 @@ struct MenubarSettings: Decodable {
         rate: 7.0, breakdowns: ["model", "runtime", "date"], topN: 3)
 }
 
-// UsageClient fetches the daily report from the daemon.
+// UsageClient fetches usage reports from the daemon.
 final class UsageClient {
-    func fetchDaily(completion: @escaping (UsageReport?) -> Void) {
-        guard let url = URL(string: "\(daemonBase)/api/v1/usage?period=daily") else {
+    // fetchDays loads the report for the last `days` local days, today
+    // included, bucketed by day. The menu shows today's figures; asking
+    // without a range made the daemon total its whole history every minute
+    // and labelled that total "Today".
+    func fetchDays(_ days: Int, completion: @escaping (UsageReport?) -> Void) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: -(max(days, 1) - 1), to: today) ?? today
+        let format = DateFormatter()
+        format.calendar = Calendar(identifier: .gregorian)
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = calendar.timeZone
+        format.dateFormat = "yyyy-MM-dd"
+        var components = URLComponents(string: "\(daemonBase)/api/v1/usage")
+        components?.queryItems = [
+            URLQueryItem(name: "period", value: "daily"),
+            URLQueryItem(name: "from", value: format.string(from: start)),
+            URLQueryItem(name: "to", value: format.string(from: today)),
+            URLQueryItem(name: "timezone", value: calendar.timeZone.identifier),
+        ]
+        guard let url = components?.url else {
             DispatchQueue.main.async { completion(nil) }
             return
         }

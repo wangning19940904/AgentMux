@@ -156,6 +156,8 @@ type Service struct {
 	// supervision condition was first seen holding; see supervision.go.
 	turnStarts map[string]time.Time
 	suspects   map[string]time.Time
+	// worktreesSwept is when finished Tickets' worktrees were last looked at.
+	worktreesSwept time.Time
 	// reactions are the marks on messages the router is working on, by
 	// reactionKey; see reactions.go.
 	reactor   ChatReactor
@@ -336,6 +338,9 @@ func (s *Service) Pass(ctx context.Context) {
 	if err := s.startQueued(ctx); err != nil && ctx.Err() == nil {
 		s.log.Error("super agent execution pass failed", "err", err)
 	}
+	// Turns start only in this pass, so none starts in a worktree while it
+	// is being removed.
+	s.sweepTicketWorktrees(ctx)
 }
 
 // Ingest applies the gate to one event from a Source and stores it once. An

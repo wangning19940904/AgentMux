@@ -61,6 +61,34 @@ export interface UsageReport {
   by_runtime?: RuntimeStat[];
   warnings?: string[];
   by_machine?: Array<{ target_id: string; target_name: string; totals: UsageTotals; buckets?: UsageBucket[] }>;
+  // The values of each filterable dimension found in the time range, before
+  // the dimension filters apply.
+  facets?: UsageFacets;
+}
+
+export interface UsageFacetValue {
+  value: string;
+  tokens: number;
+}
+
+export interface UsageFacets {
+  models: UsageFacetValue[];
+  runtimes: UsageFacetValue[];
+  agents: UsageFacetValue[];
+}
+
+// Restricts a usage report to the listed values of each dimension; an empty
+// list leaves the dimension unrestricted.
+export interface UsageReportFilter {
+  models?: string[];
+  runtimes?: string[];
+  agents?: string[];
+}
+
+// A machine a usage report can be read from.
+export interface UsageTarget {
+  id: string;
+  name: string;
 }
 
 export interface CursorHookStatus {
@@ -571,6 +599,38 @@ export interface DeviceAccount {
   authority: "local" | "primary" | "hub";
   // setup_allowed: the first administrator may be created from here.
   setup_allowed: boolean;
+  // saved_accounts: accounts that signed this machine in before, kept on
+  // this machine (names only, never a password). Older daemons leave it out.
+  saved_accounts?: SavedAccount[];
+  // hub_accounts: on a node, the accounts its hub's machines are signed in
+  // as, the only ones it may use while linked. hub_unreachable: the node
+  // could not ask its hub just now.
+  hub_accounts?: HubAccount[];
+  hub_unreachable?: boolean;
+}
+
+// HubAccount is an account a hub machine is signed in as.
+export interface HubAccount {
+  account: AccountIdentity;
+  machine?: string;
+}
+
+// DeviceApproval is a machine's request to sign in with an account, waiting
+// for a hub signed in as that account to approve it.
+export interface DeviceApproval {
+  id: string;
+  login: string;
+  machine: string;
+  state: "pending" | "approved" | "denied";
+  created_at: string;
+  expires_at: string;
+}
+
+// SavedAccount is an account the sign-in screen offers again.
+export interface SavedAccount {
+  login: string;
+  display_name?: string;
+  last_signed_in_at?: string;
 }
 
 // LoginState is what the first sign-in step learns about a login name.
@@ -1151,6 +1211,24 @@ export interface FrameworkInstallResult {
   log?: string;
   version?: string;
   error?: string;
+  // Set when the action succeeded with a problem worth reading, such as a
+  // package manager that exited non-zero after upgrading the CLI.
+  warning?: string;
+}
+
+// A framework install, update or uninstall running in the background on one
+// machine (GET/POST /api/v1/frameworks/operations).
+export interface FrameworkOperationJob {
+  id: string;
+  kind: string;
+  action: "install" | "update" | "uninstall";
+  state: "running" | "succeeded" | "failed";
+  progress: { phase: string; detail?: string; percent: number };
+  log?: string;
+  result?: FrameworkInstallResult;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string;
 }
 
 export interface FrameworkUpdateCheck {
@@ -1308,6 +1386,8 @@ export interface OperationProgress {
   detail?: string;
   percent: number;
   started_at?: number;
+  // The command's output so far, when the operation reports it.
+  log?: string;
 }
 
 export interface TTSVoice {

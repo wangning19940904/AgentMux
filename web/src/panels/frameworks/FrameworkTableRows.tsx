@@ -191,6 +191,7 @@ export function FrameworkTableRows({
                 {updateStatusClass === "success" && <CheckCircle2 size={13} />}{updateStatus}
               </span>
             ) : <span className="framework-update-state"><RefreshCw className="spin" size={12} />{t("tools.checkingUpdate")}</span>}
+            {check?.error && busy !== "check" && <span className="framework-update-error" title={check.error}>{check.error}</span>}
           </span>
         </td>
         <td className="framework-account-cell" data-label={t("frameworks.account")}>

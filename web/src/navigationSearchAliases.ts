@@ -2,11 +2,6 @@
 // short pinyin initials and product terminology are ambiguous, so explicit
 // aliases give operators predictable results in both supported UI languages.
 export const NAVIGATION_SEARCH_ALIASES = {
-  overview: [
-    "总览", "概览", "首页", "仪表盘", "控制台", "看板",
-    "zonglan", "zong lan", "zl",
-    "overview", "home", "dashboard", "summary", "console",
-  ],
   agents: [
     "智能体", "助手", "机器人", "AI 助手", "代理",
     "zhinengti", "zhi neng ti", "znt",
@@ -88,9 +83,15 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "opentelemetry", "otel",
   ],
   usage: [
-    "用量", "账本", "账单", "费用", "成本", "消耗", "Token 用量", "额度",
-    "yongliang", "yong liang", "yl", "zhangben", "zhang ben", "zb",
+    "用量", "用量看板", "账本", "账单", "费用", "成本", "消耗", "Token 用量", "额度", "总览", "概览", "仪表盘", "看板", "统计",
+    "yongliang", "yong liang", "yl", "zhangben", "zhang ben", "zb", "zonglan", "zong lan", "zl",
     "usage", "ledger", "billing", "bill", "cost", "spend", "consumption", "tokens", "quota",
+    "overview", "dashboard", "summary", "statistics", "trend",
+  ],
+  health: [
+    "健康", "健康看板", "连接健康", "可用性", "状态", "故障", "异常", "掉线", "总览", "仪表盘", "看板",
+    "jiankang", "jian kang", "jk", "zhuangtai", "zhuang tai", "zt",
+    "health", "status", "availability", "connection health", "outage", "offline", "dashboard", "overview",
   ],
   feedback: [
     "反馈", "答案反馈", "评价", "意见", "评分", "点赞", "差评", "复核",

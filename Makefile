@@ -17,7 +17,16 @@ HOOK_BINARY := agentmux-hook
 HOOK_CMD    := ./cmd/agentmux-hook
 DIST        := dist
 REMOTE_ASSETS := desktop/build/remote-assets
-VERSION     ?= 0.1.0
+# Local builds are dev builds of the next patch release, numbered by the date
+# and commit count of HEAD (0.1.1-dev.YYYYMMDD.N), so every machine reports
+# which build it runs and the Console can tell an older one from a newer one.
+# Tagged releases pass their own VERSION through GoReleaser.
+BASE_VERSION := 0.1.1
+ifeq ($(origin VERSION),undefined)
+BUILD_DATE  := $(shell TZ=UTC git log -1 --date=format-local:%Y%m%d --format=%cd 2>/dev/null)
+BUILD_COUNT := $(shell git rev-list --count HEAD 2>/dev/null)
+VERSION     := $(if $(and $(BUILD_DATE),$(BUILD_COUNT)),$(BASE_VERSION)-dev.$(BUILD_DATE).$(BUILD_COUNT),0.1.0)
+endif
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 HOOK_LDFLAGS := -s -w
 PLATFORMS   := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64

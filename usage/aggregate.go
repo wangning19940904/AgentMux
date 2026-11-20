@@ -20,6 +20,9 @@ type Report struct {
 	BySource  []SourceStat  `json:"by_source"`
 	ByAgent   []AgentStat   `json:"by_agent,omitempty"`
 	ByRuntime []RuntimeStat `json:"by_runtime,omitempty"`
+	// Facets are the filter choices of the report's time range; set by the
+	// engine, which sees the records before filters apply.
+	Facets *Facets `json:"facets,omitempty"`
 }
 
 // Totals are grand totals across all records.
@@ -166,10 +169,7 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 			ss.EstimatedTokens += totalTokens(rec)
 		}
 
-		agentKey := rec.Project
-		if agentKey == "" {
-			agentKey = "unknown"
-		}
+		agentKey := usageAgentKey(rec)
 		as := agentMap[agentKey]
 		if as == nil {
 			as = &AgentStat{Agent: agentKey}
@@ -234,7 +234,12 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 		for _, runtime := range bucketRuntimeMap[k] {
 			bucket.ByRuntime = append(bucket.ByRuntime, *runtime)
 		}
-		sort.Slice(bucket.ByRuntime, func(i, j int) bool { return bucket.ByRuntime[i].Tokens > bucket.ByRuntime[j].Tokens })
+		sort.Slice(bucket.ByRuntime, func(i, j int) bool {
+			if bucket.ByRuntime[i].Tokens == bucket.ByRuntime[j].Tokens {
+				return bucket.ByRuntime[i].Runtime < bucket.ByRuntime[j].Runtime
+			}
+			return bucket.ByRuntime[i].Tokens > bucket.ByRuntime[j].Tokens
+		})
 		r.Buckets = append(r.Buckets, bucket)
 	}
 	sort.Slice(r.Buckets, func(i, j int) bool { return r.Buckets[i].Key < r.Buckets[j].Key })
@@ -249,12 +254,41 @@ func Aggregate(period string, recs []core.UsageRecord) *Report {
 	for _, as := range agentMap {
 		r.ByAgent = append(r.ByAgent, *as)
 	}
-	sort.Slice(r.ByAgent, func(i, j int) bool { return r.ByAgent[i].CostUSD > r.ByAgent[j].CostUSD })
+	sort.Slice(r.ByAgent, func(i, j int) bool {
+		if r.ByAgent[i].Tokens != r.ByAgent[j].Tokens {
+			return r.ByAgent[i].Tokens > r.ByAgent[j].Tokens
+		}
+		return r.ByAgent[i].Agent < r.ByAgent[j].Agent
+	})
+	r.ByAgent = foldAgentTail(r.ByAgent)
 	for _, rs := range runtimeMap {
 		r.ByRuntime = append(r.ByRuntime, *rs)
 	}
 	sort.Slice(r.ByRuntime, func(i, j int) bool { return r.ByRuntime[i].CostUSD > r.ByRuntime[j].CostUSD })
 	return r
+}
+
+// OtherAgents is the row a long tail of agents and projects is folded into.
+const OtherAgents = "(other)"
+
+// maxAgentStats bounds the per-agent list. A machine that has run for months
+// has thousands of project directories; the tail is summed into one row so
+// the list still adds up to the report's totals. Sessions are summed too: a
+// session belongs to one project.
+const maxAgentStats = 200
+
+func foldAgentTail(stats []AgentStat) []AgentStat {
+	if len(stats) <= maxAgentStats {
+		return stats
+	}
+	other := AgentStat{Agent: OtherAgents}
+	for _, stat := range stats[maxAgentStats:] {
+		other.Tokens += stat.Tokens
+		other.CostUSD += stat.CostUSD
+		other.Records += stat.Records
+		other.Sessions += stat.Sessions
+	}
+	return append(stats[:maxAgentStats:maxAgentStats], other)
 }
 
 func addTotals(t *Totals, rec core.UsageRecord) {

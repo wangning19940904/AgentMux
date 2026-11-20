@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -221,6 +222,10 @@ func userExecutableDirs(home string) []string {
 		dirs = append(dirs, nvmNodeBinDirs(nvmDir)...)
 	}
 	dirs = append(dirs, nvmNodeBinDirs(filepath.Join(home, ".nvm"))...)
+	// An app started from Finder or launchd gets PATH /usr/bin:/bin:/usr/sbin:/sbin
+	// and never sees Homebrew, where npm, node and Homebrew-installed CLIs live.
+	// They come last so a user-level install still wins.
+	dirs = append(dirs, packageManagerDirs...)
 
 	seen := make(map[string]bool, len(dirs))
 	unique := make([]string, 0, len(dirs))
@@ -233,6 +238,17 @@ func userExecutableDirs(home string) []string {
 		unique = append(unique, cleaned)
 	}
 	return unique
+}
+
+// packageManagerDirs are system package-manager bin directories searched
+// after the user-level ones. Tests clear it to keep lookups hermetic.
+var packageManagerDirs = defaultPackageManagerDirs(runtime.GOOS)
+
+func defaultPackageManagerDirs(goos string) []string {
+	if goos != "darwin" {
+		return nil
+	}
+	return []string{"/opt/homebrew/bin", "/usr/local/bin"}
 }
 
 func nvmNodeBinDirs(nvmDir string) []string {

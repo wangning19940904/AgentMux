@@ -231,7 +231,12 @@ describe("fleet actions", () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       targets: [{
         target: { id: "ssh-1", name: "Remote", kind: "ssh", trusted: true, online: true },
-        responses: [{ key: "install", status: 200, ok: true, data: { kind: "codex", action: "update", ok: true }, duration_ms: 1 }],
+        // The machine runs the update as a background operation; this one
+        // has already settled when the start returns.
+        responses: [{ key: "operation", status: 200, ok: true, data: {
+          id: "fwop-1", kind: "codex", action: "update", state: "succeeded", progress: { phase: "complete", percent: 100 },
+          result: { kind: "codex", action: "update", ok: true }, started_at: "2026-11-19T12:00:00Z", updated_at: "2026-11-19T12:00:00Z",
+        }, duration_ms: 1 }],
       }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -240,6 +245,7 @@ describe("fleet actions", () => {
     expect(confirm).not.toHaveBeenCalled();
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.target_ids).toEqual(["ssh-1"]);
+    expect(body.requests[0]).toMatchObject({ method: "POST", path: "/api/v1/frameworks/operations" });
   });
 
 	it("installs a managed CLI only on explicitly selected machines without a second confirmation", async () => {
@@ -280,6 +286,10 @@ describe("fleet mergers", () => {
         by_model: [{ model: "gpt-5", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
       }],
       by_model: [], by_source: [], by_agent: [{ agent: "demo", tokens, cost_usd: tokens / 100 }], by_runtime: [{ runtime: "codex", tokens, cost_usd: tokens / 100, estimated_tokens: estimated }],
+      // Filter choices are summed across machines; an older build sends none.
+      facets: tokens === 10
+        ? { models: [{ value: "gpt-5", tokens: 10 }, { value: "o4", tokens: 4 }], runtimes: [], agents: [] }
+        : { models: [{ value: "gpt-5", tokens: 21 }], runtimes: [], agents: [] },
     });
     const batch: FleetBatchResult<UsageReport> = { targets: [
       target("local", "Local", "usage", report(10, 2)),
@@ -294,7 +304,10 @@ describe("fleet mergers", () => {
     expect(merged.buckets[0].by_runtime?.[0].estimated_tokens).toBe(5);
     expect(merged.buckets[0].by_model).toEqual([{ model: "gpt-5", tokens: 30, cost_usd: expect.closeTo(0.3), estimated_tokens: 5 }]);
     expect(merged.by_machine?.[0].buckets?.[0].key).toBe("2026-08-30 10:00");
-    expect(merged.by_agent?.map((item) => item.agent)).toEqual(["Remote · demo", "Local · demo"]);
+    // One agent or project is one row, whichever machines it ran on.
+    expect(merged.by_agent).toEqual([expect.objectContaining({ agent: "demo", tokens: 30 })]);
+    expect(merged.facets?.models).toEqual([{ value: "gpt-5", tokens: 31 }, { value: "o4", tokens: 4 }]);
+    expect(merged.facets?.agents).toEqual([]);
     expect(merged.warnings).toContain("Down: offline");
   });
 

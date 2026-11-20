@@ -635,7 +635,8 @@ there, and every Ticket has a folder below it:
     ├── ticket.json          the Ticket's status, worker and working directory
     ├── inputs.md            everything AgentMux sent the worker, one section per turn
     ├── result.md            the worker's final answer after each turn
-    └── work/                the worker's working directory, or a link to it
+    ├── work/                the worker's working directory, or a link to it
+    └── work.removed.json    where the work is, once a finished Ticket's worktree is removed
 ```
 
 - A worker whose Agent uses per-conversation worktrees gets its worktree in `work/`, on
@@ -647,8 +648,18 @@ there, and every Ticket has a folder below it:
 - The store stays the source of truth: AgentMux rewrites `ticket.json` on every change and
   only appends to the logs. Tickets created before homes existed have no folder and keep
   working where they started.
+- A worktree in `work/` is removed once its Ticket has been quiet for a while: seven days
+  after anything last happened to a ready or failed Ticket, one day after a Ticket was
+  stopped. It goes only when nothing would be lost: it is on a branch and has no
+  uncommitted changes or files of its own besides the ones AgentMux writes there. The
+  branch stays in the repository, and `work.removed.json` beside `work/` names the
+  repository, branch and commit. A follow-up or retry checks that branch out in `work/`
+  again, and a Ticket that builds on this one still starts from its last commit. Files git
+  ignores, such as build output and installed dependencies, go with the directory. A
+  worktree with uncommitted work, or on a detached HEAD, is kept. A linked directory and a
+  remote worker's directory are never removed.
 - Deleting a Super Agent keeps its home, since worktrees there can hold work that was
-  never pushed.
+  never committed.
 
 ### Auto workers
 
@@ -672,7 +683,8 @@ request, and the host starts a worker of that framework that was not configured 
 - Each worker framework has one Agent instance per directory here,
   `saw_<super agent id>_<framework>` for the default one and
   `saw_<super agent id>_<framework>_<path id>` for a listed one, removed with the Super
-  Agent. Worktrees are kept after a Ticket ends, and so is the home.
+  Agent. The home is kept, and so is a Ticket's worktree until the Ticket has been quiet
+  for a while (see above).
 
 ### Working directories
 

@@ -1,444 +1,572 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Activity, ChevronDown, ChevronUp, Cloud, Database, PlugZap, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
-import { api, type CursorUsageSourceStatus, type MenubarSettings } from "../api";
+import {
+  Activity, Bot, Brain, Clock3, FolderGit2, Gauge, MonitorDot, RefreshCw,
+} from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { api, type MenubarSettings, type SuperAgent, type UsageReport, type UsageTotals } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
-import { formatUsageCost, SupportedCurrency, validCNYRate } from "../currency";
+import { BrandIcon } from "../components/BrandIcon";
+import { SlidingSelection } from "../components/SlidingSelection";
+import { formatUsageCost, validCNYRate } from "../currency";
+import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
-import { useAsync } from "../useAsync";
-import { TargetBadge, targetKey } from "../components/TargetBadge";
-import { fmt } from "./OverviewPanel";
-import { confirmAction } from "../components/ConfirmDialog";
+import { useCachedResource } from "../useCachedResource";
+import { runtimeLabel } from "./agents/agentUtils";
+import { agentLabel, emptyTotals, formatShare, formatTokens, totalTokens, type AgentNames } from "./usage/format";
+import { UsageFilterBar, type FilterOption, type FilterOptions } from "./usage/UsageFilterBar";
+import { UsageCurrencySettings, UsageSources } from "./usage/UsageSources";
+import { UsageTrendChart } from "./usage/UsageTrendChart";
+import { prefetchUsage, useUsageReport, type UsageRequest } from "./usage/usageData";
+import {
+  formatLocalDate, includesToday, rangeBounds, resolvePeriod, toggleFilterValue, viewFromHashQuery, viewToHashQuery,
+  type FilterDimension, type UsageView,
+} from "./usage/usageQuery";
+import { TREND_DIMENSIONS, buildTrendSeries, timelineFor, type TrendDimension } from "./usage/usageTrend";
 
-const PERIODS = ["hourly", "daily", "weekly", "monthly", "session", "blocks"];
-const RANGES = ["all", "today", "7d", "month", "custom"] as const;
-type UsageRange = (typeof RANGES)[number];
+// Kept for callers that still import the formatter from this page.
+export { formatTokens as fmt } from "./usage/format";
+
+const USAGE_TAB = "usage";
+const LIVE_REFRESH_MS = 60_000;
+
+function viewFromLocation(): UsageView {
+  const hash = window.location.hash.replace(/^#\/?/, "");
+  const [tab, query = ""] = hash.split("?", 2);
+  return viewFromHashQuery(tab.split("/", 1)[0] === USAGE_TAB ? query : "");
+}
+
+// The view lives in the route so a link reopens the same slice. It is written
+// without a history entry: stepping through every filter with Back is noise.
+function writeViewToLocation(view: UsageView) {
+  const query = viewToHashQuery(view);
+  const next = `#${USAGE_TAB}${query ? `?${query}` : ""}`;
+  if (window.location.hash !== next) window.history.replaceState(window.history.state, "", next);
+}
+
+// prefetchDefaultUsage warms the view the dashboard opens with, when its
+// navigation entry is pointed at.
+export function prefetchDefaultUsage() {
+  const view = viewFromLocation();
+  const bounds = rangeBounds(view, formatLocalDate(new Date()));
+  prefetchUsage({
+    period: resolvePeriod(view.granularity, bounds), from: bounds.from, to: bounds.to,
+    filter: { models: view.filters.models, runtimes: view.filters.runtimes, agents: view.filters.agents },
+    machines: view.filters.machines,
+  });
+}
+
+type DetailTab = "period" | "model" | "framework" | "agent" | "machine";
 
 export function UsagePanel() {
   const { language, t } = useI18n();
-  const [period, setPeriod] = useState("daily");
-  const [range, setRange] = useState<UsageRange>("all");
-  const today = formatLocalDate(new Date());
-  const [customFrom, setCustomFrom] = useState(today);
-  const [customTo, setCustomTo] = useState(today);
-  const bounds = usageRangeBounds(range, customFrom, customTo);
-  const { data, error, loading } = useAsync(
-    () => api.usage(period, bounds.from, bounds.to),
-    [period, bounds.from, bounds.to],
-  );
-  const currencyPreferences = useAsync(() => api.menubarSettings(), []);
-  const cursorSources = useAsync(() => api.usageSources(), []);
-  const [preferences, setPreferences] = useState<MenubarSettings | null>(null);
-  const [currencyStatus, setCurrencyStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [sourceBusy, setSourceBusy] = useState("");
-  const [sourceError, setSourceError] = useState("");
-  const [periodTableExpanded, setPeriodTableExpanded] = useState(false);
-  const periodPagination = useCatalogPagination(
-    data?.buckets ?? [],
-    `${period}:${bounds.from}:${bounds.to}`,
-  );
+  const [view, setView] = useState<UsageView>(viewFromLocation);
+  const [today, setToday] = useState(() => formatLocalDate(new Date()));
+  const [trendDimension, setTrendDimension] = useState<TrendDimension>("total");
 
+  const updateView = useCallback((next: UsageView) => {
+    setView(next);
+    writeViewToLocation(next);
+  }, []);
   useEffect(() => {
-    if (currencyPreferences.data) setPreferences(currencyPreferences.data);
-  }, [currencyPreferences.data]);
+    const onHashChange = () => {
+      if (window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0] === USAGE_TAB) setView(viewFromLocation());
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
-  useEffect(() => {
-    if (!(cursorSources.data ?? []).some((source) => source.syncing)) return;
-    const interval = window.setInterval(() => cursorSources.reload(), 2000);
-    return () => window.clearInterval(interval);
-  }, [cursorSources.data]);
+  const bounds = useMemo(() => rangeBounds(view, today), [view, today]);
+  const period = resolvePeriod(view.granularity, bounds);
+  const request = useMemo<UsageRequest>(() => ({
+    period,
+    from: bounds.from,
+    to: bounds.to,
+    filter: { models: view.filters.models, runtimes: view.filters.runtimes, agents: view.filters.agents },
+    machines: view.filters.machines,
+  }), [period, bounds.from, bounds.to, view.filters]);
+  const live = includesToday(bounds, today);
+  const usage = useUsageReport(request, { pollMs: LIVE_REFRESH_MS, live });
+  // A range that follows today moves with the date, also across midnight
+  // while the page stays open.
+  const followDate = useCallback(() => {
+    const current = formatLocalDate(new Date());
+    setToday((previous) => (previous === current ? previous : current));
+  }, []);
+  usePolling(followDate, LIVE_REFRESH_MS);
 
-  const currency = preferences?.currency ?? "cny";
+  const settings = useCachedResource<MenubarSettings>("menubarSettings", () => api.menubarSettings(), 60_000);
+  const [savedSettings, setSavedSettings] = useState<MenubarSettings | null>(null);
+  const preferences = savedSettings ?? settings.data;
   const cnyRate = validCNYRate(preferences?.cny_rate ?? 7);
-  const formatCost = (costUSD: number) => formatUsageCost(costUSD, currency, cnyRate, language);
+  const currency = preferences?.currency ?? "cny";
+  const formatCost = useCallback((costUSD: number) => formatUsageCost(costUSD, currency, cnyRate, language), [currency, cnyRate, language]);
 
-  const updateCurrencyPreferences = (patch: Partial<MenubarSettings>) => {
-    setPreferences((current) => (current ? { ...current, ...patch } : current));
-    setCurrencyStatus("idle");
-  };
-
-  const saveCurrencyPreferences = async () => {
-    if (!preferences) return;
-    setCurrencyStatus("saving");
-    try {
-      const saved = await api.saveMenubarSettings({
-        ...preferences,
-        cny_rate: validCNYRate(preferences.cny_rate),
-      });
-      setPreferences(saved);
-      setCurrencyStatus("saved");
-    } catch {
-      setCurrencyStatus("error");
+  // Names for the agent dimension. They only label values; the page does not
+  // wait for them.
+  const agentInstances = useCachedResource("agentInstances", () => api.agentInstances());
+  const superAgents = useCachedResource("unifiedAgents", () => api.superAgents().then((items) => Array.isArray(items) ? items : []).catch(() => [] as SuperAgent[]));
+  const channels = useCachedResource("channels", () => api.channels());
+  const agentNames = useMemo<AgentNames>(() => {
+    const agents = new Map<string, string>();
+    for (const agent of agentInstances.data ?? []) if (agent.name) agents.set(agent.id, agent.name);
+    for (const agent of superAgents.data ?? []) {
+      if (!agent.name) continue;
+      agents.set(agent.id, agent.name);
+      // A super agent's router and workers record usage under derived IDs.
+      agents.set(agent.id.replace(/^sa_/, "sar_"), agent.name);
     }
-  };
-
-  const updateCustomFrom = (value: string) => {
-    setCustomFrom(value);
-    if (customTo && value > customTo) setCustomTo(value);
-  };
-
-  const updateCustomTo = (value: string) => {
-    setCustomTo(value);
-    if (customFrom && value < customFrom) setCustomFrom(value);
-  };
-
-  async function runCursorAction(source: CursorUsageSourceStatus, action: "connect" | "sync" | "repair" | "disconnect") {
-    if (action === "connect" && !(await confirmAction(t("usage.cursorConsent")))) return;
-    if (action === "disconnect" && !(await confirmAction(t("usage.cursorDisconnectConfirm"), { danger: true }))) return;
-    const key = targetKey(source.target_id, source.source);
-    setSourceBusy(`${key}:${action}`);
-    setSourceError("");
-    try {
-      await api.cursorUsageAction(action, source.target_id);
-      await cursorSources.reload();
-    } catch (actionError) {
-      setSourceError(String(actionError));
-    } finally {
-      setSourceBusy("");
+    const channelNames = new Map<string, string>();
+    for (const channel of channels.data ?? []) channelNames.set(channel.id, channel.bot_name || channel.name);
+    return { agents, channels: channelNames };
+  }, [agentInstances.data, superAgents.data, channels.data]);
+  const labelAgent = useCallback((key: string) => {
+    const worker = key.match(/^agent:saw_(sa_[^_]+)_(.+)$/);
+    if (worker) {
+      const name = agentNames.agents.get(worker[1]);
+      if (name) return `${name} · ${runtimeLabel(worker[2], t)}`;
     }
-  }
+    return agentLabel(key, agentNames, t);
+  }, [agentNames, t]);
+  const labelMachine = useCallback((id: string, name: string) => (id === "local" ? t("remote.localMachine") : name || id), [t]);
+  const labelModel = useCallback((model: string) => model.trim() || t("overview.unknownModel"), [t]);
+
+  const report = usage.report;
+  const totals = report?.totals;
+  const tokens = totals ? totalTokens(totals) : 0;
+  const cacheTokens = (totals?.cache_read_tokens ?? 0) + (totals?.cache_write_tokens ?? 0);
+  const estimatedTokens = totals?.estimated_tokens ?? 0;
+  const exactCoverage = tokens > 0 ? Math.max(0, Math.round((1 - estimatedTokens / tokens) * 100)) : 100;
+
+  const filterOptions = useMemo<FilterOptions>(() => ({
+    machines: usage.targets.map((target) => ({ value: target.id, label: labelMachine(target.id, target.name) })),
+    runtimes: (report?.facets?.runtimes ?? []).map((facet) => ({ value: facet.value, label: runtimeLabel(facet.value, t), tokens: facet.tokens })),
+    models: (report?.facets?.models ?? []).map((facet) => ({ value: facet.value, label: labelModel(facet.value), tokens: facet.tokens })),
+    agents: (report?.facets?.agents ?? []).map((facet): FilterOption => ({ value: facet.value, label: labelAgent(facet.value), title: facet.value, tokens: facet.tokens })),
+  }), [usage.targets, report?.facets, labelMachine, labelModel, labelAgent, t]);
+
+  const toggleFilter = useCallback((dimension: FilterDimension, value: string) => {
+    updateView({ ...view, filters: toggleFilterValue(view.filters, dimension, value) });
+  }, [updateView, view]);
+
+  const now = useMemo(() => new Date(), [usage.updatedAt, today]);
+  const timeline = useMemo(() => timelineFor(report, bounds, period, now), [report, bounds, period, now]);
+  const trendSeries = useMemo(() => buildTrendSeries(trendDimension, report, timeline, period, {
+    total: t("overview.trend.total"),
+    other: t("overview.trend.other"),
+    unknownModel: t("overview.unknownModel"),
+    unattributed: t("overview.trend.unattributedModel"),
+    runtime: (id) => runtimeLabel(id, t),
+    machine: labelMachine,
+  }), [trendDimension, report, timeline, period, t, labelMachine]);
+
+  const machines = report?.by_machine ?? [];
+  const showMachines = usage.targets.length > 1 || machines.length > 1;
+  const rangeLabel = view.preset === "custom"
+    ? (bounds.from === bounds.to ? bounds.from : `${bounds.from} – ${bounds.to}`)
+    : t(`range.${view.preset}`);
+  const updatedAt = usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "—";
+  const dimmed = usage.stale || (usage.loading && !report);
 
   return (
-    <div className="page-stack usage-page">
-      <section className="surface">
-        <div className="surface-header">
-          <div className="control-row usage-controls">
-            <a className="ghost-action" href="#observability/traces">
-              <Activity size={14} />
-              {t("usage.viewTraces")}
-            </a>
-            <label className="control-row">
-              <span className="muted">{t("usage.range")}</span>
-              <select value={range} onChange={(e) => setRange(e.target.value as UsageRange)}>
-                {RANGES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`range.${value}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {range === "custom" && (
-              <>
-                <label className="control-row">
-                  <span className="muted">{t("usage.from")}</span>
-                  <input type="date" value={customFrom} onChange={(e) => updateCustomFrom(e.target.value)} />
-                </label>
-                <label className="control-row">
-                  <span className="muted">{t("usage.to")}</span>
-                  <input type="date" value={customTo} onChange={(e) => updateCustomTo(e.target.value)} />
-                </label>
-              </>
-            )}
-            <label className="control-row">
-              <span className="muted">{t("usage.groupBy")}</span>
-              <select value={period} onChange={(e) => setPeriod(e.target.value)}>
-                {PERIODS.map((p) => (
-                  <option key={p} value={p}>
-                    {t(`period.${p}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
+    <div className="page-stack usage-dashboard">
+      <section className="surface usage-dashboard-header">
+        <div className="surface-header statistics-header">
+          <div>
+            <h2>{t("usage.title")}</h2>
+            <p className="subtle-copy">{t("overview.statisticsHint")}</p>
+          </div>
+          <div className="statistics-header-actions">
+            <div className="activity-line overview-updated-at" aria-live="polite">
+              <Clock3 size={14} />
+              <span>{t("overview.lastUpdated")} {updatedAt}</span>
+            </div>
+            <button className="ghost-action" type="button" onClick={() => void usage.reload()} disabled={usage.loading}>
+              <RefreshCw size={14} className={usage.loading ? "spin" : undefined} />
+              {t("common.refresh")}
+            </button>
           </div>
         </div>
-        <details className="usage-currency-settings">
-          <summary>{t("usage.currency")} · {t(currency === "cny" ? "currency.cny" : "currency.usd")}</summary>
-          <div className="control-row">
-            <label className="control-row">
-              <span className="muted">{t("usage.currency")}</span>
-              <select
-                value={currency}
-                disabled={!preferences}
-                onChange={(e) =>
-                  updateCurrencyPreferences({ currency: e.target.value as SupportedCurrency })
-                }
-              >
-                <option value="cny">{t("currency.cny")}</option>
-                <option value="usd">{t("currency.usd")}</option>
-              </select>
-            </label>
-            <label className="control-row">
-              <span className="muted">{t("usage.cnyRate")}</span>
-              <input
-                className="usage-rate-input"
-                type="number"
-                min="0.01"
-                step="0.0001"
-                value={preferences?.cny_rate ?? 7}
-                disabled={!preferences}
-                onChange={(e) => updateCurrencyPreferences({ cny_rate: Number(e.target.value) })}
-              />
-            </label>
-            <button
-              className="ghost-action"
-              type="button"
-              disabled={!preferences || currencyStatus === "saving"}
-              onClick={() => void saveCurrencyPreferences()}
-            >
-              {currencyStatus === "saving" ? "…" : t("common.save")}
-            </button>
-            {currencyStatus === "saved" && <span className="muted">{t("menubar.saved")}</span>}
-            {currencyStatus === "error" && <span className="error">{t("menubar.saveError")}</span>}
-
-          </div>
-        </details>
+        <div className="surface-body">
+          <UsageFilterBar
+            view={view}
+            bounds={bounds}
+            period={period}
+            today={today}
+            options={filterOptions}
+            showMachines={showMachines}
+            onChange={updateView}
+          />
+          {usage.pending.length > 0 && (
+            <p className="usage-pending-note" role="status">
+              {t("usage.pendingMachines", { names: usage.pending.map((target) => labelMachine(target.id, target.name)).join(", ") })}
+            </p>
+          )}
+        </div>
       </section>
 
-      {error && <div className="surface surface-body error">{error}</div>}
-      {(data?.warnings ?? []).map((warning) => <div className="surface surface-body warning" key={warning}>{warning}</div>)}
-      {loading && <div className="surface surface-body muted">{t("common.loading")}</div>}
+      {usage.error && <div className="surface surface-body error" role="alert">{usage.error}</div>}
+      {(report?.warnings ?? []).map((warning) => <div className="surface surface-body warning" key={warning}>{warning}</div>)}
 
-      {data && (
-        <>
-          <div className="metrics-grid usage-metrics-grid">
-            <Stat label={t("usage.estimatedCost")} value={formatCost(data.totals.cost_usd)} />
-            <Stat label={t("overview.totalTokens")} value={fmt(totalUsageTokens(data.totals))} />
-            <Stat label={t("usage.uncachedInput")} value={fmt(data.totals.input_tokens)} />
-            <Stat label={t("overview.output")} value={fmt(data.totals.output_tokens)} />
-            <Stat label={t("usage.cacheRead")} value={fmt(data.totals.cache_read_tokens)} />
-            <Stat label={t("usage.cacheWrite")} value={fmt(data.totals.cache_write_tokens)} />
-            <Stat label={t("overview.records")} value={String(data.totals.records)} />
-            <Stat label={t("overview.sessions")} value={String(data.totals.sessions ?? 0)} />
-            <Stat
-              label={t("usage.estimatedTokens")}
-              value={fmt(data.totals.estimated_tokens ?? 0)}
-              detail={estimatedCoverageLabel(data.totals.estimated_tokens ?? 0, totalUsageTokens(data.totals), t)}
-            />
+      <section className={`surface overview-statistics${dimmed ? " is-loading" : ""}`} aria-busy={usage.loading}>
+        <div className="surface-body statistics-body">
+          <div className="statistics-summary-grid">
+            <section className="statistics-summary-card usage-summary-card">
+              <header>
+                <span className="statistics-summary-title"><Gauge size={19} />{t("overview.usageCard")}</span>
+                <span className="usage-summary-range">{rangeLabel}</span>
+              </header>
+              <div className="usage-summary-metrics">
+                <SummaryMetric
+                  label={t("overview.totalTokens")}
+                  value={totals ? formatTokens(tokens) : "—"}
+                  detail={totals ? <>
+                    {t("overview.input")} {formatTokens(totals.input_tokens)} · {t("overview.output")} {formatTokens(totals.output_tokens)}
+                    {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: formatTokens(estimatedTokens), coverage: exactCoverage })}</>}
+                  </> : undefined}
+                />
+                <SummaryMetric
+                  label={t("usage.cacheRead")}
+                  value={totals ? formatTokens(totals.cache_read_tokens) : "—"}
+                  detail={totals ? `${t("usage.cacheWrite")} ${formatTokens(totals.cache_write_tokens)}` : undefined}
+                />
+                <SummaryMetric
+                  label={t("overview.sessionConversations")}
+                  value={totals ? formatTokens(totals.sessions ?? 0) : "—"}
+                  detail={totals ? t("usage.requestsDetail", { count: formatTokens(totals.records ?? 0) }) : t("overview.sessionScope")}
+                />
+                <SummaryMetric
+                  label={t("overview.estimatedAmount")}
+                  value={totals ? formatCost(totals.cost_usd) : "—"}
+                  detail={totals ? `${formatUsageCost(totals.cost_usd, currency === "cny" ? "usd" : "cny", cnyRate, language)} ${currency === "cny" ? "USD" : "RMB"}` : undefined}
+                />
+              </div>
+              <details className="usage-pricing-note">
+                <summary>{t("overview.pricingDetails")}</summary>
+                <p>{t("overview.includedCache", { tokens: formatTokens(cacheTokens) })}</p>
+                <div className="usage-breakdown">
+                  <Stat label={t("usage.uncachedInput")} value={totals ? formatTokens(totals.input_tokens) : "—"} />
+                  <Stat label={t("overview.output")} value={totals ? formatTokens(totals.output_tokens) : "—"} />
+                  <Stat label={t("usage.cacheRead")} value={totals ? formatTokens(totals.cache_read_tokens) : "—"} />
+                  <Stat label={t("usage.cacheWrite")} value={totals ? formatTokens(totals.cache_write_tokens) : "—"} />
+                </div>
+                <p>{t("overview.exchangeRate", { rate: cnyRate })}</p>
+                <p>{t("overview.pricingFormula")}</p>
+                <p>{t("overview.pricingSource")}</p>
+              </details>
+            </section>
           </div>
 
-          <section className="surface usage-period-section">
-            <div className="surface-header">
+          <div className="usage-trend-card">
+            <div className="usage-trend-heading">
               <div>
-                <h2>
-                  {t("usage.byPeriod")} · {t(`period.${period}`)}
-                </h2>
-                <p className="subtle-copy">{t("usage.periodRows", { count: data.buckets.length })}</p>
+                <h3>{t("overview.tokenTrend")}</h3>
+                <span>{rangeLabel} · {t(`period.${period}`)}</span>
               </div>
-              <button
-                className="ghost-action"
-                type="button"
-                aria-expanded={periodTableExpanded}
-                aria-controls="usage-period-table"
-                onClick={() => setPeriodTableExpanded((expanded) => !expanded)}
-              >
-                {periodTableExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                {periodTableExpanded ? t("usage.collapsePeriodTable") : t("usage.expandPeriodTable")}
-              </button>
-            </div>
-            {periodTableExpanded && (
-              <div id="usage-period-table">
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{t(`period.${period}`)}</th>
-                        <th>{t("usage.uncachedInput")}</th>
-                        <th>{t("overview.output")}</th>
-                        <th>{t("usage.cacheRead")}</th>
-                        <th>{t("usage.cacheWrite")}</th>
-                        <th>{t("usage.estimatedCost")}</th>
-                        <th>{t("usage.quality")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {periodPagination.pageItems.map((b) => (
-                        <tr key={b.key}>
-                          <td>{b.key}</td>
-                          <td>{fmt(b.totals.input_tokens)}</td>
-                          <td>{fmt(b.totals.output_tokens)}</td>
-                          <td>{fmt(b.totals.cache_read_tokens)}</td>
-                          <td>{fmt(b.totals.cache_write_tokens)}</td>
-                          <td>{formatCost(b.totals.cost_usd)}</td>
-                          <td>{(b.totals.estimated_tokens ?? 0) > 0 ? <span className="status-badge warning">{t("usage.estimated")}</span> : <span className="status-badge success">{t("usage.exact")}</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {periodPagination.totalPages > 1 && (
-                  <CatalogPagination
-                    page={periodPagination.page}
-                    totalPages={periodPagination.totalPages}
-                    start={periodPagination.start}
-                    end={periodPagination.end}
-                    total={periodPagination.total}
-                    onChange={periodPagination.setPage}
-                  />
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="surface">
-            <div className="surface-header">
-              <h2>{t("usage.byModel")}</h2>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>{t("usage.model")}</th>
-                    <th>{t("usage.tokens")}</th>
-                    <th>{t("usage.cost")}</th>
-                    <th>{t("usage.quality")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.by_model.map((m) => (
-                    <tr key={m.model}>
-                      <td>{m.model}</td>
-                      <td>{fmt(m.tokens)}</td>
-                      <td>{formatCost(m.cost_usd)}</td>
-                      <td className="usage-inline-quality">{(m.estimated_tokens ?? 0) > 0 ? <span className="status-badge warning">{t("usage.estimated")}</span> : <span className="status-badge success">{t("usage.exact")}</span>}</td>
-                    </tr>
+              <div className="usage-trend-actions">
+                <span className="usage-trend-total">{formatTokens(tokens)}</span>
+                <SlidingSelection className="trend-dimension-toggle" selected={trendDimension} role="group" aria-label={t("overview.trendBreakdown")}>
+                  {TREND_DIMENSIONS.filter((dimension) => dimension !== "machine" || showMachines).map((dimension) => (
+                    <button
+                      key={dimension}
+                      className={trendDimension === dimension ? "active" : ""}
+                      type="button"
+                      aria-pressed={trendDimension === dimension}
+                      onClick={() => setTrendDimension(dimension)}
+                    >
+                      {t(`overview.trend.${dimension}`)}
+                    </button>
                   ))}
-                </tbody>
-              </table>
+                </SlidingSelection>
+              </div>
             </div>
-          </section>
-        </>
+            <UsageTrendChart keys={timeline} series={trendSeries} period={period} totalTokens={tokens} loading={usage.loading && !report} />
+          </div>
+
+          <div className={`overview-rankings${showMachines ? " with-machines" : ""}`}>
+            <UsageRanking
+              title={t("overview.frameworkRanking")}
+              icon={<Bot size={19} />}
+              emptyText={t("overview.noFrameworkUsage")}
+              totalTokens={tokens}
+              selected={view.filters.runtimes}
+              onToggle={(value) => toggleFilter("runtimes", value)}
+              items={(report?.by_runtime ?? []).map((runtime) => ({
+                id: runtime.runtime, label: runtimeLabel(runtime.runtime, t), tokens: runtime.tokens,
+                icon: <BrandIcon name={runtime.runtime} />,
+              }))}
+            />
+            <UsageRanking
+              title={t("overview.modelRanking")}
+              icon={<Brain size={19} />}
+              emptyText={t("overview.noModelUsage")}
+              totalTokens={tokens}
+              selected={view.filters.models}
+              onToggle={(value) => toggleFilter("models", value)}
+              items={(report?.by_model ?? []).map((model) => ({
+                id: model.model, label: labelModel(model.model), tokens: model.tokens, icon: <BrandIcon name={model.model} kind="model" />,
+              }))}
+            />
+            <UsageRanking
+              title={t("usage.agentRanking")}
+              icon={<FolderGit2 size={19} />}
+              emptyText={t("usage.noAgentUsage")}
+              totalTokens={tokens}
+              selected={view.filters.agents}
+              onToggle={(value) => toggleFilter("agents", value)}
+              items={(report?.by_agent ?? []).map((agent) => ({
+                id: agent.agent, label: labelAgent(agent.agent), title: agent.agent, tokens: agent.tokens,
+                icon: agent.agent.startsWith("agent:") || agent.agent.startsWith("channel:") ? <Bot size={17} /> : <FolderGit2 size={17} />,
+              }))}
+            />
+            {showMachines && (
+              <UsageRanking
+                title={t("usage.machineRanking")}
+                icon={<MonitorDot size={19} />}
+                emptyText={t("usage.noMachineUsage")}
+                totalTokens={tokens}
+                selected={view.filters.machines}
+                onToggle={(value) => toggleFilter("machines", value)}
+                items={machines.map((machine) => ({
+                  id: machine.target_id, label: labelMachine(machine.target_id, machine.target_name),
+                  tokens: totalTokens(machine.totals), icon: <MonitorDot size={17} />,
+                }))}
+              />
+            )}
+          </div>
+        </div>
+      </section>
+
+      {report && (
+        <UsageDetails
+          report={report}
+          periodLabel={t(`period.${period}`)}
+          resetKey={usage.reportKey}
+          showMachines={showMachines}
+          formatCost={formatCost}
+          labels={{ model: labelModel, agent: labelAgent, machine: labelMachine }}
+        />
       )}
-      <section className="surface cursor-usage-sources">
+
+      <section className="surface usage-settings-surface">
         <div className="surface-header">
           <div>
-            <h2>{t("usage.sourcesTitle")}</h2>
-            <p className="subtle-copy">{t("usage.sourcesHint")}</p>
+            <h2>{t("usage.displayTitle")}</h2>
+            <p className="subtle-copy">{t("usage.displayHint")}</p>
           </div>
-          <button className="ghost-action" type="button" onClick={cursorSources.reload}><RefreshCw size={14} />{t("common.refresh")}</button>
+          <a className="ghost-action" href="#observability/traces">
+            <Activity size={14} />
+            {t("usage.viewTraces")}
+          </a>
         </div>
-        {cursorSources.error && <div className="surface-body error">{cursorSources.error}</div>}
-        {sourceError && <div className="surface-body error">{sourceError}</div>}
-        <div className="cursor-source-grid">
-          {(cursorSources.data ?? []).map((source) => (
-            <CursorSourceCard
-              key={targetKey(source.target_id, source.source)}
-              source={source}
-              busy={sourceBusy}
-              onAction={runCursorAction}
-              t={t}
-            />
-          ))}
-          {!cursorSources.loading && (cursorSources.data ?? []).length === 0 && <div className="empty-state">{t("usage.sourcesEmpty")}</div>}
+        <div className="surface-body">
+          <UsageCurrencySettings settings={preferences ?? null} onSaved={setSavedSettings} />
         </div>
       </section>
+
+      <UsageSources />
     </div>
   );
 }
 
-function usageRangeBounds(range: UsageRange, customFrom: string, customTo: string) {
-  const now = new Date();
-  const today = formatLocalDate(now);
-  switch (range) {
-    case "today":
-      return { from: today, to: today };
-    case "7d": {
-      const start = new Date(now);
-      start.setDate(start.getDate() - 6);
-      return { from: formatLocalDate(start), to: today };
-    }
-    case "month":
-      return {
-        from: formatLocalDate(new Date(now.getFullYear(), now.getMonth(), 1)),
-        to: today,
-      };
-    case "custom":
-      return { from: customFrom, to: customTo };
-    default:
-      return { from: "", to: "" };
-  }
+function SummaryMetric({ label, value, detail }: { label: string; value: ReactNode; detail?: ReactNode }) {
+  return (
+    <div className="usage-summary-metric">
+      <strong>{value}</strong>
+      <span className="usage-summary-metric-label">{label}</span>
+      {detail && <small>{detail}</small>}
+    </div>
+  );
 }
 
-function formatLocalDate(value: Date) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="stat">
+      <div className="label">{label}</div>
+      <div className="value">{value}</div>
+    </div>
+  );
 }
 
-function CursorSourceCard({
-  source,
-  busy,
-  onAction,
-  t,
-}: {
-  source: CursorUsageSourceStatus;
-  busy: string;
-  onAction: (source: CursorUsageSourceStatus, action: "connect" | "sync" | "repair" | "disconnect") => void;
-  t: (key: string, params?: Record<string, string | number>) => string;
+type UsageRankingItem = { id: string; label: string; title?: string; tokens: number; icon: ReactNode };
+const RANKING_TOP = 3;
+
+// A ranking of one dimension. A row is also a filter: choosing it narrows the
+// whole dashboard to that value, and choosing it again clears it.
+function UsageRanking({ title, icon, emptyText, totalTokens: total, items, selected, onToggle }: {
+  title: string;
+  icon: ReactNode;
+  emptyText: string;
+  totalTokens: number;
+  items: UsageRankingItem[];
+  selected: string[];
+  onToggle: (id: string) => void;
 }) {
-  const key = targetKey(source.target_id, source.source);
-  const coverage = source.total_tokens > 0
-    ? Math.max(0, Math.round((1 - source.estimated_tokens / source.total_tokens) * 100))
-    : 100;
-  const isBusy = busy.startsWith(`${key}:`) || source.syncing;
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const listID = useId();
+  const ranked = items.filter((item) => item.tokens > 0)
+    .sort((left, right) => right.tokens - left.tokens || left.id.localeCompare(right.id));
+  const visible = expanded ? ranked : ranked.slice(0, RANKING_TOP);
   return (
-    <article className="cursor-source-card">
+    <section className="statistics-summary-card framework-ranking-card" aria-label={title}>
       <header>
-        <span className="cursor-source-icon"><PlugZap size={20} /></span>
-        <div>
-          <strong>Cursor</strong>
-          <span>{t("usage.cursorAgentScope")}</span>
-          <TargetBadge target_id={source.target_id} target_name={source.target_name} />
+        <span className="statistics-summary-title">{icon}{title}</span>
+        <div className="ranking-actions">
+          <span className="ranking-top-label">{expanded ? t("overview.rankingAll") : `TOP ${RANKING_TOP}`}</span>
+          {ranked.length > RANKING_TOP && (
+            <button className="ranking-expand" type="button" aria-expanded={expanded} aria-controls={listID} onClick={() => setExpanded(!expanded)}>
+              {expanded ? t("overview.rankingCollapse") : t("overview.rankingExpand", { count: ranked.length })}
+            </button>
+          )}
         </div>
-        <span className={`status-badge ${source.connected ? "success" : ""}`}>{source.connected ? t("common.connected") : t("common.disconnected")}</span>
       </header>
-      <div className="cursor-source-status-grid">
-        <SourceState icon={<ShieldCheck size={15} />} label="Hook" value={sourceStatusLabel(source.hook.status, t)} />
-        <SourceState icon={<Database size={15} />} label={t("usage.cursorLocal")} value={sourceStatusLabel(source.local_status, t)} />
-        <SourceState icon={<Cloud size={15} />} label={t("usage.cursorCloud")} value={sourceStatusLabel(source.cloud_status, t)} />
-        <SourceState icon={<Activity size={15} />} label={t("usage.cursorCoverage")} value={`${coverage}%`} />
+      <div className="framework-ranking-list" id={listID}>
+        {visible.length > 0 ? visible.map((item) => {
+          const active = selected.includes(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`framework-rank-row${active ? " selected" : ""}`}
+              aria-pressed={active}
+              title={t(active ? "usage.rankingClearFilter" : "usage.rankingFilter", { name: item.title ?? item.label })}
+              onClick={() => onToggle(item.id)}
+            >
+              <span className="framework-rank-icon">{item.icon}</span>
+              <span className="framework-rank-copy">
+                <strong>{item.label}</strong>
+                <span>{formatTokens(item.tokens)} tokens</span>
+              </span>
+              <span className="framework-rank-share">{formatShare(item.tokens, total)}</span>
+            </button>
+          );
+        }) : <div className="framework-ranking-empty">{emptyText}</div>}
       </div>
-      {!source.connected && <p className="cursor-source-consent">{t("usage.cursorConsentHint")}</p>}
-      {source.connected && (
-        <div className="cursor-source-meta">
-          <span>{t("usage.cursorBackfill", { days: source.backfill_days })}: {source.backfill_complete ? t("common.complete") : t("common.inProgress")}</span>
-          <span>{t("usage.cursorMatched", { count: source.cloud_matched_events })}</span>
-          <span>{t("usage.cursorEstimated", { tokens: fmt(source.estimated_tokens) })}</span>
-          {source.last_sync_at && <span>{t("common.updated")} {new Date(source.last_sync_at).toLocaleString()}</span>}
-        </div>
-      )}
-      {source.last_error && <div className="error cursor-source-error">{source.last_error}</div>}
-      <div className="cursor-source-actions">
-        {!source.connected ? (
-          <button className="action" type="button" disabled={isBusy} onClick={() => onAction(source, "connect")}><PlugZap size={14} />{t("usage.cursorConnect")}</button>
-        ) : (
-          <>
-            <button className="action" type="button" disabled={isBusy} onClick={() => onAction(source, "sync")}><RefreshCw size={14} />{source.syncing ? t("usage.cursorSyncing") : t("usage.cursorSync")}</button>
-            <button className="ghost-action" type="button" disabled={isBusy} onClick={() => onAction(source, "repair")}><ShieldCheck size={14} />{t("usage.cursorRepair")}</button>
-            <button className="ghost-action danger-action" type="button" disabled={isBusy} onClick={() => onAction(source, "disconnect")}><Unplug size={14} />{t("usage.cursorDisconnect")}</button>
-          </>
-        )}
-      </div>
-    </article>
+    </section>
   );
 }
 
-function SourceState({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return <div><span>{icon}{label}</span><strong>{value.replace(/_/g, " ")}</strong></div>;
-}
+type DetailRow = { key: string; label: string; title?: string; tokens: number; cost: number; estimated: number; totals?: UsageTotals };
 
-function totalUsageTokens(totals: { input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_write_tokens: number }) {
-  return totals.input_tokens + totals.output_tokens + totals.cache_read_tokens + totals.cache_write_tokens;
-}
-
-function estimatedCoverageLabel(estimated: number, total: number, t: (key: string, params?: Record<string, string | number>) => string) {
-  if (estimated <= 0 || total <= 0) return t("usage.exact");
-  return t("usage.coveragePercent", { coverage: Math.max(0, Math.round((1 - estimated / total) * 100)) });
-}
-
-function sourceStatusLabel(value: string, t: (key: string) => string) {
-  const key = `usage.sourceStatus.${value.trim().toLowerCase()}`;
-  const translated = t(key);
-  return translated === key ? value.replace(/_/g, " ") : translated;
-}
-
-function Stat({ label, value, detail }: { label: string; value: string; detail?: string }) {
+// The table behind the charts: every figure the dashboard draws is readable
+// here as a number.
+function UsageDetails({ report, periodLabel, resetKey, showMachines, formatCost, labels }: {
+  report: UsageReport;
+  periodLabel: string;
+  resetKey: string;
+  showMachines: boolean;
+  formatCost: (costUSD: number) => string;
+  labels: { model: (id: string) => string; agent: (id: string) => string; machine: (id: string, name: string) => string };
+}) {
+  const { t } = useI18n();
+  const [tab, setTab] = useState<DetailTab>("period");
+  const activeTab = tab === "machine" && !showMachines ? "period" : tab;
+  const rows = useMemo<DetailRow[]>(() => {
+    switch (activeTab) {
+      case "model":
+        return (report.by_model ?? []).map((item) => ({ key: item.model, label: labels.model(item.model), tokens: item.tokens, cost: item.cost_usd, estimated: item.estimated_tokens ?? 0 }));
+      case "framework":
+        return (report.by_runtime ?? []).map((item) => ({ key: item.runtime, label: runtimeLabel(item.runtime, t), tokens: item.tokens, cost: item.cost_usd, estimated: item.estimated_tokens ?? 0 }));
+      case "agent":
+        return (report.by_agent ?? []).map((item) => ({ key: item.agent, label: labels.agent(item.agent), title: item.agent, tokens: item.tokens, cost: item.cost_usd, estimated: 0 }));
+      case "machine":
+        return (report.by_machine ?? []).map((item) => ({
+          key: item.target_id, label: labels.machine(item.target_id, item.target_name), tokens: totalTokens(item.totals),
+          cost: item.totals.cost_usd, estimated: item.totals.estimated_tokens ?? 0, totals: item.totals,
+        }));
+      default:
+        // Newest first: the current period is what a reader looks for.
+        return [...(report.buckets ?? [])].reverse().map((bucket) => ({
+          key: bucket.key, label: bucket.key, tokens: totalTokens(bucket.totals), cost: bucket.totals.cost_usd,
+          estimated: bucket.totals.estimated_tokens ?? 0, totals: bucket.totals,
+        }));
+    }
+  }, [activeTab, report, labels, t]);
+  const sorted = useMemo(() => (activeTab === "period" ? rows : [...rows].sort((left, right) => right.tokens - left.tokens)), [activeTab, rows]);
+  const pagination = useCatalogPagination(sorted, `${resetKey}:${activeTab}`);
+  const breakdown = activeTab === "period" || activeTab === "machine";
+  const tabs: Array<{ id: DetailTab; label: string }> = [
+    { id: "period", label: periodLabel },
+    { id: "framework", label: t("usage.filter.runtimes") },
+    { id: "model", label: t("usage.filter.models") },
+    { id: "agent", label: t("usage.filter.agents") },
+    ...(showMachines ? [{ id: "machine" as const, label: t("usage.filter.machines") }] : []),
+  ];
+  const total = sorted.reduce((sum, row) => sum + row.tokens, 0);
   return (
-    <div className="metric-card">
-      <div>
-        <div className="label">{label}</div>
-        <div className="value">{value}</div>
-        {detail && <div className="muted metric-detail">{detail}</div>}
+    <section className="surface usage-details-surface">
+      <div className="surface-header">
+        <div>
+          <h2>{t("usage.details")}</h2>
+          <p className="subtle-copy">{t("usage.periodRows", { count: sorted.length })}</p>
+        </div>
+        <SlidingSelection className="segmented" selected={activeTab} role="group" aria-label={t("usage.detailsBy")}>
+          {tabs.map((item) => (
+            <button key={item.id} type="button" className={activeTab === item.id ? "active" : ""} aria-pressed={activeTab === item.id} onClick={() => setTab(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </SlidingSelection>
       </div>
-    </div>
+      <div className="table-wrap">
+        <table className="usage-details-table">
+          <thead>
+            <tr>
+              <th>{tabs.find((item) => item.id === activeTab)?.label}</th>
+              <th className="numeric">{t("overview.totalTokens")}</th>
+              {breakdown ? (
+                <>
+                  <th className="numeric">{t("usage.uncachedInput")}</th>
+                  <th className="numeric">{t("overview.output")}</th>
+                  <th className="numeric">{t("usage.cacheRead")}</th>
+                  <th className="numeric">{t("usage.cacheWrite")}</th>
+                  <th className="numeric">{t("overview.sessions")}</th>
+                </>
+              ) : <th className="numeric">{t("usage.share")}</th>}
+              <th className="numeric">{t("usage.estimatedCost")}</th>
+              {activeTab !== "agent" && <th>{t("usage.quality")}</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {pagination.pageItems.map((row) => {
+              const rowTotals = row.totals ?? emptyTotals();
+              return (
+                <tr key={row.key}>
+                  <td title={row.title}>{row.label}</td>
+                  <td className="numeric">{formatTokens(row.tokens)}</td>
+                  {breakdown ? (
+                    <>
+                      <td className="numeric">{formatTokens(rowTotals.input_tokens)}</td>
+                      <td className="numeric">{formatTokens(rowTotals.output_tokens)}</td>
+                      <td className="numeric">{formatTokens(rowTotals.cache_read_tokens)}</td>
+                      <td className="numeric">{formatTokens(rowTotals.cache_write_tokens)}</td>
+                      <td className="numeric">{formatTokens(rowTotals.sessions ?? 0)}</td>
+                    </>
+                  ) : <td className="numeric">{formatShare(row.tokens, total)}</td>}
+                  <td className="numeric">{formatCost(row.cost)}</td>
+                  {activeTab !== "agent" && (
+                    <td>{row.estimated > 0
+                      ? <span className="status-badge warning">{t("usage.estimated")}</span>
+                      : <span className="status-badge success">{t("usage.exact")}</span>}</td>
+                  )}
+                </tr>
+              );
+            })}
+            {sorted.length === 0 && (
+              <tr><td colSpan={breakdown ? 9 : 5} className="muted">{t("usage.noUsageInRange")}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {pagination.totalPages > 1 && (
+        <CatalogPagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          start={pagination.start}
+          end={pagination.end}
+          total={pagination.total}
+          onChange={pagination.setPage}
+        />
+      )}
+    </section>
   );
 }

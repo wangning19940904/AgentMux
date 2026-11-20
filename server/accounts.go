@@ -73,6 +73,7 @@ func (s *Server) registerAccountRoutes() {
 	s.mux.HandleFunc("POST /api/v1/accounts/password", s.handleAccountPasswordReset)
 	s.mux.HandleFunc("POST /api/v1/accounts/reject", s.handleAccountReject)
 	s.registerDeviceAccountRoutes()
+	s.registerHubApprovalRoutes()
 }
 
 // Where accounts are kept, as /api/v1/auth/session reports it.

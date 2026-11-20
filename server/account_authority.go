@@ -67,6 +67,14 @@ const (
 	// accountOpEndSession ends one session by its record ID (a phone
 	// signed out from the Devices page), limited to AccountID when set.
 	accountOpEndSession = "end-session"
+	// The hub's account for its nodes (hub_account_approval.go):
+	// which accounts the hub machines are signed in as, and sign-ins a hub
+	// approves.
+	accountOpHubAccounts     = "hub-accounts"
+	accountOpRequestApproval = "request-approval"
+	accountOpApprovalStatus  = "approval-status"
+	accountOpListApprovals   = "list-approvals"
+	accountOpDecideApproval  = "decide-approval"
 )
 
 // deviceAccountOps are what any machine paired with the hub may ask of it:
@@ -76,6 +84,8 @@ var deviceAccountOps = map[string]bool{
 	accountOpSignOut: true, accountOpCheckSession: true,
 	// Changing one's own password needs the current one.
 	accountOpOwnPassword: true,
+	// Signing in with the hub's account, by password or a hub's approval.
+	accountOpHubAccounts: true, accountOpRequestApproval: true, accountOpApprovalStatus: true,
 }
 
 // deviceSessionTTL is how long a machine stays signed in. The account's
@@ -112,6 +122,12 @@ type accountOp struct {
 	Accounts        []store.HandoverAccount `json:"accounts,omitempty"`
 	// Device asks for a machine's long-lived device session.
 	Device bool `json:"device,omitempty"`
+	// Machine names the machine asking for approval; the hub sets it from
+	// its own record of the device.
+	Machine        string `json:"machine,omitempty"`
+	ApprovalID     string `json:"approval_id,omitempty"`
+	ApprovalSecret string `json:"approval_secret,omitempty"`
+	Approve        bool   `json:"approve,omitempty"`
 }
 
 // accountOpResult is what an operation produced.
@@ -130,6 +146,13 @@ type accountOpResult struct {
 	// account on the primary and signed them in with it.
 	Existing bool                  `json:"existing,omitempty"`
 	Handover *store.HandoverResult `json:"handover,omitempty"`
+	// HubAccounts are the accounts the hub machines are signed in as.
+	HubAccounts []hubAccount `json:"hub_accounts,omitempty"`
+	// Approval is one sign-in waiting for a hub; ApprovalSecret, given only
+	// to the machine that asked, collects its session.
+	Approval       *deviceApprovalView  `json:"approval,omitempty"`
+	ApprovalSecret string               `json:"approval_secret,omitempty"`
+	Approvals      []deviceApprovalView `json:"approvals,omitempty"`
 	// Head is the primary's change-log position after the operation.
 	Head int64 `json:"head,omitempty"`
 }
@@ -558,6 +581,25 @@ func (s *Server) applyAccountOp(ctx context.Context, op accountOp) (accountOpRes
 		}
 		return accountOpResult{}, nil
 
+	case accountOpHubAccounts:
+		accounts, err := s.hubMachineAccounts(ctx)
+		if err != nil {
+			return accountOpResult{}, err
+		}
+		return accountOpResult{HubAccounts: accounts}, nil
+
+	case accountOpRequestApproval:
+		return s.requestDeviceApproval(ctx, op)
+
+	case accountOpApprovalStatus:
+		return s.deviceApprovalStatus(ctx, op)
+
+	case accountOpListApprovals:
+		return s.listDeviceApprovals(op), nil
+
+	case accountOpDecideApproval:
+		return s.decideDeviceApproval(op)
+
 	case accountOpImport:
 		handover, err := st.ImportHandoverAccounts(ctx, op.Accounts)
 		if err != nil {
@@ -597,9 +639,21 @@ func (s *Server) handleUplinkAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	// The standby may do anything here; any other paired machine may only
 	// sign itself in, so one account works on every machine.
-	if !s.isStandbyDevice(ctx, source.ID) && !(deviceAccountOps[op.Op] && op.Device) {
+	standby := s.isStandbyDevice(ctx, source.ID)
+	if !standby && !(deviceAccountOps[op.Op] && op.Device) {
 		writeErr(w, http.StatusForbidden, "only this hub's standby may change accounts through it")
 		return
+	}
+	if !standby {
+		// A node signs in with the hub's account only, and the hub, not
+		// the node, says which machine asks.
+		op.Machine = source.Name
+		if op.Op == accountOpSignIn {
+			if err := s.requireHubAccount(ctx, core.NormalizeLogin(op.Login)); err != nil {
+				writeAccountOpError(w, err)
+				return
+			}
+		}
 	}
 	result, err := s.applyAccountOp(ctx, op)
 	if err != nil {

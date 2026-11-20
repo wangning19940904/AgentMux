@@ -7,10 +7,12 @@ export * from "./client";
 export * from "./desktop";
 export * from "./fleet";
 export * from "./mailbox";
+export * from "./frameworkOperations";
 import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, del, delChecked } from "./client";
 import type { Targeted } from "./fleet";
 import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
+import { FrameworkOperationBody, FrameworkOperationsUnsupported, followFrameworkOperationJob, startFrameworkOperationJob } from "./frameworkOperations";
 import { testRemoteHost, updateRemoteHost, statusRemoteHost, importRemoteHost } from "./remote";
 import { selectSystemDirectory } from "./desktop";
 import type {
@@ -116,6 +118,7 @@ import type {
   AccountRole,
   AuthSession,
   IdentifyResult,
+  DeviceApproval,
   PairedDevice,
   PhoneDevice,
   TerminalSessionView,
@@ -124,6 +127,8 @@ import type {
 	TTSModel,
   Trigger, EventSource, EventSubscription, EventSubscriptionInput, EventSubscriptionResult, EventDelivery, EventDeliveryPage,
   UsageReport,
+  UsageReportFilter,
+  UsageTarget,
   UsageTotals,
   CursorUsageActionResult,
   CursorUsageSourceStatus,
@@ -131,12 +136,22 @@ import type {
 } from "./types";
 import { confirmAction } from "../components/ConfirmDialog";
 
-export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageReport {
+// A machine on a build from before usage filters ignores them and answers
+// with all of its usage. Adding that to a filtered report would be wrong, so
+// such a machine is left out and named. Every build that filters also sends
+// the filter choices (facets), which is how the two are told apart.
+export function usageFilterActive(filter: UsageReportFilter = {}) {
+  return Boolean(filter.models?.length || filter.runtimes?.length || filter.agents?.length);
+}
+
+export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>, options: { filtered?: boolean } = {}): UsageReport {
   const reports: Array<{ targetID: string; targetName: string; report: UsageReport }> = [];
   const warnings: string[] = [];
   for (const target of batch.targets) {
     const response = operationFor<UsageReport>(target.responses, "usage");
-    if (response?.ok && response.data?.totals) {
+    if (options.filtered && response?.ok && response.data?.totals && !response.data.facets) {
+      warnings.push(`${target.target.name}: runs an older AgentMux that cannot filter usage, so it is left out of this view; update it to include it`);
+    } else if (response?.ok && response.data?.totals) {
       reports.push({ targetID: target.target.id, targetName: target.target.name, report: response.data });
     } else {
       warnings.push(`${target.target.name}: ${response?.error || "unavailable"}`);
@@ -152,6 +167,7 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
   const sources = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
   const agents = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
   const runtimes = new Map<string, { tokens: number; cost_usd: number; estimated_tokens: number }>();
+  const facets = { models: new Map<string, number>(), runtimes: new Map<string, number>(), agents: new Map<string, number>() };
   for (const item of reports) {
     addUsageTotals(totals, item.report.totals);
     for (const bucket of item.report.buckets ?? []) {
@@ -169,7 +185,14 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
     }
     for (const stat of item.report.by_model ?? []) addUsageStat(models, stat.model, stat.tokens, stat.cost_usd, stat.estimated_tokens);
     for (const stat of item.report.by_source ?? []) addUsageStat(sources, stat.source, stat.tokens, stat.cost_usd, stat.estimated_tokens);
-    for (const stat of item.report.by_agent ?? []) addUsageStat(agents, `${item.targetName} · ${stat.agent}`, stat.tokens, stat.cost_usd);
+    // An agent or project key means the same thing on every machine: agent
+    // IDs are unique, and a project directory names one repository.
+    for (const stat of item.report.by_agent ?? []) addUsageStat(agents, stat.agent, stat.tokens, stat.cost_usd);
+    for (const dimension of ["models", "runtimes", "agents"] as const) {
+      for (const facet of item.report.facets?.[dimension] ?? []) {
+        facets[dimension].set(facet.value, (facets[dimension].get(facet.value) ?? 0) + (facet.tokens || 0));
+      }
+    }
     for (const stat of item.report.by_runtime ?? []) addUsageStat(runtimes, stat.runtime, stat.tokens, stat.cost_usd, stat.estimated_tokens);
   }
   const first = reports[0].report;
@@ -201,8 +224,26 @@ export function mergeFleetUsage(batch: FleetBatchResult<UsageReport>): UsageRepo
       totals: item.report.totals,
       buckets: item.report.buckets ?? [],
     })),
+    facets: { models: usageFacetValues(facets.models), runtimes: usageFacetValues(facets.runtimes), agents: usageFacetValues(facets.agents) },
     warnings,
   };
+}
+
+function usageFacetValues(totals: Map<string, number>) {
+  return [...totals].map(([value, tokens]) => ({ value, tokens }))
+    .sort((left, right) => right.tokens - left.tokens || left.value.localeCompare(right.value));
+}
+
+export function usagePath(period: string, from = "", to = "", filter: UsageReportFilter = {}) {
+  const params = new URLSearchParams({ period });
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (timezone) params.set("timezone", timezone);
+  for (const model of filter.models ?? []) params.append("model", model);
+  for (const runtime of filter.runtimes ?? []) params.append("runtime", runtime);
+  for (const agent of filter.agents ?? []) params.append("agent", agent);
+  return `/api/v1/usage?${params.toString()}`;
 }
 
 function emptyUsageTotals(): UsageTotals {
@@ -419,6 +460,19 @@ export const api = {
   deviceSetup: (payload: { login: string; display_name?: string; password: string }) =>
     postChecked<{ account: AccountIdentity; existing?: boolean }>("/api/v1/auth/device/setup", payload, { local: true }),
   deviceSignOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/device/sign-out", {}, { local: true }),
+  deviceForget: (login: string) => postChecked<{ ok: boolean }>("/api/v1/auth/device/forget", { login }, { local: true }),
+  // A node signs in with its hub's account: by password, or once a hub
+  // approves. Any other account means leaving the hub first.
+  deviceRequestApproval: (login: string) =>
+    postChecked<{ approval: DeviceApproval }>("/api/v1/auth/device/approval", { login }, { local: true }),
+  deviceApprovalStatus: (id: string) =>
+    getChecked<{ approval?: DeviceApproval; account?: AccountIdentity }>(`/api/v1/auth/device/approval?id=${encodeURIComponent(id)}`, { local: true }),
+  deviceLeaveHub: (payload: { login: string; display_name?: string; password: string }) =>
+    postChecked<{ account: AccountIdentity }>("/api/v1/auth/device/leave-hub", payload, { local: true }),
+  // Sign-ins from other machines waiting for the signed-in account.
+  pendingApprovals: () => getChecked<{ approvals: DeviceApproval[] }>("/api/v1/auth/approvals", { local: true }),
+  decideApproval: (id: string, approve: boolean) =>
+    postChecked<{ approval: DeviceApproval }>("/api/v1/auth/approvals/decide", { id, approve }, { local: true }),
   signOut: () => postChecked<{ ok: boolean }>("/api/v1/auth/sign-out", {}, { local: true }),
   setupFirstAdmin: (payload: { login: string; display_name?: string; password: string }) =>
     // existing: accounts already existed at the authority (another hub of
@@ -596,7 +650,8 @@ export const api = {
     confirmedCommand?: string,
   ) => {
     const body = { kind, action, acknowledge_internal: acknowledgeInternal, ...(confirmedCommand ? { confirmed_command: confirmedCommand } : {}) };
-    return targetID || fleetMode()
+    if (targetID) return installFrameworkOnTarget(body, targetID, onProgress);
+    return fleetMode()
       ? (onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 }), fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body }, targetID ? [targetID] : ["all"], { confirm: Boolean(targetID) ? false : undefined }).then((result) => { onProgress?.({ phase: "complete", percent: 100 }); return result.first; }))
       : onProgress
       ? postProgress<FrameworkInstallResult>("/api/v1/frameworks/install/stream", body, onProgress)
@@ -611,16 +666,24 @@ export const api = {
   checkFrameworkUpdate: (kind: string, targetID?: string) => targetID
     ? fleetCall<FrameworkUpdateCheck>({ key: "check", method: "POST", path: "/api/v1/frameworks/check", body: { kind } }, [targetID], { confirm: false }).then((result) => result.first)
     : postQuery<FrameworkUpdateCheck>("/api/v1/frameworks/check", { kind }),
-  usage: (period: string, from = "", to = "") => {
-    const params = new URLSearchParams({ period });
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (timezone) params.set("timezone", timezone);
-    const path = `/api/v1/usage?${params.toString()}`;
+  usage: (period: string, from = "", to = "", filter: UsageReportFilter = {}) => {
+    const path = usagePath(period, from, to, filter);
     if (activeMachineScope() !== "all") return get<UsageReport>(path);
-    return fleetQuery<UsageReport>([{ key: "usage", path }]).then((batch) => mergeFleetUsage(batch));
+    return fleetQuery<UsageReport>([{ key: "usage", path }]).then((batch) => mergeFleetUsage(batch, { filtered: usageFilterActive(filter) }));
   },
+  // The machines a fleet-wide usage report is read from: this one and every
+  // trusted machine, as the hub's fleet query selects them.
+  usageTargets: async (): Promise<UsageTarget[]> => {
+    const hosts = await get<RemoteHost[]>("/api/v1/remote/hosts");
+    return [
+      { id: "local", name: "Local machine" },
+      ...(hosts ?? []).filter((host) => host.trusted !== false).map((host) => ({ id: host.id, name: host.name })),
+    ];
+  },
+  // One machine's part of a usage report, in the fleet's answer format so the
+  // parts merge as a fleet-wide answer does.
+  usageFromTarget: (path: string, targetID: string) =>
+    fleetQuery<UsageReport>([{ key: "usage", path }], [targetID]),
   usageSources: () => fleetMode()
     ? fleetReadArray<CursorUsageSourceStatus>("/api/v1/usage/sources", "usage_sources")
     : get<CursorUsageSourceStatus[]>("/api/v1/usage/sources"),
@@ -1077,3 +1140,25 @@ export const api = {
     return fleetCall<{ ok: boolean }>({ key: "session", method: "DELETE", path }, writeTargetIDs(session.target_id)).then((result) => result.first);
   },
 };
+
+// A framework action on one machine runs there in the background and is
+// polled, so its phase and command output stay visible even through the
+// fleet relay. Machines without background operations get the old single
+// request, which reports nothing until it finishes.
+async function installFrameworkOnTarget(
+  body: FrameworkOperationBody,
+  targetID: string,
+  onProgress?: (progress: OperationProgress) => void,
+): Promise<FrameworkInstallResult> {
+  let job;
+  try {
+    job = await startFrameworkOperationJob(body, targetID);
+  } catch (error) {
+    if (!(error instanceof FrameworkOperationsUnsupported)) throw error;
+    onProgress?.({ phase: "fleet", detail: "Applying to selected machine", percent: 10 });
+    const result = await fleetCall<FrameworkInstallResult>({ key: "install", method: "POST", path: "/api/v1/frameworks/install", body }, [targetID], { confirm: false });
+    onProgress?.({ phase: "complete", percent: 100 });
+    return result.first;
+  }
+  return followFrameworkOperationJob(job, targetID, onProgress);
+}

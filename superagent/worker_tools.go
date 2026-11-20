@@ -44,6 +44,9 @@ var (
 	codexMCPHeader   = regexp.MustCompile(`(?m)^\s*\[mcp_servers\.("?)([^\]"]+)("?)\]`)
 )
 
+// browserCleanupNote asks a worker to leave the browser as it found it.
+const browserCleanupNote = "Before you end a turn, close the browser tabs and windows you opened and any browser you started, and leave the ones you did not open: nothing else closes them, and they pile up on this machine."
+
 // browserCLIs drive a browser from a shell, which every framework's worker
 // has, so finding one gives every framework the browser tool.
 var browserCLIs = []string{"agent-browser", "playwright", "playwright-cli", "browser-use"}
@@ -169,7 +172,9 @@ func desktopSession() bool {
 }
 
 // toolNotesLine tells a worker which tools its machine gives it and how to
-// reach them, or "" when it has none.
+// reach them, or "" when it has none. Nothing closes what a worker opens in a
+// browser once its turn ends: a browser tool attached to the operator's own
+// browser leaves its tabs there by design, so the worker is asked to.
 func toolNotesLine(notes map[string]string) string {
 	if len(notes) == 0 {
 		return ""
@@ -184,7 +189,11 @@ func toolNotesLine(notes map[string]string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "TOOLS ON YOUR MACHINE: " + strings.Join(parts, "; ") + ". Prefer these to other browser or desktop tools your framework may list, which may not work here."
+	line := "TOOLS ON YOUR MACHINE: " + strings.Join(parts, "; ") + ". Prefer these to other browser or desktop tools your framework may list, which may not work here."
+	if notes[WorkerToolBrowser] != "" {
+		line += " " + browserCleanupNote
+	}
+	return line
 }
 
 // workerToolNotes finds how the worker an action names reaches its tools:

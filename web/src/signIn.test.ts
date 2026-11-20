@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { APIError, type AuthSession } from "./api";
 import {
   accountErrorCode,
+  accountInitials,
+  rememberSavedAccount,
   accountFormError,
   identifyUnsupported,
   nextSignInStep,
@@ -90,8 +92,15 @@ describe("sign-in gate", () => {
     ...overrides,
   });
 
-  it("opens as before on a machine without accounts", () => {
-    expect(resolveSignInGate(session({}), { nativeDesktopAdmin: false, failed: false })).toBe("open");
+  it("asks for the first administrator on a machine without accounts", () => {
+    expect(resolveSignInGate(session({}), { nativeDesktopAdmin: false, failed: false })).toBe("signed-out");
+  });
+
+  it("keeps a node's own Console on sign-in until its machine is signed in", () => {
+    const node = session({ device: { signed_in: false, authority: "hub", setup_allowed: false } });
+    expect(resolveSignInGate(node, { nativeDesktopAdmin: false, failed: false })).toBe("device-sign-in");
+    const signedIn = session({ device: { signed_in: true, authority: "hub", setup_allowed: false } });
+    expect(resolveSignInGate(signedIn, { nativeDesktopAdmin: false, failed: false })).toBe("open");
   });
 
   it("asks for sign-in once accounts exist and the browser has no credential", () => {
@@ -153,5 +162,25 @@ describe("identify-first sign-in", () => {
     expect(accountErrorCode(new Error("plain"))).toBe("");
     expect(identifyUnsupported(new APIError("x", 404, {}))).toBe(true);
     expect(identifyUnsupported(new APIError("x", 429, {}))).toBe(false);
+  });
+});
+
+describe("saved accounts", () => {
+  it("keeps the newest first, once per login, and only names", () => {
+    const now = new Date("2026-11-19T10:00:00Z");
+    let saved = rememberSavedAccount([], { login: "bob" }, now);
+    saved = rememberSavedAccount(saved, { login: "ning", display_name: "Ning" }, now);
+    saved = rememberSavedAccount(saved, { login: "bob", display_name: "Bob" }, now);
+    expect(saved).toEqual([
+      { login: "bob", display_name: "Bob", last_signed_in_at: now.toISOString() },
+      { login: "ning", display_name: "Ning", last_signed_in_at: now.toISOString() },
+    ]);
+  });
+
+  it("gives avatars initials", () => {
+    expect(accountInitials({ login: "ning.wang" })).toBe("NW");
+    expect(accountInitials({ login: "x", display_name: "Ning Wang" })).toBe("NW");
+    expect(accountInitials({ login: "x", display_name: "王宁" })).toBe("王");
+    expect(accountInitials({ login: "root" })).toBe("R");
   });
 });

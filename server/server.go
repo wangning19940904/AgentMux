@@ -30,6 +30,7 @@ import (
 	"github.com/wangning19940904/AgentMux/store"
 	"github.com/wangning19940904/AgentMux/superagent"
 	ttspkg "github.com/wangning19940904/AgentMux/tts"
+	usagepkg "github.com/wangning19940904/AgentMux/usage"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -62,11 +63,19 @@ type Server struct {
 	// the standby's record, which need PostgreSQL; followsForTest makes this
 	// server send account operations to its hub, as a standby does, and
 	// nodeOfHubForTest makes its device sign-in go to its hub, as a node's.
-	primaryHubForTest  *bool
-	standbyForTest     string
-	followsForTest     bool
-	nodeOfHubForTest   bool
-	deviceAccount      deviceAccountState
+	primaryHubForTest *bool
+	standbyForTest    string
+	followsForTest    bool
+	nodeOfHubForTest  bool
+	deviceAccount     deviceAccountState
+	// deviceSaved guards the saved-accounts file (device_saved_accounts.go).
+	deviceSaved sync.Mutex
+	// approvals are the node sign-ins waiting for a hub (hub_account_approval.go).
+	approvals deviceApprovalBook
+	// hubAccounts caches, on a node, which accounts its hub is signed in as.
+	hubAccounts hubAccountsCache
+	// approvalSecrets keeps this machine's own requests' secrets, by ID.
+	approvalSecrets    sync.Map
 	linkHub            *linkpkg.Hub
 	passiveDialer      *linkpkg.PassiveDialer
 	push               *pushpkg.Service
@@ -99,9 +108,9 @@ type Server struct {
 	httpSrv            *http.Server
 }
 
-// UsageReporter produces an aggregated usage report for the API. until is an
-// exclusive upper bound.
-type UsageReporter func(ctx context.Context, period string, since, until time.Time, location *time.Location) (any, error)
+// UsageReporter produces an aggregated usage report for the API. The query's
+// Until is an exclusive upper bound.
+type UsageReporter func(ctx context.Context, query usagepkg.ReportQuery) (any, error)
 
 // Dependencies contains the complete HTTP server dependency graph. Production
 // composition supplies this once rather than mutating a partially constructed
@@ -527,7 +536,14 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
-	rep, err := s.usageFn(r.Context(), period, since, until, location)
+	values := r.URL.Query()
+	rep, err := s.usageFn(r.Context(), usagepkg.ReportQuery{
+		Period: period, Since: since, Until: until, Location: location,
+		Filter: usagepkg.ReportFilter{
+			Models: values["model"], Runtimes: values["runtime"],
+			Agents: values["agent"], Sources: values["source"],
+		},
+	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

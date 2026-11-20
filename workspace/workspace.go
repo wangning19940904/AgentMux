@@ -426,6 +426,19 @@ func (i *Initializer) ensureConversationWorktree(
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return "", "", false, fmt.Errorf("create worktree root: %w", err)
 	}
+	// A worktree removed after its work finished comes back on the branch it
+	// was on, which may not be the one it started on.
+	defer func() {
+		if err == nil {
+			forgetRemovedWorktree(worktreePath)
+		}
+	}()
+	if restored, ok := restoreRemovedWorktree(ctx, repoRoot, worktreePath); ok {
+		if err := ensurePlainDir(resolvedWorkDir); err != nil {
+			return "", "", false, err
+		}
+		return resolvedWorkDir, restored, true, nil
+	}
 	baseRef := strings.TrimSpace(opts.WorktreeBaseRef)
 	if baseRef == "" {
 		baseRef = "HEAD"

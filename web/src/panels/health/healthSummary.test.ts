@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Channel } from "../api";
-import { summarizeChannelHealth, summarizeFrameworkHealth } from "./overviewHealth";
+import type { Channel } from "../../api";
+import { summarizeChannelHealth, summarizeFrameworkHealth } from "./healthSummary";
 
 describe("overview health summaries", () => {
   it("separates connected, unhealthy, and disabled channels", () => {

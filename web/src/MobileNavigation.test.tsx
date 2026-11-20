@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, LayoutGrid, Network, ServerCog, Settings } from "lucide-react";
+import { Bot, Gauge, Network, ServerCog, Settings } from "lucide-react";
 import { afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "./i18n";
 import { MobileDrawer, MobileTabBar, mobileTabItems, type MobileNavItem } from "./MobileNavigation";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type ID = "overview" | "agents" | "super-agents" | "machines" | "settings";
+type ID = "usage" | "agents" | "super-agents" | "machines" | "settings";
 
 const ITEMS: MobileNavItem<ID>[] = [
-  { id: "overview", labelKey: "nav.overview", icon: LayoutGrid },
+  { id: "usage", labelKey: "nav.usage", icon: Gauge },
   { id: "settings", labelKey: "nav.settings", icon: Settings },
   { id: "machines", labelKey: "nav.machines", icon: ServerCog },
   { id: "agents", labelKey: "nav.agents", icon: Bot },
@@ -33,7 +33,7 @@ function render(node: React.ReactNode) {
 }
 
 it("puts the phone destinations in a fixed order", () => {
-  expect(mobileTabItems(ITEMS).map((item) => item.id)).toEqual(["overview", "agents", "super-agents", "machines"]);
+  expect(mobileTabItems(ITEMS).map((item) => item.id)).toEqual(["agents", "super-agents", "usage", "machines"]);
 });
 
 it("marks More as current for pages outside the tab bar", () => {
@@ -43,9 +43,9 @@ it("marks More as current for pages outside the tab bar", () => {
     <MobileTabBar items={mobileTabItems(ITEMS)} active="settings" drawerOpen={false} isDisabled={() => false} onSelect={onSelect} onOpenMore={onOpenMore} />,
   );
   const buttons = [...container.querySelectorAll("button")];
-  expect(buttons.map((button) => button.textContent)).toEqual(["Overview", "Agents", "Super", "Devices", "More"]);
+  expect(buttons.map((button) => button.textContent)).toEqual(["Agents", "Super", "Usage", "Devices", "More"]);
   expect(buttons[4].className).toContain("active");
-  act(() => buttons[1].click());
+  act(() => buttons[0].click());
   expect(onSelect).toHaveBeenCalledWith("agents");
   act(() => buttons[4].click());
   expect(onOpenMore).toHaveBeenCalled();
@@ -53,13 +53,13 @@ it("marks More as current for pages outside the tab bar", () => {
 
 it("shows a count on a tab, and a dot on More for a page outside the tab bar", () => {
   const { container } = render(
-    <MobileTabBar items={mobileTabItems(ITEMS)} active="overview" badges={{ machines: 3, settings: 1, agents: 0 }} drawerOpen={false} isDisabled={() => false} onSelect={vi.fn()} onOpenMore={vi.fn()} />,
+    <MobileTabBar items={mobileTabItems(ITEMS)} active="usage" badges={{ machines: 3, settings: 1, agents: 0 }} drawerOpen={false} isDisabled={() => false} onSelect={vi.fn()} onOpenMore={vi.fn()} />,
   );
   const buttons = [...container.querySelectorAll("button")];
   const badge = buttons[3].querySelector(".nav-badge");
   expect(badge?.textContent).toBe("3");
   expect(badge?.getAttribute("aria-label")).toBe("3 unread");
-  expect(buttons[1].querySelector(".nav-badge")).toBeNull();
+  expect(buttons[0].querySelector(".nav-badge")).toBeNull();
   expect(buttons[4].querySelector(".nav-badge-dot")).not.toBeNull();
 });
 
@@ -69,7 +69,6 @@ it("lists every group in the drawer and closes on Escape", () => {
   const { container } = render(
     <MobileDrawer
       open
-      overview={ITEMS[0]}
       groups={[{ id: "system", labelKey: "nav.group.system", icon: Settings, items: [ITEMS[2], ITEMS[1]] }]}
       active="machines"
       isDisabled={(id) => id === "settings"}
