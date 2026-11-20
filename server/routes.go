@@ -50,6 +50,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/frameworks/health/recheck", s.handleFrameworkHealthRecheck)
 	s.mux.HandleFunc("GET /api/v1/frameworks/health/settings", s.handleFrameworkHealthSettingsGet)
 	s.mux.HandleFunc("PUT /api/v1/frameworks/health/settings", s.handleFrameworkHealthSettingsPut)
+	s.mux.HandleFunc("GET /api/v1/frameworks/scheduling", s.handleTurnScheduler)
+	s.mux.HandleFunc("PUT /api/v1/frameworks/scheduling/settings", s.handleTurnSchedulerSettingsPut)
 	s.mux.HandleFunc("GET /api/v1/frameworks/install-settings", s.handleFrameworkInstallSettingsGet)
 	s.mux.HandleFunc("PUT /api/v1/frameworks/install-settings", s.handleFrameworkInstallSettingsPut)
 	s.mux.HandleFunc("GET /api/v1/frameworks/login", s.handleFrameworkLoginStatus)

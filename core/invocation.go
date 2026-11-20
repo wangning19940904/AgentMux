@@ -264,6 +264,7 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 	defer e.trackInvocationSession(targetKey, conversationKey, nil)
 	data["agent_id"] = runtime.workspace.AgentID
 	data["runtime_id"] = runtime.workspace.RuntimeID
+	setAccountProfile(data, runtime.workspace)
 	data["memory_scope"] = runtime.workspace.MemoryScope
 	data["agent_name"] = runtime.agent.Name()
 	data["session_id"] = result.SessionID

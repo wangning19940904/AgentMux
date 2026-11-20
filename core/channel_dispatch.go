@@ -51,6 +51,7 @@ func (e *Engine) handleChannelMessageDirect(ctx context.Context, msg *Message, d
 	sessionAgent, sessionWorkspace := generation.agent, generation.workspace
 	data["agent_id"] = sessionWorkspace.AgentID
 	data["runtime_id"] = sessionWorkspace.RuntimeID
+	setAccountProfile(data, sessionWorkspace)
 	data["memory_scope"] = sessionWorkspace.MemoryScope
 	if sessionAgent != nil {
 		data["agent_name"] = sessionAgent.Name()

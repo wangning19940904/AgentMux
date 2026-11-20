@@ -46,6 +46,8 @@ type Engine struct {
 	meetingEventSubscribers map[uint64]chan MeetingEvent
 	nextMeetingEventID      uint64
 	invocationMu            sync.Mutex
+	turnSchedulerMu         sync.RWMutex
+	turnScheduler           *TurnScheduler
 	activeInvocations       map[string]struct{}
 	invocationSessions      map[string]AgentSession
 	msgLog                  *MessageLogger
@@ -409,6 +411,7 @@ func (e *Engine) handle(ctx context.Context, msg *Message) {
 	}
 	data["agent_id"] = pr.workspace.AgentID
 	data["runtime_id"] = pr.workspace.RuntimeID
+	setAccountProfile(data, pr.workspace)
 	if pr.agent != nil {
 		data["agent_name"] = pr.agent.Name()
 	}

@@ -23,6 +23,7 @@ func (s *Server) handleInvocation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "invocation runtime unavailable")
 		return
 	}
+	r = withRequestedTurnClass(r)
 	r.Body = http.MaxBytesReader(w, r.Body, maxInvocationRequestBytes)
 	req, ok := decodeJSON[core.InvocationRequest](w, r)
 	if !ok {
@@ -90,6 +91,7 @@ func (s *Server) handleInvocationStream(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "streaming is unsupported by this HTTP server")
 		return
 	}
+	r = withRequestedTurnClass(r)
 	r.Body = http.MaxBytesReader(w, r.Body, maxInvocationRequestBytes)
 	req, decoded := decodeJSON[core.InvocationRequest](w, r)
 	if !decoded {

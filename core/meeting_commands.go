@@ -367,6 +367,7 @@ func (e *Engine) runMeetingTurn(ctx context.Context, cancel context.CancelFunc, 
 	data := eventData(msg)
 	data["agent_id"] = generation.workspace.AgentID
 	data["runtime_id"] = generation.workspace.RuntimeID
+	setAccountProfile(data, generation.workspace)
 	data["memory_scope"] = generation.workspace.MemoryScope
 	data["meeting_id"] = meeting.ID
 	data["meeting_turn_id"] = turn.ID

@@ -442,7 +442,10 @@ func (s *Service) runHelper(ctx context.Context, agent core.SuperAgent, ticketID
 			parent = *current
 		}
 		s.recordHelper(ticketID, helper.ID, func(record *core.SuperAgentHelper) { record.Worker = worker })
-		answer, err = s.workers.Run(ctx, worker, helper.ConversationID, helperInput(agent, parent, helper), RunOptions{})
+		// The worker's running turn polls for this one, so it must not wait
+		// for a place that turn holds.
+		helperCtx := core.WithAwaitedTurn(core.WithTurnClass(ctx, core.TurnTicket))
+		answer, err = s.workers.Run(helperCtx, worker, helper.ConversationID, helperInput(agent, parent, helper), RunOptions{})
 	}
 	s.dispatch.mu.Lock()
 	reason := run.reason

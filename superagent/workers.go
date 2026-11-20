@@ -78,6 +78,9 @@ type Fleet struct {
 }
 
 func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversationID, input string, options RunOptions) (string, error) {
+	if _, ok := core.TurnClassFrom(ctx); !ok {
+		ctx = core.WithTurnClass(ctx, core.TurnTicket)
+	}
 	if worker.HostID != "" {
 		return f.runRemote(ctx, worker, conversationID, input, options.Progress)
 	}
@@ -236,6 +239,10 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
+	// The remote daemon admits the turn on its own account, as a Ticket's.
+	if class, ok := core.TurnClassFrom(ctx); ok {
+		request.Header.Set(core.TurnClassHeader, class.String())
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
