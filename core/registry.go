@@ -64,6 +64,11 @@ func CreatePlatform(name string, cfg map[string]any) (Platform, error) {
 // Adapters that cannot honour it ignore it.
 const AgentConfigHealthCheck = "health_check"
 
+// AgentConfigKeepTurns is an optional agent config key (bool). When true, an
+// adapter that can runs its turns so they outlive this AgentMux process and
+// can be rejoined with TurnRejoiningAgent. Adapters that cannot ignore it.
+const AgentConfigKeepTurns = "keep_turns"
+
 // CreateAgent instantiates a registered agent.
 func CreateAgent(name string, cfg map[string]any) (Agent, error) {
 	regMu.RLock()

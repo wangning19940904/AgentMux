@@ -440,6 +440,12 @@ func (c *ConnectService) processEvent(event HookEvent, data map[string]string) {
 // resolveAgent builds an Agent runtime for a stored agent instance id.
 // Returns (nil, "") when the id is empty or the instance cannot be resolved.
 func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agent, string, WorkspaceInitOptions) {
+	return c.resolveAgentWith(ctx, agentID, nil)
+}
+
+// resolveAgentWith creates the Agent with extra configuration on top of its
+// own, such as AgentConfigKeepTurns.
+func (c *ConnectService) resolveAgentWith(ctx context.Context, agentID string, extra map[string]any) (Agent, string, WorkspaceInitOptions) {
 	if agentID == "" {
 		return nil, "", WorkspaceInitOptions{}
 	}
@@ -516,6 +522,9 @@ func (c *ConnectService) resolveAgent(ctx context.Context, agentID string) (Agen
 		// A Super Agent tracks parallel work as Tickets it can see and steer.
 		// Sub-agents a framework spawns inside one turn are invisible to it.
 		cfg["single_agent"] = true
+	}
+	for key, value := range extra {
+		cfg[key] = value
 	}
 	agentKind := inst.RuntimeID
 	if strings.EqualFold(strings.TrimSpace(inst.SessionBackend), "tmux") {

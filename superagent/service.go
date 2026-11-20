@@ -1184,11 +1184,16 @@ func requeueInterrupted(ticket *core.SuperAgentTicket) {
 }
 
 // canRejoin reports whether a Ticket found running at start has a turn its
-// worker kept going.
+// worker kept going: a remote invocation on the worker's machine, or a local
+// framework's thread and turn.
 func (s *Service) canRejoin(ticket core.SuperAgentTicket) bool {
-	_, resumable := s.workers.(TurnResumer)
-	return resumable && ticket.Turn != nil && ticket.Turn.InvocationID != "" && ticket.Worker.HostID != "" &&
-		ticket.Turn.HostID == ticket.Worker.HostID
+	if _, resumable := s.workers.(TurnResumer); !resumable || ticket.Turn == nil || ticket.Turn.HostID != ticket.Worker.HostID {
+		return false
+	}
+	if ticket.Worker.HostID != "" {
+		return ticket.Turn.InvocationID != ""
+	}
+	return ticket.Turn.SessionID != "" && ticket.Turn.TurnID != ""
 }
 
 // rejoinTicket follows a turn the previous process started. The Ticket stays
@@ -1219,7 +1224,8 @@ func (s *Service) rejoinTicket(ctx context.Context, ticket core.SuperAgentTicket
 		s.turnStarts[ticket.ID] = s.now().UTC()
 	}
 	s.mu.Unlock()
-	s.log.Info("super agent rejoins a turn that ran on through the restart", "ticket", ticket.ID, "invocation", ticket.Turn.InvocationID)
+	s.log.Info("super agent rejoins a turn that ran on through the restart", "ticket", ticket.ID,
+		"invocation", ticket.Turn.InvocationID, "session", ticket.Turn.SessionID, "turn", ticket.Turn.TurnID)
 	s.goTurn(agent.ID, ticket.ID, cancel, func() { s.resumeTicket(runCtx, ctx, *agent, ticket.ID) })
 }
 
@@ -1232,7 +1238,7 @@ func (s *Service) resumeTicket(runCtx, ctx context.Context, agent core.SuperAgen
 	}
 	turn := *ticket.Turn
 	placement, _ := s.placeTicket(ctx, *ticket)
-	answer, runErr := s.workers.(TurnResumer).Resume(runCtx, ticket.Worker, turn.InvocationID, RunOptions{
+	answer, runErr := s.workers.(TurnResumer).Resume(runCtx, ticket.Worker, ticket.ConversationID, turn, RunOptions{
 		Progress: s.progressRecorder(*ticket), Detach: ctx,
 	})
 	if errors.Is(runErr, ErrTurnGone) && ctx.Err() == nil {
@@ -1296,13 +1302,12 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	answer, runErr := s.workers.Run(runCtx, ticket.Worker, ticket.ConversationID, input, RunOptions{
 		Dir: placement.ConversationDir, BaseRef: s.baseCommit(ctx, ticket), Progress: s.progressRecorder(ticket),
 		Detach: ctx,
-		Started: func(invocationID string) {
+		Started: func(turn core.SuperAgentTicketTurn) {
 			// Saved so a restart rejoins the turn instead of repeating it.
+			turn.HostID, turn.Delivered, turn.StartedAt = ticket.Worker.HostID, delivered, startedAt
 			err := s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
 				if current.Status == core.SuperAgentTicketRunning {
-					current.Turn = &core.SuperAgentTicketTurn{
-						InvocationID: invocationID, HostID: ticket.Worker.HostID, Delivered: delivered, StartedAt: startedAt,
-					}
+					current.Turn = &turn
 				}
 				return nil
 			})

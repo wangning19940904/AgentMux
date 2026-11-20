@@ -1,6 +1,7 @@
 # Super Agent turns across an AgentMux restart
 
-Status: phase 1 (remote workers) implemented; phase 2 (local workers) proposed.
+Status: phase 1 (remote workers) and phase 2 (local Codex workers) implemented;
+local Claude Code (phase 2b) proposed.
 
 ## Problem
 
@@ -57,7 +58,7 @@ event stream, which is what a Ticket needs to get its answer.
    turn explicitly. A daemon shutting down does not. This change is entirely
    within AgentMux, works for every framework, and also covers tunnel blips
    and idle-timeouts that used to restart turns.
-2. **Detached local Codex app-server (phase 2).** Start one app-server per
+2. **Detached local Codex app-server (chosen, phase 2).** Start one app-server per
    Codex Agent configuration on a unix socket in the state directory, in its
    own session, so it outlives AgentMux. Record the thread and turn ids on
    the Ticket. On restart, reconnect, `thread/resume` and follow the turn to
@@ -123,14 +124,114 @@ Hub (`superagent`):
   note, counted in the agent's concurrency, and with supervision's turn
   start restored. Replayed events do not go to the progress log twice. If the
   remote no longer has the turn (`ErrTurnGone`), the Ticket goes back to the
-  queue with the recovery note, as before. Tickets without a `Turn`, which
-  includes all local workers, keep the old recovery.
+  queue with the recovery note, as before. Tickets without a `Turn` keep the
+  old recovery.
+
+## Phase 2 design (implemented): local Codex workers
+
+Detached app-server (`agent/cliagents/codex_detached.go`):
+
+- A Codex Agent created with `core.AgentConfigKeepTurns` runs its threads on a
+  detached app-server: `codex app-server --listen unix://<dir>/sock`, started
+  with `Setsid` so the signals that stop AgentMux, its process group or its
+  launchd job do not reach it. Its output goes to `<dir>/server.log`. AgentMux
+  reaps it while it lives; afterwards it belongs to init.
+- Directory: `<UserConfigDir>/agentmux/codex-servers/<configuration>/<generation>/`
+  with `sock`, `pid`, `used` and `server.log`. The configuration is a hash of
+  the resolved binary and the Agent's environment. The generation is a hash
+  of `codex --version` (cached 30 s; an npm-installed Codex is a script whose
+  own file does not change on update) and the app-server arguments, which
+  include the OTel settings. The OTel ingest token is persisted, so the
+  generation is stable across AgentMux restarts.
+- The unix socket speaks WebSocket (verified with codex-cli 0.171.0): one
+  JSON-RPC message per text frame. Codex keeps the socket itself under
+  `/tmp/codex-daemon-<uid>/` and links the requested path to it, so AgentMux
+  dials the link's target and the path length limit does not apply.
+- Finding or starting: under a process mutex and a `flock` on the
+  configuration, AgentMux dials the current generation's socket and starts
+  the app-server only when nothing listens (waiting up to a minute for it to
+  listen). Each Codex Agent, which the invocation path creates per turn, opens
+  its own connection; closing it leaves the server and its turns running.
+- Restart only when idle: after a Codex update, new turns get a new
+  generation. Every acquire stops idle app-servers of older generations, and
+  those of configurations unused for a day. Idle means no loaded thread is
+  `active` (`thread/loaded/list`, then `thread/read`). A server with a running
+  turn is kept until a later acquire finds it idle. A stale pid is checked
+  against the process's command line before it is signalled.
+- Codex Desktop threads (`codex-app`), Trae and Windows keep the stdio child.
+
+Codex adapter:
+
+- A turn's context ending interrupts the turn (`turn/interrupt`) as before,
+  except on a detached app-server when `core.TurnOwnerEnded(ctx)`: the turn's
+  owner, the context `core.WithTurnDetach` attached (the Super Agent
+  service's), has ended, so AgentMux is shutting down. A Ticket stop or
+  deadline ends only the turn's context and still interrupts it.
+- Events of a turn on a detached app-server carry the metadata
+  `kept_turn=true` with the thread and turn ids.
+- `RejoinTurn(ctx, workDir, {SessionID: thread, TurnID: turn})` finds the live
+  app-server of the configuration that has the thread loaded, registers a
+  session for the thread before calling `thread/resume {threadId}` (so no
+  notification after the resume is lost), and looks up the turn in the
+  response: `inProgress` is followed to `turn/completed` with the usual event
+  mapping, the answer seeded from the turn's last agent message; `completed`
+  (it finished while AgentMux was away) gives its answer at once. Anything
+  else, or a thread no live server has loaded but whose record says
+  `inProgress` (its server died), is `core.ErrInvocationTurnGone`.
+
+Core invocation:
+
+- `InvocationRequest.KeepTurn` (in-process only) creates the Agent with
+  `AgentConfigKeepTurns`.
+- `ConnectService.RejoinInvocation(ctx, {AgentID, ConversationID, Turn}, sink)`
+  (`core.InvocationRejoiner`) creates the Agent the same way and calls its
+  `RejoinTurn` (`core.TurnRejoiningAgent`). It holds the conversation's
+  invocation slot, so a new turn on it waits, and tracks the session, so
+  steering reaches a rejoined turn. Events and the outcome are reported as by
+  `InvokeStream`, through the same `followInvocationTurn`. A framework that
+  keeps no turns, or a turn that is gone, returns `ErrInvocationTurnGone`
+  before any event.
+
+Super Agent:
+
+- `Fleet.Run` for a local worker sets `KeepTurn` (whenever `RunOptions.Started`
+  is set, as the service does) and wraps the turn's context with
+  `WithTurnDetach(RunOptions.Detach)`. The first event marked `kept_turn`
+  reports `Turn{SessionID, TurnID}` through `Started`; the service saves it on
+  the Ticket with `Delivered` and `StartedAt`, as for a remote turn. A
+  framework that keeps no turns (Claude Code) never marks an event, so its
+  Tickets record no `Turn` and keep the old recovery.
+- `canRejoin` covers a local Ticket whose `Turn` has a session and turn id;
+  `Fleet.Resume` rejoins it through `RejoinInvocation`. `ErrTurnGone` (the
+  app-server or the turn is gone, for example after a reboot) sends the
+  Ticket back to the queue with the recovery note.
+- Tests: `TestLocalTurnContinuesAcrossARestartMidTurn`,
+  `TestRestartFallsBackWhenTheLocalTurnIsGone` and
+  `TestStoppingATicketInterruptsItsKeptLocalTurn` (superagent); a fake
+  app-server, the test binary run as `codex`, in
+  `agent/cliagents/codex_kept_turn_test.go` keeps a turn across a client
+  reconnect, a Codex update and a stop. Verified once against codex-cli
+  0.171.0: a turn running `sleep 8` was left running when its owner context
+  ended, and a new Agent rejoined it and received the tool call and the
+  final answer.
+
+Known limits:
+
+- A server request that needs a person (an approval) made while no AgentMux
+  is connected: whether Codex sends it again to the rejoining client is not
+  verified. Super Agent workers normally run without approvals.
+- Usage of a rejoined turn counts only what was reported after the rejoin.
+- The local `liveturns` of a remote daemon are in memory, so a remote daemon
+  that itself restarts still loses the hub's turn even though its Codex
+  app-server kept it (see follow-ups).
 
 ## Follow-ups
 
-- Phase 2 (option 2) for local Codex workers, which the bot on
-  bytedance-macmini uses as well as ecs_cn.
-- A remote daemon that itself restarts still loses its turns. Phase 2 on that
-  machine fixes it there too.
+- A remote daemon that itself restarts still loses its turns: the hub knows
+  only the invocation id, which lives in the daemon's memory. The detached
+  invocation could set `KeepTurn` and send its `kept_turn` thread and turn ids
+  to the hub, which would rejoin through the daemon's `RejoinInvocation` when
+  the invocation id is unknown.
+- Phase 2b (option 3) for local Claude Code workers.
 - Updates could wait a short grace period (option 4) for turns about to end
   before the swap. It is cheap and complements phase 2.

@@ -335,12 +335,16 @@ type SuperAgentTicket struct {
 	Turn *SuperAgentTicketTurn `json:"turn,omitempty"`
 }
 
-// SuperAgentTicketTurn is a worker turn AgentMux can rejoin. Delivered is how
-// many of the Ticket's Inputs the turn was given; later ones wait for the
-// next turn.
+// SuperAgentTicketTurn is a worker turn AgentMux can rejoin: a remote
+// worker's by its invocation id on HostID's daemon, a local worker's by the
+// native session (thread) and turn ids its framework kept running. Delivered
+// is how many of the Ticket's Inputs the turn was given; later ones wait for
+// the next turn.
 type SuperAgentTicketTurn struct {
-	InvocationID string    `json:"invocation_id"`
+	InvocationID string    `json:"invocation_id,omitempty"`
 	HostID       string    `json:"host_id,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	TurnID       string    `json:"turn_id,omitempty"`
 	Delivered    int       `json:"delivered"`
 	StartedAt    time.Time `json:"started_at"`
 }

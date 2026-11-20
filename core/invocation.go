@@ -31,6 +31,27 @@ type InvocationRequest struct {
 	// worktree starts from instead of the Agent's base ref. Like
 	// ConversationDir, only in-process callers can set it.
 	WorktreeBaseRef string `json:"-"`
+	// KeepTurn asks for a turn that outlives this process when the Agent's
+	// framework can keep one (AgentConfigKeepTurns). Its events then carry
+	// EventMetadataKeptTurn, and RejoinInvocation follows it after a
+	// restart. In-process callers only.
+	KeepTurn bool `json:"-"`
+}
+
+// InvocationRejoin names a kept turn an earlier AgentMux process started:
+// the Agent and conversation it ran for, and the session and turn ids its
+// events carried.
+type InvocationRejoin struct {
+	AgentID        string
+	ConversationID string
+	Turn           AgentTurnRef
+}
+
+// InvocationRejoiner follows a kept turn after a restart, reporting its
+// remaining events to sink and its outcome as Invoke would. It returns
+// ErrInvocationTurnGone, before any event, when the turn is not running.
+type InvocationRejoiner interface {
+	RejoinInvocation(ctx context.Context, rejoin InvocationRejoin, sink InvocationEventSink) (InvocationResult, error)
 }
 
 // InvocationResult is the completed, synchronous result of an Agent turn.
@@ -141,7 +162,11 @@ func (c *ConnectService) invoke(ctx context.Context, req InvocationRequest, sink
 	if !inst.Enabled {
 		return InvocationResult{}, fmt.Errorf("%w: agent %q", ErrInvocationDisabled, req.AgentID)
 	}
-	agent, workDir, workspace := c.resolveAgent(ctx, req.AgentID)
+	var extra map[string]any
+	if req.KeepTurn {
+		extra = map[string]any{AgentConfigKeepTurns: true}
+	}
+	agent, workDir, workspace := c.resolveAgentWith(ctx, req.AgentID, extra)
 	if agent == nil {
 		return InvocationResult{}, fmt.Errorf("%w: could not start agent %q", ErrInvocationRuntime, req.AgentID)
 	}
@@ -285,6 +310,15 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 	}
 	defer cleanupInput()
 	events, turnErr := e.observeSendInput(turnCtx, sess, turnInput, data)
+	return e.followInvocationTurn(ctx, turnCtx, cancelTurn, sess, events, turnErr, data, emitStream, result, startedAt, func() {
+		e.persistConversationTurn(ctx, conversation, sess)
+	})
+}
+
+// followInvocationTurn consumes a turn's events, forwarding them to the
+// stream, and reports its outcome. turnErr is a failure to start the turn.
+// persist, when set, saves the conversation once the turn ends.
+func (e *Engine) followInvocationTurn(ctx, turnCtx context.Context, cancelTurn context.CancelFunc, sess AgentSession, events <-chan *Event, turnErr error, data map[string]string, emitStream func(InvocationStreamEvent) error, result InvocationResult, startedAt time.Time, persist func()) (InvocationResult, error) {
 	var answer string
 	var sinkErr error
 	streamedError := false
@@ -337,7 +371,9 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 	result.SessionID = sessionObservationID(sess)
 	data["session_id"] = result.SessionID
 	result.DurationMS = time.Since(startedAt).Milliseconds()
-	e.persistConversationTurn(ctx, conversation, sess)
+	if persist != nil {
+		persist()
+	}
 	e.emit(ctx, HookMessageSent, data)
 	if sinkErr != nil {
 		return result, sinkErr
@@ -355,6 +391,97 @@ func (e *Engine) invokeRuntime(ctx context.Context, runtime *projectRuntime, req
 		return result, err
 	}
 	return result, nil
+}
+
+// RejoinInvocation implements InvocationRejoiner for Agents whose framework
+// keeps turns (TurnRejoiningAgent).
+func (c *ConnectService) RejoinInvocation(ctx context.Context, rejoin InvocationRejoin, sink InvocationEventSink) (InvocationResult, error) {
+	if c == nil || c.eng == nil {
+		return InvocationResult{}, fmt.Errorf("%w: engine is unavailable", ErrInvocationRuntime)
+	}
+	rejoin.AgentID = strings.TrimSpace(rejoin.AgentID)
+	rejoin.ConversationID = strings.TrimSpace(rejoin.ConversationID)
+	if rejoin.AgentID == "" || rejoin.ConversationID == "" {
+		return InvocationResult{}, fmt.Errorf("%w: agent_id and conversation_id are required", ErrInvalidInvocation)
+	}
+	if c.store == nil {
+		return InvocationResult{}, fmt.Errorf("%w: agent store is unavailable", ErrInvocationRuntime)
+	}
+	inst, err := c.store.GetAgentInstance(ctx, rejoin.AgentID)
+	if err != nil {
+		return InvocationResult{}, fmt.Errorf("load agent %q: %w", rejoin.AgentID, err)
+	}
+	if inst == nil {
+		return InvocationResult{}, fmt.Errorf("%w: agent %q", ErrInvocationNotFound, rejoin.AgentID)
+	}
+	if !inst.Enabled {
+		return InvocationResult{}, fmt.Errorf("%w: agent %q", ErrInvocationDisabled, rejoin.AgentID)
+	}
+	agent, workDir, workspace := c.resolveAgentWith(ctx, rejoin.AgentID, map[string]any{AgentConfigKeepTurns: true})
+	if agent == nil {
+		return InvocationResult{}, fmt.Errorf("%w: could not start agent %q", ErrInvocationRuntime, rejoin.AgentID)
+	}
+	runtime := &projectRuntime{
+		owner: c.eng, name: rejoin.AgentID, conversationScope: "api-agent:" + rejoin.AgentID,
+		agent: agent, workDir: workDir, workspace: workspace, sessions: map[string]AgentSession{},
+	}
+	defer c.eng.closeInvocationRuntime(runtime)
+	return c.eng.rejoinRuntime(ctx, runtime, rejoin, sink)
+}
+
+func (e *Engine) rejoinRuntime(ctx context.Context, runtime *projectRuntime, rejoin InvocationRejoin, sink InvocationEventSink) (InvocationResult, error) {
+	rejoiner, ok := runtime.agent.(TurnRejoiningAgent)
+	if !ok {
+		return InvocationResult{}, fmt.Errorf("%w: %s does not keep turns", ErrInvocationTurnGone, runtime.agent.Name())
+	}
+	targetKey, conversationKey := "agent:"+rejoin.AgentID, "api:"+rejoin.ConversationID
+	if !e.beginInvocation(targetKey, conversationKey) {
+		return InvocationResult{}, fmt.Errorf("%w: %q", ErrInvocationBusy, rejoin.ConversationID)
+	}
+	defer e.finishInvocation(targetKey, conversationKey)
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	defer cancelTurn()
+	invocationID := "inv_" + randomHexID(12)
+	startedAt := time.Now()
+	result := InvocationResult{ID: invocationID, AgentID: rejoin.AgentID, ConversationID: rejoin.ConversationID, SessionID: rejoin.Turn.SessionID}
+	sess, events, err := rejoiner.RejoinTurn(turnCtx, runtime.workDir, rejoin.Turn)
+	if err != nil {
+		return result, err
+	}
+	runtime.mu.Lock()
+	runtime.sessions[conversationKey] = sess
+	runtime.mu.Unlock()
+	emitStream := func(event InvocationStreamEvent) error {
+		if sink == nil {
+			return nil
+		}
+		event.InvocationID = invocationID
+		event.ConversationID = rejoin.ConversationID
+		if event.SessionID == "" {
+			event.SessionID = result.SessionID
+		}
+		return sink(event)
+	}
+	if err := emitStream(InvocationStreamEvent{Type: "started"}); err != nil {
+		cancelTurn()
+		for range events {
+		}
+		return result, err
+	}
+	e.trackInvocationSession(targetKey, conversationKey, sess)
+	defer e.trackInvocationSession(targetKey, conversationKey, nil)
+	data := eventData(&Message{
+		ID: invocationID, ChatID: rejoin.ConversationID, ChatType: "api", ConversationKey: conversationKey,
+		UserID: "agentmux-api", UserName: "AgentMux API", Platform: "api", Project: "agent:" + rejoin.AgentID, Origin: OriginAPI,
+	})
+	data["agent_id"] = runtime.workspace.AgentID
+	data["runtime_id"] = runtime.workspace.RuntimeID
+	data["memory_scope"] = runtime.workspace.MemoryScope
+	data["agent_name"] = runtime.agent.Name()
+	data["invocation_id"] = invocationID
+	data["session_id"] = result.SessionID
+	data["rejoined"] = "true"
+	return e.followInvocationTurn(ctx, turnCtx, cancelTurn, sess, events, nil, data, emitStream, result, startedAt, nil)
 }
 
 func prepareInvocationTurnInput(req InvocationRequest, invocationID string) (AgentTurnInput, func(), error) {

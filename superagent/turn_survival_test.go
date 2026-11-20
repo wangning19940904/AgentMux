@@ -279,7 +279,7 @@ func TestRemoteTurnIsRejoinedWhenItsStreamBreaks(t *testing.T) {
 		daemon.answers <- "made it"
 	}()
 	answer, err := fleet.Run(context.Background(), remoteWorker, "conv-1", "work", RunOptions{
-		Started: func(id string) { started = append(started, id) },
+		Started: func(turn core.SuperAgentTicketTurn) { started = append(started, turn.InvocationID) },
 		Progress: func(event core.InvocationStreamEvent) {
 			mu.Lock()
 			progress = append(progress, event.Type)
@@ -340,14 +340,14 @@ func TestEndingARemoteTurnCancelsItUnlessAgentMuxIsStopping(t *testing.T) {
 func TestResumeReportsATurnTheRemoteNoLongerHas(t *testing.T) {
 	daemon := newRemoteDaemon(t)
 	fleet := fleetTo(t, daemon.handler())
-	if _, err := fleet.Resume(context.Background(), remoteWorker, "inv_9", RunOptions{}); !errors.Is(err, ErrTurnGone) {
+	if _, err := fleet.Resume(context.Background(), remoteWorker, "conv-1", core.SuperAgentTicketTurn{InvocationID: "inv_9"}, RunOptions{}); !errors.Is(err, ErrTurnGone) {
 		t.Fatalf("err = %v", err)
 	}
 	// An older relay or daemon refuses the route instead.
 	old := fleetTo(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"error":"only the worker API is relayed"}`, http.StatusForbidden)
 	}))
-	if _, err := old.Resume(context.Background(), remoteWorker, "inv_9", RunOptions{}); !errors.Is(err, ErrTurnGone) {
+	if _, err := old.Resume(context.Background(), remoteWorker, "conv-1", core.SuperAgentTicketTurn{InvocationID: "inv_9"}, RunOptions{}); !errors.Is(err, ErrTurnGone) {
 		t.Fatalf("old daemon err = %v", err)
 	}
 }

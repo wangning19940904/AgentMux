@@ -11,12 +11,16 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gorilla/websocket"
+
 	"github.com/wangning19940904/AgentMux/agent/internal/runner"
 )
 
-// codexAppClient owns one long-lived app-server process for a Codex Agent.
-// Calls are multiplexed by JSON-RPC id; notifications and server requests are
-// routed to sessions by native thread id.
+// codexAppClient is a connection to an app-server for a Codex Agent: the
+// Agent's own child on stdio, or a detached one on a unix socket (ws), which
+// closing the client leaves running. Calls are multiplexed by JSON-RPC id;
+// notifications and server requests are routed to sessions by native thread
+// id.
 type codexAppClient struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex
@@ -25,6 +29,7 @@ type codexAppClient struct {
 	stdin  io.WriteCloser
 	reader *bufio.Reader
 	stderr bytes.Buffer
+	ws     *websocket.Conn
 
 	nextID    int
 	pending   map[int]chan codexRPCResponse
@@ -73,19 +78,25 @@ func newCodexAppClient(ctx context.Context, agent *codexAgent, workDir string) (
 		return nil, err
 	}
 	go client.readLoop()
-	if _, err := client.call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]string{"name": "AgentMux", "version": "0.1.0"},
-		"capabilities": map[string]any{"experimentalApi": true},
-	}); err != nil {
-		_ = client.close()
-		return nil, client.withStderr(err)
-	}
-	if err := client.notify("initialized", map[string]any{}); err != nil {
+	if err := client.initialize(ctx); err != nil {
 		_ = client.close()
 		return nil, err
 	}
 	return client, nil
 }
+
+func (c *codexAppClient) initialize(ctx context.Context) error {
+	if _, err := c.call(ctx, "initialize", map[string]any{
+		"clientInfo":   map[string]string{"name": "AgentMux", "version": "0.1.0"},
+		"capabilities": map[string]any{"experimentalApi": true},
+	}); err != nil {
+		return c.withStderr(err)
+	}
+	return c.notify("initialized", map[string]any{})
+}
+
+// detached reports whether the app-server outlives this client.
+func (c *codexAppClient) detached() bool { return c.ws != nil }
 
 func (c *codexAppClient) isClosed() bool {
 	c.mu.Lock()
@@ -166,22 +177,34 @@ func (c *codexAppClient) writeMessage(message map[string]any) error {
 	closed := c.closed
 	stdin := c.stdin
 	c.mu.Unlock()
-	if closed || stdin == nil {
+	if closed || stdin == nil && c.ws == nil {
 		return fmt.Errorf("codex app-server is closed")
+	}
+	if c.ws != nil {
+		return c.ws.WriteMessage(websocket.TextMessage, data)
 	}
 	_, err = stdin.Write(append(data, '\n'))
 	return err
 }
 
+func (c *codexAppClient) readMessage() ([]byte, error) {
+	if c.ws != nil {
+		_, data, err := c.ws.ReadMessage()
+		return data, err
+	}
+	line, err := c.reader.ReadString('\n')
+	return []byte(line), err
+}
+
 func (c *codexAppClient) readLoop() {
 	for {
-		line, err := c.reader.ReadString('\n')
+		line, err := c.readMessage()
 		if err != nil {
 			c.fail(err)
 			return
 		}
 		var message map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &message); err != nil {
+		if err := json.Unmarshal(bytes.TrimSpace(line), &message); err != nil {
 			c.fail(err)
 			return
 		}
@@ -265,8 +288,12 @@ func (c *codexAppClient) close() error {
 		return nil
 	}
 	c.closed = true
-	stdin, cmd := c.stdin, c.cmd
+	stdin, cmd, ws := c.stdin, c.cmd, c.ws
 	c.mu.Unlock()
+	if ws != nil {
+		// A detached app-server keeps running, with any turn it has.
+		_ = ws.Close()
+	}
 	if stdin != nil {
 		_ = stdin.Close()
 	}

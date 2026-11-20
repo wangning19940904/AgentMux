@@ -41,19 +41,21 @@ type RunOptions struct {
 	BaseRef string
 	// Progress, when set, receives the turn's events as they happen.
 	Progress func(core.InvocationStreamEvent)
-	// Started, when set, receives the id of a remote turn as soon as it has
-	// one, so a restarted AgentMux can rejoin it with Resume.
-	Started func(invocationID string)
+	// Started, when set, asks for a turn that outlives this process and
+	// receives how to rejoin it as soon as that is known: a remote turn's
+	// invocation id, or a local turn's session and turn ids when its
+	// framework keeps turns. A restarted AgentMux rejoins it with Resume.
+	Started func(turn core.SuperAgentTicketTurn)
 	// Detach is the context of the process running the turn's caller. When
 	// it has ended along with the turn's context, AgentMux is shutting down
-	// and a remote turn is left running to be rejoined; otherwise ending the
+	// and a kept turn is left running to be rejoined; otherwise ending the
 	// turn's context stops it.
 	Detach context.Context
 }
 
 // TurnResumer rejoins a turn a worker kept running while AgentMux was away.
 type TurnResumer interface {
-	Resume(ctx context.Context, worker core.SuperAgentWorker, invocationID string, options RunOptions) (string, error)
+	Resume(ctx context.Context, worker core.SuperAgentWorker, conversationID string, turn core.SuperAgentTicketTurn, options RunOptions) (string, error)
 }
 
 // ErrTurnGone means the worker no longer has the turn: it ended long ago, its
@@ -100,12 +102,23 @@ func (f *Fleet) Run(ctx context.Context, worker core.SuperAgentWorker, conversat
 	if worker.HostID != "" {
 		return f.runRemote(ctx, worker, conversationID, input, options)
 	}
-	request := core.InvocationRequest{AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: options.Dir, WorktreeBaseRef: options.BaseRef}
+	request := core.InvocationRequest{
+		AgentID: worker.AgentID, ConversationID: conversationID, Input: input, ConversationDir: options.Dir, WorktreeBaseRef: options.BaseRef,
+		KeepTurn: options.Started != nil,
+	}
+	ctx = core.WithTurnDetach(ctx, options.Detach)
 	var result core.InvocationResult
 	var err error
-	if streaming, ok := f.Invoker.(core.StreamingInvoker); ok && options.Progress != nil {
+	if streaming, ok := f.Invoker.(core.StreamingInvoker); ok && (options.Progress != nil || options.Started != nil) {
+		recorded := false
 		result, err = streaming.InvokeStream(ctx, request, func(event core.InvocationStreamEvent) error {
-			options.Progress(event)
+			if !recorded && options.Started != nil && event.Metadata[core.EventMetadataKeptTurn] == "true" && event.SessionID != "" && event.TurnID != "" {
+				recorded = true
+				options.Started(core.SuperAgentTicketTurn{SessionID: event.SessionID, TurnID: event.TurnID})
+			}
+			if options.Progress != nil {
+				options.Progress(event)
+			}
 			return nil
 		})
 	} else {
@@ -265,20 +278,49 @@ func (f *Fleet) runRemote(ctx context.Context, worker core.SuperAgentWorker, con
 	return answer, err
 }
 
-// Resume rejoins a remote turn this process, or one before it, started. The
-// events already seen are not reported to options.Progress again.
-func (f *Fleet) Resume(ctx context.Context, worker core.SuperAgentWorker, invocationID string, options RunOptions) (string, error) {
+// Resume rejoins a turn this process, or one before it, started. The events
+// already seen are not reported to options.Progress again.
+func (f *Fleet) Resume(ctx context.Context, worker core.SuperAgentWorker, conversationID string, turn core.SuperAgentTicketTurn, options RunOptions) (string, error) {
 	if worker.HostID == "" {
+		return f.resumeLocal(ctx, worker, conversationID, turn, options)
+	}
+	if turn.InvocationID == "" {
 		return "", ErrTurnGone
 	}
 	host, client, err := f.remoteClient(worker.HostID)
 	if err != nil {
 		return "", err
 	}
-	turn := &remoteTurn{host: host, client: client, options: options, id: invocationID}
-	answer, err := turn.rejoin(ctx, time.Now())
-	turn.release(ctx)
+	remote := &remoteTurn{host: host, client: client, options: options, id: turn.InvocationID}
+	answer, err := remote.rejoin(ctx, time.Now())
+	remote.release(ctx)
 	return answer, err
+}
+
+// resumeLocal follows a local turn the worker's framework kept running, as a
+// detached Codex app-server does. Ending ctx stops it unless options.Detach
+// has ended too, as for a turn Run started.
+func (f *Fleet) resumeLocal(ctx context.Context, worker core.SuperAgentWorker, conversationID string, turn core.SuperAgentTicketTurn, options RunOptions) (string, error) {
+	rejoiner, ok := f.Invoker.(core.InvocationRejoiner)
+	if !ok || turn.SessionID == "" || turn.TurnID == "" {
+		return "", ErrTurnGone
+	}
+	result, err := rejoiner.RejoinInvocation(core.WithTurnDetach(ctx, options.Detach), core.InvocationRejoin{
+		AgentID: worker.AgentID, ConversationID: conversationID,
+		Turn: core.AgentTurnRef{SessionID: turn.SessionID, TurnID: turn.TurnID},
+	}, func(event core.InvocationStreamEvent) error {
+		if options.Progress != nil {
+			options.Progress(event)
+		}
+		return nil
+	})
+	if errors.Is(err, core.ErrInvocationTurnGone) {
+		return "", ErrTurnGone
+	}
+	if err != nil {
+		return "", err
+	}
+	return result.Answer, nil
 }
 
 const (
@@ -413,7 +455,7 @@ func (t *remoteTurn) stream(ctx context.Context, newRequest func(context.Context
 		if t.id == "" && event.InvocationID != "" {
 			t.id = event.InvocationID
 			if t.options.Started != nil {
-				t.options.Started(t.id)
+				t.options.Started(core.SuperAgentTicketTurn{InvocationID: t.id})
 			}
 		}
 		if t.options.Progress != nil && (seq == 0 || seq > quiet) {
