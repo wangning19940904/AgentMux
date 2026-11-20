@@ -67,8 +67,17 @@ func PrepareRuntimeEnvironment() {
 	}
 }
 
+// detectVersionTimeout bounds a CLI's version command during routine
+// detection, which runs for every framework each time the page opens.
+const detectVersionTimeout = 5 * time.Second
+
 // Detect returns the status of a single framework spec.
 func Detect(s Spec, pre Prereqs) Status {
+	return detectWithTimeout(s, detectVersionTimeout)
+}
+
+// detectWithTimeout is Detect with a chosen limit for the version command.
+func detectWithTimeout(s Spec, timeout time.Duration) Status {
 	st := Status{Spec: s}
 	switch s.KindType {
 	case KindCLI:
@@ -91,7 +100,7 @@ func Detect(s Spec, pre Prereqs) Status {
 		if len(args) == 0 {
 			args = []string{"--version"}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		out, err := frameworkCommandContext(ctx, binary, args...).CombinedOutput()
 		if err != nil {

@@ -940,6 +940,8 @@ export const en = {
     "frameworks.uninstallUnsupported": "This installation method cannot be safely removed automatically.",
     "frameworks.currentVersion": "Current",
     "frameworks.latestVersion": "Latest",
+    "frameworks.updatesWithApp": "updates with {app}",
+    "frameworks.repair": "Repair",
     "frameworks.installFailed": "Install failed",
     "frameworks.installLog": "Install log",
     "frameworks.installSettings": "Install settings",

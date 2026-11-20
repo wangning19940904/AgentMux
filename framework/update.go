@@ -25,6 +25,13 @@ type UpdateCheck struct {
 	UpdateAvailable bool      `json:"update_available"`
 	CheckedAt       time.Time `json:"checked_at"`
 	Error           string    `json:"error,omitempty"`
+	// Repairable marks an installed CLI whose version command fails but whose
+	// update command can reinstall it in place, such as an npm install that
+	// lost its platform binary.
+	Repairable bool `json:"repairable,omitempty"`
+	// ManagedBy names the application that ships and updates this copy of
+	// the CLI (for example "ChatGPT.app"). AgentMux cannot update it.
+	ManagedBy string `json:"managed_by,omitempty"`
 }
 
 // CheckUpdate compares an installed framework with its catalog-owned latest
@@ -70,9 +77,13 @@ func checkUpdate(ctx context.Context, kind string, settings InstallSettings, fre
 	current := normalizeSDKVersion(status.Version)
 	if current == "" {
 		res.Error = unrunnableCLIError(spec, status)
+		res.Repairable = cliRepairable(spec)
 		return res, nil
 	}
 	res.CurrentVersion = current
+	if inst, found := installedCLI(spec); found && inst.Method == cliInstallAppBundle {
+		res.ManagedBy = appBundleName(inst)
+	}
 
 	latest, err := cachedLatestFrameworkVersion(ctx, spec, pre, settings, fresh)
 	if err != nil {
