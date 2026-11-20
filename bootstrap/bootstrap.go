@@ -8,9 +8,11 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/historysearch"
 	nativeintegration "github.com/wangning19940904/AgentMux/integrations/native"
 	observationpkg "github.com/wangning19940904/AgentMux/observability"
 	"github.com/wangning19940904/AgentMux/server"
@@ -43,7 +45,7 @@ func cliNotes(ctx context.Context, st tools.DescriptionStore, ids []string) []co
 
 // attachObservability builds the observation runtime and fans it out to the
 // engine, the provider proxy and the server's observability API.
-func attachObservability(ctx context.Context, log *slog.Logger, cfg *config.Config, st *store.Store, srv *server.Server, eng *core.Engine, usageEngine *usage.Engine) error {
+func attachObservability(ctx context.Context, log *slog.Logger, cfg *config.Config, st *store.Store, srv *server.Server, eng *core.Engine, usageEngine *usage.Engine, history *historysearch.Service) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -95,6 +97,7 @@ func attachObservability(ctx context.Context, log *slog.Logger, cfg *config.Conf
 		observationRuntime.Ingest.SetUsageSink(usageEngine.Record)
 	}
 	srv.SetObservability(cfg.Observability, observationRuntime.Recorder, observationRuntime.Insights, nativeManager, observationRuntime.Ingest)
+	attachHistorySearch(history, cfg.Observability, observationRuntime)
 	// Start runs heavy DB-bound initialization, daily aggregation, and insight
 	// materialization off the HTTP startup path.
 	go func() {
@@ -107,6 +110,26 @@ func attachObservability(ctx context.Context, log *slog.Logger, cfg *config.Conf
 
 // ConfiguredSecrets collects config values that must never appear in
 // persisted observation content.
+// attachHistorySearch indexes the turns the engine records, under the same
+// conditions the recorder keeps their content: capture_content "full" and a
+// secure key. Otherwise only memory is searchable, and a search says why.
+func attachHistorySearch(history *historysearch.Service, cfg config.ObservabilityConfig, runtime *observationpkg.Runtime) {
+	if history == nil {
+		return
+	}
+	recorder := runtime.Recorder
+	history.AddSecrets(recorder.KnownSecrets())
+	switch {
+	case cfg.CaptureContent != "full":
+		history.DisableOriginals("observability.capture_content is not \"full\", so past turns are not indexed")
+	case recorder.MetadataOnly():
+		history.DisableOriginals("past turns are not indexed: " + recorder.MetadataOnlyReason())
+	default:
+		history.EnableOriginals(time.Duration(cfg.ContentRetentionDays)*24*time.Hour, recorder)
+		runtime.Bus.Subscribe("history-search-index", history.Observe)
+	}
+}
+
 func ConfiguredSecrets(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil

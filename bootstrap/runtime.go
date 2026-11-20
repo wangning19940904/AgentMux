@@ -15,6 +15,7 @@ import (
 	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/framework"
 	"github.com/wangning19940904/AgentMux/guard"
+	"github.com/wangning19940904/AgentMux/historysearch"
 	"github.com/wangning19940904/AgentMux/mcp"
 	"github.com/wangning19940904/AgentMux/memory"
 	"github.com/wangning19940904/AgentMux/server"
@@ -101,7 +102,16 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 		return nil, err
 	}
 	engine.SetConversationStore(st)
-	memoryStore := memory.New(st)
+	// History search indexes memory as it is written; turns are added when
+	// observability attaches below.
+	history := historysearch.New(historysearch.Options{
+		Index: st, Log: log, Secrets: ConfiguredSecrets(cfg),
+		Redact: func(text []byte, secrets []string) []byte {
+			redacted, _ := store.RedactObservationContent(text, secrets)
+			return redacted
+		},
+	})
+	memoryStore := history.WrapMemory(memory.New(st))
 	guardGate := guard.New(st, core.GuardAsk)
 	engine.SetMemoryStore(memoryStore)
 	engine.SetGuard(guardGate)
@@ -121,7 +131,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	srv := server.New(server.Dependencies{
 		Config: cfg, Version: version, Log: log, Store: st, EventRelay: relay,
 		Usage: reporter, UsageSources: usageEngine, Sender: engine, Invoker: connect, Connect: connect,
-		Memory: memoryStore, Skills: skillManager, MCP: mcpRegistry,
+		Memory: memoryStore, History: history, Turns: engine, Skills: skillManager, MCP: mcpRegistry,
 		Guard: guardGate, Workspace: initializer,
 		ModuleRuntime: map[string]server.ModuleRuntimeState{
 			"memory": {RuntimeActive: true},
@@ -166,7 +176,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	relay.SetLocalConsumer(superAgents)
 	srv.SetSuperAgents(superAgents, feishuAPI)
 	if cfg.Observability.Enabled {
-		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, usageEngine); obsErr != nil {
+		if obsErr := attachObservability(ctx, log, cfg, st, srv, engine, usageEngine, history); obsErr != nil {
 			if strictObservability {
 				cancel()
 				return nil, obsErr
@@ -174,6 +184,7 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 			log.Error("observability unavailable; continuing without it", "err", obsErr)
 		}
 	}
+	history.Start(ctx)
 	initialized = true
 	return &Runtime{
 		ctx: ctx, cancel: cancel, log: log, Server: srv, EventRelay: relay, SuperAgents: superAgents,

@@ -1309,3 +1309,22 @@
   background: color-mix(in srgb, var(--text) 8%, var(--bg-elevated));
   border-color: color-mix(in srgb, var(--text) 32%, var(--border-strong));
 }
+
+/* History search on the Memory page: two ranked lists with snippets. */
+.history-results h3 {
+  margin: 4px 0 8px;
+  font-size: 0.95rem;
+}
+
+.history-results ol {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding-left: 22px;
+}
+
+.history-results li > div:last-child {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

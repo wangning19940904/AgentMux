@@ -18,6 +18,7 @@ const channelInteractionContract = `渠道执行约束：
 - 如生成二维码或文件，必须先执行 <delivery_cli> send --channel-id <channel_id> --conversation-key <conversation_key> --image <绝对路径>（普通文件使用 --file）上传到当前渠道；delivery_cli、channel_id 和 conversation_key 均来自下方 JSON 元数据，必须原样使用。上传后再调用 request_user_input，不能只回复服务器本地路径。
 - delivery_cli send 只能向当前活动 turn 对应的渠道会话发送，不代表用户已经完成操作。发送成功后仍需用 request_user_input 等待结构化回调。
 - 若当前运行时确实不支持 request_user_input，才退化为结束当前 turn，并明确请用户完成后回复；不得让阻塞命令占住 turn。
+- 需要回忆以前的对话、决定或记忆时，执行 <delivery_cli> history search --channel-id <channel_id> --conversation-key <conversation_key> --query "<关键词>"；可重复 --query 给出同义词和中英文等不同说法，问题提到时间时加 --around <YYYY-MM-DD>（只提升该时间的结果，不过滤）。结果分 memory（记忆）和 originals（原始消息与回答）。断定某事从未提过或没有记录之前，必须先搜索 originals。
 - 所有等待仍受 AgentMux 的统一 turn 超时和停止机制约束。`
 
 // ChannelDefaultMessagePrompt returns the static prefix AgentMux injects in
@@ -83,6 +84,30 @@ func channelMessageForAgent(ch Channel, msg *Message) *Message {
 	}
 	agentMsg.Text = prompt + "\n\n" + string(payload)
 	return &agentMsg
+}
+
+// ChannelPromptUserText returns what the person wrote, given the text an
+// agent received for a channel message: the "text" field of the structured
+// prompt channelMessageForAgent builds, or the text itself when it is not one.
+func ChannelPromptUserText(prompt string) string {
+	if !strings.HasPrefix(prompt, feishuMessagePromptIntro) {
+		return prompt
+	}
+	start := strings.Index(prompt, "\n\n{")
+	if start < 0 {
+		return prompt
+	}
+	decoder := json.NewDecoder(strings.NewReader(prompt[start+2:]))
+	var payload feishuMessagePrompt
+	if err := decoder.Decode(&payload); err != nil {
+		return prompt
+	}
+	rest := strings.TrimSpace(prompt[start+2+int(decoder.InputOffset()):])
+	if rest == "" {
+		return payload.Text
+	}
+	// Attachment references follow the JSON.
+	return payload.Text + "\n\n" + rest
 }
 
 func channelDeliveryCLIPath() string {

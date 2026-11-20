@@ -20,6 +20,7 @@ import (
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/eventrelay"
 	"github.com/wangning19940904/AgentMux/framework/health"
+	"github.com/wangning19940904/AgentMux/historysearch"
 	"github.com/wangning19940904/AgentMux/internal/hostmetrics"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 	"github.com/wangning19940904/AgentMux/mailbox"
@@ -49,6 +50,8 @@ type Server struct {
 	openAIFiles        *openAIFileRegistry
 	connect            *core.ConnectService
 	memory             core.MemoryStore
+	history            *historysearch.Service
+	turns              core.ActiveTurnResolver
 	skills             core.SkillManager
 	mcp                core.MCPRegistry
 	guard              core.Guard
@@ -116,17 +119,21 @@ type UsageReporter func(ctx context.Context, query usagepkg.ReportQuery) (any, e
 // composition supplies this once rather than mutating a partially constructed
 // server through a sequence of setters.
 type Dependencies struct {
-	EventRelay     *eventrelay.Service
-	Config         *config.Config
-	Version        string
-	Log            *slog.Logger
-	Store          *store.Store
-	Usage          UsageReporter
-	UsageSources   UsageSourceManager
-	Sender         core.ChannelDeliverySender
-	Invoker        core.Invoker
-	Connect        *core.ConnectService
-	Memory         core.MemoryStore
+	EventRelay   *eventrelay.Service
+	Config       *config.Config
+	Version      string
+	Log          *slog.Logger
+	Store        *store.Store
+	Usage        UsageReporter
+	UsageSources UsageSourceManager
+	Sender       core.ChannelDeliverySender
+	Invoker      core.Invoker
+	Connect      *core.ConnectService
+	Memory       core.MemoryStore
+	// History searches memory and past turns; Turns says who a running
+	// turn acts for, so an agent's search sees only its own history.
+	History        *historysearch.Service
+	Turns          core.ActiveTurnResolver
 	Skills         core.SkillManager
 	MCP            core.MCPRegistry
 	Guard          core.Guard
@@ -160,6 +167,8 @@ func New(deps Dependencies) *Server {
 		invoker:           deps.Invoker,
 		connect:           deps.Connect,
 		memory:            deps.Memory,
+		history:           deps.History,
+		turns:             deps.Turns,
 		skills:            deps.Skills,
 		mcp:               deps.MCP,
 		guard:             deps.Guard,

@@ -300,3 +300,50 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	}
 	return answer, nil
 }
+
+// ActiveTurnIdentity returns who the running turn of a channel conversation
+// acts for: its agent and that agent's memory scope, and the chat and person
+// of the message being answered. It fails when the conversation has no
+// running turn, so a caller holding a channel id and conversation key from an
+// earlier turn learns nothing.
+func (e *Engine) ActiveTurnIdentity(channelID, conversationKey string) (ActiveTurnIdentity, error) {
+	channelID, conversationKey = strings.TrimSpace(channelID), strings.TrimSpace(conversationKey)
+	if channelID == "" || conversationKey == "" {
+		return ActiveTurnIdentity{}, errors.New("channel and conversation key are required")
+	}
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return ActiveTurnIdentity{}, fmt.Errorf("channel %q is not running", channelID)
+	}
+	var msg *Message
+	var generation *channelAgentGeneration
+	rt.controlMu.Lock()
+	if state := rt.controlTasks[conversationKey]; state != nil && state.active != nil {
+		msg, generation = state.active.msg, state.active.generation
+	} else if turn := rt.directTurns[conversationKey]; turn != nil {
+		msg = turn.msg
+	}
+	rt.controlMu.Unlock()
+	if msg == nil {
+		return ActiveTurnIdentity{}, fmt.Errorf("conversation %q has no active turn", conversationKey)
+	}
+	if generation == nil {
+		rt.mu.Lock()
+		generation = rt.generation
+		rt.mu.Unlock()
+	}
+	identity := ActiveTurnIdentity{
+		ChannelID: channelID, ChatID: msg.ChatID, ChatType: msg.ChatType, UserID: msg.UserID,
+		AgentID: rt.channel.AgentID,
+	}
+	if generation != nil {
+		if generation.workspace.AgentID != "" {
+			identity.AgentID = generation.workspace.AgentID
+		}
+		identity.MemoryScope = generation.workspace.MemoryScope
+	}
+	if identity.AgentID == "" {
+		return ActiveTurnIdentity{}, fmt.Errorf("channel %q has no agent", channelID)
+	}
+	return identity, nil
+}

@@ -948,6 +948,37 @@ export interface Trigger {
   target_name?: string;
 }
 
+// History search: memory entries and past turns, by keywords
+// (docs/architecture/history-search.md).
+export interface HistoryMatch {
+  id: string;
+  kind: "memory" | "summary" | "turn_input" | "turn_answer" | string;
+  agent_id?: string;
+  memory_scope?: string;
+  channel_id?: string;
+  chat_id?: string;
+  conversation_key?: string;
+  user_name?: string;
+  time: string;
+  snippet: string;
+  score: number;
+  matched_queries: number[];
+  in_time_range?: boolean;
+}
+
+export interface HistorySearchRequest {
+  agent_id?: string;
+  queries: string[];
+  around?: { from: string; to: string };
+  limit?: number;
+}
+
+export interface HistorySearchResult {
+  memory: HistoryMatch[];
+  originals: HistoryMatch[];
+  notes?: string[];
+}
+
 export interface MemoryEntry {
   id: string;
   scope: string;
