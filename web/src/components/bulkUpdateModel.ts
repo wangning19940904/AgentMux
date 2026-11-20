@@ -2,6 +2,7 @@ export interface BulkActionResult {
   ok: boolean;
   error?: string;
   log?: string;
+  warning?: string;
 }
 
 export interface BulkUpdateResult<T> {

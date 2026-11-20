@@ -221,7 +221,12 @@ describe("fleet actions", () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       targets: [{
         target: { id: "ssh-1", name: "Remote", kind: "ssh", trusted: true, online: true },
-        responses: [{ key: "install", status: 200, ok: true, data: { kind: "codex", action: "update", ok: true }, duration_ms: 1 }],
+        // The machine runs the update as a background operation; this one
+        // has already settled when the start returns.
+        responses: [{ key: "operation", status: 200, ok: true, data: {
+          id: "fwop-1", kind: "codex", action: "update", state: "succeeded", progress: { phase: "complete", percent: 100 },
+          result: { kind: "codex", action: "update", ok: true }, started_at: "2026-11-19T12:00:00Z", updated_at: "2026-11-19T12:00:00Z",
+        }, duration_ms: 1 }],
       }],
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -230,6 +235,7 @@ describe("fleet actions", () => {
     expect(confirm).not.toHaveBeenCalled();
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(body.target_ids).toEqual(["ssh-1"]);
+    expect(body.requests[0]).toMatchObject({ method: "POST", path: "/api/v1/frameworks/operations" });
   });
 
 	it("installs a managed CLI only on explicitly selected machines without a second confirmation", async () => {

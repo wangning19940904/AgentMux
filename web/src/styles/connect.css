@@ -2344,3 +2344,38 @@
 .framework-models-typed { display: flex; gap: 8px; }
 .framework-models-typed > input { flex: 1 1 auto; min-width: 0; }
 .agent-model-test { display: grid; gap: 4px; justify-items: start; }
+
+.bulk-update-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bulk-update-current {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.bulk-update-current .framework-log {
+  max-height: 240px;
+}
+
+.bulk-update-ok { color: var(--green); }
+.bulk-update-warning { color: var(--amber); }
+.bulk-update-queued { margin: 0; color: var(--muted); font-size: 13px; }
+
+.framework-update-error {
+  display: -webkit-box;
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}

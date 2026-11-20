@@ -69,7 +69,7 @@ func checkUpdate(ctx context.Context, kind string, settings InstallSettings, fre
 	}
 	current := normalizeSDKVersion(status.Version)
 	if current == "" {
-		res.Error = fmt.Sprintf("could not parse installed version from %q", status.Version)
+		res.Error = unrunnableCLIError(spec, status)
 		return res, nil
 	}
 	res.CurrentVersion = current
@@ -82,6 +82,41 @@ func checkUpdate(ctx context.Context, kind string, settings InstallSettings, fre
 	res.LatestVersion = latest
 	res.UpdateAvailable = frameworkUpdateAvailable(spec, latest, current)
 	return res, nil
+}
+
+// unrunnableCLIError explains an installed CLI whose version command fails,
+// such as a link left pointing at a binary that is gone, with the last line
+// of what the command printed: that is where tracebacks and shells put the
+// cause.
+func unrunnableCLIError(spec Spec, status Status) string {
+	if status.Version != "" {
+		return fmt.Sprintf("could not parse installed version from %q", status.Version)
+	}
+	command := strings.TrimSpace(spec.Bin + " " + strings.Join(versionArgs(spec), " "))
+	if reason := lastNonEmptyLine(status.Detail); reason != "" {
+		return fmt.Sprintf("%s is installed but `%s` fails: %s", spec.Display, command, reason)
+	}
+	return fmt.Sprintf("%s is installed but `%s` printed no version", spec.Display, command)
+}
+
+func versionArgs(spec Spec) []string {
+	if len(spec.VersionArgs) == 0 {
+		return []string{"--version"}
+	}
+	return spec.VersionArgs
+}
+
+func lastNonEmptyLine(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if line := strings.TrimSpace(lines[index]); line != "" {
+			if len(line) > 300 {
+				line = line[:300] + "…"
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 func frameworkUpdateAvailable(spec Spec, latest, current string) bool {
