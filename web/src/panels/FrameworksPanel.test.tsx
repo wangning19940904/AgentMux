@@ -134,9 +134,9 @@ describe("framework install", () => {
     vi.mocked(api.frameworks).mockResolvedValue(frameworksResponse(true));
     await act(async () => { install.resolve({ kind: "dsh", action: "install", ok: true, version: "0.2.1-rc.5" }); });
 
-    expect(table.querySelector(".framework-installing-row")).toBeNull();
-    expect(table.querySelector('[role="progressbar"]')).toBeNull();
-    expect(table.querySelector(".framework-installed-row")?.textContent).toContain("v0.2.1-rc.5");
+    expect(container.querySelector(".framework-installing-row")).toBeNull();
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    expect(container.querySelector(".framework-installed-row")?.textContent).toContain("v0.2.1-rc.5");
     expect(container.querySelector(".session-notice")?.textContent).toBe("已安装");
   });
 

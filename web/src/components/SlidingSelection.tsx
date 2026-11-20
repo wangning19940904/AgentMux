@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef, type HTMLAttributes, type KeyboardEvent } from "react";
 
-type SlidingSelectionProps = HTMLAttributes<HTMLDivElement> & { selected: string };
+type SlidingSelectionProps = HTMLAttributes<HTMLDivElement> & { selected: string; previewOnHover?: boolean };
 
-export function SlidingSelection({ selected, className, children, ...props }: SlidingSelectionProps) {
+export function SlidingSelection({ selected, previewOnHover = false, className, children, ...props }: SlidingSelectionProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<HTMLSpanElement>(null);
 
@@ -25,15 +25,19 @@ export function SlidingSelection({ selected, className, children, ...props }: Sl
       marker.style.height = `${rect.height}px`;
     }
     function previewSelection(event: PointerEvent) {
-      if (event.button !== 0 || !(event.target instanceof Element)) return;
+      if ((event.type === "pointerdown" && event.button !== 0) || !(event.target instanceof Element)) return;
       const option = event.target.closest<HTMLButtonElement>("button");
       if (option?.parentElement === root && !option.disabled) positionMarker(option);
     }
     const restoreSelection = () => positionMarker();
+    function previewHover(event: PointerEvent) {
+      if (event.pointerType === "mouse") previewSelection(event);
+    }
     positionMarker();
     root.addEventListener("pointerdown", previewSelection);
     root.addEventListener("pointerleave", restoreSelection);
     root.addEventListener("pointercancel", restoreSelection);
+    if (previewOnHover) root.addEventListener("pointerover", previewHover);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(restoreSelection);
     observer?.observe(root);
     for (const option of root.querySelectorAll(":scope > button")) observer?.observe(option);
@@ -42,8 +46,9 @@ export function SlidingSelection({ selected, className, children, ...props }: Sl
       root.removeEventListener("pointerdown", previewSelection);
       root.removeEventListener("pointerleave", restoreSelection);
       root.removeEventListener("pointercancel", restoreSelection);
+      root.removeEventListener("pointerover", previewHover);
     };
-  }, [selected]);
+  }, [selected, previewOnHover]);
 
   function handleArrowKeys(event: KeyboardEvent<HTMLDivElement>) {
     if (props.role !== "tablist" && props.role !== "radiogroup") return;

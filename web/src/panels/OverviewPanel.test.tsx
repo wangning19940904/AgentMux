@@ -68,12 +68,34 @@ describe("overview usage refresh", () => {
     vi.mocked(api.menubarSettings).mockResolvedValue({ cny_rate: 6.7249 } as Awaited<ReturnType<typeof api.menubarSettings>>);
     await mount();
     const summary = container.querySelector(".usage-summary-card")!;
+    expect(summary.querySelectorAll(".usage-summary-metric")).toHaveLength(4);
     expect(summary.querySelector(".usage-summary-metric > strong")!.textContent).toBe("3.52K");
     expect(summary.textContent).toContain("其中缓存 3.40K Token，已计入总量");
     const breakdown = Array.from(summary.querySelectorAll(".usage-breakdown .stat"), (node) => node.textContent);
     expect(breakdown).toEqual(["非缓存输入100", "输出20", "缓存读取3.00K", "缓存写入400"]);
     expect(summary.textContent).toContain("¥67.25");
     expect(summary.textContent).toContain("1 USD = 6.7249 RMB");
+  });
+
+  it("combines hourly usage into daily bars and shows framework and model logos", async () => {
+    const usage = report(300);
+    usage.buckets = [100, 200].map((tokens, hour) => ({
+      key: `2026-10-14 ${String(hour).padStart(2, "0")}:00`,
+      totals: report(tokens).totals,
+      by_model: [],
+      by_runtime: [],
+    }));
+    usage.by_runtime = [{ runtime: "codex", tokens: 300, cost_usd: 3 }];
+    usage.by_model = [{ model: "gpt-6.2-sol", tokens: 300, cost_usd: 3 }];
+    vi.mocked(api.usage).mockResolvedValue(usage);
+    await mount();
+    expect(container.querySelectorAll(".usage-bar")).toHaveLength(2);
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>(".statistics-range button")[1].click(); });
+    expect(container.querySelectorAll(".usage-bar")).toHaveLength(1);
+    expect(container.querySelector(".usage-trend-maximum")?.textContent).toBe("300");
+    expect(container.querySelector(".usage-bar-group[tabindex] title")?.textContent).toBe("2026-10-14 · 300 tokens");
+    const logos = [...container.querySelectorAll<HTMLImageElement>(".framework-rank-row .brand-icon img")];
+    expect(logos.map((image) => image.src)).toEqual([expect.stringContaining("codex.png"), expect.stringContaining("openai.svg")]);
   });
 
   it("refreshes usage and its timestamp on the polling interval", async () => {

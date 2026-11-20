@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { SlidingSelection } from "../components/SlidingSelection";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronsDownUp, ChevronsUpDown, Package, Play, Plus, Settings2, Trash2, TriangleAlert, X } from "lucide-react";
 import {
   activeMachineScope,
@@ -383,7 +384,7 @@ export function FrameworksPanel() {
             <span className="pill on">{installedGroups.length}</span>
           </div>
           <div className="catalog-bulk-actions">
-            <div className="segmented framework-group-by" role="radiogroup" aria-label={t("frameworks.groupBy")}>
+            <SlidingSelection className="segmented framework-group-by" selected={groupBy} role="radiogroup" aria-label={t("frameworks.groupBy")}>
               {(["framework", "machine"] as const).map((value) => (
                 <button
                   aria-checked={groupBy === value}
@@ -396,7 +397,7 @@ export function FrameworksPanel() {
                   {t(value === "framework" ? "frameworks.groupByFramework" : "frameworks.groupByMachine")}
                 </button>
               ))}
-            </div>
+            </SlidingSelection>
             <button
               className="ghost-action"
               disabled={pageGroupKeys.length === 0}
@@ -449,82 +450,95 @@ export function FrameworksPanel() {
         </div>
         {activeMachineScope() !== "all" && (frameworks.data?.warnings ?? []).map((warning) => <div className="session-notice warning framework-warning" key={warning}>{warning}</div>)}
         {frameworks.error && <div className="surface-body error">{frameworks.error}</div>}
-        <div className="catalog-table-wrap">
-          <table className="catalog-table framework-table">
-            <thead><tr>
-              <th>{t(groupBy === "framework" ? "frameworks.machine" : "frameworks.framework")}</th>
-              <th>{t("frameworks.versionAndUpdate")}</th>
-              <th>{t("frameworks.account")}</th>
-              <th>{t("frameworks.availability")}</th>
-              <th>{t("common.actions")}</th>
-            </tr></thead>
-            <tbody>
-              {installingItems.map((item) => {
-                const key = targetKey(item.target_id, item.spec.kind);
-                return <FrameworkInstallingRow key={`installing:${key}`} item={item} progress={progress[key]} />;
-              })}
-              {listLoading && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("common.loading")}</td></tr>}
-              {frameworkPagination.pageItems.map((group) => {
-                const { members } = group;
-                const keys = members.map((item) => targetKey(item.target_id, item.spec.kind));
-                const outdated = updateCandidates.filter((item) => keys.includes(targetKey(item.target_id, item.spec.kind)));
-                const latestVersion = group.by === "framework" ? keys.map((key) => checks[key]?.latest_version).find(Boolean) : undefined;
-                const open = expanded.has(group.key);
-                return (
-                  <Fragment key={group.key}>
-                    <FrameworkGroupRow
-                      by={group.by}
-                      item={members[0]}
-                      machineName={machineLabel(members[0])}
-                      count={members.length}
-                      latestVersion={latestVersion}
-                      outdatedCount={outdated.length}
-                      failedCount={keys.filter((key) => checks[key]?.error).length}
-                      updating={keys.some((key) => busy[key] === "update" || busy[key] === "install")}
-                      checking={members.some((item, index) => item.spec.update_supported && (busy[keys[index]] === "check" || !checks[keys[index]]))}
-                      expanded={open}
-                      onToggle={() => toggleGroup(group.key)}
-                      updateDisabled={updateAllBlocked}
-                      onUpdateOutdated={() => requestUpdateMany(outdated)}
-                    />
-                    {open && members.map((item) => {
-                      const key = targetKey(item.target_id, item.spec.kind);
-                      return <FrameworkTableRows
-                        key={key}
-                        identity={group.by === "framework" ? "machine" : "framework"}
-                        item={item}
-                        busy={busy[key]}
-                        progress={progress[key]}
-                        check={checks[key]}
-                        auth={frameworkAuth.auth[key]}
-                        loginFlow={frameworkAuth.loginFlows[key]}
-                        loginCode={frameworkAuth.loginCodes[key] ?? ""}
-                        copiedCode={frameworkAuth.copiedCode === key}
-                        currentMachine={machineLabel(item)}
-                        disabled={!item.spec.supported || Boolean(bulkProgress)}
-                        health={latestHealthResult(health.results[key])}
-                        record={health.records[key]}
-                        testing={Object.keys(health.testing[key] ?? {}).length > 0}
-                        onTest={() => void health.test(item)}
-                        onModels={() => setModelsFor(item)}
-                        onCheck={() => void checkUpdate(item)}
-                        onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
-                        onUninstall={() => requestUninstall(item)}
-                        onAuth={() => void frameworkAuth.startAuth(item)}
-                        onLogout={() => void frameworkAuth.logout(item)}
-                        onLoginCodeChange={(code) => frameworkAuth.setLoginCode(item, code)}
-                        onCompleteAuth={(sessionID) => void frameworkAuth.completeAuth(item, sessionID)}
-                        onCancelAuth={(sessionID) => void frameworkAuth.cancelAuth(item, sessionID)}
-                        onDismissAuth={() => frameworkAuth.dismissAuth(item)}
-                        onCopyCode={(code) => void frameworkAuth.copyCode(item, code)}
-                      />;
-                    })}
-                  </Fragment>
-                );
-              })}
-              {!listLoading && installedItems.length === 0 && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("frameworks.noInstalled")}</td></tr>}
-            </tbody>
-          </table>
+        <div className="framework-card-list">
+          {(installingItems.length > 0 || listLoading) && (
+            <div className="catalog-table-wrap framework-record-card">
+              <table className="catalog-table framework-table">
+                <tbody>
+                  {installingItems.map((item) => {
+                    const key = targetKey(item.target_id, item.spec.kind);
+                    return <FrameworkInstallingRow key={`installing:${key}`} item={item} progress={progress[key]} />;
+                  })}
+                  {listLoading && installingItems.length === 0 && <tr><td className="empty-state" colSpan={5}>{t("common.loading")}</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {frameworkPagination.pageItems.map((group) => {
+            const { members } = group;
+            const keys = members.map((item) => targetKey(item.target_id, item.spec.kind));
+            const outdated = updateCandidates.filter((item) => keys.includes(targetKey(item.target_id, item.spec.kind)));
+            const latestVersion = group.by === "framework" ? keys.map((key) => checks[key]?.latest_version).find(Boolean) : undefined;
+            const open = expanded.has(group.key);
+            return (
+              <section className="framework-record-card" key={group.key}
+                aria-label={group.by === "framework" ? members[0].spec.display : machineLabel(members[0])}>
+                <div className="catalog-table-wrap">
+                  <table className="catalog-table framework-table">
+                    <tbody>
+                      <FrameworkGroupRow
+                        by={group.by}
+                        item={members[0]}
+                        machineName={machineLabel(members[0])}
+                        count={members.length}
+                        latestVersion={latestVersion}
+                        outdatedCount={outdated.length}
+                        failedCount={keys.filter((key) => checks[key]?.error).length}
+                        updating={keys.some((key) => busy[key] === "update" || busy[key] === "install")}
+                        checking={members.some((item, index) => item.spec.update_supported && (busy[keys[index]] === "check" || !checks[keys[index]]))}
+                        expanded={open}
+                        onToggle={() => toggleGroup(group.key)}
+                        updateDisabled={updateAllBlocked}
+                        onUpdateOutdated={() => requestUpdateMany(outdated)}
+                      />
+                      {open && (
+                        <tr>
+                          <th>{t(groupBy === "framework" ? "frameworks.machine" : "frameworks.framework")}</th>
+                          <th>{t("frameworks.versionAndUpdate")}</th>
+                          <th>{t("frameworks.account")}</th>
+                          <th>{t("frameworks.availability")}</th>
+                          <th>{t("common.actions")}</th>
+                        </tr>
+                      )}
+                      {open && members.map((item) => {
+                        const key = targetKey(item.target_id, item.spec.kind);
+                        return <FrameworkTableRows
+                          key={key}
+                          identity={group.by === "framework" ? "machine" : "framework"}
+                          item={item}
+                          busy={busy[key]}
+                          progress={progress[key]}
+                          check={checks[key]}
+                          auth={frameworkAuth.auth[key]}
+                          loginFlow={frameworkAuth.loginFlows[key]}
+                          loginCode={frameworkAuth.loginCodes[key] ?? ""}
+                          copiedCode={frameworkAuth.copiedCode === key}
+                          currentMachine={machineLabel(item)}
+                          disabled={!item.spec.supported || Boolean(bulkProgress)}
+                          health={latestHealthResult(health.results[key])}
+                          record={health.records[key]}
+                          testing={Object.keys(health.testing[key] ?? {}).length > 0}
+                          onTest={() => void health.test(item)}
+                          onModels={() => setModelsFor(item)}
+                          onCheck={() => void checkUpdate(item)}
+                          onInstall={(action) => (action === "update" ? requestUpdate(item) : startInstall(item))}
+                          onUninstall={() => requestUninstall(item)}
+                          onAuth={() => void frameworkAuth.startAuth(item)}
+                          onLogout={() => void frameworkAuth.logout(item)}
+                          onLoginCodeChange={(code) => frameworkAuth.setLoginCode(item, code)}
+                          onCompleteAuth={(sessionID) => void frameworkAuth.completeAuth(item, sessionID)}
+                          onCancelAuth={(sessionID) => void frameworkAuth.cancelAuth(item, sessionID)}
+                          onDismissAuth={() => frameworkAuth.dismissAuth(item)}
+                          onCopyCode={(code) => void frameworkAuth.copyCode(item, code)}
+                        />;
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            );
+          })}
+          {!listLoading && installedItems.length === 0 && installingItems.length === 0 && <div className="empty-state">{t("frameworks.noInstalled")}</div>}
         </div>
         {frameworkPagination.totalPages > 1 && (
           <CatalogPagination

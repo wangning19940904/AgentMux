@@ -17,10 +17,11 @@ export function DisclosurePanel({ id, expanded, children }: {
   );
 }
 
-export function RowDisclosure({ className, name, summary, children, onDoubleClick }: {
+export function RowDisclosure({ className, name, summary, preview, children, onDoubleClick }: {
   className: string;
   name: string;
   summary: ReactNode;
+  preview?: ReactNode;
   children: ReactNode;
   onDoubleClick?: () => void;
 }) {
@@ -44,6 +45,7 @@ export function RowDisclosure({ className, name, summary, children, onDoubleClic
           <ChevronDown size={14} aria-hidden="true" />
         </button>
       </div>
+      {preview && <div className="disclosure-preview">{preview}</div>}
       <DisclosurePanel id={panelId} expanded={expanded}>
         <div className="disclosure-content">{children}</div>
       </DisclosurePanel>

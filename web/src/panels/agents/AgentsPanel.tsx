@@ -568,10 +568,27 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             const deleteOperation = `delete:${itemKey}`;
             return (
               <RowDisclosure
-                className="agent-registry-row"
+                className="agent-registry-row resource-card agent-card"
                 key={itemKey}
                 name={item.name}
                 onDoubleClick={() => editAgent(item)}
+                preview={
+                  <div className="agent-list-meta">
+                    <TargetBadge target_id={resourceTargetID(item)} target_name={item.target_name} />
+                    <span className="pill agent-route-model-pill">{routeModelLabel}
+                      {item.default_reasoning_effort?.trim() && ` · ${item.default_reasoning_effort.trim()}`}
+                      {item.default_service_tier?.trim() && ` · ${["priority", "fast"].includes(item.default_service_tier.trim())
+                        ? t("agents.fastModeShort") : ["default", "normal", "standard"].includes(item.default_service_tier.trim())
+                          ? t("agents.normalModeShort") : item.default_service_tier.trim()}`}
+                    </span>
+                    <ChannelLogoGroup
+                      channels={itemChannels}
+                      emptyLabel={channelStatusLabel}
+                      label={t("agents.boundChannelsShort")}
+                    />
+                    {itemUnified && <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>}
+                  </div>
+                }
                 summary={
                   <div className="agent-list-main">
                     {itemUnified ? (
@@ -611,21 +628,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   </div>
                 }
               >
-                <div className="agent-list-meta">
-                  <TargetBadge target_id={resourceTargetID(item)} target_name={item.target_name} />
-                  <span className="pill agent-route-model-pill">{routeModelLabel}
-                    {item.default_reasoning_effort?.trim() && ` · ${item.default_reasoning_effort.trim()}`}
-                    {item.default_service_tier?.trim() && ` · ${["priority", "fast"].includes(item.default_service_tier.trim())
-                      ? t("agents.fastModeShort") : ["default", "normal", "standard"].includes(item.default_service_tier.trim())
-                        ? t("agents.normalModeShort") : item.default_service_tier.trim()}`}
-                  </span>
-                  <ChannelLogoGroup
-                    channels={itemChannels}
-                    emptyLabel={channelStatusLabel}
-                    label={t("agents.boundChannelsShort")}
-                  />
-                  {itemUnified && <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>}
-                </div>
                 <div className="agent-row-actions">
                   {itemUnified && (
                     <button className="ghost-action" onClick={() => openAgent(itemUnified, "work")} onDoubleClick={(event) => event.stopPropagation()}>
@@ -662,10 +664,22 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
             const routedChannels = agentChannels(agent, channelItems);
             return (
               <RowDisclosure
-                className="agent-registry-row"
+                className="agent-registry-row resource-card agent-card"
                 key={`agent:${agentKey}`}
                 name={agent.name}
                 onDoubleClick={() => openAgent(agent, "work")}
+                preview={
+                  <div className="agent-list-meta">
+                    <TargetBadge target_id={resourceTargetID(agent)} target_name={agent.target_name} />
+                    {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
+                    <ChannelLogoGroup
+                      channels={routedChannels}
+                      emptyLabel={channelStatusLabel}
+                      label={t("agents.boundChannelsShort")}
+                    />
+                    <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
+                  </div>
+                }
                 summary={
                   <div className="agent-list-main">
                     <button
@@ -688,16 +702,6 @@ export function AgentsPanel({ createRequested = false, onCreateRequestHandled }:
                   </div>
                 }
               >
-                <div className="agent-list-meta">
-                  <TargetBadge target_id={resourceTargetID(agent)} target_name={agent.target_name} />
-                  {router && <span className="pill">{t("agents.work.routedBy", { name: router.name })}</span>}
-                  <ChannelLogoGroup
-                    channels={routedChannels}
-                    emptyLabel={channelStatusLabel}
-                    label={t("agents.boundChannelsShort")}
-                  />
-                  <span className="pill agent-work-pill">{t(policy.key, policy.params)}</span>
-                </div>
                 <div className="agent-row-actions">
                   <button className="ghost-action" onClick={() => openAgent(agent, "work")} onDoubleClick={(event) => event.stopPropagation()}>
                     <Network size={15} />

@@ -1,3 +1,4 @@
+import { BrandIcon } from "../components/BrandIcon";
 import { SlidingSelection } from "../components/SlidingSelection";
 import {
   AlertTriangle,
@@ -130,30 +131,36 @@ export function OverviewPanel() {
                 label={t("overview.totalTokens")}
                 value={totals ? fmt(totalTokens) : "—"}
                 detail={totals ? <>
-                  {t("overview.includedCache", { tokens: fmt(cacheTokens) })}
+                  {t("overview.input")} {fmt(totals.input_tokens)} · {t("overview.output")} {fmt(totals.output_tokens)}
                   {estimatedTokens > 0 && <><br />{t("usage.estimatedDetail", { tokens: fmt(estimatedTokens), coverage: exactCoverage })}</>}
                 </> : undefined}
               />
-              <SummaryMetric label={t("overview.sessionConversations")} value={totals ? fmt(totals.sessions ?? 0) : "—"} detail={t("overview.sessionScope")} />
+              <SummaryMetric
+                label={t("usage.cacheRead")}
+                value={totals ? fmt(totals.cache_read_tokens) : "—"}
+                detail={totals ? `${t("usage.cacheWrite")} ${fmt(totals.cache_write_tokens)}` : undefined}
+              />
+              <SummaryMetric
+                label={t("overview.sessionConversations")}
+                value={totals ? fmt(totals.sessions ?? 0) : "—"}
+                detail={totals ? `${fmt(totals.records)} ${t("overview.records")}` : undefined}
+              />
               <SummaryMetric
                 label={t("overview.estimatedAmount")}
-                value={(
-                  <span className="usage-cost-values">
-                    <span>{totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}<small>RMB</small></span>
-                    <span>{totals ? formatUsageCost(totals.cost_usd, "usd", cnyRate, language) : "—"}<small>USD</small></span>
-                  </span>
-                )}
-                detail={t("overview.exchangeRate", { rate: cnyRate })}
+                value={totals ? formatUsageCost(totals.cost_usd, "cny", cnyRate, language) : "—"}
+                detail={totals ? `${formatUsageCost(totals.cost_usd, "usd", cnyRate, language)} USD` : undefined}
               />
-            </div>
-            <div className="usage-breakdown">
-              <Stat label={t("usage.uncachedInput")} value={totals ? fmt(totals.input_tokens) : "—"} />
-              <Stat label={t("overview.output")} value={totals ? fmt(totals.output_tokens) : "—"} />
-              <Stat label={t("usage.cacheRead")} value={totals ? fmt(totals.cache_read_tokens) : "—"} />
-              <Stat label={t("usage.cacheWrite")} value={totals ? fmt(totals.cache_write_tokens) : "—"} />
             </div>
             <details className="usage-pricing-note">
               <summary>{t("overview.pricingDetails")}</summary>
+              <p>{t("overview.includedCache", { tokens: fmt(cacheTokens) })}</p>
+              <div className="usage-breakdown">
+                <Stat label={t("usage.uncachedInput")} value={totals ? fmt(totals.input_tokens) : "—"} />
+                <Stat label={t("overview.output")} value={totals ? fmt(totals.output_tokens) : "—"} />
+                <Stat label={t("usage.cacheRead")} value={totals ? fmt(totals.cache_read_tokens) : "—"} />
+                <Stat label={t("usage.cacheWrite")} value={totals ? fmt(totals.cache_write_tokens) : "—"} />
+              </div>
+              <p>{t("overview.exchangeRate", { rate: cnyRate })}</p>
               <p>{t("overview.pricingFormula")}</p>
               <p>{t("overview.pricingSource")}</p>
             </details>
@@ -192,6 +199,7 @@ export function OverviewPanel() {
                 id: runtime.runtime,
                 label: runtimeLabel(runtime.runtime, t),
                 tokens: runtime.tokens,
+                icon: <BrandIcon name={runtime.runtime} />,
               }))}
             />
             <UsageRanking
@@ -203,6 +211,7 @@ export function OverviewPanel() {
                 id: model.model,
                 label: model.model.trim() || t("overview.unknownModel"),
                 tokens: model.tokens,
+                icon: <BrandIcon name={model.model} kind="model" />,
               }))}
             />
           </div>
@@ -335,14 +344,14 @@ function HealthSummaryRow({
 function SummaryMetric({ label, value, detail }: { label: string; value: ReactNode; detail?: ReactNode }) {
   return (
     <div className="usage-summary-metric">
-      <span className="usage-summary-metric-label">{label}</span>
       <strong>{value}</strong>
+      <span className="usage-summary-metric-label">{label}</span>
       {detail && <small>{detail}</small>}
     </div>
   );
 }
 
-type UsageRankingItem = { id: string; label: string; tokens: number };
+type UsageRankingItem = { id: string; label: string; tokens: number; icon: ReactNode };
 
 function UsageRanking({ title, icon, emptyText, totalTokens, items }: {
   title: string;
@@ -368,18 +377,18 @@ function UsageRanking({ title, icon, emptyText, totalTokens, items }: {
         )}
       </header>
       <div className="framework-ranking-list" id={listID}>
-        {visible.length > 0 ? visible.map((item, index) => (
-          <UsageRank key={item.id} rank={index + 1} label={item.label} tokens={item.tokens} share={totalTokens > 0 ? item.tokens / totalTokens : 0} />
+        {visible.length > 0 ? visible.map((item) => (
+          <UsageRank key={item.id} icon={item.icon} label={item.label} tokens={item.tokens} share={totalTokens > 0 ? item.tokens / totalTokens : 0} />
         )) : <div className="framework-ranking-empty">{emptyText}</div>}
       </div>
     </section>
   );
 }
 
-function UsageRank({ rank, label, tokens, share }: { rank: number; label: string; tokens: number; share: number }) {
+function UsageRank({ icon, label, tokens, share }: { icon: ReactNode; label: string; tokens: number; share: number }) {
   return (
     <div className="framework-rank-row">
-      <span className="framework-rank-number">{rank}</span>
+      {icon}
       <span className="framework-rank-copy">
         <strong title={label}>{label}</strong>
         <span>{fmt(tokens)} tokens</span>
@@ -562,26 +571,32 @@ function UsageTrend({
   range: StatRange;
   totalTokens: number;
 }) {
-  const max = Math.max(...series.flatMap((item) => item.values), 1);
+  const [hovered, setHovered] = useState<number | null>(null);
+  const groups = useMemo(() => {
+    const grouped = new Map<string, number[]>();
+    buckets.forEach((bucket, index) => {
+      const key = range === "today" ? bucket.key : bucket.key.slice(0, 10);
+      const indices = grouped.get(key) ?? [];
+      indices.push(index);
+      grouped.set(key, indices);
+    });
+    return [...grouped].map(([key, indices]) => ({ key, indices }));
+  }, [buckets, range]);
+  const bars = groups.map((group) => ({
+    key: group.key,
+    values: series.map((item) => group.indices.reduce((sum, index) => sum + (item.values[index] ?? 0), 0)),
+  }));
+  const peak = Math.max(...bars.map((bar) => bar.values.reduce((sum, value) => sum + value, 0)), 0);
+  const max = peak || 1;
   const width = 920;
-  const height = 180;
-  const insetX = 8;
-  const insetY = 12;
-  const chartWidth = width - insetX * 2;
-  const chartHeight = height - insetY * 2;
-  const plotted = series.map((item) => {
-    const points = item.values.map((value, index) => ({
-      x: item.values.length <= 1 ? width / 2 : insetX + (index / (item.values.length - 1)) * chartWidth,
-      y: insetY + chartHeight - (value / max) * chartHeight,
-    }));
-    const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`).join(" ");
-    const area = points.length
-      ? `${line} L${points[points.length - 1].x},${height - insetY} L${points[0].x},${height - insetY} Z`
-      : "";
-    return { ...item, points, line, area };
-  });
-  const labels = chartLabels(buckets, range);
-  const showPoints = buckets.length <= 48;
+  const height = 164;
+  const baseline = height - 4;
+  const step = width / Math.max(bars.length, 1);
+  const barWidth = Math.max(1, step - (bars.length > 40 ? 2 : 4));
+  const labels = range === "today"
+    ? ["00", "04", "08", "12", "16", "20", "23"]
+    : chartLabels(groups.map((group) => ({ key: group.key } as UsageBucket)), range);
+  const selected = hovered === null ? undefined : bars[hovered];
 
   return (
     <div className="usage-trend-wrap">
@@ -596,22 +611,36 @@ function UsageTrend({
           ))}
         </div>
       )}
-      <div className="usage-trend" role="img" aria-label={series.map((item) => `${item.label}: ${fmt(item.tokens)}`).join(", ")}>
-        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-          {[1 / 3, 2 / 3].map((ratio) => (
-            <line key={ratio} x1="0" y1={insetY + chartHeight * ratio} x2={width} y2={insetY + chartHeight * ratio} className="usage-grid-line" />
-          ))}
-          {plotted.length === 1 && plotted[0].area && <path d={plotted[0].area} className="usage-area" />}
-          {plotted.map((item, seriesIndex) => (
-            <g key={item.id} className={`usage-series color-${seriesIndex % 6}`}>
-              {item.line && <path d={item.line} className="usage-line" />}
-              {showPoints && item.points.map((point, index) => item.values[index] > 0 && (
-                <circle key={`${item.id}-${buckets[index]?.key ?? index}`} cx={point.x} cy={point.y} r="3.3" className="usage-point" />
-              ))}
-            </g>
-          ))}
+      <div className="usage-trend" onMouseLeave={() => setHovered(null)}>
+        <span className="usage-trend-maximum">{fmt(peak)}</span>
+        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img"
+          aria-label={series.map((item) => `${item.label}: ${fmt(item.tokens)}`).join(", ")}>
+          <line x1="0" y1={baseline} x2={width} y2={baseline} className="usage-grid-line" />
+          {bars.map((bar, index) => {
+            let bottom = baseline;
+            const total = bar.values.reduce((sum, value) => sum + value, 0);
+            return (
+              <g key={bar.key} className={`usage-bar-group${hovered === index ? " hovered" : ""}`}
+                tabIndex={total > 0 ? 0 : undefined}
+                onMouseEnter={() => setHovered(index)} onFocus={() => setHovered(index)} onBlur={() => setHovered(null)}>
+                <title>{bar.key} · {fmt(total)} tokens</title>
+                <rect x={index * step} y="0" width={step} height={baseline} fill="transparent" />
+                {bar.values.map((value, seriesIndex) => {
+                  const barHeight = value > 0 ? Math.max(2, value / max * (baseline - 18)) : 0;
+                  bottom -= barHeight;
+                  return value > 0 && <g key={series[seriesIndex].id} className={`usage-series color-${seriesIndex % 6}`}>
+                    <rect className="usage-bar" x={index * step + 2} y={bottom} width={barWidth} height={barHeight} rx="2" />
+                    <rect className="usage-bar-cap" x={index * step + 2} y={bottom} width={barWidth} height={Math.min(5, barHeight)} rx="1" />
+                  </g>;
+                })}
+              </g>
+            );
+          })}
         </svg>
-        {series.length === 0 && <span className="usage-trend-empty">—</span>}
+        {selected && <div className="usage-chart-tooltip" role="status">
+          <strong>{selected.key}</strong>
+          {series.map((item, index) => <span key={item.id}>{item.label}<b>{fmt(selected.values[index])}</b></span>)}
+        </div>}
         <div className="usage-trend-labels">
           {labels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}
         </div>
@@ -634,7 +663,7 @@ function chartLabels(buckets: UsageBucket[], range: StatRange) {
   return indexes.map((index) => {
     const key = buckets[index].key;
     const [date, time = ""] = key.split(" ");
-    return range === "today" ? time : `${date.slice(5)} ${time.slice(0, 2)}时`;
+    return range === "today" ? time.slice(0, 2) : date.slice(5);
   });
 }
 
