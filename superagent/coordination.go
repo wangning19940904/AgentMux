@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wangning19940904/AgentMux/core"
+	"github.com/wangning19940904/AgentMux/workspace"
 )
 
 // A Super Agent coordinates work across threads and channels. The router sees
@@ -533,8 +534,14 @@ func (s *Service) baseCommit(ctx context.Context, ticket core.SuperAgentTicket) 
 	if dir == "" {
 		return ""
 	}
-	output, err := exec.CommandContext(ctx, "git", "-C", filepath.Join(dir, ticketWorkDir), "rev-parse", "HEAD").Output()
+	work := filepath.Join(dir, ticketWorkDir)
+	output, err := exec.CommandContext(ctx, "git", "-C", work, "rev-parse", "HEAD").Output()
 	if err != nil {
+		// The base Ticket's worktree was removed after it finished; its
+		// branch still holds the commit.
+		if note, ok := workspace.ReadRemovedWorktree(work); ok && note.Commit != "" {
+			return note.Commit
+		}
 		s.log.Warn("super agent could not read base ticket's commit", "ticket", ticket.ID, "base", base.ID, "err", err)
 		return ""
 	}

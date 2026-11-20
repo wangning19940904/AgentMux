@@ -143,6 +143,12 @@ func TestNotesSayHowAWorkerReachesItsTools(t *testing.T) {
 	if !strings.HasPrefix(line, "TOOLS ON YOUR MACHINE: for a web browser, use the chrome-devtools MCP server") {
 		t.Fatalf("line = %q", line)
 	}
+	if !strings.Contains(line, "close the browser tabs and windows you opened") {
+		t.Fatalf("a worker with a browser is asked to close what it opened: %q", line)
+	}
+	if desktop := toolNotesLine(map[string]string{WorkerToolComputerUse: "the computer-use MCP server"}); desktop == "" || strings.Contains(desktop, "browser tabs") {
+		t.Fatalf("a worker without a browser is not asked to close one: %q", desktop)
+	}
 	if toolNotesLine(nil) != "" {
 		t.Fatal("a worker without tools gets no line")
 	}

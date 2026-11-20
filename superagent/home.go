@@ -27,6 +27,10 @@ import (
 //	    ├── progress.md        what the worker has been doing, as it happens
 //	    └── work/              the worker's working directory, or a link to it
 //
+// A worktree in work/ is removed some time after its Ticket finishes, once
+// everything in it is committed; work.removed.json then names the branch that
+// holds it, and a follow-up checks that branch out in work/ again.
+//
 // Tickets created before homes existed have no folder and keep working where
 // they started.
 const (
@@ -52,7 +56,10 @@ and each ticket's worker works in a folder below it.
   - inputs.md: everything AgentMux sent the worker
   - result.md: the worker's final answer after each turn
   - progress.md: what the worker has been doing, written as it happens
-  - work/: the worker's working directory, or a link to the directory its Agent uses
+  - work/: the worker's working directory, or a link to the directory its Agent uses.
+    A git worktree here is removed some time after the ticket finishes, once
+    everything in it is committed. work.removed.json then names the repository
+    and branch that hold the work, and a follow-up brings work/ back.
 
 AgentMux does not overwrite this file after creating it.
 `
