@@ -9,7 +9,7 @@ export * from "./fleet";
 export * from "./mailbox";
 export * from "./frameworkOperations";
 export * from "./diagnostics";
-import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, del, delChecked } from "./client";
+import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, postQueryChecked, del, delChecked } from "./client";
 import type { Targeted } from "./fleet";
 import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";
 import { observationGet, observationPost } from "./observability";
@@ -90,6 +90,8 @@ import type {
   MachineTarget,
   SystemMetrics,
   MemoryEntry,
+  HistorySearchRequest,
+  HistorySearchResult,
   MenubarSettings,
   MeetingInvitation,
 	MeetingDetail,
@@ -914,6 +916,9 @@ export const api = {
     if (!payload.id && targets[0] === "all") payload.id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     return (await fleetCall<{ id: string }>({ key: "memory", method: "POST", path: "/api/v1/memory", body: payload }, targets)).first;
   },
+  // History search runs on the machine the Console is looking at.
+  searchHistory: (request: HistorySearchRequest) =>
+    postQueryChecked<HistorySearchResult>("/api/v1/history/search", request),
   deleteMemory: async (id: string, targetID?: string) =>
     (await fleetCall<{ ok: boolean }>({ key: "memory", method: "DELETE", path: `/api/v1/memory?id=${encodeURIComponent(id)}` }, writeTargetIDs(targetID))).first,
 

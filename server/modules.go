@@ -19,6 +19,7 @@ func (s *Server) registerModuleRoutes() {
 	s.mux.HandleFunc("GET /api/v1/memory", s.handleMemorySearch)
 	s.mux.HandleFunc("POST /api/v1/memory", s.handleMemoryPut)
 	s.mux.HandleFunc("DELETE /api/v1/memory", s.handleMemoryDelete)
+	s.mux.HandleFunc("POST /api/v1/history/search", s.handleHistorySearch)
 
 	s.mux.HandleFunc("GET /api/v1/skills", s.handleSkillsList)
 	s.mux.HandleFunc("GET /api/v1/skills/marketplace", s.handleSkillsMarketplace)

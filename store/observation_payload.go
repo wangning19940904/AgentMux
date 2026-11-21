@@ -157,6 +157,15 @@ func decodeObservationMasterKey(value string) ([]byte, error) {
 	return nil, fmt.Errorf("expected 32 raw bytes, 64 hex characters, or base64-encoded 32 bytes")
 }
 
+// KnownSecrets returns the secrets the recorder redacts by value, so another
+// consumer of observation content can redact the same way.
+func (r *ObservationRecorder) KnownSecrets() []string {
+	if r == nil {
+		return nil
+	}
+	return append([]string(nil), r.knownSecrets...)
+}
+
 func (r *ObservationRecorder) MetadataOnly() bool {
 	return r == nil || !r.captureContent || len(r.masterKey) != observationMasterKeySize
 }

@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useI18n } from "../i18n";
 import { useAsync } from "../useAsync";
 import { TargetBadge, targetKey } from "../components/TargetBadge";
+import { HistorySearch } from "./HistorySearch";
 
 export function MemoryPanel() {
   const { t, language } = useI18n();
@@ -37,6 +38,8 @@ export function MemoryPanel() {
   return (
     <div className="page-stack">
       <p className="subtle-copy">{t("memory.subtitle")}</p>
+
+      <HistorySearch />
 
       <section className="surface">
         <div className="surface-header">

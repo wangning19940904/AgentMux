@@ -363,6 +363,21 @@ export async function postChecked<T>(path: string, body: unknown, options: { loc
   return payload as T;
 }
 
+// postQueryChecked is postQuery with the server's error message: a POST that
+// only reads, so cached resources stay.
+export async function postQueryChecked<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(apiPath(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...CONSOLE_HEADER },
+    body: JSON.stringify(body),
+  });
+  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    throw checkedError(path, res.status, payload);
+  }
+  return payload as T;
+}
+
 export async function postProgress<T>(
   path: string,
   body: unknown,
