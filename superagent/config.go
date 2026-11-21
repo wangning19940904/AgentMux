@@ -343,6 +343,12 @@ func requiredConfig(source core.SuperAgentSource) ([]string, error) {
 		default:
 			return nil, fmt.Errorf(`delivery must be "webhook" or %q, not %q`, GitHubDeliveryPoll, delivery)
 		}
+	case core.SuperAgentSourceCallback:
+		// Results go to a chat only through a channel's bot.
+		if strings.TrimSpace(source.Config["notify_chat_id"]) != "" {
+			return []string{"webhook_secret", "channel_id"}, nil
+		}
+		return []string{"webhook_secret"}, nil
 	}
 	return nil, fmt.Errorf("unknown kind %q", source.Kind)
 }

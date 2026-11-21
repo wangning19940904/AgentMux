@@ -52,13 +52,13 @@ type Replies struct {
 
 func (r *Replies) Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) error {
 	switch source.Kind {
-	case core.SuperAgentSourceFeishuMessage, core.SuperAgentSourceFeishuDoc, core.SuperAgentSourceChannel:
+	case core.SuperAgentSourceFeishuMessage, core.SuperAgentSourceFeishuDoc, core.SuperAgentSourceChannel, core.SuperAgentSourceCallback:
 		var reply feishuReply
 		if err := json.Unmarshal(target, &reply); err != nil {
 			return err
 		}
 		if reply.ChatID == "" {
-			return nil // A document Source without a notify chat records results only.
+			return nil // A document or callback Source without a notify chat records results only.
 		}
 		return r.Chats.ReplyToChat(ctx, reply.ChannelID, reply.ChatID, reply.MessageID, truncateRunes(text, maxChatReplyRunes))
 	case core.SuperAgentSourceGitHub:

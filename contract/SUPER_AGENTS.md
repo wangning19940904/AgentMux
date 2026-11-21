@@ -578,6 +578,7 @@ stay apart.
 | Email | IMAP over TLS, polled every minute | Authenticated `From` address | SMTP over TLS, in the same thread |
 | GitHub webhook | `POST /hook/super-agent/github/{source_id}` | `sender.login` | A comment, with a token |
 | GitHub notifications (`delivery=poll`) | The agent account's notifications, read about once a minute | The comment's or assignment's author | A comment, with the same token |
+| Custom callback | `POST /hook/super-agent/callback/{source_id}` | The request's `actor` (`callback` when empty) | The configured notify chat |
 
 - **Feishu messages:** mentions and direct messages are claimed, so the channel's
   own Agent does not also answer. `/` commands stay with the channel. Follow-ups
@@ -614,6 +615,23 @@ stay apart.
   `X-Poll-Interval`, starts from now, and reads on GitHub's clock with a minute of
   overlap; dedupe keys drop the repeats. It never marks notifications read. Give
   the agent its own account: its own comments never trigger it.
+
+- **Custom callback:** an address for any system AgentMux has no trigger for, such as
+  a script that watches a tracker. The body is JSON:
+  `{"id","thread","actor","title","text"}`, and only `text` is required. `id` makes a
+  repeated request harmless (it defaults to the body's digest), `thread` keeps events
+  about one subject, and the Tickets they start, on one thread (it defaults to `id`),
+  and `actor` must be on the trigger's allowed list, where `*` is refused. The caller
+  proves itself with the trigger's secret: `X-AgentMux-Signature: sha256=` plus the
+  hex HMAC-SHA256 of the body, or `Authorization: Bearer <secret>` when it cannot
+  sign. The answer is `202 {"ok":true,"accepted":true}`; `accepted` is false for a
+  repeat, and while the agent or the trigger is off. `400` means the body is not a
+  request, `401` a wrong secret. `instructions` is added to every request's text.
+  With `channel_id` and `notify_chat_id` the agent reports in that Feishu chat;
+  without them results are only recorded. The daemon listens on loopback by default,
+  so the caller runs on the same machine unless `/hook/` is exposed as for GitHub.
+  [`integrations/meego-todo`](../integrations/meego-todo/README.md) is a caller that
+  turns a person's new Meego to-dos into requests.
 
 ### Setting a trigger up in the Console
 

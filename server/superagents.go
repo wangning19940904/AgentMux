@@ -140,6 +140,9 @@ func (s *Server) registerSuperAgentRoutes() {
 	// Outside /api: GitHub cannot present a bridge token. Each delivery proves
 	// itself with the HMAC signature of its Source's webhook secret instead.
 	s.mux.HandleFunc("POST /hook/super-agent/github/{source}", s.handleSuperAgentGitHubHook)
+	// A custom callback proves itself the same way, or with the secret as a
+	// bearer token when the caller cannot sign.
+	s.mux.HandleFunc("POST /hook/super-agent/callback/{source}", s.handleSuperAgentCallbackHook)
 }
 
 func (s *Server) requireSuperAgents(w http.ResponseWriter) bool {
@@ -345,6 +348,42 @@ func (s *Server) handleSuperAgentGitHubHook(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "webhook processing failed", http.StatusInternalServerError)
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}
+}
+
+const maxCallbackBytes = 1 << 20
+
+func (s *Server) handleSuperAgentCallbackHook(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSuperAgents(w) {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCallbackBytes))
+	if err != nil {
+		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	accepted, err := s.superAgents.HandleCallback(r.Context(), r.PathValue("source"), superagent.CallbackDelivery{
+		Signature: r.Header.Get("X-AgentMux-Signature"),
+		Token:     strings.TrimSpace(token),
+		Body:      body,
+	})
+	switch {
+	case errors.Is(err, superagent.ErrNotFound):
+		http.Error(w, "callback source not found", http.StatusNotFound)
+	case errors.Is(err, superagent.ErrUnauthorized):
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+	case errors.Is(err, superagent.ErrBadCallback):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		if s.log != nil {
+			s.log.Error("super agent callback failed", "err", err)
+		}
+		http.Error(w, "callback processing failed", http.StatusInternalServerError)
+	default:
+		// accepted is false for a repeat of a stored id, and while the agent or
+		// the trigger is switched off.
+		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true, "accepted": accepted})
 	}
 }
 

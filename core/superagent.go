@@ -12,6 +12,9 @@ const (
 	SuperAgentSourceFeishuDoc     = "feishu_doc"
 	SuperAgentSourceEmail         = "email"
 	SuperAgentSourceGitHub        = "github_webhook"
+	// SuperAgentSourceCallback is an address any system can post a request to,
+	// such as a script that watches a tracker the agent has no Source for.
+	SuperAgentSourceCallback = "callback"
 	// SuperAgentSourceChannel is a channel bound to the agent's brain
 	// (channels.agent_id). It is derived from the binding, never stored: the
 	// channel engine runs the brain's turn, and the channel's own reply scope,

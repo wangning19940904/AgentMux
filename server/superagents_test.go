@@ -50,6 +50,7 @@ func TestSuperAgentRoutesRequireRuntime(t *testing.T) {
 		{http.MethodPost, "/api/v1/super-agents/github/login/cancel"},
 		{http.MethodPost, "/api/v1/super-agents/github/invite"},
 		{http.MethodPost, "/hook/super-agent/github/src"},
+		{http.MethodPost, "/hook/super-agent/callback/src"},
 	} {
 		recorder := httptest.NewRecorder()
 		srv.mux.ServeHTTP(recorder, httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}")))
@@ -107,6 +108,18 @@ func TestSuperAgentGitHubHookStatusCodes(t *testing.T) {
 	mac.Write([]byte(body))
 	request := httptest.NewRequest(http.MethodPost, "/hook/super-agent/github/unknown", strings.NewReader(body))
 	request.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	srv.mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("unknown source: %d", recorder.Code)
+	}
+}
+
+func TestSuperAgentCallbackHookStatusCodes(t *testing.T) {
+	srv := &Server{mux: http.NewServeMux(), superAgents: superagent.New(superagent.Options{Store: emptySuperAgentStore{}})}
+	srv.registerSuperAgentRoutes()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/hook/super-agent/callback/unknown", strings.NewReader(`{"text":"hello"}`))
+	request.Header.Set("Authorization", "Bearer secret")
 	srv.mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("unknown source: %d", recorder.Code)
