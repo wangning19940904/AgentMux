@@ -414,6 +414,25 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		Health string `json:"health,omitempty"`
 		// CostTier is low, medium or high.
 		CostTier string `json:"cost_tier,omitempty"`
+		// Model, Effort and Use are a worker profile's.
+		Model  string `json:"model,omitempty"`
+		Effort string `json:"effort,omitempty"`
+		Use    string `json:"use,omitempty"`
+	}
+	// variants gives an auto worker entry one copy per profile of its
+	// framework, after the plain one.
+	variants := func(entry rosterEntry, runtimeID, pathID string) []rosterEntry {
+		out := []rosterEntry{entry}
+		for _, profile := range agent.WorkerProfiles {
+			if profile.RuntimeID != runtimeID {
+				continue
+			}
+			variant := entry
+			variant.ID = autoRosterID(runtimeID, profile.ID, pathID)
+			variant.Model, variant.Effort, variant.Use = profile.Model, profile.ReasoningEffort, profile.Use
+			out = append(out, variant)
+		}
+		return out
 	}
 	healthOf := healthIndex(view.Health)
 	mark := func(hostID, runtime string) string {
@@ -435,7 +454,7 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	}
 	if agent.AutoWorkers {
 		for _, runtimeID := range agent.WorkerRuntimes {
-			roster = append(roster, rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Tools: view.LocalTools[runtimeID], Available: true, Health: mark("", runtimeID)})
+			roster = append(roster, variants(rosterEntry{ID: autoWorkerRosterID(runtimeID), Location: "local", Capabilities: fmt.Sprintf(autoWorkerGuidance, runtimeID), Tools: view.LocalTools[runtimeID], Available: true, Health: mark("", runtimeID)}, runtimeID, "")...)
 		}
 		// One entry per framework in each directory the operator listed, so
 		// the router sees where the work can go and which machine can take
@@ -444,11 +463,11 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 			pathID := machinePathID(machine)
 			if machine.HostID == "" {
 				for _, runtimeID := range agent.WorkerRuntimes {
-					roster = append(roster, rosterEntry{
+					roster = append(roster, variants(rosterEntry{
 						ID: machineWorkerRosterID(runtimeID, pathID), Label: machine.Dir, Location: "local",
 						Capabilities: strings.TrimSpace(fmt.Sprintf(localDirGuidance, runtimeID, machine.Dir) + " " + machine.Capabilities),
 						Tools:        view.LocalTools[runtimeID], Available: true, Health: mark("", runtimeID),
-					})
+					}, runtimeID, pathID)...)
 				}
 				continue
 			}
@@ -471,7 +490,7 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 					entry.Detail = runtimeID + " is not installed on " + status.Name
 				}
 				entry.Health = mark(machine.HostID, runtimeID)
-				roster = append(roster, entry)
+				roster = append(roster, variants(entry, runtimeID, pathID)...)
 			}
 		}
 	}
@@ -499,6 +518,9 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 	fmt.Fprintf(prompt, "\nWORKER ROSTER:\n%s\n", rosterJSON)
 	if marked || remote {
 		prompt.WriteString("\nPLACEMENT: " + placementNote + "\n")
+	}
+	if agent.AutoWorkers && len(agent.WorkerProfiles) > 0 {
+		prompt.WriteString("\nPROFILES: " + profileNote + "\n")
 	}
 	if view.PlanNote != "" {
 		prompt.WriteString("\nPLANS: " + view.PlanNote + "\n")

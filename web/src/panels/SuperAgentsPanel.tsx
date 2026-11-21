@@ -177,6 +177,12 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                   {selected.auto_workers && (selected.worker_runtimes ?? []).map((runtime) => (
                     <span key={runtime} className="super-agent-chip"><i className="online" />{runtime}<small>{[t("superAgents.autoWorkersOn"), tierLabel(`auto:${runtime}`)].filter(Boolean).join(" · ")}</small>{healthMarks("", [runtime])}</span>
                   ))}
+                  {selected.auto_workers && (selected.worker_profiles ?? []).map((profile) => (
+                    <span key={`${profile.runtime_id}/${profile.id}`} className="super-agent-chip" title={profile.use}>
+                      <i className="online" />{`${profile.runtime_id}/${profile.id}`}
+                      <small>{[profile.model, profile.reasoning_effort, tierLabel(`auto:${profile.runtime_id}/${profile.id}`)].filter(Boolean).join(" · ")}</small>
+                    </span>
+                  ))}
                   {selected.auto_workers && (selected.worker_machines ?? []).map((machine, index) => {
                     const local = !machine.host_id;
                     const status = activity.data?.machines?.find((item) => item.host_id === machine.host_id);

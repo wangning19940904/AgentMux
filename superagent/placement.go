@@ -78,6 +78,8 @@ type workerPlace struct {
 	WorkerID string
 	// Runtime is the framework; empty when the machine did not say.
 	Runtime string
+	// Profile is an auto worker's profile; empty for the plain one.
+	Profile string
 	HostID  string
 	// Place names the directory: an auto worker's path ID ("" for its
 	// default directory) or a roster worker's id.
@@ -88,8 +90,8 @@ type workerPlace struct {
 
 // placeOf resolves a roster entry without launching anything.
 func (s *Service) placeOf(ctx context.Context, agent core.SuperAgent, workerID string) (workerPlace, error) {
-	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
-		place := workerPlace{WorkerID: workerID, Runtime: runtimeID, Place: pathID}
+	if runtimeID, profile, pathID, ok := parseAutoWorker(workerID); ok {
+		place := workerPlace{WorkerID: workerID, Runtime: runtimeID, Profile: profile, Place: pathID}
 		if pathID != "" {
 			machine, found := agentMachine(agent, pathID)
 			if !found {
@@ -129,12 +131,16 @@ func (s *Service) candidatePlaces(ctx context.Context, agent core.SuperAgent) []
 		return out
 	}
 	for _, runtimeID := range agent.WorkerRuntimes {
-		out = append(out, workerPlace{WorkerID: autoWorkerRosterID(runtimeID), Runtime: runtimeID})
+		for _, profile := range runtimeVariants(agent, runtimeID) {
+			out = append(out, workerPlace{WorkerID: autoRosterID(runtimeID, profile, ""), Runtime: runtimeID, Profile: profile})
+		}
 	}
 	for _, machine := range agent.WorkerMachines {
 		pathID := machinePathID(machine)
 		for _, runtimeID := range agent.WorkerRuntimes {
-			out = append(out, workerPlace{WorkerID: machineWorkerRosterID(runtimeID, pathID), Runtime: runtimeID, HostID: machine.HostID, Place: pathID})
+			for _, profile := range runtimeVariants(agent, runtimeID) {
+				out = append(out, workerPlace{WorkerID: autoRosterID(runtimeID, profile, pathID), Runtime: runtimeID, Profile: profile, HostID: machine.HostID, Place: pathID})
+			}
 		}
 	}
 	for index := range out {
@@ -317,14 +323,17 @@ func (s *Service) place(ctx context.Context, agent core.SuperAgent, action route
 	}
 	candidates := s.candidatePlaces(ctx, agent)
 	// Closest first: the same directory, then the same framework, then the
-	// same machine, and otherwise roster order.
+	// same profile of it, then the same machine, and otherwise roster order.
 	score := func(candidate workerPlace) int {
 		value := 0
 		if candidate.HostID == named.HostID && candidate.Place == named.Place {
-			value += 4
+			value += 8
 		}
 		if candidate.Runtime != "" && candidate.Runtime == named.Runtime {
-			value += 2
+			value += 4
+			if candidate.Profile == named.Profile {
+				value += 2
+			}
 		}
 		if candidate.HostID == named.HostID {
 			value++

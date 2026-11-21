@@ -54,14 +54,22 @@ func machineWorkerRosterID(runtimeID, pathID string) string {
 	return autoWorkerRosterID(runtimeID) + "@" + pathID
 }
 
-// parseAutoWorkerID splits auto:<framework> and auto:<framework>@<path>.
+// parseAutoWorkerID splits auto:<framework> and auto:<framework>@<path>,
+// leaving out any profile.
 func parseAutoWorkerID(id string) (runtimeID, pathID string, ok bool) {
+	runtimeID, _, pathID, ok = parseAutoWorker(id)
+	return runtimeID, pathID, ok
+}
+
+// parseAutoWorker splits auto:<framework>[/<profile>][@<path>].
+func parseAutoWorker(id string) (runtimeID, profile, pathID string, ok bool) {
 	rest, ok := strings.CutPrefix(id, autoWorkerID+":")
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
-	runtimeID, pathID, _ = strings.Cut(rest, "@")
-	return runtimeID, pathID, runtimeID != ""
+	rest, pathID, _ = strings.Cut(rest, "@")
+	runtimeID, profile, _ = strings.Cut(rest, profileSep)
+	return runtimeID, profile, pathID, runtimeID != ""
 }
 
 // machinePathID is the ID a listed directory goes by on the roster. One saved
@@ -290,14 +298,14 @@ func (s *Service) machineStatuses(ctx context.Context, agent core.SuperAgent) []
 }
 
 // checkMachineWorker is launchMachineWorkerMode without launching anything.
-func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID string) error {
+func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, profile, pathID string) error {
 	if !agent.AutoWorkers {
 		return errors.New("this Super Agent cannot launch workers; choose one from the roster")
 	}
 	if _, allowed := agentMachine(agent, pathID); !allowed || !slices.Contains(agent.WorkerRuntimes, runtimeID) {
 		return fmt.Errorf("worker %q is not on the roster", workerID)
 	}
-	return nil
+	return checkProfile(agent, workerID, runtimeID, profile)
 }
 
 // launchMachineWorkerMode gives a new Ticket a worker in one of the listed
@@ -306,9 +314,9 @@ func checkMachineWorker(agent core.SuperAgent, workerID, runtimeID, pathID strin
 // applies its own checks to them and answers with the Agent it keeps for this
 // agent. It also returns how another machine isolates the worker's
 // conversations ("" on this machine).
-func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperAgent, runtimeID, pathID string) (core.SuperAgentWorker, string, error) {
-	workerID := machineWorkerRosterID(runtimeID, pathID)
-	if err := checkMachineWorker(agent, workerID, runtimeID, pathID); err != nil {
+func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperAgent, runtimeID, profile, pathID string) (core.SuperAgentWorker, string, error) {
+	workerID := autoRosterID(runtimeID, profile, pathID)
+	if err := checkMachineWorker(agent, workerID, runtimeID, profile, pathID); err != nil {
 		return core.SuperAgentWorker{}, "", fmt.Errorf("router chose worker %q: %w", workerID, err)
 	}
 	machine, _ := agentMachine(agent, pathID)
@@ -317,8 +325,7 @@ func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperA
 		if err != nil {
 			return core.SuperAgentWorker{}, "", err
 		}
-		worker, err := s.launchLocalWorker(ctx, agent, runtimeID, pathID, dir)
-		worker.ID = workerID
+		worker, err := s.launchLocalWorker(ctx, agent, runtimeID, profile, pathID, dir)
 		return worker, "", err
 	}
 	fleet := s.machineFleet()
@@ -328,6 +335,10 @@ func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperA
 	request := core.HostedWorkerRequest{
 		OwnerID: agent.ID, OwnerName: agent.Name, RuntimeID: runtimeID,
 		Dir: machine.Dir, ApprovalMode: agent.AutoWorkerApprovalMode,
+	}
+	if settings, ok := workerProfile(agent, runtimeID, profile); ok {
+		request.Profile, request.Model = settings.ID, settings.Model
+		request.ReasoningEffort, request.ServiceTier = settings.ReasoningEffort, settings.ServiceTier
 	}
 	// The first directory on a machine keeps the worker it had when each
 	// machine had one directory.
@@ -339,6 +350,11 @@ func (s *Service) launchMachineWorkerMode(ctx context.Context, agent core.SuperA
 	hosted, err := fleet.Launch(launchCtx, machine.HostID, request)
 	if err != nil {
 		return core.SuperAgentWorker{}, "", err
+	}
+	// A machine too old for profiles launched the plain worker, which would
+	// run the work on a model nobody chose for it.
+	if hosted.Profile != request.Profile {
+		return core.SuperAgentWorker{}, "", fmt.Errorf("AgentMux on %s is too old for worker profiles; choose %s instead, or update it", s.machineLabel(machine.HostID), autoRosterID(runtimeID, "", pathID))
 	}
 	return core.SuperAgentWorker{ID: workerID, Label: hosted.Name, HostID: machine.HostID, AgentID: hosted.AgentID}, hosted.WorkspaceMode, nil
 }
@@ -405,11 +421,21 @@ func (s *Service) HostWorker(ctx context.Context, request core.HostedWorkerReque
 	if pathID != "" && !validPathID(pathID) {
 		return core.HostedWorker{}, fmt.Errorf("%w: invalid path id", ErrInvalid)
 	}
+	profile := strings.TrimSpace(request.Profile)
+	model, effort, tier := strings.TrimSpace(request.Model), strings.TrimSpace(request.ReasoningEffort), strings.TrimSpace(request.ServiceTier)
+	if profile == "" && (model != "" || effort != "" || tier != "") {
+		return core.HostedWorker{}, fmt.Errorf("%w: model settings need a profile", ErrInvalid)
+	}
+	if profile != "" {
+		if err := checkProfileSettings(profile, model, effort, tier); err != nil {
+			return core.HostedWorker{}, fmt.Errorf("%w: %s", ErrInvalid, err)
+		}
+	}
 	workDir, err := s.hostedWorkerDir(ownerID, request.Dir)
 	if err != nil {
 		return core.HostedWorker{}, err
 	}
-	id := hostedWorkerAgentID(ownerID, runtimeID, pathID)
+	id := withProfile(hostedWorkerAgentID(ownerID, runtimeID, pathID), profile)
 	now := s.now().UTC()
 	createdAt := now
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -422,17 +448,18 @@ func (s *Service) HostWorker(ctx context.Context, request core.HostedWorkerReque
 		}
 		createdAt = existing.CreatedAt
 	}
-	name := fmt.Sprintf("%s worker (%s)", firstNonEmpty(strings.TrimSpace(request.OwnerName), ownerID), runtimeID)
+	name := fmt.Sprintf("%s worker (%s)", firstNonEmpty(strings.TrimSpace(request.OwnerName), ownerID), profileLabel(runtimeID, profile))
 	instance := core.AgentInstance{
 		ID: id, Name: name, RuntimeID: runtimeID, SessionBackend: "structured",
 		WorkDir: workDir, WorkspaceMode: autoWorkerWorkspaceMode(ctx, workDir),
 		DefaultApprovalMode: mode, Enabled: true, Source: autoWorkerAgentSource,
+		DefaultModel: model, DefaultReasoningEffort: effort, DefaultServiceTier: tier,
 		CreatedAt: createdAt, UpdatedAt: now,
 	}
 	if err := s.store.UpsertAgentInstance(ctx, &instance); err != nil {
 		return core.HostedWorker{}, err
 	}
-	return core.HostedWorker{AgentID: id, Name: name, WorkDir: workDir, WorkspaceMode: instance.WorkspaceMode}, nil
+	return core.HostedWorker{AgentID: id, Name: name, WorkDir: workDir, WorkspaceMode: instance.WorkspaceMode, Profile: profile}, nil
 }
 
 func (s *Service) hostedWorkerDir(ownerID, dir string) (string, error) {
@@ -474,7 +501,7 @@ func (s *Service) ReleaseHostedWorkers(ctx context.Context, ownerID string) (int
 	removed := 0
 	for _, instance := range instances {
 		base := hostedWorkerAgentID(ownerID, instance.RuntimeID, "")
-		if !IsManagedAgent(instance) || (instance.ID != base && !strings.HasPrefix(instance.ID, base+"_")) {
+		if !IsManagedAgent(instance) || (instance.ID != base && !strings.HasPrefix(instance.ID, base+"_") && !strings.HasPrefix(instance.ID, base+profileAgentSep)) {
 			continue
 		}
 		if err := s.store.DeleteAgentInstance(ctx, instance.ID); err != nil {

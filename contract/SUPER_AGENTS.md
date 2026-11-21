@@ -367,8 +367,10 @@ there costs. It comes from the framework and model: a model name with `haiku`, `
 `o3` is high, any other named model is medium, and without a model Claude Code is high
 and other frameworks medium. An auto worker of the brain's own framework on this machine
 uses the brain's model. The operator can set `cost_tier` on a roster worker to override
-it. The Console shows the tier on each roster entry (`cost_tiers` in the activity
-response).
+it. A worker profile's tier moves one step up for a `high`, `xhigh`, `max` or `ultra`
+reasoning effort and one down for `none`, `minimal` or `low`, and its own `cost_tier`
+overrides all of that. The Console
+shows the tier on each roster entry (`cost_tiers` in the activity response).
 
 ### The plan action
 
@@ -685,6 +687,41 @@ request, and the host starts a worker of that framework that was not configured 
   `saw_<super agent id>_<framework>_<path id>` for a listed one, removed with the Super
   Agent. The home is kept, and so is a Ticket's worktree until the Ticket has been quiet
   for a while (see above).
+
+### Worker profiles
+
+`worker_profiles` are the operator's model settings for auto workers of one worker
+framework, so the brain matches the model and thinking effort to how hard the work is:
+
+```json
+"worker_profiles": [
+  { "id": "deep", "runtime_id": "claudecode", "model": "opus", "reasoning_effort": "high",
+    "use": "Hard, ambiguous or risky work" },
+  { "id": "fast", "runtime_id": "claudecode", "reasoning_effort": "low",
+    "use": "Translation, lookups, small edits", "cost_tier": "low" }
+]
+```
+
+- `id` is 1 to 32 lowercase letters, digits, `-` or `_`, unique within its framework, and
+  `runtime_id` must be one of `worker_runtimes`. A profile sets a `model`, a
+  `reasoning_effort` or both, and may set a `service_tier`; one it leaves empty is what the
+  framework's plain auto worker uses (the brain's for the brain's own framework here, the
+  framework's default otherwise). At most 16 profiles; they are dropped when auto workers
+  are off.
+- The roster offers `auto:<framework>/<id>` next to `auto:<framework>`, and
+  `auto:<framework>/<id>@<path id>` in every listed directory, each showing the profile's
+  `model`, `effort` and `use`, with a note telling the brain to pick the cheapest profile
+  that can do the work well. A decision can only name a profile the operator set; it
+  cannot set a model or effort itself.
+- Each profile has its own Agent instance wherever it runs, `saw_…+<id>` here and
+  `sawr_…+<id>` on another machine, so a Ticket keeps its model across turns.
+- Another machine is sent `profile`, `model`, `reasoning_effort` and `service_tier` with
+  the launch, checks that they are plain tokens, and answers with the `profile` it
+  launched. A machine whose AgentMux predates profiles launches the plain worker and
+  answers without one; the accept is then refused, naming the plain entry to use instead,
+  rather than running on a model nobody chose.
+- A `flexible` accept moved off its entry prefers the same profile of the same framework
+  elsewhere.
 
 ### Working directories
 

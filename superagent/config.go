@@ -166,6 +166,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if err := s.normalizeWorkerMachines(agent); err != nil {
 		return err
 	}
+	if err := normalizeWorkerProfiles(agent); err != nil {
+		return err
+	}
 	if err := normalizePrompts(agent, existing); err != nil {
 		return err
 	}

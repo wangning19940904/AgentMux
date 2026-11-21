@@ -56,12 +56,15 @@ func validateAutoWorkerApproval(mode string) error {
 // Agent's provider and environment. Tools and channels are not inherited. Each
 // Ticket has its own conversation, and so its own session and, in a git
 // repository, its own worktree. MaxConcurrency bounds how many run at once.
-func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, runtimeID string) (core.SuperAgentWorker, error) {
+func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, runtimeID, profile string) (core.SuperAgentWorker, error) {
 	if !agent.AutoWorkers {
 		return core.SuperAgentWorker{}, errors.New("router chose to launch a worker, which this Super Agent does not allow")
 	}
 	if !slices.Contains(agent.WorkerRuntimes, runtimeID) {
 		return core.SuperAgentWorker{}, fmt.Errorf("router chose to launch a %q worker, which is not one of this Super Agent's worker frameworks", runtimeID)
+	}
+	if err := checkProfile(agent, autoRosterID(runtimeID, profile, ""), runtimeID, profile); err != nil {
+		return core.SuperAgentWorker{}, err
 	}
 	router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID)
 	if err != nil {
@@ -74,13 +77,14 @@ func (s *Service) launchAutoWorker(ctx context.Context, agent core.SuperAgent, r
 	if err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	return s.launchLocalWorker(ctx, agent, runtimeID, "", workDir)
+	return s.launchLocalWorker(ctx, agent, runtimeID, profile, "", workDir)
 }
 
 // launchLocalWorker keeps the Agent instance that runs a Super Agent's auto
-// workers of one framework in one directory on this machine: its default
-// directory with no path ID, or a directory the operator listed.
-func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, runtimeID, pathID, workDir string) (core.SuperAgentWorker, error) {
+// workers of one framework, or one of its profiles, in one directory on this
+// machine: its default directory with no path ID, or a directory the
+// operator listed.
+func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, runtimeID, profile, pathID, workDir string) (core.SuperAgentWorker, error) {
 	if !agent.AutoWorkers {
 		return core.SuperAgentWorker{}, errors.New("router chose to launch a worker, which this Super Agent does not allow")
 	}
@@ -91,7 +95,11 @@ func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, 
 	if router == nil {
 		return core.SuperAgentWorker{}, fmt.Errorf("router agent %q not found on this machine", agent.RouterAgentID)
 	}
-	id := autoWorkerAgentID(agent.ID, runtimeID, pathID)
+	settings, profiled := workerProfile(agent, runtimeID, profile)
+	if profile != "" && !profiled {
+		return core.SuperAgentWorker{}, checkProfile(agent, autoRosterID(runtimeID, profile, pathID), runtimeID, profile)
+	}
+	id := withProfile(autoWorkerAgentID(agent.ID, runtimeID, pathID), profile)
 	now := s.now().UTC()
 	createdAt := now
 	existing, err := s.store.GetAgentInstance(ctx, id)
@@ -101,7 +109,7 @@ func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, 
 	if existing != nil {
 		createdAt = existing.CreatedAt
 	}
-	name := fmt.Sprintf("%s auto worker (%s)", agent.Name, runtimeID)
+	name := fmt.Sprintf("%s auto worker (%s)", agent.Name, profileLabel(runtimeID, profile))
 	instance := core.AgentInstance{
 		ID: id, Name: name, RuntimeID: runtimeID, SessionBackend: "structured",
 		WorkDir: workDir, WorkspaceMode: autoWorkerWorkspaceMode(ctx, workDir),
@@ -116,10 +124,13 @@ func (s *Service) launchLocalWorker(ctx context.Context, agent core.SuperAgent, 
 		instance.DefaultModel, instance.DefaultReasoningEffort, instance.DefaultServiceTier = router.DefaultModel, router.DefaultReasoningEffort, router.DefaultServiceTier
 		instance.Env = router.Env
 	}
+	if profiled {
+		applyProfile(&instance, settings)
+	}
 	if err := s.store.UpsertAgentInstance(ctx, &instance); err != nil {
 		return core.SuperAgentWorker{}, err
 	}
-	return core.SuperAgentWorker{ID: autoWorkerRosterID(runtimeID), Label: name, AgentID: id}, nil
+	return core.SuperAgentWorker{ID: autoRosterID(runtimeID, profile, pathID), Label: name, AgentID: id}, nil
 }
 
 // deleteAutoWorkers removes the Agent instances a Super Agent launched, including
@@ -133,7 +144,7 @@ func (s *Service) deleteAutoWorkers(ctx context.Context, superAgentID string) er
 	prefix := autoWorkerAgentID(superAgentID, "")
 	for _, instance := range instances {
 		runtimeID, found := strings.CutPrefix(instance.ID, prefix)
-		owned := instance.ID == "saw_"+superAgentID || (found && (runtimeID == instance.RuntimeID || strings.HasPrefix(runtimeID, instance.RuntimeID+"_")))
+		owned := instance.ID == "saw_"+superAgentID || (found && (runtimeID == instance.RuntimeID || strings.HasPrefix(runtimeID, instance.RuntimeID+"_") || strings.HasPrefix(runtimeID, instance.RuntimeID+profileAgentSep)))
 		if !IsManagedAgent(instance) || !owned {
 			continue
 		}
