@@ -153,6 +153,22 @@ it("applies a custom hours and minutes duration only on Confirm", async () => {
     expect(input("Minutes").value).toBe("00");
     expect(confirm().disabled).toBe(true);
     expect(container.textContent).toContain("Pick at least 1 minute.");
+
+    // Days come before hours, so hours stop at 23 and longer durations go past a day.
+    expect(input("Days").value).toBe("0");
+    await type("Days", "2");
+    await type("Hours", "30");
+    await type("Minutes", "5");
+    expect(input("Hours").value).toBe("23");
+    await act(async () => { confirm().click(); });
+    expect(setKeepAwake).toHaveBeenLastCalledWith({ enabled: true, duration_minutes: 2 * 1440 + 23 * 60 + 5, mode: "display", simulate_activity: false });
+    expect(container.textContent).toContain("On · about 2 d 23 h left");
+
+    // The longest timed duration is 30 days.
+    await type("Days", "99");
+    expect(input("Days").value).toBe("30");
+    expect(input("Hours").value).toBe("0");
+    expect(input("Minutes").value).toBe("00");
   } finally {
     await act(async () => { root.unmount(); });
   }

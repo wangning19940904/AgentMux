@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const maxKeepAwakeMinutes = 24 * 60
+const maxKeepAwakeMinutes = 30 * 24 * 60 // 30 days; 0 ("until turned off") covers longer
 
 // KeepAwakeMode selects which macOS power assertions AgentMux holds.
 type KeepAwakeMode string

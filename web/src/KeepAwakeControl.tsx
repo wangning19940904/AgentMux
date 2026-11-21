@@ -6,7 +6,10 @@ import type { KeepAwakeMode, KeepAwakeRequest, KeepAwakeStatus } from "./api";
 import { useI18n } from "./i18n";
 
 const PREFS_KEY = "agentmux.keepAwake.prefs";
-const MAX_MINUTES = 1440;
+const MINUTES_PER_DAY = 24 * 60;
+/** The longest timed duration; "until turned off" covers anything longer. Matches the server. */
+const MAX_DAYS = 30;
+const MAX_MINUTES = MAX_DAYS * MINUTES_PER_DAY;
 /** Preset durations in minutes; 0 keeps the Mac awake until turned off. */
 export const KEEP_AWAKE_PRESETS = [30, 60, 120, 240, 480, 0] as const;
 const CUSTOM = "custom";
@@ -58,6 +61,13 @@ export function keepAwakeRequest(enabled: boolean, prefs: KeepAwakePrefs): KeepA
 function formatRemaining(seconds: number, t: ReturnType<typeof useI18n>["t"]): string {
   const minutes = Math.max(1, Math.ceil(seconds / 60));
   if (minutes < 60) return t("app.keepAwakeRemaining", { minutes });
+  if (minutes >= MINUTES_PER_DAY) {
+    const days = Math.floor(minutes / MINUTES_PER_DAY);
+    const hours = Math.floor((minutes % MINUTES_PER_DAY) / 60);
+    return hours === 0
+      ? t("app.keepAwakeRemainingDays", { days })
+      : t("app.keepAwakeRemainingDaysHours", { days, hours });
+  }
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0
@@ -84,20 +94,29 @@ interface DurationPickerProps {
   onConfirm: () => void;
 }
 
-/** An hours and minutes picker whose value only takes effect on Confirm. */
+/** A days, hours and minutes picker whose value only takes effect on Confirm. */
 export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange, onConfirm }: DurationPickerProps) {
   const { t } = useI18n();
-  const hours = Math.floor(value / 60);
+  const days = Math.floor(value / MINUTES_PER_DAY);
+  const hours = Math.floor((value % MINUTES_PER_DAY) / 60);
   const minutes = value % 60;
 
   const fields = [
+    {
+      key: "days",
+      name: t("app.keepAwakePickerDays"),
+      unit: t("app.daysShort"),
+      display: String(days),
+      step: (direction: 1 | -1) => onChange(clampMinutes(value + direction * MINUTES_PER_DAY)),
+      set: (next: number) => onChange(clampMinutes(Math.min(next, MAX_DAYS) * MINUTES_PER_DAY + hours * 60 + minutes)),
+    },
     {
       key: "hours",
       name: t("app.keepAwakePickerHours"),
       unit: t("app.hoursShort"),
       display: String(hours),
       step: (direction: 1 | -1) => onChange(clampMinutes(value + direction * 60)),
-      set: (next: number) => onChange(clampMinutes(next * 60 + minutes)),
+      set: (next: number) => onChange(clampMinutes(days * MINUTES_PER_DAY + Math.min(next, 23) * 60 + minutes)),
     },
     {
       key: "minutes",
@@ -110,7 +129,7 @@ export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange,
           ? Math.floor(value / MINUTE_STEP) * MINUTE_STEP + MINUTE_STEP
           : Math.ceil(value / MINUTE_STEP) * MINUTE_STEP - MINUTE_STEP,
       )),
-      set: (next: number) => onChange(clampMinutes(hours * 60 + Math.min(next, 59))),
+      set: (next: number) => onChange(clampMinutes(days * MINUTES_PER_DAY + hours * 60 + Math.min(next, 59))),
     },
   ];
 
