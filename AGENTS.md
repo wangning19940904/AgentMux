@@ -25,3 +25,18 @@ requests a separate installation:
   refresh only `/Applications/AgentMux.app` with `lsregister -f`. Do not reset
   LaunchServices or Spotlight globally. Verify the installed app is running from
   the fixed path and that no extra AgentMux application entry was introduced.
+
+# Checks before committing
+
+- `make check BASE=main` runs only the checks your changes since the merge base
+  with `main` need: committed, uncommitted and untracked files. It prints the
+  plan, runs the selected checks in parallel and ends with a pass/fail summary.
+  Go checks cover the changed packages, their importers and the packages whose
+  tests import those, plus `internal/archguard` for any Go change.
+  `make check-plan BASE=main` prints the plan without running it.
+- `make check` (no `BASE`, or `ALL=1`) still runs every check; CI runs it on
+  pushes to main and plans pull requests from the same table.
+- The path-to-check table is `rules` in `scripts/checkplan/plan.go`, the only
+  place that maps paths to checks. When a test starts reading a file outside
+  its own package directory, add a rule naming that package; when a new tree
+  needs a check, add it there, not to CI.

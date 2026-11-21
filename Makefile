@@ -8,6 +8,8 @@
 #   make desktop         # build the Wails desktop app (requires wails toolchain)
 #   make menubar         # build the macOS SwiftUI menu bar app (macOS only)
 #   make test            # run Go tests
+#   make check           # every check CI runs; BASE=<ref> runs only what the
+#                        # changes since the merge base with <ref> need
 #   make sign-macos      # codesign + notarize the macOS artifacts (needs creds)
 
 BINARY      := amux
@@ -34,8 +36,12 @@ WAILS       ?= $(HOME)/go/bin/wails
 GORELEASER  ?= goreleaser
 STATICCHECK ?= staticcheck
 WEB_DEPS_STAMP := web/node_modules/.package-lock.json
+# The Go packages test, vet and staticcheck check. `make check BASE=<ref>`
+# narrows it to the packages a change can affect.
+GO_PKGS     ?= ./...
+CHECK_PLAN  := go run ./scripts/checkplan
 
-.PHONY: all build web web-deps web-test release cross remote-assets desktop menubar test vet staticcheck tidy-check check clean tidy release-check snapshot
+.PHONY: all build web web-deps web-test release cross remote-assets desktop menubar test vet staticcheck tidy-check check check-plan clean tidy release-check snapshot
 
 all: release
 
@@ -120,18 +126,32 @@ menubar:
 		-framework AppKit -framework SwiftUI
 
 test:
-	go test ./...
+	go test $(GO_PKGS)
 
 vet:
-	go vet ./...
+	go vet $(GO_PKGS)
 
 staticcheck:
-	$(STATICCHECK) ./...
+	$(STATICCHECK) $(GO_PKGS)
 
 tidy-check:
 	go mod tidy -diff
 
+# `make check` runs every check. With BASE=<ref> it runs, in parallel, only the
+# checks the changes since the merge base with <ref> need (committed,
+# uncommitted and untracked), as planned by the path table in
+# scripts/checkplan/plan.go. ALL=1 runs every check even with BASE.
+ifneq ($(and $(BASE),$(if $(ALL),,1)),)
+check:
+	@$(CHECK_PLAN) -base '$(BASE)' -run -make '$(MAKE)'
+else
 check: test vet staticcheck tidy-check web-test web
+endif
+
+# Prints the plan of `make check BASE=<ref>` without running it.
+check-plan:
+	@test -n '$(BASE)' || { echo 'usage: make check-plan BASE=<ref>' >&2; exit 2; }
+	@$(CHECK_PLAN) -base '$(BASE)'
 
 tidy:
 	go mod tidy
