@@ -146,6 +146,9 @@ func TestNotesSayHowAWorkerReachesItsTools(t *testing.T) {
 	if !strings.Contains(line, "close the browser tabs and windows you opened") {
 		t.Fatalf("a worker with a browser is asked to close what it opened: %q", line)
 	}
+	if !strings.Contains(line, "the tab your browser tool opened when it connected") || !strings.Contains(line, "even when it is the last tab you have") {
+		t.Fatalf("a worker is asked to close the tab its browser tool opened on connecting, which it did not open itself: %q", line)
+	}
 	if desktop := toolNotesLine(map[string]string{WorkerToolComputerUse: "the computer-use MCP server"}); desktop == "" || strings.Contains(desktop, "browser tabs") {
 		t.Fatalf("a worker without a browser is not asked to close one: %q", desktop)
 	}
