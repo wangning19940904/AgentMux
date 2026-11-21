@@ -175,6 +175,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 	if err := normalizeSupervision(agent); err != nil {
 		return err
 	}
+	if err := normalizeProgress(agent); err != nil {
+		return err
+	}
 	if err := normalizePlanApproval(agent); err != nil {
 		return err
 	}

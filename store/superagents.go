@@ -82,6 +82,10 @@ func (s *Store) UpdateSuperAgentTrigger(ctx context.Context, trigger core.SuperA
 	return err
 }
 
+func (s *Store) GetSuperAgentTrigger(ctx context.Context, id string) (*core.SuperAgentTrigger, error) {
+	return getSuperAgentRow[core.SuperAgentTrigger](ctx, s, `SELECT data FROM super_agent_triggers WHERE id=?`, id)
+}
+
 func (s *Store) ListPendingSuperAgentTriggers(ctx context.Context, limit int) ([]core.SuperAgentTrigger, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT data FROM super_agent_triggers WHERE disposition=?
 		ORDER BY received_at, id LIMIT ?`, core.SuperAgentDispositionPending, limit)

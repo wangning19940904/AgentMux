@@ -97,6 +97,64 @@ func (e *Engine) RemoveChatReaction(ctx context.Context, channelID, messageID, r
 	e.deleteChannelAckReaction(ctx, rt, &Message{ID: messageID, SourceMessageID: messageID, ChannelID: channelID}, reactionID)
 }
 
+// ErrStatusUnsupported is a channel whose platform cannot keep a status
+// message up to date.
+var ErrStatusUnsupported = errors.New("channel cannot show a status message")
+
+// AddChatStatusReaction marks a message with a given emoji, for work that
+// shows its state as a reaction. Like AddChatReaction it returns "" when the
+// channel is not running, has ack reactions turned off or cannot react.
+func (e *Engine) AddChatStatusReaction(ctx context.Context, channelID, messageID, emoji string) string {
+	rt := e.channelRuntime(channelID)
+	if rt == nil || messageID == "" || emoji == "" || !channelAckReactionEnabled(rt.channel) {
+		return ""
+	}
+	reacter, ok := rt.platform.(MessageReactioner)
+	if !ok {
+		return ""
+	}
+	id, err := reacter.AddReaction(ctx, &Message{ID: messageID, SourceMessageID: messageID, ChannelID: channelID}, emoji)
+	if err != nil {
+		e.log.Warn("add status reaction", "channel", rt.channel.Name, "message_id", messageID, "emoji", emoji, "err", err)
+		return ""
+	}
+	return id
+}
+
+// PostChatStatus posts a message that UpdateChatStatus edits later, as text
+// or as a card, in the thread of messageID when there is one. It falls back
+// to a plain post when the platform refuses the reply, as ReplyToChat does.
+func (e *Engine) PostChatStatus(ctx context.Context, channelID, chatID, messageID, text string, card bool) (string, error) {
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return "", fmt.Errorf("channel %q is not running", channelID)
+	}
+	poster, ok := rt.platform.(StatusMessenger)
+	if !ok {
+		return "", ErrStatusUnsupported
+	}
+	if messageID != "" {
+		msg := &Message{ID: messageID, SourceMessageID: messageID, ChatID: chatID, ChannelID: channelID, ReplyInThread: true}
+		if id, err := poster.PostStatus(ctx, msg, text, card); err == nil {
+			return id, nil
+		}
+	}
+	return poster.PostStatus(ctx, &Message{ChatID: chatID, ChannelID: channelID}, text, card)
+}
+
+// UpdateChatStatus edits a message PostChatStatus posted.
+func (e *Engine) UpdateChatStatus(ctx context.Context, channelID, messageID, text string, card, done, failed bool) error {
+	rt := e.channelRuntime(channelID)
+	if rt == nil {
+		return fmt.Errorf("channel %q is not running", channelID)
+	}
+	poster, ok := rt.platform.(StatusMessenger)
+	if !ok {
+		return ErrStatusUnsupported
+	}
+	return poster.UpdateStatus(ctx, messageID, text, card, done, failed)
+}
+
 // ReplyToChat posts to any chat of a running channel, with no active turn. With
 // a messageID the text replies in that message's thread, falling back to a
 // plain post when the platform refuses, for example because the message was

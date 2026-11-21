@@ -121,9 +121,13 @@ type scopeState struct {
 }
 
 // activity is the latest thing a running worker did.
+// steps counts the tools it called this turn, and tool says what kind the
+// latest one was.
 type activity struct {
-	at   time.Time
-	text string
+	at    time.Time
+	text  string
+	steps int
+	tool  string
 }
 
 // routerView assembles everything the router is shown with an event.
@@ -662,11 +666,15 @@ func (s *Service) steer(ctx context.Context, ticket core.SuperAgentTicket, text 
 func (s *Service) progressRecorder(ticket core.SuperAgentTicket) func(core.InvocationStreamEvent) {
 	seen := map[string]bool{}
 	var lastOutput time.Time
+	var steps int
+	var tool string
 	return func(event core.InvocationStreamEvent) {
 		var line string
 		switch {
 		case event.ToolName != "" && event.ToolCallID != "" && !seen[event.ToolCallID]:
 			seen[event.ToolCallID] = true
+			steps++
+			tool = toolKind(event.ToolName)
 			line = event.ToolName
 			if input := oneLine(event.ToolInput, 160); input != "" {
 				line += ": " + input
@@ -682,7 +690,7 @@ func (s *Service) progressRecorder(ticket core.SuperAgentTicket) func(core.Invoc
 		}
 		at := s.now().UTC()
 		s.mu.Lock()
-		s.activities[ticket.ID] = activity{at: at, text: line}
+		s.activities[ticket.ID] = activity{at: at, text: line, steps: steps, tool: tool}
 		s.mu.Unlock()
 		s.appendProgress(ticket, fmt.Sprintf("- %s %s\n", at.Format("15:04:05"), line))
 	}

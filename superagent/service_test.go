@@ -90,6 +90,20 @@ func (m *memoryStore) UpdateSuperAgentTrigger(_ context.Context, trigger core.Su
 	}
 	return nil
 }
+func (m *memoryStore) GetSuperAgentTrigger(_ context.Context, id string) (*core.SuperAgentTrigger, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, trigger := range m.triggers {
+		if trigger.ID == id {
+			if trigger.Progress != nil {
+				progress := *trigger.Progress
+				trigger.Progress = &progress
+			}
+			return &trigger, nil
+		}
+	}
+	return nil, nil
+}
 func (m *memoryStore) ListPendingSuperAgentTriggers(context.Context, int) ([]core.SuperAgentTrigger, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

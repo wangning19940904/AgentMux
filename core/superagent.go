@@ -88,6 +88,46 @@ const (
 	SuperAgentReviewNeedsUser = "needs_user"
 )
 
+// Progress styles: how a Feishu request shows the work it started.
+const (
+	SuperAgentProgressText     = "text"
+	SuperAgentProgressCard     = "card"
+	SuperAgentProgressReaction = "reaction"
+	SuperAgentProgressOff      = "off"
+)
+
+// SuperAgentProgress is what AgentMux shows in a Feishu thread about the
+// Tickets one request started: a status reaction on the person's message and,
+// unless Style is reaction, a message of its own it edits as the work moves.
+// Edits count the edits of that message, since Feishu limits how often a text
+// message can be edited.
+type SuperAgentProgress struct {
+	Style     string `json:"style"`
+	ChannelID string `json:"channel_id"`
+	ChatID    string `json:"chat_id"`
+	// RequestID is the person's message, which carries the reaction.
+	RequestID  string `json:"request_id"`
+	Reaction   string `json:"reaction,omitempty"`
+	ReactionID string `json:"reaction_id,omitempty"`
+	// MessageID is the status message; Header the agent's reply it opens with.
+	MessageID string    `json:"message_id,omitempty"`
+	Header    string    `json:"header,omitempty"`
+	Shown     string    `json:"shown,omitempty"`
+	ShownAt   time.Time `json:"shown_at,omitzero"`
+	Edits     int       `json:"edits,omitempty"`
+	// Failures counts edits in a row that Feishu refused. Frozen is set once
+	// the message cannot be edited any more; the reaction still follows the
+	// work.
+	Failures int  `json:"failures,omitempty"`
+	Frozen   bool `json:"frozen,omitempty"`
+	// Phase is the state last shown: working, stalled, done, failed or
+	// stopped.
+	Phase string `json:"phase,omitempty"`
+	// Final is set once the status shows the work ended. A Ticket that runs
+	// again opens it again.
+	Final bool `json:"final,omitempty"`
+}
+
 // SuperAgentTimerFollowUp is a one-off wake-up the router set for itself.
 const SuperAgentTimerFollowUp = "follow_up"
 
@@ -165,11 +205,16 @@ type SuperAgent struct {
 	// Supervision is observe (empty), act or off: whether AgentMux records
 	// the signals it derives from open Tickets, and whether it also wakes the
 	// brain with them.
-	Supervision string             `json:"supervision,omitempty"`
-	Sources     []SuperAgentSource `json:"sources"`
-	Enabled     bool               `json:"enabled"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	Supervision string `json:"supervision,omitempty"`
+	// Progress is how a Feishu request shows the work it started while that
+	// work runs: text (empty), card, reaction or off. Text and card keep a
+	// status reaction on the person's message and edit the agent's reply in
+	// place; reaction keeps only the reaction.
+	Progress  string             `json:"progress,omitempty"`
+	Sources   []SuperAgentSource `json:"sources"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 
 	// Dispatch lets a Ticket's worker hand sub-tasks to other workers on the
 	// roster and read their results, within the host's limits. Off by default.
@@ -373,6 +418,9 @@ type SuperAgentTrigger struct {
 	// Answer is what the agent said back to the thread about this event: its
 	// reply and any notice AgentMux added. Empty when it said nothing.
 	Answer string `json:"answer,omitempty"`
+	// Progress is set on a person's Feishu request that started work, while
+	// AgentMux shows that work's state in the thread.
+	Progress *SuperAgentProgress `json:"progress,omitempty"`
 }
 
 // SuperAgentTicket is one unit of authorized work and its current Assignment.

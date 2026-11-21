@@ -1721,6 +1721,10 @@ export interface SuperAgent extends TargetMetadata {
   // What AgentMux does with the signals it derives from running Tickets:
   // observe (empty) records them, act also wakes the brain, off does neither.
   supervision?: "" | "observe" | "act" | "off";
+  // How a Feishu request shows the work it started: text (empty) or card edit
+  // the agent's reply in place beside a status reaction, reaction keeps only
+  // the reaction, off shows neither.
+  progress?: "" | "text" | "card" | "reaction" | "off";
   // When work needs the requester's approval before it starts: off (empty),
   // always, or above a cost tier.
   plan_approval?: "" | "off" | "always" | "above_low" | "above_medium";
