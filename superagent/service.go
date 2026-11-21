@@ -57,6 +57,7 @@ type Store interface {
 	DeleteSuperAgent(context.Context, string) error
 	InsertSuperAgentTrigger(context.Context, core.SuperAgentTrigger) (bool, error)
 	UpdateSuperAgentTrigger(context.Context, core.SuperAgentTrigger) error
+	GetSuperAgentTrigger(context.Context, string) (*core.SuperAgentTrigger, error)
 	ListPendingSuperAgentTriggers(context.Context, int) ([]core.SuperAgentTrigger, error)
 	ListSuperAgentTriggers(context.Context, string, int) ([]core.SuperAgentTrigger, error)
 	UpsertSuperAgentTicket(context.Context, core.SuperAgentTicket) error
@@ -104,6 +105,9 @@ type Options struct {
 	// Reactions marks a Feishu message while the router works on it; nil
 	// marks nothing.
 	Reactions ChatReactor
+	// Progress shows the state of the work a Feishu request started, in its
+	// thread; nil shows nothing. See progress.go.
+	Progress ChatProgress
 	// RuntimeAvailable reports whether an agent framework can run on this machine.
 	RuntimeAvailable func(string) bool
 	// DetectTools finds what workers on this machine can use besides code,
@@ -162,6 +166,14 @@ type Service struct {
 	// reactionKey; see reactions.go.
 	reactor   ChatReactor
 	reactions map[string]reactionMark
+	// progress shows requests' work in their threads. progressWatch holds
+	// the requests to look at, each with the sequence number of its latest
+	// watch, so a pass does not drop one watched again meanwhile.
+	progress      ChatProgress
+	progressMu    sync.Mutex
+	progressWatch map[string]uint64
+	progressSeq   uint64
+	progressWake  chan struct{}
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -244,6 +256,7 @@ func New(options Options) *Service {
 		places: map[string]feishuPlaces{}, scopeChecks: map[string]scopeState{}, activities: map[string]activity{},
 		turnStarts: map[string]time.Time{}, suspects: map[string]time.Time{},
 		reactor: options.Reactions, reactions: map[string]reactionMark{},
+		progress: options.Progress, progressWatch: map[string]uint64{}, progressWake: make(chan struct{}, 1),
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
@@ -304,6 +317,11 @@ func (s *Service) Start(parent context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		s.runSupervision(ctx)
+	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runProgress(ctx)
 	}()
 	return nil
 }
@@ -730,7 +748,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		return id
 	}
 	var accepted, attached, stopped, posted, reviewed, planned bool
-	var ticketIDs, problems, reasons, notices []string
+	var ticketIDs, started, problems, reasons, notices []string
 	if decision.Reason != "" {
 		reasons = append(reasons, decision.Reason)
 	}
@@ -772,6 +790,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			if id, err = s.accept(ctx, agent, trigger, action); err == nil {
 				accepted = true
 				ticketIDs = append(ticketIDs, id)
+				started = append(started, id)
 				if action.placed != nil && action.placed.moved != nil {
 					moved := action.placed.moved
 					reasons = append(reasons, fmt.Sprintf("moved %s from %s to %s (%s): %s", id, moved.RequestedWorkerID, moved.WorkerID, moved.Machine, moved.Reason))
@@ -828,6 +847,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 				if plan.Status == core.SuperAgentPlanApproved {
 					accepted = true
 					ticketIDs = append(ticketIDs, plan.TicketIDs...)
+					started = append(started, plan.TicketIDs...)
 					reasons = append(reasons, "started plan "+plan.ID+" (remembered approval)")
 				} else {
 					reasons = append(reasons, "proposed plan "+plan.ID+" for approval")
@@ -853,6 +873,18 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		if err != nil {
 			s.log.Error("apply router action", "trigger", trigger.ID, "action", action.Action, "err", err)
 			problems = append(problems, action.Action+": "+err.Error())
+		}
+	}
+	// Work a person's message started is shown in its thread while it runs.
+	// The reply that says so becomes the status message, unless it already
+	// went out.
+	if len(started) > 0 {
+		header := reply
+		if replied {
+			header = ""
+		}
+		if s.openProgress(ctx, agent, &trigger, header, started) {
+			replied = true
 		}
 	}
 	sendReply()
@@ -886,6 +918,9 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 	}
 	trigger.Answer = joinAnswer(append([]string{trigger.Answer, reply}, notices...))
 	s.finishTrigger(ctx, trigger, disposition, reason, ticketID)
+	if trigger.Progress != nil {
+		s.watchProgress(trigger.ID)
+	}
 }
 
 func (s *Service) accept(ctx context.Context, agent core.SuperAgent, trigger core.SuperAgentTrigger, action routerAction) (string, error) {
@@ -1090,6 +1125,7 @@ func (s *Service) mutateTicket(ctx context.Context, id string, mutate func(*core
 		return err
 	}
 	s.recordTicket(ctx, *ticket)
+	s.watchProgress(ticket.TriggerID)
 	s.notify()
 	return nil
 }
@@ -1319,6 +1355,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 		return err
 	}
 	s.recordTicket(ctx, *ticket)
+	s.watchProgress(ticket.TriggerID)
 	if cancel := s.running[ticket.SuperAgentID+"|"+id]; cancel != nil {
 		s.stopping[id] = true
 		cancel()

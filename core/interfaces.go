@@ -386,6 +386,16 @@ type MessageReactioner interface {
 	DeleteReaction(ctx context.Context, msg *Message, reactionID string) error
 }
 
+// StatusMessenger is an optional Platform capability for a message that work
+// running outside a channel turn keeps up to date, such as a Super Agent's
+// progress. Unlike a ReplyStream it is addressed by message id alone, so it
+// can be edited again after a restart. card selects a card instead of plain
+// text; done and failed style a card's final state.
+type StatusMessenger interface {
+	PostStatus(ctx context.Context, msg *Message, text string, card bool) (messageID string, err error)
+	UpdateStatus(ctx context.Context, messageID, text string, card, done, failed bool) error
+}
+
 // Agent is an AI coding agent adapter (Claude Code, Codex, ...). It knows how
 // to spawn and manage agent sessions.
 type Agent interface {

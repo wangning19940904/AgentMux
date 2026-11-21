@@ -453,6 +453,12 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
                   </select>
                   <small>{t("superAgentForm.supervisionHelp")}</small>
                 </label>
+                <label className="field"><span>{t("superAgentForm.progress")}</span>
+                  <select value={draft.progress || "text"} onChange={(event) => onChange({ ...draft, progress: event.target.value as SuperAgent["progress"] })}>
+                    {(["text", "card", "reaction", "off"] as const).map((style) => <option key={style} value={style}>{t(`superAgentForm.progress.${style}`)}</option>)}
+                  </select>
+                  <small>{t("superAgentForm.progressHelp")}</small>
+                </label>
                 <label className="field"><span>{t("superAgentForm.planApproval")}</span>
                   <select value={draft.plan_approval || "off"} onChange={(event) => onChange({ ...draft, plan_approval: event.target.value as SuperAgent["plan_approval"] })}>
                     {(["off", "always", "above_low", "above_medium"] as const).map((mode) => <option key={mode} value={mode}>{t(`superAgentForm.planApproval.${mode}`)}</option>)}
