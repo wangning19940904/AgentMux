@@ -395,3 +395,47 @@ func TestABrainSetsAFollowUpThatReportsToItsChat(t *testing.T) {
 		t.Fatalf("follow-up in the chat = %q (all: %q)", got, h.replies.sent())
 	}
 }
+
+func TestAFollowUpIsListedByItsTitle(t *testing.T) {
+	h := newHarness(t)
+	h.followUpRouter(`"in":"18h","title":"Li's approval of the migration"`, "Check whether Li approved the migration. If so, start it.", "")
+	h.ingest("alice", "github:o/r#1", "ask Li about the migration", true)
+	h.settle()
+
+	active := h.timers(core.SuperAgentTimerActive)
+	if len(active) != 1 || active[0].Title != "Li's approval of the migration" {
+		t.Fatalf("timers = %+v", active)
+	}
+	h.ingest("alice", "github:o/r#1", "any news?", true)
+	h.settle()
+	if prompt := h.router.prompts[1]; !strings.Contains(prompt, "Li's approval of the migration") {
+		t.Fatalf("the router was not shown its timer's title:\n%s", prompt)
+	}
+
+	h.advance(18 * time.Hour)
+	h.settle()
+	events := h.timerEvents()
+	// The router sets one on each event, so two came due.
+	if len(events) != 2 {
+		t.Fatalf("timer events = %+v", events)
+	}
+	for _, event := range events {
+		if event.Title != "Follow-up due: Li's approval of the migration" || !strings.Contains(event.Text, "Title: Li's approval of the migration\n") {
+			t.Fatalf("timer event = %+v", event)
+		}
+	}
+}
+
+func TestAFollowUpWithoutATitleIsNamedByItsNote(t *testing.T) {
+	for _, test := range []struct{ title, note, want string }{
+		{"  Li's   approval ", "anything", "Li's approval"},
+		{"", "Check whether Li approved the migration. If so, start it.", "Check whether Li approved the migration"},
+		{"", "检查王宁是否回答生产共享spacex_agent.cn的DDL授权。若已答复，继续。", "检查王宁是否回答生产共享spacex_agent.cn的DDL授权"},
+		{"", "Ping Bob\nabout the release", "Ping Bob"},
+		{"", strings.Repeat("a", 100), strings.Repeat("a", maxTimerTitleRunes) + "…"},
+	} {
+		if got := timerTitle(test.title, test.note); got != test.want {
+			t.Errorf("timerTitle(%q, %q) = %q, want %q", test.title, test.note, got, test.want)
+		}
+	}
+}

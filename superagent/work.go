@@ -241,6 +241,9 @@ func (s *Service) Work(ctx context.Context) (*Work, error) {
 	fleet := s.machineFleet()
 	for _, ticket := range tickets {
 		summary := summarizeTicket(ticket, names[ticket.SuperAgentID], fleet)
+		// The page polls every few seconds and shows neither the reviews nor
+		// the acceptance criteria, which made up about half of what it read.
+		summary.Reviews, summary.DoneWhen, summary.AutoReview = nil, nil, nil
 		if request, found := events[ticket.TriggerID]; found {
 			summary.RequesterName = request.ActorName
 			summary.Request = truncateRunes(request.Text, routingTextShown)

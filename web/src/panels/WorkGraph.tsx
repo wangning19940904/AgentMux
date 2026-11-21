@@ -1,7 +1,7 @@
 import { AlarmClock, Bot, GitBranch, Inbox, Mail, MessageSquare, RotateCcw, Square, TriangleAlert, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../i18n";
-import { formatDuration, isActiveTicket, ticketSince, type TaskLink, type TaskNode, type WorkTask, type WorkTicket, type WorkTimer } from "./workModel";
+import { formatDuration, isActiveTicket, ticketSince, timerTitle, type TaskLink, type TaskNode, type WorkTask, type WorkTicket, type WorkTimer } from "./workModel";
 
 // Every node is a box of a fixed size, so the lines between them follow from
 // the layout alone. The first column holds only requests, which are narrower.
@@ -171,10 +171,10 @@ export function WorkGraph({ task, selected, busy, onSelect, onStop, onCancel, ti
           : wait > 0 ? t("work.node.dueIn", { time: time(timer.due_at), duration: formatDuration(wait) }) : t("work.node.overdue", { time: time(timer.due_at) });
         return {
           icon: <AlarmClock size={14} />,
-          title: timer.note,
+          title: timerTitle(timer),
           meta,
           action: timer.status === "active" && (
-            <button type="button" className="work-node-action" disabled={busy} title={t("common.cancel")} aria-label={`${t("common.cancel")}: ${timer.note}`} onClick={() => onCancel(timer)}>
+            <button type="button" className="work-node-action" disabled={busy} title={t("common.cancel")} aria-label={`${t("common.cancel")}: ${timerTitle(timer)}`} onClick={() => onCancel(timer)}>
               <X size={12} />
             </button>
           ),

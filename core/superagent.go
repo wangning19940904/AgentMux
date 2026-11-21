@@ -605,7 +605,10 @@ type SuperAgentTimer struct {
 	// TicketID is the Ticket a follow-up is about, if any. Stopping that
 	// Ticket cancels the follow-up.
 	TicketID string `json:"ticket_id,omitempty"`
-	// Note is what the router told its later self to do when the timer fires.
+	// Title is a short name for a follow-up that lists show: what it waits
+	// for. Note is what the router told its later self to do when the timer
+	// fires. A timer set before titles has none.
+	Title string    `json:"title,omitempty"`
 	Note  string    `json:"note"`
 	DueAt time.Time `json:"due_at"`
 	// SetBy is the Trigger whose turn set the timer.

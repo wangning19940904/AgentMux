@@ -1072,20 +1072,43 @@ export const api = {
   runSuperAgentDailyReport: (id: string, targetID?: string) => superAgentAction("/api/v1/super-agents/daily-report/run", id, targetID),
   // What every agent on every machine is doing now, one entry per machine.
   // A machine without agents (or too old to list their work) is left out.
-  superAgentWork: async (): Promise<MachineWork[]> => {
+  // Each machine is asked on its own, so a slow one holds up only its own
+  // part: onAnswer gets the entries of one machine as soon as it answers.
+  superAgentWork: async (onAnswer?: (targetID: string, machines: MachineWork[]) => void): Promise<MachineWork[]> => {
     const path = "/api/v1/super-agents/work";
     if (!fleetMode()) {
       const scope = activeMachineScope();
-      return [{ target_id: scope, work: await get<SuperAgentWork>(path) }];
+      const machines = [{ target_id: scope, work: await get<SuperAgentWork>(path) }];
+      onAnswer?.(scope, machines);
+      return machines;
     }
-    const batch = await fleetMonitorQuery<SuperAgentWork>([{ key: "work", path }]);
-    return batch.targets.flatMap((target): MachineWork[] => {
+    const query = (targetIDs?: string[]) => fleetMonitorQuery<SuperAgentWork>([{ key: "work", path }], targetIDs);
+    const machineWork = (batch: Awaited<ReturnType<typeof query>>) => batch.targets.flatMap((target): MachineWork[] => {
       const response = operationFor<SuperAgentWork>(target.responses, "work");
       const machine = { target_id: target.target.id, target_name: target.target.name };
       if (response?.ok && response.data) return [{ ...machine, work: response.data }];
       if (response && [404, 405, 503].includes(response.status)) return [];
       return [{ ...machine, error: response?.error || "unavailable" }];
     });
+    // The host list is a cheap local read; without it, ask all at once.
+    let hosts: RemoteHost[];
+    try {
+      hosts = (await get<RemoteHost[]>("/api/v1/remote/hosts")).filter((host) => host.trusted);
+    } catch {
+      return machineWork(await query());
+    }
+    const targets = [{ id: "local", name: "" }, ...hosts.map((host) => ({ id: host.id, name: host.name || host.host }))];
+    const answers = await Promise.all(targets.map(async (target) => {
+      let machines: MachineWork[];
+      try {
+        machines = machineWork(await query([target.id]));
+      } catch (error) {
+        machines = [{ target_id: target.id, target_name: target.name, error: error instanceof Error ? error.message : String(error) }];
+      }
+      onAnswer?.(target.id, machines);
+      return machines;
+    }));
+    return answers.flat();
   },
   approveSuperAgentPlan: (agentID: string, planID: string, remember: boolean) =>
     postChecked<SuperAgentPlan>("/api/v1/super-agents/plans/approve", { agent_id: agentID, plan_id: planID, remember }),
