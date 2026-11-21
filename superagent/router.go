@@ -135,6 +135,11 @@ type routerContext struct {
 	Tiers    map[string]string
 	Plans    []planView
 	PlanNote string
+	// Stopped is work stopped lately on other threads, with why, so no
+	// thread reports it as current. RepliedTo is the agent's own message
+	// the event replies to.
+	Stopped   []stoppedView
+	RepliedTo map[string]any
 }
 
 // route asks the router about one event. A router that goes quiet for
@@ -392,6 +397,9 @@ func routerPrompt(agent core.SuperAgent, trigger core.SuperAgentTrigger, statuse
 	if view.Where != "" {
 		event["where"] = view.Where
 	}
+	if view.RepliedTo != nil {
+		event["replying_to"] = view.RepliedTo
+	}
 	if trigger.Kind != "" {
 		event["kind"] = trigger.Kind
 		if trigger.TicketID != "" {
@@ -550,6 +558,10 @@ func writeRouterContext(prompt *strings.Builder, agent core.SuperAgent, statuses
 		fmt.Fprintf(prompt, "\nPLANS WAITING FOR APPROVAL (proposed; nothing started yet):\n%s\n", plansJSON)
 	}
 	fmt.Fprintf(prompt, "\nOPEN TICKETS (every thread, newest first):\n%s\n", ticketsJSON)
+	if len(view.Stopped) > 0 {
+		stoppedJSON, _ := json.MarshalIndent(view.Stopped, "", "  ")
+		fmt.Fprintf(prompt, "\nSTOPPED LATELY (on other threads, with why; this work is no longer being done unless someone asks for it again. Its folder still holds earlier reports: never present it as current work):\n%s\n", stoppedJSON)
+	}
 	if len(view.Workspaces) > 0 {
 		workspacesJSON, _ := json.MarshalIndent(view.Workspaces, "", "  ")
 		fmt.Fprintf(prompt, "\nDIRECTORIES IN USE (a running ticket holds each; an accept that would write in one is refused unless it depends on that ticket):\n%s\n", workspacesJSON)

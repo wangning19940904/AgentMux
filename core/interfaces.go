@@ -396,6 +396,14 @@ type StatusMessenger interface {
 	UpdateStatus(ctx context.Context, messageID, text string, card, done, failed bool) error
 }
 
+// MessagePoster is a Platform that reports the message a Reply or Send
+// created, so a later reply to that message can be traced back to what it
+// was about. An empty id means the platform could not tell.
+type MessagePoster interface {
+	ReplyMessage(ctx context.Context, msg *Message, text string) (messageID string, err error)
+	SendMessage(ctx context.Context, chatID, text string) (messageID string, err error)
+}
+
 // Agent is an AI coding agent adapter (Claude Code, Codex, ...). It knows how
 // to spawn and manage agent sessions.
 type Agent interface {

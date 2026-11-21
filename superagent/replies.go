@@ -33,14 +33,15 @@ const (
 )
 
 // ReplySender writes to a Source's Channel. Target is the opaque address the
-// Source stored on the Trigger.
+// Source stored on the Trigger. It returns the id of the chat message it
+// posted, empty when there is none or the platform cannot tell.
 type ReplySender interface {
-	Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) error
+	Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) (string, error)
 }
 
 // ChatSender is the Engine's outbound chat surface.
 type ChatSender interface {
-	ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) error
+	ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) (string, error)
 }
 
 // Replies is the production ReplySender.
@@ -50,31 +51,31 @@ type Replies struct {
 	SendEmail func(ctx context.Context, source core.SuperAgentSource, to string, message []byte) error
 }
 
-func (r *Replies) Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) error {
+func (r *Replies) Send(ctx context.Context, source core.SuperAgentSource, target []byte, text string) (string, error) {
 	switch source.Kind {
 	case core.SuperAgentSourceFeishuMessage, core.SuperAgentSourceFeishuDoc, core.SuperAgentSourceChannel, core.SuperAgentSourceCallback:
 		var reply feishuReply
 		if err := json.Unmarshal(target, &reply); err != nil {
-			return err
+			return "", err
 		}
 		if reply.ChatID == "" {
-			return nil // A document or callback Source without a notify chat records results only.
+			return "", nil // A document or callback Source without a notify chat records results only.
 		}
 		return r.Chats.ReplyToChat(ctx, reply.ChannelID, reply.ChatID, reply.MessageID, truncateRunes(text, maxChatReplyRunes))
 	case core.SuperAgentSourceGitHub:
 		var reply githubReply
 		if err := json.Unmarshal(target, &reply); err != nil {
-			return err
+			return "", err
 		}
-		return r.commentOnGitHub(ctx, source, reply, truncateRunes(text, maxOtherReplyRunes))
+		return "", r.commentOnGitHub(ctx, source, reply, truncateRunes(text, maxOtherReplyRunes))
 	case core.SuperAgentSourceEmail:
 		var reply emailReply
 		if err := json.Unmarshal(target, &reply); err != nil {
-			return err
+			return "", err
 		}
-		return r.replyByEmail(ctx, source, reply, truncateRunes(text, maxOtherReplyRunes))
+		return "", r.replyByEmail(ctx, source, reply, truncateRunes(text, maxOtherReplyRunes))
 	default:
-		return fmt.Errorf("source kind %q cannot reply", source.Kind)
+		return "", fmt.Errorf("source kind %q cannot reply", source.Kind)
 	}
 }
 
