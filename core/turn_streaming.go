@@ -223,6 +223,9 @@ func (e *Engine) driveReplyStream(ctx context.Context, sess AgentSession, stream
 				clearModelRetry()
 			}
 		case EventPermission:
+			if e.resolveGuardInteraction(ctx, sess, ev, data) {
+				continue
+			}
 			if !e.dispatchAgentInteraction(ctx, ev, data) {
 				e.declineAgentInteraction(ctx, sess, ev)
 			} else {

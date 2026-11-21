@@ -158,6 +158,11 @@ type Service struct {
 	suspects   map[string]time.Time
 	// worktreesSwept is when finished Tickets' worktrees were last looked at.
 	worktreesSwept time.Time
+	// reportsMu makes sending one agent's daily report one step, and
+	// reportsScanned is when the agents' report times were last checked;
+	// see daily_report.go.
+	reportsMu      sync.Mutex
+	reportsScanned time.Time
 	// reactions are the marks on messages the router is working on, by
 	// reactionKey; see reactions.go.
 	reactor   ChatReactor
@@ -331,6 +336,9 @@ func (s *Service) notify() {
 func (s *Service) Pass(ctx context.Context) {
 	if err := s.fireDueTimers(ctx); err != nil && ctx.Err() == nil {
 		s.log.Error("super agent timer pass failed", "err", err)
+	}
+	if err := s.fireDailyReports(ctx); err != nil && ctx.Err() == nil {
+		s.log.Error("super agent daily report pass failed", "err", err)
 	}
 	if err := s.evaluatePending(ctx); err != nil && ctx.Err() == nil {
 		s.log.Error("super agent evaluation pass failed", "err", err)
@@ -529,6 +537,12 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	delete(s.routerFeedback, trigger.ID)
 	delete(s.notBefore, trigger.ID)
 	s.mu.Unlock()
+	if trigger.Kind == core.SuperAgentTriggerDailyReport {
+		// Nobody wrote the report, so the people it goes to get the facts.
+		s.finishTrigger(ctx, trigger, core.SuperAgentDispositionFailed, "router failed: "+cause.Error()+"; sent the report's facts as they were", "")
+		s.relayDailyFacts(ctx, agent, trigger)
+		return
+	}
 	if trigger.Kind == core.SuperAgentTriggerTimer || trigger.Kind == core.SuperAgentTriggerSupervision || trigger.Kind == core.SuperAgentTriggerPlan {
 		// Nobody is waiting for an answer to a follow-up or a supervision
 		// signal, and either is for the router, not for a worker or a person.
@@ -594,6 +608,9 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 			return "", err
 		}
 		return ticket.Status, nil
+	}
+	if trigger.Kind == core.SuperAgentTriggerDailyReport && len(decision.Actions) > 0 {
+		return errors.New("a daily report event takes no actions: answer with the report only")
 	}
 	for index, action := range decision.Actions {
 		switch action.Action {

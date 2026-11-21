@@ -1709,10 +1709,24 @@ export interface SuperAgent extends TargetMetadata {
   plan_approval?: "" | "off" | "always" | "above_low" | "above_medium";
   // Lets a Ticket's worker start helpers on other workers of the roster.
   dispatch?: boolean;
+  // A short report of the day, written by the brain once a day.
+  daily_report?: SuperAgentDailyReport;
   sources: SuperAgentSource[];
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+}
+
+// When an agent writes its daily report and where it goes. at is "HH:MM"
+// (09:00 when empty), timezone an IANA zone (the daemon's when empty), to a
+// place such as chat:<id> or person:<login> (empty keeps it in the activity).
+// always sends one on a day with nothing to say.
+export interface SuperAgentDailyReport {
+  enabled: boolean;
+  at?: string;
+  timezone?: string;
+  to?: string;
+  always?: boolean;
 }
 
 // An operator's text for one built-in prompt part. base is the version of the

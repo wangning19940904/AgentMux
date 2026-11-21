@@ -152,6 +152,43 @@ The host limits them, whatever the router asks for:
 A follow-up may set another, which is how "check every hour until it merges"
 works. The 24-hour limit is what bounds such a chain.
 
+## Daily reports
+
+An agent can write a short report of its day. The agent record's `daily_report`
+says when and where:
+
+```json
+"daily_report": {"enabled": true, "at": "09:00", "timezone": "Asia/Shanghai", "to": "chat:oc_…", "always": false}
+```
+
+- **When.** `at` is a local time, `HH:MM`, 09:00 when empty, in `timezone`, the
+  daemon's zone when empty. A report covers the time since the previous one: a
+  day, or up to a week after a gap. One that comes due while the daemon is down is
+  sent late, but not more than 6 hours late; the next report then covers the time.
+  Turning the report on after today's time starts with tomorrow's.
+- **Where.** `to` is a place as a post names it: `chat:<id>` for a Feishu group,
+  `person:<login>` or `agent:<id>` for a direct message, or
+  `github:<owner/repo>#<number>`. It is resolved when the report is sent; a place
+  that cannot be reached is named in the report, which stays in the activity.
+  Without `to`, the report stays in the activity only.
+- **What.** AgentMux gathers the facts from its own records: Tickets finished,
+  failed, stopped and still open; people's events by outcome and the events that
+  failed; work sent back for rework and blocking independent reviews; files the
+  brain changed in its `memory/`; what needs a person (failed Tickets, Tickets
+  waiting on a person's decision, stalled or orphaned Tickets, plans waiting for
+  approval, asks waiting for an answer, replies that could not be delivered); the
+  follow-ups due in the next 24 hours; and frameworks that are failing or at a
+  usage limit. It stores them as an event of kind `daily_report` on the thread
+  `report:daily`, so the brain sees its earlier reports there. The brain writes
+  the report in four sections: tasks, rules and lessons, what needs a person, and
+  anything else important. Its answer is the report.
+- **Quiet days** are skipped unless `always` is true.
+- **No actions.** A report event takes none; an answer with an action block is
+  refused and the router asked again.
+- **When the router fails** after its retries, the facts are sent as they are.
+- **Later.** When the nightly memory pass exists, the rules it learned are one more
+  fact, and the report time should come after it.
+
 ## Owning a Ticket
 
 The brain owns the completion and quality of the Tickets it starts, instead of only
@@ -939,6 +976,7 @@ These routes are for Console administrators and are closed to member accounts.
 | `POST /api/v1/super-agents/github/account` | The GitHub login, classic scopes and reachable repositories of a token in the body, or of a saved Source's token when the body sends it redacted with `super_agent_id` and `source_id` |
 | `POST /api/v1/super-agents/tickets/stop`, `/retry` | Stop or retry a Ticket |
 | `POST /api/v1/super-agents/timers/cancel` | Cancel a follow-up by `id`; `409` when it already fired or was cancelled |
+| `POST /api/v1/super-agents/daily-report/run` | Write the agent's [daily report](#daily-reports) now (`{id}`), covering the time since its last report, even on a quiet day; `409` when the agent is disabled |
 | `GET /api/v1/super-agents/plans?agent_id=` | Beta. The agent's plans, newest first, and its remembered approvals (`{plans, trust}`) |
 | `POST /api/v1/super-agents/plans/approve` | Beta. `{agent_id, plan_id, remember}`: start a pending plan's Tickets; `remember` keeps the requester's approval up to its tier; `400` with the reason when they cannot start now, `409` when the plan is no longer pending |
 | `POST /api/v1/super-agents/plans/decline` | Beta. `{agent_id, plan_id, note}`: decline a pending plan and tell the brain |

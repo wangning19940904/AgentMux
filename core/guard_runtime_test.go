@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +58,53 @@ func TestGuardResolvesNativePermission(t *testing.T) {
 		}
 		if guard.request.Tool != "shell" || guard.request.Action != "execute" || guard.request.AgentID != "agent-1" {
 			t.Fatalf("guard request = %+v", guard.request)
+		}
+	}
+}
+
+type guardStreamRecorder struct{ updates []string }
+
+func (s *guardStreamRecorder) Update(_ context.Context, text string, _, _ bool) error {
+	s.updates = append(s.updates, text)
+	return nil
+}
+
+func (s *guardStreamRecorder) Close(context.Context) error { return nil }
+
+// Streaming channel turns (Feishu/Lark stream_message and stream_card) must
+// apply Guard rules before a permission request becomes an approval card.
+func TestStreamingReplyAppliesGuard(t *testing.T) {
+	for _, test := range []struct {
+		decision GuardDecision
+		response string
+	}{
+		{decision: GuardAllow, response: "accept"},
+		{decision: GuardDeny, response: "decline"},
+	} {
+		guard := &decisionGuard{decision: test.decision}
+		engine := NewEngine(nil, NewHookRunner(nil, nil))
+		engine.SetGuard(guard)
+		session := &guardInteractiveSession{}
+		event := &Event{Type: EventPermission, Interaction: &AgentInteraction{
+			ID: "interaction-1", Kind: AgentInteractionCommandApproval, Command: "git push", Cwd: "/repo",
+		}}
+		events := make(chan *Event, 1)
+		events <- event
+		close(events)
+		stream := &guardStreamRecorder{}
+		engine.driveReplyStream(context.Background(), session, stream, nil, events, map[string]string{
+			"agent_id": "agent-1", "runtime_id": "codex", "channel_id": "channel-1", "conversation_key": "chat-1",
+		})
+		if guard.request == nil || guard.request.Tool != "shell" || guard.request.Args["command"] != "git push" {
+			t.Fatalf("decision %q: guard request = %+v", test.decision, guard.request)
+		}
+		if session.response.Decision != test.response || event.Metadata["guard_decision"] != string(test.decision) {
+			t.Fatalf("decision %q: response=%+v metadata=%v", test.decision, session.response, event.Metadata)
+		}
+		for _, update := range stream.updates {
+			if strings.Contains(update, "等待审批") {
+				t.Fatalf("decision %q: stream showed a pending approval: %q", test.decision, update)
+			}
 		}
 	}
 }
