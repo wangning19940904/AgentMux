@@ -1,10 +1,9 @@
 import { AlarmClock, ChevronDown, ChevronRight, Inbox, RefreshCw, Search, Square, TriangleAlert, Workflow, X } from "lucide-react";
-import { useMemo, useState } from "react";
-import { api } from "../api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { activeMachineScope, api, type MachineWork } from "../api";
 import { confirmAction } from "../components/ConfirmDialog";
 import { usePolling } from "../hooks/usePolling";
 import { useI18n } from "../i18n";
-import { useAsync } from "../useAsync";
 import { ticketStatusClass, timerStatusClass } from "./superAgentCards";
 import { nodeDomID, WorkGraph } from "./WorkGraph";
 import {
@@ -15,6 +14,7 @@ import {
   formatDuration,
   isActiveTicket,
   ticketSince,
+  timerTitle,
   workAgents,
   type TaskBoard,
   type TaskNode,
@@ -27,12 +27,67 @@ import {
 const POLL_INTERVAL_MS = 5_000;
 const TALLY_STATES = ["running", "queued", "done", "failed", "stopped"] as const;
 
+// lastWork is the page's last answer for a machine scope, so coming back to
+// the page shows it at once while a fresh one loads.
+let lastWork: { scope: string; machines: MachineWork[] } | null = null;
+
+// useWork loads what every machine is doing. Each machine's answer replaces
+// its part of the page as soon as it arrives, so a slow machine neither
+// holds up the others nor blanks its own part while it is asked again. A
+// poll can start while a slow machine is still answering the one before;
+// an answer is only dropped when a later one from that machine is shown.
+function useWork() {
+  const [scope] = useState(activeMachineScope);
+  const [data, setData] = useState<MachineWork[] | null>(lastWork?.scope === scope ? lastWork.machines : null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const mounted = useRef(true);
+  const requests = useRef(0);
+  const shown = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const reload = useCallback(async () => {
+    const request = ++requests.current;
+    const answered = new Set<string>();
+    const show = (targetID: string, machines: MachineWork[]) => {
+      answered.add(targetID);
+      if (!mounted.current || (shown.current[targetID] ?? 0) > request) return;
+      shown.current[targetID] = request;
+      setData((current) => [...(current ?? []).filter((machine) => machine.target_id !== targetID), ...machines]);
+    };
+    setLoading(true);
+    try {
+      const all = await api.superAgentWork(show);
+      if (!mounted.current || request !== requests.current) return;
+      // Whatever was not passed on as it came in, and then a machine no
+      // longer in the fleet goes.
+      for (const targetID of new Set(all.map((machine) => machine.target_id ?? ""))) {
+        if (!answered.has(targetID)) show(targetID, all.filter((machine) => (machine.target_id ?? "") === targetID));
+      }
+      setData((current) => (current ?? []).filter((machine) => answered.has(machine.target_id ?? "")));
+      setError(null);
+    } catch (loadError) {
+      if (mounted.current && request === requests.current) setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      if (mounted.current && request === requests.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { if (data) lastWork = { scope, machines: data }; }, [scope, data]);
+  return { data, error, loading, reload };
+}
+
 // WorkPanel shows what every agent on every machine is doing, one flow per
 // task: the request, the workers started for it, what reached them later
 // and the follow-ups set for it, with a way to stop each.
 export function WorkPanel() {
   const { t, language } = useI18n();
-  const machines = useAsync(() => api.superAgentWork(), []);
+  const machines = useWork();
   usePolling(machines.reload, POLL_INTERVAL_MS);
   const [agent, setAgent] = useState("");
   const [query, setQuery] = useState("");
@@ -42,6 +97,8 @@ export function WorkPanel() {
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
   const [selected, setSelected] = useState<{ task: string; node: string } | null>(null);
+  // The follow-up whose details are open, by timerKey.
+  const [openTimer, setOpenTimer] = useState("");
 
   const all = useMemo(() => flattenWork(machines.data ?? []), [machines.data]);
   const agents = useMemo(() => workAgents(all), [all]);
@@ -322,35 +379,86 @@ export function WorkPanel() {
     );
   };
 
-  const timerRow = ({ timer, task, ticket, loose }: TaskBoard["timers"][number]) => {
-    const nodeID = task?.nodes.some((node) => node.id === `f:${timer.id}`) ? `f:${timer.id}` : ticket ? `t:${ticket.id}` : "";
-    const label = task && (ticket && ticket.title !== task.title ? `${task.title} › ${ticket.title}` : task.title);
+  // The task a follow-up belongs to, and the step in its graph to point at.
+  const timerPlace = ({ timer, task, ticket }: TimerEntry) => ({
+    nodeID: task?.nodes.some((node) => node.id === `f:${timer.id}`) ? `f:${timer.id}` : ticket ? `t:${ticket.id}` : "",
+    label: task ? (ticket && ticket.title !== task.title ? `${task.title} › ${ticket.title}` : task.title) : "",
+  });
+
+  // When a follow-up is due, or when it fired or was cancelled.
+  const timerWhen = (timer: WorkTimer) => {
+    if (timer.status === "done") return `${t("superAgents.timerFired")} ${time(timer.fired_at || timer.updated_at)}`;
+    if (timer.status === "cancelled") return `${t("superAgents.timerCancelled")} ${time(timer.updated_at)}`;
+    const wait = Date.parse(timer.due_at) - Date.now();
+    return wait > 0
+      ? t("work.node.dueIn", { time: time(timer.due_at), duration: formatDuration(wait) })
+      : t("work.node.overdue", { time: time(timer.due_at) });
+  };
+
+  // A follow-up in the list: what it waits for, its task and when it is due.
+  // The note and the rest open in a dialog.
+  const timerRow = (entry: TimerEntry) => {
+    const { timer } = entry;
+    const title = timerTitle(timer);
+    const { label } = timerPlace(entry);
     return (
-      <article key={`${timer.target_id}-${timer.id}`} className="work-item">
-        <header>
-          <strong>{timer.note}</strong>
-          <span className="control-row">
-            <span className={`status-badge status-${timerStatusClass(timer.status)}`}>{t(`superAgents.timer.${timer.status}`)}</span>
-            {timer.status === "active" && (
-              <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => cancelTimer(timer)}>
-                <X size={13} /> {t("common.cancel")}
-              </button>
-            )}
-          </span>
-        </header>
-        <dl className="work-facts">
-          <div>
-            <dt>{t("work.timerTask")}</dt>
-            <dd>
-              {task && label
-                ? <button type="button" className="work-link" title={t("work.showInTask", { title: label })} onClick={() => reveal(task, nodeID)}><Workflow size={12} /> {label}</button>
-                : <span className="muted">{timer.ticket_title || t("work.timerNoTask")}</span>}
-              {task && loose && <small className="muted"> ({t("work.timerSameThread")})</small>}
-            </dd>
+      <button key={timerKey(timer)} type="button" className="work-item work-timer-row" aria-label={t("work.timerOpen", { title })} onClick={() => setOpenTimer(timerKey(timer))}>
+        <span className="work-timer-icon"><AlarmClock size={15} /></span>
+        <span className="work-timer-main">
+          <strong>{title}</strong>
+          <small><Workflow size={12} /> {label || timer.ticket_title || t("work.timerNoTask")}</small>
+        </span>
+        <span className="work-timer-when">
+          <span className={`status-badge status-${timerStatusClass(timer.status)}`}>{t(`superAgents.timer.${timer.status}`)}</span>
+          <small>{timerWhen(timer)}</small>
+        </span>
+      </button>
+    );
+  };
+
+  const timerDialog = (entry: TimerEntry) => {
+    const { timer, task, loose } = entry;
+    const title = timerTitle(timer);
+    const { nodeID, label } = timerPlace(entry);
+    const close = () => setOpenTimer("");
+    return (
+      <div className="meeting-dialog-layer">
+        <button className="meeting-dialog-backdrop" aria-label={t("common.close")} onClick={close} type="button" />
+        <section className="surface meeting-dialog work-timer-dialog" role="dialog" aria-modal="true" aria-labelledby="work-timer-title">
+          <button className="meeting-dialog-close" aria-label={t("common.close")} onClick={close} type="button"><X size={17} /></button>
+          <header className="work-timer-dialog-head">
+            <span className="meeting-dialog-icon"><AlarmClock size={16} /></span>
+            <div>
+              <h2 id="work-timer-title">{title}</h2>
+              <span className={`status-badge status-${timerStatusClass(timer.status)}`}>{t(`superAgents.timer.${timer.status}`)}</span>
+            </div>
+          </header>
+          <dl className="work-facts work-timer-facts">
+            <div>
+              <dt>{t("work.timerTask")}</dt>
+              <dd>
+                {task && label
+                  ? <button type="button" className="work-link" title={t("work.showInTask", { title: label })} onClick={() => { close(); reveal(task, nodeID); }}><Workflow size={12} /> {label}</button>
+                  : <span className="muted">{timer.ticket_title || t("work.timerNoTask")}</span>}
+                {task && loose && <small className="muted"> ({t("work.timerSameThread")})</small>}
+              </dd>
+            </div>
+            {timerFacts(timer)}
+            {timer.created_at && <div><dt>{t("work.timerSetAt")}</dt><dd>{time(timer.created_at)}</dd></div>}
+          </dl>
+          <div className="work-timer-note">
+            <h3>{t("work.timerNote")}</h3>
+            <blockquote className="work-request full">{timer.note}</blockquote>
           </div>
-          {timerFacts(timer)}
-        </dl>
-      </article>
+          {timer.status === "active" && (
+            <div className="control-row work-timer-actions">
+              <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => cancelTimer(timer)}>
+                <X size={13} /> {t("work.cancelTimer")}
+              </button>
+            </div>
+          )}
+        </section>
+      </div>
     );
   };
 
@@ -369,6 +477,14 @@ export function WorkPanel() {
       </dl>
     </article>
   );
+
+  const shownTimer = openTimer ? board.timers.find(({ timer }) => timerKey(timer) === openTimer) : undefined;
+  useEffect(() => {
+    if (!openTimer) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpenTimer(""); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openTimer]);
 
   const firstLoad = machines.loading && !machines.data;
   return (
@@ -459,6 +575,11 @@ export function WorkPanel() {
           </section>
         </>
       )}
+      {shownTimer && timerDialog(shownTimer)}
     </div>
   );
 }
+
+type TimerEntry = TaskBoard["timers"][number];
+
+const timerKey = (timer: WorkTimer) => `${timer.target_id}-${timer.id}`;

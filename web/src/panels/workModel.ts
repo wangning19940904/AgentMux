@@ -355,7 +355,7 @@ export function filterBoard(board: TaskBoard, filter: WorkFilter): TaskBoard {
       ]);
       case "helper": return matchesText(query, [node.helper.title, node.helper.instructions, node.helper.worker_id]);
       case "message": return matchesText(query, [node.event.text, node.event.actor_name]);
-      case "timer": return matchesText(query, [node.timer.note]);
+      case "timer": return matchesText(query, [node.timer.title, node.timer.note]);
       case "routing": return matchesText(query, [node.item.title, node.item.text]);
     }
   }));
@@ -364,7 +364,7 @@ export function filterBoard(board: TaskBoard, filter: WorkFilter): TaskBoard {
   return {
     tasks,
     incoming: board.incoming.filter((item) => ofAgent(item) && (!query || matchesText(query, [item.title, item.text, item.actor, item.actor_name, item.super_agent_name, item.thread_key]))),
-    timers: board.timers.filter(({ timer, task }) => ofAgent(timer) && (!query || (task && kept.has(task)) || matchesText(query, [timer.note, timer.ticket_title, timer.super_agent_name, timer.thread_key]))),
+    timers: board.timers.filter(({ timer, task }) => ofAgent(timer) && (!query || (task && kept.has(task)) || matchesText(query, [timer.title, timer.note, timer.ticket_title, timer.super_agent_name, timer.thread_key]))),
   };
 }
 
@@ -378,4 +378,25 @@ export function boardCounts(board: TaskBoard) {
     failed: sum((tally) => tally.failed),
     timers: board.timers.filter(({ timer }) => timer.status === "active").length,
   };
+}
+
+const TITLE_RUNES = 60;
+
+// timerTitle is the short name a follow-up is listed by: the one its router
+// gave, or, for one set before follow-ups had titles, the first sentence of
+// its note.
+export function timerTitle(timer: { title?: string; note: string }) {
+  const squeeze = (text: string) => {
+    const runes = Array.from(text.split(/\s+/).filter(Boolean).join(" "));
+    return runes.length > TITLE_RUNES ? `${runes.slice(0, TITLE_RUNES).join("")}…` : runes.join("");
+  };
+  const title = squeeze(timer.title ?? "");
+  if (title) return title;
+  let note = timer.note.trim().split("\n")[0];
+  // A period inside a name such as example.com ends no sentence.
+  for (const mark of ["。", "！", "？", "；", ". ", "! ", "? ", "; "]) {
+    const end = note.indexOf(mark);
+    if (end > 0) note = note.slice(0, end);
+  }
+  return squeeze(note);
 }

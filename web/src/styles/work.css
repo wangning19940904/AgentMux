@@ -400,3 +400,72 @@ path.work-arrow.link { fill: var(--work-link); }
   .work-search input { width: 100%; }
   .work-filters select { width: 100%; }
 }
+
+/* A follow-up is one line: what it waits for, its task and when it is due.
+   Its note and the rest open in a dialog. */
+.work-timer-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 13px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  background: var(--fill-1);
+  border: 0;
+  border-radius: var(--radius-item);
+  cursor: pointer;
+}
+
+.work-timer-row:hover { background: var(--fill-2); }
+.work-timer-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.work-timer-icon { display: grid; place-items: center; color: var(--muted); }
+
+.work-timer-main,
+.work-timer-when { display: grid; gap: 3px; min-width: 0; }
+
+.work-timer-main strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.work-timer-main small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.work-timer-main small svg { flex: 0 0 auto; }
+
+.work-timer-when { justify-items: end; }
+.work-timer-when small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+.work-timer-dialog { gap: 16px; }
+
+.work-timer-dialog-head { display: flex; align-items: flex-start; gap: 10px; padding-right: 36px; }
+.work-timer-dialog-head > div { display: grid; justify-items: start; gap: 6px; min-width: 0; }
+.work-timer-dialog-head h2 { margin: 0; font-size: 16px; line-height: 1.4; overflow-wrap: anywhere; }
+
+.work-timer-facts { display: grid; gap: 6px; }
+
+.work-timer-note { display: grid; gap: 6px; }
+.work-timer-note h3 { margin: 0; color: var(--muted); font-size: 12px; font-weight: 500; }
+.work-timer-note .work-request.full { max-height: 320px; }
+
+.work-timer-actions { justify-content: flex-end; }
+
+@media (max-width: 640px) {
+  .work-timer-row { grid-template-columns: auto minmax(0, 1fr); }
+  .work-timer-when { grid-column: 2; justify-items: start; }
+}

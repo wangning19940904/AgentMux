@@ -28,6 +28,7 @@ const (
 	minFollowUpDelay   = time.Minute
 	maxFollowUpDelay   = 90 * 24 * time.Hour
 	maxTimerNoteRunes  = 2000
+	maxTimerTitleRunes = 60
 	// A timer event may set another follow-up, which is how "check every hour
 	// until it merges" works. This budget is what bounds such a chain.
 	maxTimerEventsPerDay = 200
@@ -46,6 +47,7 @@ const (
 type timerView struct {
 	ID       string `json:"timer_id"`
 	Due      string `json:"due"`
+	Title    string `json:"title,omitempty"`
 	Note     string `json:"note"`
 	TicketID string `json:"ticket_id,omitempty"`
 }
@@ -198,16 +200,38 @@ func (s *Service) setFollowUp(ctx context.Context, agent core.SuperAgent, trigge
 	if err := ledger.add(); err != nil {
 		return core.SuperAgentTimer{}, err
 	}
+	note := truncateRunes(strings.TrimSpace(action.Note), maxTimerNoteRunes)
 	timer := core.SuperAgentTimer{
 		ID: "stm_" + uuid.NewString(), SuperAgentID: agent.ID, Kind: core.SuperAgentTimerFollowUp, Status: core.SuperAgentTimerActive,
 		ThreadKey: trigger.ThreadKey, SourceID: trigger.SourceID, SourceKind: trigger.SourceKind, Reply: trigger.Reply,
-		TicketID: strings.TrimSpace(ticketID), Note: truncateRunes(strings.TrimSpace(action.Note), maxTimerNoteRunes),
+		TicketID: strings.TrimSpace(ticketID), Title: timerTitle(action.Title, note), Note: note,
 		DueAt: due, SetBy: trigger.ID, CreatedAt: now.UTC(), UpdatedAt: now.UTC(),
 	}
 	if err := s.store.UpsertSuperAgentTimer(ctx, timer); err != nil {
 		return core.SuperAgentTimer{}, err
 	}
 	return timer, nil
+}
+
+// timerTitle is the short name a follow-up is listed by: the one the router
+// gave, or else the first sentence of its note.
+func timerTitle(title, note string) string {
+	squeeze := func(text string) string { return oneLine(strings.Join(strings.Fields(text), " "), maxTimerTitleRunes) }
+	if title = squeeze(title); title != "" {
+		return title
+	}
+	note = strings.TrimSpace(note)
+	if line, _, found := strings.Cut(note, "\n"); found {
+		note = line
+	}
+	// A period inside a name such as example.com ends no sentence; one
+	// followed by a space, or a full-width mark, does.
+	for _, mark := range []string{"。", "！", "？", "；", ". ", "! ", "? ", "; "} {
+		if end := strings.Index(note, mark); end > 0 {
+			note = note[:end]
+		}
+	}
+	return squeeze(note)
 }
 
 // cancelTimer withdraws an active timer. One that already fired or was
@@ -329,8 +353,11 @@ func (s *Service) fireTimer(ctx context.Context, id string, now time.Time) (bool
 	if now.Sub(timer.DueAt) > lateTimerGrace {
 		late = ", " + strings.TrimSuffix(ago(now, timer.DueAt), " ago") + " late"
 	}
-	fmt.Fprintf(&text, "A follow-up you set %s is due (due %s%s).\nYour note: %s\n",
-		ago(now, timer.CreatedAt), timer.DueAt.In(now.Location()).Format(time.RFC3339), late, timer.Note)
+	fmt.Fprintf(&text, "A follow-up you set %s is due (due %s%s).\n", ago(now, timer.CreatedAt), timer.DueAt.In(now.Location()).Format(time.RFC3339), late)
+	if timer.Title != "" {
+		fmt.Fprintf(&text, "Title: %s\n", timer.Title)
+	}
+	fmt.Fprintf(&text, "Your note: %s\n", timer.Note)
 	if timer.TicketID != "" {
 		if ticket, err := s.store.GetSuperAgentTicket(ctx, timer.TicketID); err == nil && ticket != nil {
 			fmt.Fprintf(&text, "Ticket %s %q is %s.\n", ticket.ID, ticket.Title, ticket.Status)
@@ -342,7 +369,7 @@ func (s *Service) fireTimer(ctx context.Context, id string, now time.Time) (bool
 		DedupeKey: fmt.Sprintf("timer:%s:%d", timer.ID, timer.DueAt.Unix()), ThreadKey: timer.ThreadKey,
 		Actor: "agentmux", ActorName: "AgentMux", Addressed: true, Kind: core.SuperAgentTriggerTimer,
 		TicketID: timer.TicketID, SubjectTicketID: timer.TicketID, TimerID: timer.ID,
-		Title: "Follow-up due", Text: text.String(), Reply: timer.Reply,
+		Title: firedTimerTitle(*timer), Text: text.String(), Reply: timer.Reply,
 		Disposition: core.SuperAgentDispositionPending, ReceivedAt: at, UpdatedAt: at,
 	}
 	if _, err := s.store.InsertSuperAgentTrigger(ctx, trigger); err != nil {
@@ -354,6 +381,14 @@ func (s *Service) fireTimer(ctx context.Context, id string, now time.Time) (bool
 		return false, err
 	}
 	return true, nil
+}
+
+// firedTimerTitle names the event a due follow-up raises.
+func firedTimerTitle(timer core.SuperAgentTimer) string {
+	if timer.Title == "" {
+		return "Follow-up due"
+	}
+	return "Follow-up due: " + timer.Title
 }
 
 // timerViews are a thread's active timers as the router is shown them.
@@ -370,7 +405,7 @@ func (s *Service) timerViews(ctx context.Context, agentID, threadKey string) []t
 			continue
 		}
 		views = append(views, timerView{
-			ID: timer.ID, Due: timer.DueAt.In(zone).Format(time.RFC3339),
+			ID: timer.ID, Due: timer.DueAt.In(zone).Format(time.RFC3339), Title: timer.Title,
 			Note: oneLine(timer.Note, maxTimerNoteShown), TicketID: timer.TicketID,
 		})
 	}

@@ -193,6 +193,7 @@ it("formats spans compactly", () => {
 
 const cardOf = (title: string) => [...container.querySelectorAll<HTMLElement>(".work-task")].find((card) => card.querySelector(".work-task-title")?.textContent?.includes(title))!;
 const nodeOf = (card: HTMLElement, text: string) => [...card.querySelectorAll<HTMLElement>(".work-node")].find((node) => node.textContent?.includes(text))!;
+const timerRow = (title: string) => [...container.querySelectorAll<HTMLElement>(".work-timer-row")].find((row) => row.querySelector("strong")?.textContent === title)!;
 const buttonOf = (scope: HTMLElement, text: string) => [...scope.querySelectorAll("button")].find((button) => button.textContent?.includes(text) || button.getAttribute("aria-label")?.includes(text))!;
 
 it("shows each task's workers and stops one on the machine that keeps it", async () => {
@@ -243,15 +244,71 @@ it("shows each task's workers and stops one on the machine that keeps it", async
   await act(async () => buttonOf(cardOf("Answer Li"), "Show the flow of Answer Li").click());
   expect(nodeOf(cardOf("Answer Li"), "Answer Li").textContent).toContain("Done");
 
-  const followUp = [...container.querySelectorAll<HTMLElement>(".work-item")].find((card) => card.textContent?.includes("Check again") && card.textContent?.includes("Set"))!;
+  // A follow-up is one line: its title, its task and when it is due.
+  const followUp = timerRow("Check again");
+  expect(followUp.textContent).toContain("Fix the build");
+  expect(followUp.textContent).toContain("Set");
   expect(followUp.textContent).toContain("in 1h 30m");
-  // It names the task it came from, and goes there.
-  await act(async () => buttonOf(followUp, "Fix the build").click());
+  expect(followUp.textContent).not.toContain("feishu:oc_1");
+  // Its details open in a dialog, which names the task it came from and goes there.
+  await act(async () => followUp.click());
+  let dialog = container.querySelector<HTMLElement>("[role=dialog]")!;
+  expect(dialog.textContent).toContain("What to do when it is due");
+  expect(dialog.textContent).toContain("feishu:oc_1");
+  await act(async () => buttonOf(dialog, "Fix the build").click());
+  expect(container.querySelector("[role=dialog]")).toBeNull();
   expect(running.querySelector(".work-node.selected")?.textContent).toContain("Check again");
   expect(running.querySelector(".work-node-detail")?.textContent).toContain("Follow-up");
-  await act(async () => buttonOf(followUp, "Cancel").click());
+  await act(async () => timerRow("Check again").click());
+  dialog = container.querySelector<HTMLElement>("[role=dialog]")!;
+  await act(async () => buttonOf(dialog, "Cancel follow-up").click());
   await settle();
   expect(cancel).toHaveBeenCalledWith("tm_1", "local");
+});
+
+it("lists a follow-up by its title and keeps its note for the dialog", async () => {
+  const titled: MachineWork[] = [{
+    target_id: "local", target_name: "Local machine",
+    work: {
+      routing: [], tickets: [ticket({ id: "tk_run", title: "Fix the build" })],
+      timers: [
+        timer({ id: "tm_t", title: "Alice's go-ahead for the release", note: "Check whether Alice answered. If she did, start the release; if not, remind her once.", ticket_id: "tk_run", ticket_title: "Fix the build" }),
+        // Set before follow-ups had titles: named by the first sentence of its note.
+        timer({ id: "tm_old", note: "检查王宁是否回答spacex_agent.cn的DDL授权。若已答复，继续推进。", due_at: new Date(now + 3 * 3_600_000).toISOString() }),
+      ],
+    },
+  }];
+  vi.spyOn(api, "superAgentWork").mockResolvedValue(titled);
+  await act(async () => root.render(<I18nProvider language="en"><WorkPanel /></I18nProvider>));
+  await settle();
+
+  const row = timerRow("Alice's go-ahead for the release");
+  expect(row.textContent).not.toContain("remind her once");
+  expect(timerRow("检查王宁是否回答spacex_agent.cn的DDL授权").textContent).not.toContain("继续推进");
+  expect(nodeOf(cardOf("Fix the build"), "Alice's go-ahead").textContent).toContain("in 1h 30m");
+
+  await act(async () => row.click());
+  const dialog = container.querySelector<HTMLElement>("[role=dialog]")!;
+  expect(dialog.querySelector("h2")?.textContent).toBe("Alice's go-ahead for the release");
+  expect(dialog.textContent).toContain("If she did, start the release; if not, remind her once.");
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(container.querySelector("[role=dialog]")).toBeNull();
+});
+
+it("shows each machine's work as soon as that machine answers", async () => {
+  let finish: (machines: MachineWork[]) => void = () => {};
+  vi.spyOn(api, "superAgentWork").mockImplementation((onAnswer) => {
+    onAnswer?.("local", [machines[0]]);
+    return new Promise((resolve) => { finish = resolve; });
+  });
+  await act(async () => root.render(<I18nProvider language="en"><WorkPanel /></I18nProvider>));
+  await settle();
+  // The slow machine has not answered, and the page already shows the rest.
+  expect(cardOf("Fix the build")).toBeTruthy();
+  expect(cardOf("Write report")).toBeUndefined();
+  await act(async () => finish(machines));
+  await settle();
+  expect(cardOf("Write report")).toBeTruthy();
 });
 
 it("shows what a request set in motion, and where a later message went", async () => {
@@ -285,10 +342,9 @@ it("shows what a request set in motion, and where a later message went", async (
   expect(waiting).toContain("Write release notes waits for Verify the fix");
 
   // A follow-up no task on the page explains says so.
-  const alone = [...container.querySelectorAll<HTMLElement>(".work-item")].find((card) => card.textContent?.includes("weekly report"))!;
-  expect(alone.textContent).toContain("No task on this page");
-  const thread = [...container.querySelectorAll<HTMLElement>(".work-item")].find((card) => card.textContent?.includes("ask Alice again"))!;
-  expect(thread.textContent).toContain("(same conversation)");
+  expect(timerRow("weekly report").textContent).toContain("No task on this page");
+  await act(async () => timerRow("ask Alice again").click());
+  expect(container.querySelector("[role=dialog]")?.textContent).toContain("(same conversation)");
 });
 
 it("does not stop a ticket the operator declines to stop", async () => {

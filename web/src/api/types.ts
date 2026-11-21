@@ -2129,6 +2129,8 @@ export interface SuperAgentTimer {
   status: "active" | "done" | "cancelled";
   thread_key: string;
   ticket_id?: string;
+  // A short name for the follow-up; one set before titles has none.
+  title?: string;
   note: string;
   due_at: string;
   fired_at?: string;

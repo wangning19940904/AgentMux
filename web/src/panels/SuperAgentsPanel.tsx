@@ -15,6 +15,7 @@ import { WorkerFace, workerPersona } from "./agents/avatars";
 import { confirmAction } from "../components/ConfirmDialog";
 import { PlanCard, TicketCard, timerStatusClass, triggerStatusClass } from "./superAgentCards";
 import type { CardContext } from "./superAgentCards";
+import { timerTitle } from "./workModel";
 import { SuperAgentChat } from "./SuperAgentChat";
 
 type WorkView = "chat" | "form";
@@ -298,7 +299,7 @@ export function SuperAgentsPanel({ createRequested = false, onCreateRequestHandl
                         return (
                           <article key={timer.id}>
                             <header>
-                              <strong>{timer.note}</strong>
+                              <strong title={timer.note}>{timerTitle(timer)}</strong>
                               <span className="control-row">
                                 <span className={`status-badge status-${timerStatusClass(timer.status)}`}>{t(`superAgents.timer.${timer.status}`)}</span>
                                 {timer.status === "active" && <button className="ghost-action danger-action" disabled={Boolean(busy)} onClick={() => void run("cancel-timer", () => api.cancelSuperAgentTimer(timer.id))}><X size={13} /> {t("common.cancel")}</button>}
