@@ -35,8 +35,6 @@ export const en = {
     "app.keepAwakeCustom": "Custom…",
     "app.keepAwakePickerHours": "Hours",
     "app.keepAwakePickerMinutes": "Minutes",
-    "app.keepAwakeIncrease": "Increase {unit}",
-    "app.keepAwakeDecrease": "Decrease {unit}",
     "app.keepAwakeConfirm": "Confirm",
     "app.keepAwakeDurationTooShort": "Pick at least 1 minute.",
     "app.keepAwakeModeLabel": "What to prevent",

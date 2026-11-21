@@ -1,6 +1,6 @@
 import { SlidingSelection } from "./components/SlidingSelection";
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, Check } from "lucide-react";
 import { api } from "./api";
 import type { KeepAwakeMode, KeepAwakeRequest, KeepAwakeStatus } from "./api";
 import { useI18n } from "./i18n";
@@ -10,7 +10,7 @@ const MAX_MINUTES = 1440;
 /** Preset durations in minutes; 0 keeps the Mac awake until turned off. */
 export const KEEP_AWAKE_PRESETS = [30, 60, 120, 240, 480, 0] as const;
 const CUSTOM = "custom";
-/** The minutes column of the custom picker steps in 5-minute increments. */
+/** Arrow keys in the custom minutes field step in 5-minute increments. */
 const MINUTE_STEP = 5;
 
 export interface KeepAwakePrefs {
@@ -90,14 +90,12 @@ export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange,
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
 
-  const columns = [
+  const fields = [
     {
       key: "hours",
       name: t("app.keepAwakePickerHours"),
       unit: t("app.hoursShort"),
       display: String(hours),
-      canDecrease: hours > 0,
-      canIncrease: value < MAX_MINUTES,
       step: (direction: 1 | -1) => onChange(clampMinutes(value + direction * 60)),
       set: (next: number) => onChange(clampMinutes(next * 60 + minutes)),
     },
@@ -106,9 +104,7 @@ export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange,
       name: t("app.keepAwakePickerMinutes"),
       unit: t("app.minutesShort"),
       display: String(minutes).padStart(2, "0"),
-      canDecrease: value > 0,
-      canIncrease: value < MAX_MINUTES,
-      // Snap to the 5-minute grid, carrying into the hours column.
+      // Arrow keys snap to the 5-minute grid, carrying into the hours.
       step: (direction: 1 | -1) => onChange(clampMinutes(
         direction > 0
           ? Math.floor(value / MINUTE_STEP) * MINUTE_STEP + MINUTE_STEP
@@ -120,52 +116,30 @@ export function KeepAwakeDurationPicker({ value, disabled, canConfirm, onChange,
 
   return (
     <div className="keep-awake-picker" role="group" aria-label={t("app.keepAwakeDuration")}>
-      <div className="keep-awake-picker-columns">
-        {columns.map((column, index) => (
-          <div key={column.key} className="keep-awake-picker-column-wrap">
-            {index > 0 && <span className="keep-awake-picker-separator" aria-hidden="true">:</span>}
-            <div className="keep-awake-picker-column">
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-label={t("app.keepAwakeIncrease", { unit: column.name })}
-                disabled={disabled || !column.canIncrease}
-                onClick={() => column.step(1)}
-              >
-                <ChevronUp size={14} />
-              </button>
-              <label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={column.display}
-                  disabled={disabled}
-                  aria-label={column.name}
-                  onFocus={(event) => event.target.select()}
-                  onChange={(event) => column.set(parseDigits(event.target.value))}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                      event.preventDefault();
-                      column.step(event.key === "ArrowUp" ? 1 : -1);
-                    } else if (event.key === "Enter" && canConfirm) {
-                      onConfirm();
-                    }
-                  }}
-                />
-                <span>{column.unit}</span>
-              </label>
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-label={t("app.keepAwakeDecrease", { unit: column.name })}
-                disabled={disabled || !column.canDecrease}
-                onClick={() => column.step(-1)}
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
-          </div>
+      <div className="keep-awake-picker-fields">
+        {fields.map((field) => (
+          <label key={field.key} className="keep-awake-picker-field">
+            <input
+              className="keep-awake-picker-input"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              value={field.display}
+              disabled={disabled}
+              aria-label={field.name}
+              onFocus={(event) => event.target.select()}
+              onChange={(event) => field.set(parseDigits(event.target.value))}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                  event.preventDefault();
+                  field.step(event.key === "ArrowUp" ? 1 : -1);
+                } else if (event.key === "Enter" && canConfirm) {
+                  onConfirm();
+                }
+              }}
+            />
+            <span>{field.unit}</span>
+          </label>
         ))}
       </div>
       <div className="keep-awake-picker-actions">

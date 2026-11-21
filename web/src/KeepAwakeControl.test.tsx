@@ -102,7 +102,13 @@ it("applies a custom hours and minutes duration only on Confirm", async () => {
   const container = document.createElement("div");
   const root = createRoot(container);
   const input = (name: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!;
-  const button = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+  const type = async (name: string, value: string) => {
+    await act(async () => {
+      const field = input(name);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
   const confirm = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === "Confirm")!;
   const stored = () => JSON.parse(localStorage.getItem("agentmux.keepAwake.prefs") || "{}");
   try {
@@ -119,8 +125,10 @@ it("applies a custom hours and minutes duration only on Confirm", async () => {
     expect(input("Minutes").value).toBe("00");
     expect(confirm().disabled).toBe(true);
 
-    await act(async () => { button("Increase Hours").click(); });
-    await act(async () => { button("Decrease Minutes").click(); });
+    // The picker has only text fields; typing sets each part.
+    expect(container.querySelectorAll(".keep-awake-picker button").length).toBe(1);
+    await type("Hours", "1");
+    await type("Minutes", "55");
     expect(input("Hours").value).toBe("1");
     expect(input("Minutes").value).toBe("55");
     expect(stored().duration).toBeUndefined();
@@ -135,17 +143,13 @@ it("applies a custom hours and minutes duration only on Confirm", async () => {
     expect(setKeepAwake).toHaveBeenLastCalledWith({ enabled: true, duration_minutes: 115, mode: "display", simulate_activity: false });
 
     // While on, Confirm re-applies the new duration immediately.
-    await act(async () => { button("Decrease Hours").click(); });
+    await type("Hours", "0");
     expect(setKeepAwake).toHaveBeenCalledTimes(1);
     await act(async () => { confirm().click(); });
     expect(setKeepAwake).toHaveBeenLastCalledWith({ enabled: true, duration_minutes: 55, mode: "display", simulate_activity: false });
 
     // Zero is not a valid custom duration.
-    await act(async () => {
-      const minutes = input("Minutes");
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(minutes, "0");
-      minutes.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await type("Minutes", "0");
     expect(input("Minutes").value).toBe("00");
     expect(confirm().disabled).toBe(true);
     expect(container.textContent).toContain("Pick at least 1 minute.");
