@@ -225,6 +225,8 @@ func (s *Server) handleRemoteHostDelete(w http.ResponseWriter, r *http.Request) 
 		code := http.StatusInternalServerError
 		if errors.Is(err, os.ErrNotExist) {
 			code = http.StatusNotFound
+		} else if errors.Is(err, errHubListedMachine) {
+			code = http.StatusConflict
 		}
 		writeErr(w, code, err.Error())
 		return

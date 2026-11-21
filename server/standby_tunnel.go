@@ -9,20 +9,25 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wangning19940904/AgentMux/core"
 	linkpkg "github.com/wangning19940904/AgentMux/link"
 )
 
-// A standby hub keeps the primary's machine list, but the machines link to
-// the primary, so the standby cannot open a stream to any of them itself. The
-// primary opens one for it and joins the two: every page the standby shows
-// then reaches the machines live, as it does on the primary.
+// The machines link to the primary hub, so no other machine can open a
+// stream to any of them itself. The primary opens one for it and joins the
+// two: every page that machine shows then reaches the others live, as it
+// does on the primary.
 //
-// Only the standby may do this. It holds a copy of the whole hub and takes
-// over from it, so it reaches nothing it could not reach after a failover.
+// The standby may reach every machine. It holds a copy of the whole hub and
+// takes over from it, so it reaches nothing it could not reach after a
+// failover. Any other machine reaches the machines of its own owner, the ones
+// the hub lists for it (hubFleet). The worker relay already lets it run
+// workers on those, so the whole API adds no machine it could not reach.
 
 const (
 	standbyDialPath = "/uplink/v1/standby/dial/"
@@ -36,7 +41,8 @@ func (s *Server) registerStandbyTunnel(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+standbyDialPath+"{id}", s.handleStandbyDial)
 }
 
-// handleStandbyDial joins the standby to a stream to one of the machines.
+// handleStandbyDial joins a machine linked to this hub to a stream to another
+// one, or to this hub itself.
 func (s *Server) handleStandbyDial(w http.ResponseWriter, r *http.Request) {
 	source, ok := s.relaySource(w, r)
 	if !ok {
@@ -47,20 +53,21 @@ func (s *Server) handleStandbyDial(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "this machine is not the primary hub")
 		return
 	}
-	if !s.isStandbyDevice(ctx, source.ID) {
-		writeErr(w, http.StatusForbidden, "only the standby hub may open streams through this hub")
-		return
-	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), tunnelProtocol) {
 		writeErr(w, http.StatusBadRequest, "upgrade to "+tunnelProtocol+" required")
 		return
 	}
 	targetID := strings.TrimSpace(r.PathValue("id"))
+	self := targetID == fleetHubID || s.ownDeviceIDs()[targetID]
+	if !s.mayReachThroughHub(ctx, source, targetID, self) {
+		writeErr(w, http.StatusNotFound, "no such machine")
+		return
+	}
 	var target net.Conn
-	if s.ownDeviceIDs()[targetID] {
+	if self {
 		target = s.localAPIStream()
 	} else {
-		if device, err := s.st.GetDevice(ctx, targetID); err != nil || device == nil || s.devices == nil {
+		if s.devices == nil {
 			writeErr(w, http.StatusNotFound, "no such machine")
 			return
 		}
@@ -93,6 +100,36 @@ func (s *Server) handleStandbyDial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	joinStreams(&bufferedConn{Conn: conn, reader: buffered.Reader}, target)
+}
+
+// mayReachThroughHub says whether source may open a stream to targetID, which
+// is this hub when self. The standby reaches every machine; another machine
+// reaches the machines of its owner, never itself. This hub belongs to the
+// owner of its own device record, or to no one (the administrator) without
+// one, as unowned devices do.
+func (s *Server) mayReachThroughHub(ctx context.Context, source *core.Device, targetID string, self bool) bool {
+	if targetID == "" || targetID == source.ID {
+		return false
+	}
+	standby := s.isStandbyDevice(ctx, source.ID)
+	if self {
+		return standby || source.OwnerAccountID == s.hubOwnerAccountID(ctx)
+	}
+	device, err := s.st.GetDevice(ctx, targetID)
+	if err != nil || device == nil {
+		return false
+	}
+	return standby || device.OwnerAccountID == source.OwnerAccountID
+}
+
+// hubOwnerAccountID is the owner of this hub's own device record, or empty.
+func (s *Server) hubOwnerAccountID(ctx context.Context) string {
+	for id := range s.ownDeviceIDs() {
+		if device, err := s.st.GetDevice(ctx, id); err == nil && device != nil && device.OwnerAccountID != "" {
+			return device.OwnerAccountID
+		}
+	}
+	return ""
 }
 
 func (s *Server) isStandbyDevice(ctx context.Context, id string) bool {
@@ -134,8 +171,8 @@ func joinStreams(a, b net.Conn) {
 	<-done
 }
 
-// dialViaHub opens a stream to a machine through the primary hub, for a
-// standby. It fails as offline when this machine follows no hub.
+// dialViaHub opens a stream to a machine through the primary hub. It fails
+// as offline when this machine follows no hub.
 func (s *Server) dialViaHub(ctx context.Context, id string) (net.Conn, error) {
 	uplink := s.HubRelay().Uplink()
 	if uplink == nil || s.isPrimaryHub(ctx) {
@@ -193,6 +230,31 @@ func (s *Server) hubPresence(ctx context.Context) map[string]bool {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
 	return s.fleet.presence
+}
+
+// errHubListedMachine refuses to unpair a machine this one only knows from
+// its hub's list: it is paired with the hub, not here.
+var errHubListedMachine = errors.New("this machine is paired with the hub; remove it on the hub")
+
+// hubListedMachines are the machines the hub this one follows lists for it,
+// from the list hubPresence keeps fresh. It is nil on the primary and on a
+// machine that follows no hub.
+func (s *Server) hubListedMachines(ctx context.Context) []fleetMachine {
+	if !s.followsHub(ctx) {
+		return nil
+	}
+	s.hubPresence(ctx) // Asks the hub again when its last list is old.
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	if s.fleet.last == nil {
+		return nil
+	}
+	return slices.Clone(s.fleet.last.Machines)
+}
+
+// followsHub reports whether this machine follows a hub other than itself.
+func (s *Server) followsHub(ctx context.Context) bool {
+	return s.HubRelay().Uplink() != nil && !s.isPrimaryHub(ctx)
 }
 
 // deviceOnline says whether a machine is connected to this hub or, on a
