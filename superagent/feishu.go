@@ -47,11 +47,17 @@ func (s *Service) InterceptMessage(ctx context.Context, msg *core.Message) (bool
 			continue
 		}
 		trigger := feishuMessageTrigger(claim.source, msg)
-		// A mention or a direct message is marked as soon as it is taken, as
-		// a channel turn marks it, until the router has answered. It is
-		// marked before it is stored, so the router never finishes first.
+		// A reply to one of the agent's own messages addresses it, and says
+		// which work it is about.
+		trigger.InReplyTo = s.repliedTo(ctx, claim.agent.ID, msg)
+		replied := trigger.InReplyTo != nil
+		trigger.Addressed = trigger.Addressed || replied
+		// A mention, a direct message or a reply to the agent is marked as
+		// soon as it is taken, as a channel turn marks it, until the router
+		// has answered. It is marked before it is stored, so the router never
+		// finishes first.
 		key := ""
-		if (msg.MentionedBot || msg.ChatType == "p2p") && claim.agent.Enabled && claim.source.Enabled && actorAllowed(claim.source, trigger.Actor) {
+		if (msg.MentionedBot || msg.ChatType == "p2p" || replied) && claim.agent.Enabled && claim.source.Enabled && actorAllowed(claim.source, trigger.Actor) {
 			key = reactionKey(claim.agent.ID, claim.source.ID, trigger.DedupeKey)
 			s.react(ctx, key, trigger.Reply)
 		}

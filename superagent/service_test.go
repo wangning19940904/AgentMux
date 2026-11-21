@@ -385,13 +385,16 @@ type replyStub struct {
 	err     error
 }
 
-func (r *replyStub) Send(_ context.Context, source core.SuperAgentSource, target []byte, text string) error {
+func (r *replyStub) Send(_ context.Context, source core.SuperAgentSource, target []byte, text string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.texts = append(r.texts, text)
 	r.targets = append(r.targets, string(target))
 	r.sources = append(r.sources, source.ID)
-	return r.err
+	if r.err != nil {
+		return "", r.err
+	}
+	return fmt.Sprintf("om_sent_%d", len(r.texts)), nil
 }
 
 // sentTo returns what was sent to one reply address.

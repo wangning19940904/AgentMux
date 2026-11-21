@@ -512,31 +512,31 @@ func TestRepliesReachEachChannel(t *testing.T) {
 	ctx := context.Background()
 
 	gh := core.SuperAgentSource{Kind: core.SuperAgentSourceGitHub, Config: map[string]string{"github_token": "tok", "api_base": github.URL}}
-	if err := replies.Send(ctx, gh, []byte(`{"repo":"acme/app","number":7}`), "fixed"); err != nil {
+	if _, err := replies.Send(ctx, gh, []byte(`{"repo":"acme/app","number":7}`), "fixed"); err != nil {
 		t.Fatal(err)
 	}
 	if comment.path != "/repos/acme/app/issues/7/comments" || comment.auth != "Bearer tok" || !strings.Contains(comment.body, "fixed") {
 		t.Fatalf("comment = %+v", comment)
 	}
 	delete(gh.Config, "github_token")
-	if err := replies.Send(ctx, gh, []byte(`{"repo":"a/b","number":1}`), "x"); err == nil {
+	if _, err := replies.Send(ctx, gh, []byte(`{"repo":"a/b","number":1}`), "x"); err == nil {
 		t.Fatal("a missing token must surface as a reply error")
 	}
 
 	message := core.SuperAgentSource{Kind: core.SuperAgentSourceFeishuMessage}
-	if err := replies.Send(ctx, message, []byte(`{"channel_id":"c","chat_id":"g","message_id":"m"}`), "hello"); err != nil {
+	if _, err := replies.Send(ctx, message, []byte(`{"channel_id":"c","chat_id":"g","message_id":"m"}`), "hello"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(chats.calls, []string{"c g m hello"}) {
 		t.Fatalf("chats = %v", chats.calls)
 	}
 	doc := core.SuperAgentSource{Kind: core.SuperAgentSourceFeishuDoc}
-	if err := replies.Send(ctx, doc, []byte(`{"channel_id":"c"}`), "no notify chat"); err != nil || len(chats.calls) != 1 {
+	if _, err := replies.Send(ctx, doc, []byte(`{"channel_id":"c"}`), "no notify chat"); err != nil || len(chats.calls) != 1 {
 		t.Fatalf("a document Source without a notify chat records only: %v %v", err, chats.calls)
 	}
 
 	email := emailSource()
-	if err := replies.Send(ctx, email, []byte(`{"to":"alice@acme.com","subject":"Re: x","message_id":"<m1>"}`), "done"); err != nil {
+	if _, err := replies.Send(ctx, email, []byte(`{"to":"alice@acme.com","subject":"Re: x","message_id":"<m1>"}`), "done"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(mailed, "alice@acme.com\n") || !strings.Contains(mailed, "In-Reply-To: <m1>") {
@@ -546,9 +546,9 @@ func TestRepliesReachEachChannel(t *testing.T) {
 
 type chatStub struct{ calls []string }
 
-func (c *chatStub) ReplyToChat(_ context.Context, channelID, chatID, messageID, text string) error {
+func (c *chatStub) ReplyToChat(_ context.Context, channelID, chatID, messageID, text string) (string, error) {
 	c.calls = append(c.calls, strings.Join([]string{channelID, chatID, messageID, text}, " "))
-	return nil
+	return "", nil
 }
 
 // fakeDialer routes the fleet's tunnel to a test server, so the remote path runs
@@ -838,10 +838,10 @@ func TestCallbackSourceNeedsASecretAndAChannelForItsChat(t *testing.T) {
 	}
 	chats := &chatStub{}
 	replies := &Replies{Chats: chats}
-	if err := replies.Send(context.Background(), source, []byte(`{"channel_id":"ch","chat_id":"oc_1"}`), "done"); err != nil || !slices.Equal(chats.calls, []string{"ch oc_1  done"}) {
+	if _, err := replies.Send(context.Background(), source, []byte(`{"channel_id":"ch","chat_id":"oc_1"}`), "done"); err != nil || !slices.Equal(chats.calls, []string{"ch oc_1  done"}) {
 		t.Fatalf("reply: %v %v", err, chats.calls)
 	}
-	if err := replies.Send(context.Background(), source, []byte(`{}`), "quiet"); err != nil || len(chats.calls) != 1 {
+	if _, err := replies.Send(context.Background(), source, []byte(`{}`), "quiet"); err != nil || len(chats.calls) != 1 {
 		t.Fatalf("without a chat the result is recorded only: %v %v", err, chats.calls)
 	}
 }

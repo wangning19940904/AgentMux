@@ -158,19 +158,27 @@ func (e *Engine) UpdateChatStatus(ctx context.Context, channelID, messageID, tex
 // ReplyToChat posts to any chat of a running channel, with no active turn. With
 // a messageID the text replies in that message's thread, falling back to a
 // plain post when the platform refuses, for example because the message was
-// deleted.
-func (e *Engine) ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) error {
+// deleted. It returns the posted message's id when the platform reports one.
+func (e *Engine) ReplyToChat(ctx context.Context, channelID, chatID, messageID, text string) (string, error) {
 	rt := e.channelRuntime(channelID)
 	if rt == nil {
-		return fmt.Errorf("channel %q is not running", channelID)
+		return "", fmt.Errorf("channel %q is not running", channelID)
 	}
+	poster, posts := rt.platform.(MessagePoster)
 	if messageID != "" {
 		msg := &Message{ID: messageID, SourceMessageID: messageID, ChatID: chatID, ChannelID: channelID, ReplyInThread: true}
-		if err := rt.platform.Reply(ctx, msg, text); err == nil {
-			return nil
+		if posts {
+			if id, err := poster.ReplyMessage(ctx, msg, text); err == nil {
+				return id, nil
+			}
+		} else if err := rt.platform.Reply(ctx, msg, text); err == nil {
+			return "", nil
 		}
 	}
-	return rt.platform.Send(ctx, chatID, text)
+	if posts {
+		return poster.SendMessage(ctx, chatID, text)
+	}
+	return "", rt.platform.Send(ctx, chatID, text)
 }
 
 // SendToChannel delivers text and artifacts to the exact conversation that

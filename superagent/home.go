@@ -271,6 +271,7 @@ type ticketRecord struct {
 	Attempts       int                           `json:"attempts"`
 	Error          string                        `json:"error,omitempty"`
 	ReplyError     string                        `json:"reply_error,omitempty"`
+	StopReason     string                        `json:"stop_reason,omitempty"`
 	CreatedAt      time.Time                     `json:"created_at"`
 	StartedAt      time.Time                     `json:"started_at,omitzero"`
 	FinishedAt     time.Time                     `json:"finished_at,omitzero"`
@@ -295,7 +296,7 @@ func (s *Service) recordTicket(ctx context.Context, ticket core.SuperAgentTicket
 		DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
 		DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
 		Signals: ticket.Signals, Reviews: ticket.Reviews, ReworkRounds: ticket.ReworkRounds,
-		Error: ticket.Error, ReplyError: ticket.ReplyError, CreatedAt: ticket.CreatedAt,
+		Error: ticket.Error, ReplyError: ticket.ReplyError, StopReason: ticket.StopReason, CreatedAt: ticket.CreatedAt,
 		StartedAt: ticket.StartedAt, FinishedAt: ticket.FinishedAt, UpdatedAt: ticket.UpdatedAt,
 	}
 	for _, link := range ticket.Links {

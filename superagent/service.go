@@ -216,6 +216,9 @@ type Service struct {
 	deliveryMu   sync.Mutex
 	chatActivity map[string]time.Time
 	heldAgents   map[string]bool
+	// sentMu makes each change to an agent's record of sent messages one
+	// step; see sent.go.
+	sentMu sync.Mutex
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -811,6 +814,8 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			return
 		}
 		replied = true
+		// The reply is about the Tickets the router acted on so far, too.
+		class.about.Tickets = compactIDs(append(slices.Clone(class.about.Tickets), ticketIDs...)...)
 		note, err := s.deliver(ctx, agent, trigger.SourceID, trigger.Reply, reply, class)
 		if note != "" {
 			reasons = append(reasons, "reply "+note)
@@ -863,7 +868,7 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			}
 		case actionStop:
 			id := resolve(action.TicketID)
-			if err = s.StopTicket(ctx, id); err == nil || errors.Is(err, ErrConflict) {
+			if err = s.stopTicket(ctx, id, stopReason(trigger, action)); err == nil || errors.Is(err, ErrConflict) {
 				err = nil
 				stopped = true
 				ticketIDs = append(ticketIDs, id)
@@ -1505,6 +1510,21 @@ func (s *Service) finishTurn(runCtx, ctx context.Context, agent core.SuperAgent,
 // cancelling its context closes the local turn or the remote stream, and the
 // remote daemon cancels the invocation when its client disconnects.
 func (s *Service) StopTicket(ctx context.Context, id string) error {
+	return s.stopTicket(ctx, id, "stopped by an operator in AgentMux")
+}
+
+// stopReason is why the router stopped a Ticket: its audit note and, for a
+// person's message, who asked and what they said. Every thread's router is
+// shown it, so none reports the work as current.
+func stopReason(trigger core.SuperAgentTrigger, action routerAction) string {
+	reason := strings.TrimSpace(action.Reason)
+	if who := firstNonEmpty(trigger.ActorName, trigger.Actor); trigger.Kind == "" && who != "" && strings.TrimSpace(trigger.Text) != "" {
+		reason = strings.TrimSpace(reason + " (" + who + " said: " + oneLine(trigger.Text, 200) + ")")
+	}
+	return firstNonEmpty(reason, "stopped by the router")
+}
+
+func (s *Service) stopTicket(ctx context.Context, id, reason string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ticket, err := s.store.GetSuperAgentTicket(ctx, id)
@@ -1519,6 +1539,7 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 	}
 	now := s.now().UTC()
 	ticket.Status = core.SuperAgentTicketStopped
+	ticket.StopReason = reason
 	ticket.Turn = nil
 	ticket.Inputs = nil
 	ticket.FinishedAt, ticket.UpdatedAt = now, now
@@ -1528,6 +1549,9 @@ func (s *Service) StopTicket(ctx context.Context, id string) error {
 		return err
 	}
 	s.recordTicket(ctx, *ticket)
+	// result.md is what a router reads for the state of the work, so it
+	// ends by saying the work stopped.
+	s.appendTicketLog(*ticket, ticketResultFile, "STOPPED: "+reason)
 	s.watchProgress(ticket.TriggerID)
 	if cancel := s.running[ticket.SuperAgentID+"|"+id]; cancel != nil {
 		s.stopping[id] = true

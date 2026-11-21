@@ -192,26 +192,37 @@ func (p *Platform) JoinMeetingByNumber(ctx context.Context, meetingNumber string
 
 // Reply responds to the chat that originated msg.
 func (p *Platform) Reply(ctx context.Context, msg *core.Message, text string) error {
+	_, err := p.ReplyMessage(ctx, msg, text)
+	return err
+}
+
+// ReplyMessage is Reply that returns the posted message's id. It implements
+// core.MessagePoster.
+func (p *Platform) ReplyMessage(ctx context.Context, msg *core.Message, text string) (string, error) {
 	if p.client == nil {
-		return fmt.Errorf("%s: client not started", p.name)
+		return "", fmt.Errorf("%s: client not started", p.name)
 	}
 	if messageID := threadReplyMessageID(msg); messageID != "" {
 		if client, ok := p.client.(threadReplyClient); ok {
-			_, err := client.ReplyText(ctx, messageID, text)
-			return err
+			return client.ReplyText(ctx, messageID, text)
 		}
 	}
-	_, err := p.client.SendText(ctx, msg.ChatID, text)
-	return err
+	return p.client.SendText(ctx, msg.ChatID, text)
 }
 
 // Send delivers an unsolicited message to a chat.
 func (p *Platform) Send(ctx context.Context, chatID, text string) error {
-	if p.client == nil {
-		return fmt.Errorf("%s: client not started", p.name)
-	}
-	_, err := p.client.SendText(ctx, chatID, text)
+	_, err := p.SendMessage(ctx, chatID, text)
 	return err
+}
+
+// SendMessage is Send that returns the posted message's id. It implements
+// core.MessagePoster.
+func (p *Platform) SendMessage(ctx context.Context, chatID, text string) (string, error) {
+	if p.client == nil {
+		return "", fmt.Errorf("%s: client not started", p.name)
+	}
+	return p.client.SendText(ctx, chatID, text)
 }
 
 // ReplyImage uploads an image and delivers it to the originating conversation.

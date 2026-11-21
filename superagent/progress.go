@@ -134,6 +134,7 @@ func (s *Service) openProgress(ctx context.Context, agent core.SuperAgent, trigg
 		return false
 	}
 	progress.MessageID, progress.Shown, progress.ShownAt, progress.Phase = id, text, s.now().UTC(), phase
+	s.rememberSent(ctx, agent.ID, id, text, sentAbout{Thread: trigger.ThreadKey, Tickets: compactIDs(ticketIDs...)})
 	return progress.Header != ""
 }
 

@@ -55,6 +55,9 @@ type deliveryClass struct {
 	state      string
 	ticketID   string
 	triggerID  string
+	// about is what the message is about, so a reply to it can be traced
+	// back; see sent.go.
+	about sentAbout
 }
 
 func (c deliveryClass) repeatKey() string {
@@ -69,7 +72,7 @@ func (c deliveryClass) repeatKey() string {
 // is answered at once. Events AgentMux raised itself, document edits and
 // thread traffic that did not address the agent are unprompted.
 func triggerDelivery(trigger core.SuperAgentTrigger) deliveryClass {
-	class := deliveryClass{ticketID: trigger.TicketID, triggerID: trigger.ID}
+	class := deliveryClass{ticketID: trigger.TicketID, triggerID: trigger.ID, about: triggerAbout(trigger)}
 	item := "thread:" + trigger.ThreadKey
 	if trigger.TicketID != "" {
 		item = "ticket:" + trigger.TicketID
@@ -98,7 +101,7 @@ func triggerDelivery(trigger core.SuperAgentTrigger) deliveryClass {
 // ticketReportDelivery classifies a Ticket's report that AgentMux sends
 // itself, when the brain cannot.
 func ticketReportDelivery(ticket core.SuperAgentTicket) deliveryClass {
-	return deliveryClass{unprompted: true, ticketID: ticket.ID}
+	return deliveryClass{unprompted: true, ticketID: ticket.ID, about: sentAbout{Thread: ticket.ThreadKey, Tickets: []string{ticket.ID}}}
 }
 
 // recipientKey names the chat or person a message goes to, for the cap and
@@ -277,7 +280,9 @@ type HeldMessage struct {
 	Item      string          `json:"item,omitempty"`
 	TicketID  string          `json:"ticket_id,omitempty"`
 	TriggerID string          `json:"trigger_id,omitempty"`
-	HeldAt    time.Time       `json:"held_at"`
+	// About is what the message is about, recorded once it is sent.
+	About  sentAbout `json:"about,omitzero"`
+	HeldAt time.Time `json:"held_at"`
 	// Until is when the message may go next, when that is known: the end of
 	// quiet hours or of the day. A message waiting for a quiet chat has none.
 	Until    time.Time `json:"until,omitzero"`
@@ -347,19 +352,24 @@ func (s *Service) saveDelivery(ctx context.Context, agentID string, state delive
 	return s.saveSetting(ctx, deliverySettingKey+agentID, state)
 }
 
-// transmit writes one message to its Channel.
-func (s *Service) transmit(ctx context.Context, source core.SuperAgentSource, sourceID string, target []byte, text string) error {
+// transmit writes one message to its Channel, and remembers what a chat
+// message it posted was about.
+func (s *Service) transmit(ctx context.Context, agentID string, source core.SuperAgentSource, sourceID string, target []byte, text string, about sentAbout) error {
 	if source.Kind == core.SuperAgentSourceMailbox {
 		return s.sendMail(ctx, target, text)
 	}
 	if s.replies == nil {
 		return nil
 	}
-	err := s.replies.Send(ctx, source, target, text)
-	if err != nil && ctx.Err() == nil {
-		s.log.Warn("super agent reply failed", "source", sourceID, "kind", source.Kind, "err", err)
+	messageID, err := s.replies.Send(ctx, source, target, text)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Warn("super agent reply failed", "source", sourceID, "kind", source.Kind, "err", err)
+		}
+		return err
 	}
-	return err
+	s.rememberSent(ctx, agentID, messageID, text, about)
+	return nil
 }
 
 // deliver sends one message, unless the agent's rules hold it back or drop
@@ -374,7 +384,7 @@ func (s *Service) deliver(ctx context.Context, agent core.SuperAgent, sourceID s
 	}
 	key := recipientKey(source, target)
 	if !class.unprompted || !agent.Delivery.Active() || key == "" {
-		err := s.transmit(ctx, source, sourceID, target, text)
+		err := s.transmit(ctx, agent.ID, source, sourceID, target, text, class.about)
 		if err == nil {
 			s.noteChatActivity(key, s.now())
 		}
@@ -423,7 +433,7 @@ func (s *Service) deliver(ctx context.Context, agent core.SuperAgent, sourceID s
 	if reason != "" {
 		held := HeldMessage{
 			ID: "hld_" + uuid.NewString(), Recipient: key, SourceID: sourceID, Target: target, Text: text,
-			Reason: reason, Item: repeat, TicketID: class.ticketID, TriggerID: class.triggerID,
+			Reason: reason, Item: repeat, TicketID: class.ticketID, TriggerID: class.triggerID, About: class.about,
 			HeldAt: now.UTC(), Until: window.opens(now, reason),
 		}
 		state.Held = append(state.Held, held)
@@ -438,7 +448,7 @@ func (s *Service) deliver(ctx context.Context, agent core.SuperAgent, sourceID s
 		s.markHeld(agent.ID, true)
 		return "held: " + heldNote(reason), nil
 	}
-	if err := s.transmit(ctx, source, sourceID, target, text); err != nil {
+	if err := s.transmit(ctx, agent.ID, source, sourceID, target, text, class.about); err != nil {
 		return "", err
 	}
 	s.noteChatActivity(key, s.now())
@@ -622,7 +632,7 @@ func (s *Service) releaseAgent(ctx context.Context, agent core.SuperAgent) error
 				}
 				continue
 			}
-			if err := s.transmit(ctx, source, out.sourceID, out.target, out.text); err != nil {
+			if err := s.transmit(ctx, agent.ID, source, out.sourceID, out.target, out.text, heldAbout(out.held)); err != nil {
 				if ctx.Err() != nil {
 					kept = append(kept, out.held...)
 					continue

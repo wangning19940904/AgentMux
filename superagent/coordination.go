@@ -28,7 +28,10 @@ const (
 	// so it can still answer questions about them and build on them.
 	openTicketWindow = 72 * time.Hour
 	maxOpenTickets   = 30
-	ticketListLimit  = 200
+	// maxStoppedTickets bounds the work stopped on other threads that the
+	// router is shown.
+	maxStoppedTickets = 20
+	ticketListLimit   = 200
 	// maxReportRunes bounds the worker report quoted in a ticket update. The
 	// router reads result.md for the rest.
 	maxReportRunes   = 6000
@@ -73,10 +76,23 @@ type ticketView struct {
 	Updated  string `json:"updated"`
 	Activity string `json:"last_activity,omitempty"`
 	Folder   string `json:"folder,omitempty"`
+	// StopReason is why a stopped Ticket was stopped. RepliedTo marks a
+	// Ticket the agent's message that this event replies to was about.
+	StopReason string `json:"stop_reason,omitempty"`
+	RepliedTo  bool   `json:"replied_to,omitempty"`
 
 	// Helpers are the sub-tasks its worker handed to other workers that
 	// still run.
 	Helpers []string `json:"helpers,omitempty"`
+}
+
+// stoppedView is work stopped on another thread, as the router is shown it.
+type stoppedView struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Thread  string `json:"thread"`
+	Stopped string `json:"stopped"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type threadLink struct {
@@ -185,16 +201,33 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 		view.PlanNote = planNote(agent, trusted)
 	}
 	view.Timers = s.timerViews(ctx, agent.ID, trigger.ThreadKey)
+	var repliedTickets []string
+	if replied := trigger.InReplyTo; replied != nil {
+		view.RepliedTo, repliedTickets = repliedView(*replied, trigger.ThreadKey, names), replied.TicketIDs
+		note := "This event replies to a message you sent (replying_to in the event). Unless it says otherwise, \"this\", \"it\" or \"这个\" in it mean the work that message was about"
+		if len(repliedTickets) > 0 {
+			note += ": " + strings.Join(repliedTickets, ", ") + ", marked replied_to in OPEN TICKETS"
+		}
+		view.Notes = append(view.Notes, note+", not other work in the same chat.")
+	}
 	now := s.now()
 	view.Now = now.Format(time.RFC3339) + " (" + now.Weekday().String() + ")"
 	shown := 0
 	for _, ticket := range newestFirst(tickets) {
 		onThread := ticket.ThreadKey == trigger.ThreadKey
+		about := slices.Contains(repliedTickets, ticket.ID)
 		recent := now.Sub(ticket.UpdatedAt) < openTicketWindow
-		if shown >= maxOpenTickets || (!onThread && (ticket.Status == core.SuperAgentTicketStopped || !recent)) {
+		stopped := ticket.Status == core.SuperAgentTicketStopped
+		if !onThread && !about && stopped {
+			if recent && len(view.Stopped) < maxStoppedTickets {
+				view.Stopped = append(view.Stopped, stoppedView{
+					ID: ticket.ID, Title: ticket.Title, Thread: describeThread(ticket.ThreadKey, "", names),
+					Stopped: ago(now, firstTime(ticket.FinishedAt, ticket.UpdatedAt)), Reason: ticket.StopReason,
+				})
+			}
 			continue
 		}
-		if onThread && ticket.Status == core.SuperAgentTicketStopped && !recent {
+		if !about && (shown >= maxOpenTickets || !recent && (!onThread || stopped)) {
 			continue
 		}
 		shown++
@@ -202,7 +235,7 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 			ID: ticket.ID, Title: ticket.Title, Status: ticket.Status, Worker: ticket.Worker.ID,
 			Thread: "this thread", DependsOn: ticket.DependsOn, BaseTicket: ticket.BaseTicket,
 			DoneWhen: ticket.DoneWhen, ExpectMinutes: ticket.ExpectMinutes,
-			Updated: ago(now, ticket.UpdatedAt),
+			Updated: ago(now, ticket.UpdatedAt), StopReason: ticket.StopReason, RepliedTo: about,
 		}
 		if !onThread {
 			entry.Thread = describeThread(ticket.ThreadKey, "", names)
@@ -240,6 +273,28 @@ func (s *Service) routerView(ctx context.Context, agent core.SuperAgent, trigger
 		view.Tickets = append(view.Tickets, entry)
 	}
 	return view
+}
+
+// repliedView is the agent's own message an event replies to, as the router
+// is shown it.
+func repliedView(replied core.SuperAgentRepliedMessage, threadKey string, names map[string]string) map[string]any {
+	view := map[string]any{"your_message": replied.Text}
+	if replied.ThreadKey != "" && replied.ThreadKey != threadKey {
+		view["sent_for"] = describeThread(replied.ThreadKey, "", names)
+	}
+	if len(replied.TicketIDs) > 0 {
+		view["ticket_ids"] = replied.TicketIDs
+	}
+	return view
+}
+
+func firstTime(times ...time.Time) time.Time {
+	for _, at := range times {
+		if !at.IsZero() {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 func newestFirst(tickets []core.SuperAgentTicket) []core.SuperAgentTicket {

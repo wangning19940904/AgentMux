@@ -426,6 +426,19 @@ type SuperAgentTrigger struct {
 	// Progress is set on a person's Feishu request that started work, while
 	// AgentMux shows that work's state in the thread.
 	Progress *SuperAgentProgress `json:"progress,omitempty"`
+	// InReplyTo is the agent's own message this one replies to, when AgentMux
+	// recorded what that message was about.
+	InReplyTo *SuperAgentRepliedMessage `json:"in_reply_to,omitempty"`
+}
+
+// SuperAgentRepliedMessage is a message the agent posted that a person
+// replied to: its text, the thread it was sent for and the Tickets it was
+// about.
+type SuperAgentRepliedMessage struct {
+	MessageID string   `json:"message_id"`
+	Text      string   `json:"text,omitempty"`
+	ThreadKey string   `json:"thread_key,omitempty"`
+	TicketIDs []string `json:"ticket_ids,omitempty"`
 }
 
 // SuperAgentTicket is one unit of authorized work and its current Assignment.
@@ -447,7 +460,9 @@ type SuperAgentTicket struct {
 	Output         string           `json:"output,omitempty"`
 	Error          string           `json:"error,omitempty"`
 	ReplyError     string           `json:"reply_error,omitempty"`
-	Reply          json.RawMessage  `json:"reply,omitempty"`
+	// StopReason says why the Ticket was stopped and on whose word.
+	StopReason string          `json:"stop_reason,omitempty"`
+	Reply      json.RawMessage `json:"reply,omitempty"`
 	// DependsOn holds a queued Ticket until each of these is ready. A new
 	// worktree starts from BaseTicket's latest commit instead of the default.
 	DependsOn  []string `json:"depends_on,omitempty"`
