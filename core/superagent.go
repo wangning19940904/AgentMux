@@ -168,6 +168,10 @@ type SuperAgent struct {
 	// DailyReport has the brain write a short report of the day once a day.
 	// Nil or not enabled sends none.
 	DailyReport *SuperAgentDailyReport `json:"daily_report,omitempty"`
+
+	// Delivery holds the rules for messages the agent sends without a person
+	// asking in that turn. The zero value sends every message at once.
+	Delivery SuperAgentDelivery `json:"delivery,omitzero"`
 }
 
 // SuperAgentDailyReport is when an agent writes its daily report and where it
@@ -187,6 +191,43 @@ type SuperAgentDailyReport struct {
 	// Always sends a report on a day with nothing to say. By default such a
 	// day is skipped.
 	Always bool `json:"always,omitempty"`
+}
+
+// SuperAgentDelivery are an agent's rules for messages it sends on its own:
+// Ticket reports, follow-ups, supervision and replies to events no person
+// addressed to it. A reply to a person's message is never held. Each rule is
+// off at its zero value. See docs/architecture/agent-notification-rules.md.
+type SuperAgentDelivery struct {
+	// QuietStart and QuietEnd are "HH:MM" in TimeZone; both empty turns quiet
+	// hours off. A window whose start is after its end crosses midnight.
+	QuietStart string `json:"quiet_start,omitempty"`
+	QuietEnd   string `json:"quiet_end,omitempty"`
+	// TimeZone is an IANA name such as Asia/Shanghai; empty is this machine's.
+	TimeZone string `json:"time_zone,omitempty"`
+	// DailyCap is how many such messages one chat or recipient gets per day
+	// in TimeZone; 0 is no cap.
+	DailyCap int `json:"daily_cap,omitempty"`
+	// QuietChatMinutes holds a message until its chat has been quiet this
+	// long; 0 sends at once.
+	QuietChatMinutes int `json:"quiet_chat_minutes,omitempty"`
+	// Held is what happens to messages held back by quiet hours or the cap:
+	// queue (empty) sends them when the window opens, digest folds them into
+	// one message per chat then.
+	Held string `json:"held,omitempty"`
+	// OncePerDay sends at most one message per day about one item in one
+	// state to one chat, such as one Ticket's stalled signal.
+	OncePerDay bool `json:"once_per_day,omitempty"`
+}
+
+// Delivery held modes (SuperAgentDelivery.Held). Queue is empty.
+const (
+	SuperAgentHeldQueue  = "queue"
+	SuperAgentHeldDigest = "digest"
+)
+
+// Active reports whether any rule is on.
+func (d SuperAgentDelivery) Active() bool {
+	return d.QuietStart != "" || d.DailyCap > 0 || d.QuietChatMinutes > 0 || d.OncePerDay
 }
 
 // SuperAgentPrompt is an operator's text for one built-in prompt part. Base

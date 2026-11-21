@@ -1,8 +1,8 @@
-import { Bot, ChevronRight, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X, Zap } from "lucide-react";
+import { BellOff, Bot, ChevronRight, FolderOpen, HardDrive, Plus, Save, Server, Trash2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { isDesktopApp } from "../../api/desktop";
-import type { MachineTarget, SuperAgent, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../../api";
+import type { MachineTarget, SuperAgent, SuperAgentDelivery, SuperAgentMachine, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../../api";
 import { useI18n } from "../../i18n";
 import { useAsync } from "../../useAsync";
 import { confirmAction } from "../../components/ConfirmDialog";
@@ -473,6 +473,7 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
                   <small>{t("superAgentForm.dispatchHelp")}</small>
                 </label>
                 <DailyReportFields draft={draft} machine={machine} onChange={onChange} />
+                <DeliveryFields value={draft.delivery ?? {}} onChange={(delivery) => onChange({ ...draft, delivery })} />
                 {(promptParts.data ?? []).length > 0 && (
                   <div className="field" role="group" aria-labelledby="saf-worker-prompts">
                     <span id="saf-worker-prompts">{t("superAgentPrompts.workerTitle")}</span>
@@ -573,5 +574,53 @@ function DailyReportFields({ draft, machine, onChange }: { draft: SuperAgent; ma
         </span>
       )}
     </div>
+  );
+}
+
+// DeliveryFields edits the rules for messages an agent sends on its own.
+function DeliveryFields({ value, onChange }: { value: SuperAgentDelivery; onChange: (value: SuperAgentDelivery) => void }) {
+  const { t } = useI18n();
+  const quiet = Boolean(value.quiet_start || value.quiet_end);
+  const number = (raw: string) => Math.max(0, Math.floor(Number(raw) || 0));
+  return (
+    <>
+      <h4 className="super-agent-subhead"><BellOff size={13} aria-hidden="true" /> {t("superAgentForm.delivery")}</h4>
+      <small className="muted">{t("superAgentForm.deliveryHelp")}</small>
+      <label className="field"><span>{t("superAgentForm.delivery.quiet")}</span>
+        <span className="super-agent-check"><input type="checkbox" checked={quiet} onChange={(event) => onChange(event.target.checked ? { ...value, quiet_start: "22:00", quiet_end: "08:00" } : { ...value, quiet_start: "", quiet_end: "" })} /> {t("superAgentForm.delivery.quietOn")}</span>
+      </label>
+      {quiet && (
+        <div className="form-row">
+          <label className="field"><span>{t("superAgentForm.delivery.quietStart")}</span>
+            <input type="time" value={value.quiet_start ?? ""} onChange={(event) => onChange({ ...value, quiet_start: event.target.value })} />
+          </label>
+          <label className="field"><span>{t("superAgentForm.delivery.quietEnd")}</span>
+            <input type="time" value={value.quiet_end ?? ""} onChange={(event) => onChange({ ...value, quiet_end: event.target.value })} />
+          </label>
+        </div>
+      )}
+      <label className="field"><span>{t("superAgentForm.delivery.timeZone")}</span>
+        <input value={value.time_zone ?? ""} placeholder={Intl.DateTimeFormat().resolvedOptions().timeZone} onChange={(event) => onChange({ ...value, time_zone: event.target.value })} />
+        <small>{t("superAgentForm.delivery.timeZoneHelp")}</small>
+      </label>
+      <label className="field"><span>{t("superAgentForm.delivery.dailyCap")}</span>
+        <input type="number" min={0} max={100} value={value.daily_cap ?? 0} onChange={(event) => onChange({ ...value, daily_cap: number(event.target.value) })} />
+        <small>{t("superAgentForm.delivery.dailyCapHelp")}</small>
+      </label>
+      <label className="field"><span>{t("superAgentForm.delivery.quietChat")}</span>
+        <input type="number" min={0} max={60} value={value.quiet_chat_minutes ?? 0} onChange={(event) => onChange({ ...value, quiet_chat_minutes: number(event.target.value) })} />
+        <small>{t("superAgentForm.delivery.quietChatHelp")}</small>
+      </label>
+      <label className="field"><span>{t("superAgentForm.delivery.held")}</span>
+        <select value={value.held || "queue"} onChange={(event) => onChange({ ...value, held: event.target.value as SuperAgentDelivery["held"] })}>
+          <option value="queue">{t("superAgentForm.delivery.held.queue")}</option>
+          <option value="digest">{t("superAgentForm.delivery.held.digest")}</option>
+        </select>
+      </label>
+      <label className="field"><span>{t("superAgentForm.delivery.oncePerDay")}</span>
+        <span className="super-agent-check"><input type="checkbox" checked={value.once_per_day ?? false} onChange={(event) => onChange({ ...value, once_per_day: event.target.checked })} /> {t("superAgentForm.delivery.oncePerDayOn")}</span>
+        <small>{t("superAgentForm.delivery.oncePerDayHelp")}</small>
+      </label>
+    </>
   );
 }

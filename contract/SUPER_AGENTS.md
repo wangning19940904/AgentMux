@@ -463,6 +463,30 @@ by `remembered trust`. The Console lists remembered approvals on the agent's pag
 can revoke each. Plans and remembered approvals are stored as settings of this machine
 (`super_agent_plans:<agent>`, `super_agent_trust:<agent>`), never in the agent's home,
 which its brain can write, and are deleted with the agent.
+
+## Delivery rules
+
+Messages an agent sends without a person asking in that turn (Ticket reports,
+follow-ups, supervision, replies to document edits and to messages that did not
+address it) follow the agent's `delivery` setting. A reply to a person's message
+always goes at once. Each rule is off until set:
+
+- `quiet_start`, `quiet_end` ("HH:MM") and `time_zone` (IANA, empty is the
+  machine's): such messages are held during quiet hours; a start after the end
+  crosses midnight.
+- `daily_cap`: at most this many per chat or recipient per day in that zone.
+- `quiet_chat_minutes`: held until nothing was said in the chat for this long.
+- `held`: `queue` (the default) sends held messages one by one when the window
+  opens, folding what the cap does not allow into one digest; `digest` sends one
+  digest per chat.
+- `once_per_day`: one message per day about one Ticket or thread in one state
+  (a follow-up, a supervision signal, a document edit). Reports are never dropped.
+
+Held messages, today's counts and the last dropped messages are a setting of this
+machine (`super_agent_delivery:<agent>`), deleted with the agent, and listed in the
+agent's activity (`delivery`). The Trigger's reason says when its reply was held.
+See [docs/architecture/agent-notification-rules.md](../docs/architecture/agent-notification-rules.md).
+
 ## Helpers
 
 Optional, and off unless the agent's `dispatch` setting is on. A worker running a Ticket
@@ -901,7 +925,8 @@ description.
 Mode, maximum concurrency and whether the Super Agent is enabled are under Advanced settings,
 with supervision (record only, record and tell the agent, or off; see
 [Supervision](#supervision)), the framework for [independent review](#independent-review),
-and whether workers may start [helpers](#helpers) (`dispatch`, off by default).
+whether workers may start [helpers](#helpers) (`dispatch`, off by default), and the
+[delivery rules](#delivery-rules) for messages the agent sends on its own.
 The Tickets list shows each Ticket's `done_when`, its open signals, its latest review with
 its checks, its independent review's findings, and its helpers with their state and result.
 

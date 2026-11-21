@@ -90,7 +90,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	s.mu.Unlock()
 	// Its plans and remembered approvals go with it, so an agent saved later
 	// with the same id starts with none.
-	for _, key := range []string{plansSettingKey + id, trustSettingKey + id, reportSettingKey + id} {
+	for _, key := range []string{plansSettingKey + id, trustSettingKey + id, reportSettingKey + id, deliverySettingKey + id} {
 		if err := s.store.SetSetting(ctx, key, ""); err != nil {
 			s.log.Warn("forget an agent's plans", "agent", id, "err", err)
 		}
@@ -176,6 +176,9 @@ func (s *Service) normalize(ctx context.Context, agent *core.SuperAgent, existin
 		return err
 	}
 	if err := normalizeDailyReport(agent); err != nil {
+		return err
+	}
+	if err := normalizeDelivery(agent); err != nil {
 		return err
 	}
 	if err := s.normalizeReviewRuntime(agent); err != nil {

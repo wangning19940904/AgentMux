@@ -196,6 +196,14 @@ type Service struct {
 
 	// dispatch keeps the helpers Tickets' workers started; see dispatch.go.
 	dispatch dispatcher
+
+	// deliveryMu makes each unprompted message under an agent's delivery
+	// rules one step; it is never taken while mu is held. chatActivity is
+	// when each chat last had a message, and heldAgents the agents with held
+	// messages; both are guarded by mu. See delivery.go.
+	deliveryMu   sync.Mutex
+	chatActivity map[string]time.Time
+	heldAgents   map[string]bool
 }
 
 // SourceHealth is the latest intake outcome of one Source. A warning is a
@@ -230,6 +238,9 @@ type Activity struct {
 	CostTiers map[string]string      `json:"cost_tiers,omitempty"`
 	Plans     []core.SuperAgentPlan  `json:"plans,omitempty"`
 	Trust     []core.SuperAgentTrust `json:"trust,omitempty"`
+	// Delivery is what the agent's delivery rules hold back, dropped and
+	// counted today; nil when they have done nothing.
+	Delivery *DeliveryActivity `json:"delivery,omitempty"`
 }
 
 func New(options Options) *Service {
@@ -252,7 +263,8 @@ func New(options Options) *Service {
 		mail: options.Mail, github: options.GitHub, docs: options.Docs, documents: map[string][]documentRef{}, channelHasAgent: options.ChannelHasAgent,
 		runtimeAvailable: options.RuntimeAvailable, detectTools: options.DetectTools, mcp: options.MCP, state: options.StateDir,
 		directory: options.Directory, scopes: options.Scopes, healthRecords: options.Health,
-		machineUIDs: options.MachineUIDs,
+		machineUIDs:  options.MachineUIDs,
+		chatActivity: map[string]time.Time{}, heldAgents: map[string]bool{},
 	}
 }
 
@@ -310,6 +322,11 @@ func (s *Service) Start(parent context.Context) error {
 		defer s.wg.Done()
 		s.runSupervision(ctx)
 	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runDeliveries(ctx)
+	}()
 	return nil
 }
 
@@ -360,6 +377,9 @@ func (s *Service) Ingest(ctx context.Context, agent core.SuperAgent, source core
 	}
 	now := s.now().UTC()
 	s.recordEvent(source.ID, now)
+	if len(trigger.Reply) > 0 {
+		s.noteChatActivity(recipientKey(source, trigger.Reply), now)
+	}
 	allowed := actorAllowed(source, trigger.Actor)
 	if !trigger.Addressed {
 		if !allowed {
@@ -565,7 +585,7 @@ func (s *Service) routerFailed(ctx context.Context, agent core.SuperAgent, trigg
 	if errors.As(cause, new(decisionError)) {
 		message = "I could not process this request because my router chose something I cannot carry out. Please try again, or ask the operator to check this Super Agent."
 	}
-	s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, message)
+	s.deliver(ctx, agent, trigger.SourceID, trigger.Reply, message, triggerDelivery(trigger))
 }
 
 func latestLiveTicket(tickets []core.SuperAgentTicket) *core.SuperAgentTicket {
@@ -758,12 +778,17 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 		s.react(ctx, triggerReactionKey(trigger), trigger.Reply)
 	}
 	replied := false
+	class := triggerDelivery(trigger)
 	sendReply := func() {
 		if replied {
 			return
 		}
 		replied = true
-		if err := s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, reply); err != nil && trigger.Kind == core.SuperAgentTriggerTicketUpdate {
+		note, err := s.deliver(ctx, agent, trigger.SourceID, trigger.Reply, reply, class)
+		if note != "" {
+			reasons = append(reasons, "reply "+note)
+		}
+		if err != nil && trigger.Kind == core.SuperAgentTriggerTicketUpdate {
 			_ = s.mutateTicket(ctx, trigger.TicketID, func(ticket *core.SuperAgentTicket) error {
 				ticket.ReplyError = err.Error()
 				return nil
@@ -819,7 +844,11 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 			sendReply()
 			var target destination
 			if target, err = s.resolveDestination(ctx, agent, resolve(action.To), refs); err == nil {
-				if err = s.sendReply(ctx, agent, target.sourceID, target.reply, action.Text); err == nil {
+				var note string
+				if note, err = s.deliver(ctx, agent, target.sourceID, target.reply, action.Text, class); err == nil {
+					if note != "" {
+						reasons = append(reasons, "post to "+strings.TrimSpace(action.To)+" "+note)
+					}
 					posted = true
 					s.notePost(agent.ID, trigger.ThreadKey, trigger.SourceID, trigger.Reply, target, action.Text)
 				}
@@ -876,8 +905,11 @@ func (s *Service) apply(ctx context.Context, agent core.SuperAgent, trigger core
 	// What AgentMux itself must tell the thread, such as a ticket that needs
 	// a decision, goes after the brain's reply, in a message of its own.
 	for _, notice := range notices {
-		if err := s.sendReply(ctx, agent, trigger.SourceID, trigger.Reply, notice); err != nil {
+		note, err := s.deliver(ctx, agent, trigger.SourceID, trigger.Reply, notice, class)
+		if err != nil {
 			problems = append(problems, "notice: "+err.Error())
+		} else if note != "" {
+			reasons = append(reasons, "notice "+note)
 		}
 	}
 	disposition := core.SuperAgentDispositionIgnored
@@ -1302,7 +1334,7 @@ func (s *Service) runTicket(runCtx, ctx context.Context, agent core.SuperAgent, 
 	} else if ctx.Err() == nil {
 		s.log.Error("wake super agent router", "ticket", ticketID, "err", wakeErr)
 	}
-	if replyErr := s.sendReply(ctx, agent, ticket.SourceID, replyTo, reply); replyErr != nil {
+	if _, replyErr := s.deliver(ctx, agent, ticket.SourceID, replyTo, reply, ticketReportDelivery(saved)); replyErr != nil {
 		_ = s.mutateTicket(ctx, ticketID, func(current *core.SuperAgentTicket) error {
 			current.ReplyError = replyErr.Error()
 			return nil
@@ -1424,6 +1456,9 @@ func (s *Service) Activity(ctx context.Context, id string) (*Activity, error) {
 		return nil, err
 	}
 	if activity.Trust, err = s.Trust(ctx, id); err != nil {
+		return nil, err
+	}
+	if activity.Delivery, err = s.deliveryActivity(ctx, *agent); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
