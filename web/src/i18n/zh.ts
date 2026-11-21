@@ -37,8 +37,6 @@ export const zh: Record<keyof typeof en, string> = {
     "app.keepAwakeCustom": "自定义…",
     "app.keepAwakePickerHours": "小时",
     "app.keepAwakePickerMinutes": "分钟",
-    "app.keepAwakeIncrease": "增加{unit}",
-    "app.keepAwakeDecrease": "减少{unit}",
     "app.keepAwakeConfirm": "确认",
     "app.keepAwakeDurationTooShort": "至少选择 1 分钟。",
     "app.keepAwakeModeLabel": "阻止范围",

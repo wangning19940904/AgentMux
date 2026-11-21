@@ -729,82 +729,35 @@ body.sidebar-resizing * {
   border-radius: var(--radius);
 }
 
-.keep-awake-picker-columns {
+.keep-awake-picker-fields {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 6px 14px;
   min-width: 0;
 }
 
-.keep-awake-picker-column-wrap {
-  display: flex;
+.keep-awake-picker-field {
+  display: inline-flex;
   align-items: center;
-}
-
-.keep-awake-picker-separator {
-  padding: 0 1px;
-  color: var(--muted);
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.keep-awake-picker-column {
-  display: grid;
-  justify-items: center;
-}
-
-.keep-awake-picker-column > button {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  min-height: 0;
-  height: 18px;
-  padding: 0;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-}
-
-.keep-awake-picker-column > button:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-subtle);
-}
-
-.keep-awake-picker-column > button:disabled {
-  opacity: 0.3;
-}
-
-.keep-awake-picker-column label {
-  display: flex;
-  align-items: baseline;
-  gap: 2px;
-  padding: 0 4px;
+  gap: 6px;
   cursor: text;
 }
 
-.keep-awake-picker .keep-awake-picker-column input {
-  width: 2.2ch;
+/* Outranks the global input:not([type=checkbox])... rules, whose side padding
+   otherwise hides the digits inside this narrow field. */
+.keep-awake-picker .keep-awake-picker-field input.keep-awake-picker-input[type="text"] {
+  width: 5ch;
+  min-width: 0;
   min-height: 0;
-  height: 26px;
-  padding: 0;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  box-shadow: none;
-  font-size: 20px;
-  font-weight: 650;
+  height: var(--control-h, 30px);
+  padding: 0 6px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  text-align: center;
 }
 
-.keep-awake-picker .keep-awake-picker-column input:focus {
-  background: var(--bg-subtle);
-  outline: none;
-}
-
-.keep-awake-picker-column label span {
+.keep-awake-picker-field span {
   color: var(--muted);
   font-size: var(--fs-xs);
   white-space: nowrap;
