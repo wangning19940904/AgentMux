@@ -1,8 +1,8 @@
-import { useLayoutEffect, useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   api,
   baseMachineScope,
-  setMachineOverride,
+  withMachineScope,
   type EventDelivery,
   type EventSubscription,
   type EventSubscriptionInput,
@@ -22,48 +22,44 @@ export function splitEventValues(value: string): string[] {
     ),
   ];
 }
-export function EventSubscriptionsPanel() {
+type Scoped = <T>(fn: () => T) => T;
+
+// EventSubscriptionsSection is the Triggers page's outbound part that delivers
+// events to a service on one machine. Subscriptions are per machine and their
+// callbacks are loopback only, so with every machine in view it asks which
+// one, and routes only its own requests there.
+export function EventSubscriptionsSection() {
   const { t } = useI18n();
   const fleet = baseMachineScope() === "all";
   const targets = useAsync(() => fleet ? api.fleetTargets() : Promise.resolve([]), [fleet]);
   const [machine, setMachine] = useState("local");
+  const scoped: Scoped = (fn) => fleet ? withMachineScope(machine, fn) : fn();
 
-  // Route the form's effects before they load, just as an agent's machine view does.
-  useLayoutEffect(() => {
-    if (!fleet) return;
-    setMachineOverride(machine);
-    return () => setMachineOverride(null);
-  }, [fleet, machine]);
-
-  return (
-    <div className="page-stack">
-      {fleet && (
-        <div className="control-row">
-          <label className="subscription-machine-picker">
-            <span>{t("remote.currentMachine")}</span>
-            <select value={machine} onChange={(event) => setMachine(event.target.value)}>
-              <option value="local">{t("remote.localMachine")}</option>
-              {(targets.data ?? []).filter((target) => target.id !== "local").map((target) => (
-                <option key={target.id} value={target.id}>{target.name}</option>
-              ))}
-            </select>
-          </label>
-          {targets.error && <span className="error" role="status">{targets.error}</span>}
-        </div>
-      )}
-      <Subscriptions key={machine} />
-    </div>
+  const picker = fleet && (
+    <>
+      <label className="subscription-machine-picker">
+        <span>{t("remote.currentMachine")}</span>
+        <select value={machine} onChange={(event) => setMachine(event.target.value)}>
+          <option value="local">{t("remote.localMachine")}</option>
+          {(targets.data ?? []).filter((target) => target.id !== "local").map((target) => (
+            <option key={target.id} value={target.id}>{target.name}</option>
+          ))}
+        </select>
+      </label>
+      {targets.error && <span className="error" role="status">{targets.error}</span>}
+    </>
   );
+  return <Subscriptions key={machine} scoped={scoped} picker={picker} />;
 }
-function Subscriptions() {
+function Subscriptions({ scoped, picker }: { scoped: Scoped; picker: ReactNode }) {
   const { t } = useI18n();
-  const sources = useAsync(() => api.eventSources(), []);
-  const subscriptions = useAsync(() => api.eventSubscriptions(), []);
+  const sources = useAsync(() => scoped(() => api.eventSources()), []);
+  const subscriptions = useAsync(() => scoped(() => api.eventSubscriptions()), []);
   const [subscriptionID, setSubscriptionID] = useState("");
   const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
   const deliveries = useAsync(
-    () => api.eventDeliveries(subscriptionID, status, offset),
+    () => scoped(() => api.eventDeliveries(subscriptionID, status, offset)),
     [subscriptionID, status, offset],
   );
   const [draft, setDraft] = useState<EventSubscriptionInput | null>(null);
@@ -130,14 +126,15 @@ function Subscriptions() {
     notice || sources.error || subscriptions.error || deliveries.error;
   const hasError = notice ? noticeError : !!error;
   return (
-    <div className="page-stack">
+    <>
       <section className="surface">
         <div className="surface-header">
           <div>
-            <h2>{t("nav.subscriptions")}</h2>
-            <p>{t("events.help")}</p>
+            <h2>{t("triggers.subscriptionsTitle")}</h2>
+            <p className="subtle-copy">{t("events.help")}</p>
           </div>
           <div className="table-actions">
+            {picker}
             <button
               className="ghost-action"
               disabled={busy}
@@ -186,7 +183,7 @@ function Subscriptions() {
               onSubmit={(event) => {
                 event.preventDefault();
                 void run(async () => {
-                  const result = await api.saveEventSubscription({
+                  const result = await scoped(() => api.saveEventSubscription({
                     ...draft,
                     event_types: splitEventValues(typesText),
                     filters: Object.fromEntries(
@@ -195,7 +192,7 @@ function Subscriptions() {
                         splitEventValues(filterText[key] ?? ""),
                       ]).filter(([, values]) => values.length > 0),
                     ),
-                  });
+                  }));
                   setDraft(null);
                   if (result.signing_secret) setSecret(result.signing_secret);
                   setNotice(t("events.saved"));
@@ -377,10 +374,10 @@ function Subscriptions() {
                     disabled={busy}
                     onClick={() =>
                       void run(() =>
-                        api.saveEventSubscription({
+                        scoped(() => api.saveEventSubscription({
                           ...sub,
                           paused: !sub.paused,
-                        }),
+                        })),
                       )
                     }
                   >
@@ -391,7 +388,7 @@ function Subscriptions() {
                     disabled={busy || sub.paused}
                     onClick={() =>
                       void run(async () => {
-                        await api.testEventSubscription(sub.id);
+                        await scoped(() => api.testEventSubscription(sub.id));
                         setNotice(t("events.testQueued"));
                       })
                     }
@@ -403,7 +400,7 @@ function Subscriptions() {
                     disabled={busy}
                     onClick={() =>
                       void run(async () => {
-                        const result = await api.rotateEventSecret(sub.id);
+                        const result = await scoped(() => api.rotateEventSecret(sub.id));
                         setSecret(result.signing_secret);
                       })
                     }
@@ -414,7 +411,7 @@ function Subscriptions() {
                     className="ghost-action danger-action"
                     disabled={busy}
                     onClick={() =>
-                      void run(() => api.deleteEventSubscription(sub.id))
+                      void run(() => scoped(() => api.deleteEventSubscription(sub.id)))
                     }
                   >
                     {t("common.delete")}
@@ -486,7 +483,7 @@ function Subscriptions() {
                   disabled={busy || !delivery.event}
                   onClick={() =>
                     void run(async () =>
-                      setDetail(await api.eventDelivery(delivery.id)),
+                      setDetail(await scoped(() => api.eventDelivery(delivery.id))),
                     )
                   }
                 >
@@ -497,7 +494,7 @@ function Subscriptions() {
                     className="ghost-action"
                     disabled={busy || !delivery.event}
                     onClick={() =>
-                      void run(() => api.retryEventDelivery(delivery.id))
+                      void run(() => scoped(() => api.retryEventDelivery(delivery.id)))
                     }
                   >
                     {t("events.retry")}
@@ -535,6 +532,6 @@ function Subscriptions() {
           )}
         </div>
       </section>
-    </div>
+    </>
   );
 }

@@ -45,7 +45,7 @@ describe("navigation by role", () => {
   // Mirrors the Console's full navigation.
   const consoleGroups = [
     { id: "agents", items: ["agents", "frameworks", "skills", "mcp", "memory"].map((id) => ({ id })) },
-    { id: "connectivity", items: ["channels", "schedules", "triggers", "subscriptions", "meetings"].map((id) => ({ id })) },
+    { id: "connectivity", items: ["channels", "schedules", "triggers", "meetings"].map((id) => ({ id })) },
     { id: "operations", items: ["usage", "health", "sessions", "machine-status", "observability", "feedback", "guard"].map((id) => ({ id })) },
     { id: "system", items: ["machines", "accounts", "settings"].map((id) => ({ id })) },
   ];
@@ -117,6 +117,8 @@ describe("navigation search", () => {
       feishu: "channels",
       cron: "schedules",
       webhook: "triggers",
+      事件订阅: "triggers",
+      "event subscription": "triggers",
       router: "frameworks",
       magpie: "frameworks",
       moxing: "frameworks",

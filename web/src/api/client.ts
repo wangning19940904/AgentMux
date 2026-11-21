@@ -71,6 +71,19 @@ export function withBaseMachineScope<T>(fn: () => T): T {
   }
 }
 
+// withMachineScope runs fn routed to one machine, leaving the rest of the
+// page as it was. Like withBaseMachineScope it covers the requests fn starts
+// before its first await, so wrap each request on its own.
+export function withMachineScope<T>(targetID: string, fn: () => T): T {
+  const saved = machineOverride;
+  machineOverride = targetID.trim() || null;
+  try {
+    return fn();
+  } finally {
+    machineOverride = saved;
+  }
+}
+
 export function setActiveMachineScope(scope: MachineScope) {
   const value = String(scope || "all").trim() || "all";
   localStorage.setItem(ACTIVE_REMOTE_KEY, value);

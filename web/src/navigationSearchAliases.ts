@@ -64,11 +64,11 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "dingshirenwu", "ding shi ren wu", "dsrw", "dingshi", "ding shi", "ds",
     "schedule", "schedules", "scheduled task", "cron", "recurring task",
   ],
-  subscriptions: ["事件订阅", "消息转发", "订阅", "event subscription", "callback", "relay"],
   triggers: [
-    "触发器", "触发", "Webhook", "事件回调", "回调", "自动化",
+    "触发器", "触发", "Webhook", "事件回调", "回调", "自动化", "事件订阅", "消息转发", "订阅", "入站", "出站",
     "chufaqi", "chu fa qi", "cfq", "chufa", "chu fa", "cf", "huidiao", "hui diao", "hd",
     "trigger", "triggers", "webhook", "event callback", "callback", "automation",
+    "event subscription", "subscription", "relay", "inbound", "outbound", "meego",
   ],
   "machine-status": [
     "机器状态", "机器监控", "主机监控", "资源监控", "服务器状态", "负载", "磁盘", "内存", "CPU", "网速",
