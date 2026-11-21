@@ -63,6 +63,34 @@ describe("buildConversations", () => {
     expect(conversations[0].participants).toEqual([]);
   });
 
+  it("stops asking for attention once someone writes again and the agent takes it up", () => {
+    const thread = "feishu:c1:oc_dm:om_1";
+    const needsUser = ticket({
+      id: "k1", thread_key: thread, updated_at: "2026-11-15T09:30:00Z",
+      reviews: [{ verdict: "needs_user", note: "Approve the DDL?", at: "2026-11-15T09:30:00Z" }],
+    });
+    const failed = trigger({ id: "f", thread_key: thread, disposition: "failed", received_at: "2026-11-15T09:00:00Z" });
+    const attention = (triggers: SuperAgentTrigger[], tickets: SuperAgentTicket[] = []) =>
+      buildConversations(activity({ triggers, tickets }))[1].attention;
+
+    expect(attention([failed])).toBe(true);
+    // Resent and answered: the failure is behind them.
+    expect(attention([failed, trigger({ id: "r", thread_key: thread, disposition: "answered", received_at: "2026-11-15T09:05:00Z" })])).toBe(false);
+    // A resend that also failed, or one still waiting, answers nothing.
+    expect(attention([failed, trigger({ id: "r", thread_key: thread, disposition: "failed", received_at: "2026-11-15T09:05:00Z" })])).toBe(true);
+    expect(attention([failed, trigger({ id: "r", thread_key: thread, disposition: "pending", received_at: "2026-11-15T09:05:00Z" })])).toBe(true);
+
+    // A question to people asked after the last message is still open.
+    const earlier = trigger({ id: "r", thread_key: thread, disposition: "accepted", received_at: "2026-11-15T09:05:00Z" });
+    expect(attention([earlier], [needsUser])).toBe(true);
+    expect(attention([earlier, trigger({ id: "a", thread_key: thread, disposition: "follow_up", received_at: "2026-11-15T09:40:00Z" })], [needsUser])).toBe(false);
+    // Machine callbacks and AgentMux's own events are not someone answering.
+    expect(attention([earlier, trigger({ id: "m", thread_key: thread, source_kind: "callback", disposition: "accepted", received_at: "2026-11-15T09:40:00Z" })], [needsUser])).toBe(true);
+    expect(attention([earlier, trigger({ id: "u", kind: "ticket_update", thread_key: thread, answer: "update", received_at: "2026-11-15T09:40:00Z" })], [needsUser])).toBe(true);
+    // A stopped ticket no longer waits on anyone.
+    expect(attention([earlier], [{ ...needsUser, status: "stopped" }])).toBe(false);
+  });
+
   it("always offers the console, even with no history", () => {
     expect(buildConversations(null).map((item) => item.key)).toEqual(["console"]);
   });
