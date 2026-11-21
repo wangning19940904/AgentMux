@@ -1,25 +1,24 @@
 /*
  * Usage and Health dashboards.
  *
- * The chart's series colours are a fixed categorical order checked for
- * colour-blind separation against both surfaces; "Other" is neutral. A series
- * keeps its slot when filters reorder the chart.
+ * Muted chart colours share the compact dashboard palette. A series keeps
+ * its slot when filters reorder the chart, and the legend names each series.
  */
 :root {
-  --series-0: #2a78d6;
-  --series-1: #eb6834;
-  --series-2: #1baf7a;
-  --series-3: #eda100;
-  --series-4: #e87ba4;
+  --series-0: #6758d5;
+  --series-1: #9690c0;
+  --series-2: #6b7280;
+  --series-3: #b3acdf;
+  --series-4: #8a90a5;
   --series-other: #b9b9bf;
 }
 
 :root[data-theme="dark"] {
-  --series-0: #3987e5;
-  --series-1: #d95926;
-  --series-2: #199e70;
-  --series-3: #c98500;
-  --series-4: #d55181;
+  --series-0: #a99cf5;
+  --series-1: #8f89b7;
+  --series-2: #a1a8b4;
+  --series-3: #b9b0df;
+  --series-4: #798298;
   --series-other: #5f5f66;
 }
 
@@ -56,14 +55,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 26px;
   max-width: 280px;
   padding: 0 9px;
   color: var(--text-soft);
   font: inherit;
-  font-size: 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
+  font-size: var(--fs-ui);
+  background: var(--fill-1);
+  border: 0;
   border-radius: var(--radius);
   cursor: pointer;
 }
@@ -95,7 +94,7 @@
 }
 
 .usage-filter-button.active {
-  border-color: color-mix(in srgb, var(--text) 38%, var(--border-strong));
+  background: var(--fill-2);
 }
 
 .usage-filter-select > span {
@@ -123,7 +122,7 @@
   max-width: min(360px, calc(100vw - 32px));
   padding: 6px;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: 10px;
   box-shadow: var(--shadow-floating);
 }
@@ -143,7 +142,7 @@
   padding: 3px 8px;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-ui);
   text-align: left;
   background: transparent;
   border: 0;
@@ -196,7 +195,7 @@
   padding: 0;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-ui);
   background: transparent;
   border: 0;
   outline: 0;
@@ -273,18 +272,6 @@
   font-size: 11px;
 }
 
-.overview-rankings > .statistics-summary-card:nth-child(odd) {
-  border-left: 0;
-}
-
-.overview-rankings > .statistics-summary-card:nth-child(n + 3) {
-  border-top: 1px solid var(--border);
-}
-
-.overview-rankings:not(.with-machines) > .statistics-summary-card:nth-child(3) {
-  grid-column: 1 / -1;
-}
-
 button.framework-rank-row {
   width: 100%;
   color: inherit;
@@ -327,27 +314,29 @@ button.framework-rank-row {
 }
 
 .usage-chart {
+  position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0 8px;
   margin-top: 14px;
 }
 
 .usage-chart-axis {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  height: 200px;
-  padding-top: 2px;
+  position: absolute;
+  top: 4px;
+  right: 0;
+  z-index: 1;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  pointer-events: none;
 }
+.usage-chart-axis span:not(:first-child) { display: none; }
 
 .usage-chart-plot {
   position: relative;
-  height: 200px;
+  height: clamp(130px, 21vh, 170px);
   border-radius: 4px;
   touch-action: pan-y;
 }
@@ -370,10 +359,13 @@ button.framework-rank-row {
 
 .usage-chart-bar {
   fill: var(--series);
+  opacity: .42;
 }
+.usage-chart-bar-cap { fill: var(--series); }
 
-.usage-chart-bar.dimmed {
-  opacity: 0.55;
+.usage-chart-bar.dimmed,
+.usage-chart-bar-cap.dimmed {
+  opacity: 0.25;
 }
 
 .usage-chart-empty {
@@ -397,7 +389,7 @@ button.framework-rank-row {
   padding: 8px 10px;
   font-size: 11px;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: 8px;
   box-shadow: var(--shadow-floating);
   pointer-events: none;
@@ -455,7 +447,7 @@ button.framework-rank-row {
 
 .usage-chart-ticks {
   position: relative;
-  grid-column: 2;
+  grid-column: 1;
   height: 22px;
   color: var(--muted);
   font-size: 10px;
@@ -498,7 +490,7 @@ button.framework-rank-row {
 .health-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  border-top: 1px solid var(--border);
+  gap: 10px;
 }
 
 .health-summary-tile {
@@ -509,9 +501,8 @@ button.framework-rank-row {
   padding: 14px 16px;
   color: inherit;
   text-decoration: none;
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  margin: 0 -1px -1px 0;
+  background: var(--fill-1);
+  border-radius: 10px;
 }
 
 .health-summary-tile:hover {
@@ -526,13 +517,13 @@ button.framework-rank-row {
 
 .health-summary-copy strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 
 .health-summary-copy span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-ui);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -543,6 +534,8 @@ button.framework-rank-row {
 
 .health-list {
   display: grid;
+  gap: 8px;
+  padding: 0 16px 12px;
 }
 
 .health-row {
@@ -552,7 +545,8 @@ button.framework-rank-row {
   gap: 12px;
   min-height: 44px;
   padding: 8px 16px;
-  border-top: 1px solid var(--border);
+  background: var(--fill-1);
+  border-radius: 8px;
 }
 
 .health-row .status-badge {
@@ -574,7 +568,7 @@ button.framework-rank-row {
 
 .health-row-title strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 
 .health-row-title small,

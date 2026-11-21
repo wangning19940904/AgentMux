@@ -1,3 +1,4 @@
+import { BrandIcon } from "../../components/BrandIcon";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { CheckCircle2, ChevronRight, Copy, Download, Ellipsis, ExternalLink, List, LogIn, LogOut, Monitor, Package, Play, RefreshCw, Trash2, UserRound, X } from "lucide-react";
@@ -64,7 +65,7 @@ export function FrameworkGroupRow({
         <div className="framework-group-head">
           <button aria-expanded={expanded} className="framework-group-toggle" onClick={onToggle} type="button">
             <ChevronRight className="framework-group-chevron" size={16} />
-            <span className="provider-icon">{byFramework ? <Package size={16} /> : <Monitor size={16} />}</span>
+            {byFramework ? <BrandIcon name={spec.kind} /> : <span className="brand-icon"><Monitor size={17} /></span>}
             <span className="framework-group-copy">
               <strong>{byFramework ? spec.display : machineName}</strong>
               {byFramework && (

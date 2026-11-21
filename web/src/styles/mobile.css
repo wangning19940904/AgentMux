@@ -295,6 +295,7 @@
 
   .workspace-header,
   .native-desktop .workspace-header {
+    flex: 0 0 auto;
     position: sticky;
     top: 0;
     z-index: 20;
@@ -468,7 +469,7 @@
     max-width: calc(100vw - 16px);
   }
 
-  .main button,
+  .main button:not([role="switch"]),
   .workspace-header button {
     min-height: 32px;
   }

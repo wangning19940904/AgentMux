@@ -1,3 +1,5 @@
+import { Brain, Trash2 } from "lucide-react";
+import { RowDisclosure } from "../components/RowDisclosure";
 import { useState } from "react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
@@ -61,42 +63,30 @@ export function MemoryPanel() {
           </div>
         </form>}
         {entries.error && <div className="surface-body error">{entries.error}</div>}
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>{t("memory.scope")}</th>
-                <th>{t("memory.content")}</th>
-                <th>{t("remote.currentMachine")}</th>
-                <th>{t("memory.updated")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(entries.data ?? []).map((entry) => (
-                <tr key={targetKey(entry.target_id, entry.id)}>
-                  <td>
-                    <span className="pill">{entry.scope}</span>
-                  </td>
-                  <td>{entry.content}</td>
-                  <td><TargetBadge target_id={entry.target_id} target_name={entry.target_name} /></td>
-                  <td className="muted">{new Date(entry.updated_at).toLocaleString(language === "zh" ? "zh-CN" : "en-US")}</td>
-                  <td>
-                    <button className="ghost-action" onClick={() => remove(entry.id, entry.target_id)}>
-                      {t("common.delete")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {entries.data?.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty-state">
-                    {t("memory.empty")}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="resource-card-grid memory-card-grid">
+          {(entries.data ?? []).map((entry) => (
+            <RowDisclosure
+              className="resource-card memory-card"
+              key={targetKey(entry.target_id, entry.id)}
+              name={entry.scope}
+              summary={<div className="resource-card-heading"><span className="brand-icon"><Brain size={18} /></span><strong>{entry.scope}</strong></div>}
+              preview={<>
+                <p className="memory-preview">{entry.content}</p>
+                <div className="resource-card-meta">
+                  <TargetBadge target_id={entry.target_id} target_name={entry.target_name} />
+                  <time dateTime={entry.updated_at}>{new Date(entry.updated_at).toLocaleDateString(language === "zh" ? "zh-CN" : "en-US")}</time>
+                </div>
+              </>}
+            >
+              <p className="memory-content">{entry.content}</p>
+              <div className="table-actions">
+                <button className="ghost-action danger-action" onClick={() => remove(entry.id, entry.target_id)}>
+                  <Trash2 size={14} />{t("common.delete")}
+                </button>
+              </div>
+            </RowDisclosure>
+          ))}
+          {entries.data?.length === 0 && <div className="empty-state">{t("memory.empty")}</div>}
         </div>
       </section>
     </div>
