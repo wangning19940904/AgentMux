@@ -25,6 +25,10 @@ type DatabaseConfig struct {
 	MaxOpenConnections    int
 	MaxIdleConnections    int
 	ConnectionMaxLifetime time.Duration
+	// SkipMigrations connects without migrating the schema. A reader that is
+	// not the daemon (amux diagnose) sets it, so a CLI of another version
+	// never changes the database under the running daemon.
+	SkipMigrations bool
 }
 
 func DefaultDatabaseConfig() DatabaseConfig {

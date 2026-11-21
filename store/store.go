@@ -113,6 +113,9 @@ func OpenPostgres(ctx context.Context, cfg DatabaseConfig) (*Store, error) {
 		_ = s.Close()
 		return nil, fmt.Errorf("connect postgres observation pool: %w", err)
 	}
+	if cfg.SkipMigrations {
+		return s, nil
+	}
 	if err := s.migratePostgres(ctx); err != nil {
 		_ = s.Close()
 		return nil, err

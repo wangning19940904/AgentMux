@@ -8,6 +8,7 @@ export * from "./desktop";
 export * from "./fleet";
 export * from "./mailbox";
 export * from "./frameworkOperations";
+export * from "./diagnostics";
 import { activeMachineScope, activeRemoteID, fleetMonitorQuery, fleetQuery, get, getChecked, getLocal, post, put, putChecked, putLocal, postChecked, postProgress, postQuery, del, delChecked } from "./client";
 import type { Targeted } from "./fleet";
 import { fleetCall, fleetGet, fleetMode, fleetReadArray, fleetReadValues, interactiveFleetGet, operationFor, singleTargetID, writeTargetIDs } from "./fleet";

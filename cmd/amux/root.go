@@ -49,6 +49,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(leaveCmd())
 	root.AddCommand(machineUIDCmd())
 	root.AddCommand(hubCmd())
+	root.AddCommand(diagnoseCmd())
 	root.AddCommand(versionCmd())
 	return root
 }

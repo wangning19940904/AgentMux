@@ -392,3 +392,18 @@
     animation: none;
   }
 }
+
+.diagnostics-files ul {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnostics-files li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
