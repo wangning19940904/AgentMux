@@ -17,6 +17,7 @@ import (
 	"github.com/wangning19940904/AgentMux/config"
 	"github.com/wangning19940904/AgentMux/core"
 	"github.com/wangning19940904/AgentMux/store"
+	"github.com/wangning19940904/AgentMux/superagent"
 	ttspkg "github.com/wangning19940904/AgentMux/tts"
 
 	// Register agent adapters for agent instance validation.
@@ -454,6 +455,53 @@ func TestChannelsHealthViewSkipsRemoteBotInfoAndConfig(t *testing.T) {
 	}
 	if calls := remoteCalls.Load(); calls != 0 {
 		t.Fatalf("health view made %d remote bot-info calls", calls)
+	}
+}
+
+func TestChannelsListNamesSuperAgentLinkedFromItsSources(t *testing.T) {
+	s, st := newTestServer(t)
+	ctx := context.Background()
+	records := &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}
+	s.SetSuperAgents(superagent.New(superagent.Options{Store: records, StateDir: t.TempDir()}), nil)
+	now := time.Now().UTC()
+	for _, ch := range []core.Channel{
+		{ID: "channel-sourced", Name: "Work Agent", Type: "custom", CreatedAt: now, UpdatedAt: now},
+		{ID: "channel-router", Name: "Router Bot", Type: "custom", AgentID: "sar_router", CreatedAt: now, UpdatedAt: now},
+		{ID: "channel-free", Name: "Free Bot", Type: "custom", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := st.UpsertChannel(ctx, &ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, agent := range []core.SuperAgent{
+		{ID: "sa_work", Name: "Work Agent", Enabled: true, CreatedAt: now, UpdatedAt: now, Sources: []core.SuperAgentSource{
+			{ID: "src-msg", Kind: "feishu_message", Enabled: true, Config: map[string]string{"channel_id": "channel-sourced"}},
+			{ID: "src-cb", Kind: "callback", Enabled: true, Config: map[string]string{"channel_id": "channel-sourced"}},
+		}},
+		{ID: "sa_router", Name: "Router Owner", RouterAgentID: "sar_router", Enabled: true, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := records.UpsertSuperAgent(ctx, agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := doJSON(t, s, http.MethodGet, "/api/v1/channels", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var listed []apiChannel
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, item := range listed {
+		got[item.ID] = item.AgentName
+	}
+	want := map[string]string{"channel-sourced": "Work Agent", "channel-router": "Router Owner", "channel-free": ""}
+	for id, name := range want {
+		if got[id] != name {
+			t.Fatalf("agent_name[%s] = %q, want %q (all %v)", id, got[id], name, got)
+		}
 	}
 }
 
