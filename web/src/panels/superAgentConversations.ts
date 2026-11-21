@@ -31,7 +31,8 @@ export interface Conversation {
   lastAt: string;
   // Work still going: events being routed, tickets queued or running.
   active: number;
-  // Something waits on a person: a plan to approve, a failed ticket.
+  // Something waits on a person: a plan to approve, or a failed message,
+  // failed ticket or question to people that nobody has written after.
   attention: boolean;
 }
 
@@ -105,6 +106,14 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
   const touch = (conversation: Conversation, at?: string) => {
     if (at && stamp(at) > stamp(conversation.lastAt)) conversation.lastAt = at;
   };
+  // A failure or a question to people stops asking for attention once
+  // someone writes in the conversation again and the agent takes it up: the
+  // person resent the message or answered, or moved on.
+  const lastReply = new Map<string, number>();
+  const raised = new Map<string, number>();
+  const raise = (conversation: Conversation, at?: string) => {
+    raised.set(conversation.key, Math.max(raised.get(conversation.key) ?? 0, stamp(at) || Number.MAX_SAFE_INTEGER));
+  };
 
   const triggers = activity?.triggers ?? [];
   const tickets = activity?.tickets ?? [];
@@ -122,7 +131,8 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
       if (name && trigger.actor_avatar && trigger.source_kind !== "console") conversation.avatars[name] ??= trigger.actor_avatar;
       if (trigger.answer?.trim()) conversation.items.push({ type: "answer", at: trigger.received_at, trigger });
       if (trigger.disposition === "pending") conversation.active++;
-      if (trigger.disposition === "failed") conversation.attention = true;
+      if (trigger.disposition === "failed") raise(conversation, trigger.received_at);
+      if (handledReply(trigger)) lastReply.set(conversation.key, Math.max(lastReply.get(conversation.key) ?? 0, stamp(trigger.received_at)));
     }
     touch(conversation, trigger.updated_at || trigger.received_at);
   }
@@ -130,7 +140,9 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
     const conversation = open(locate(ticket), ticket.source_kind ?? "", ticket.source_id);
     conversation.items.push({ type: "ticket", at: ticket.created_at || ticket.updated_at, ticket });
     if (ticket.status === "queued" || ticket.status === "running") conversation.active++;
-    if (ticket.status === "failed" || ticket.reviews?.[ticket.reviews.length - 1]?.verdict === "needs_user") conversation.attention = true;
+    const review = ticket.reviews?.[ticket.reviews.length - 1];
+    if (ticket.status === "failed") raise(conversation, ticket.updated_at);
+    else if (ticket.status !== "stopped" && review?.verdict === "needs_user") raise(conversation, review.at || ticket.updated_at);
     touch(conversation, ticket.updated_at);
   }
   for (const plan of activity?.plans ?? []) {
@@ -150,6 +162,7 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
   if (!byKey.has(CONSOLE_CONVERSATION)) open({ key: CONSOLE_CONVERSATION, kind: "console" }, "console");
   const conversations = [...byKey.values()];
   for (const conversation of conversations) {
+    if ((raised.get(conversation.key) ?? 0) > (lastReply.get(conversation.key) ?? 0)) conversation.attention = true;
     conversation.items.sort((a, b) => stamp(a.at) - stamp(b.at) || itemOrder[a.type] - itemOrder[b.type]);
   }
   return conversations.sort((a, b) => {
@@ -157,6 +170,13 @@ export function buildConversations(activity: SuperAgentActivity | null | undefin
     if (a.kind === "console" || b.kind === "console") return a.kind === "console" ? -1 : 1;
     return stamp(b.lastAt) - stamp(a.lastAt) || a.key.localeCompare(b.key);
   });
+}
+
+// handledReply is a message from a person that the agent took up. Callback
+// sources such as the Meego poller are machines, not someone answering.
+function handledReply(trigger: SuperAgentTrigger): boolean {
+  if (trigger.kind || trigger.source_kind === "callback") return false;
+  return trigger.disposition === "accepted" || trigger.disposition === "answered" || trigger.disposition === "follow_up";
 }
 
 // lastText is a one-line preview of an item, without markdown marks.
