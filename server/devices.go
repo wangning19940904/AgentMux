@@ -52,6 +52,11 @@ type deviceBackend struct {
 	// it, and presence says which machines are linked to it, for a standby.
 	viaHub   func(ctx context.Context, id string) (net.Conn, error)
 	presence func(ctx context.Context) map[string]bool
+	// hubListed returns the machines the hub this machine follows lists for
+	// it, or nil on the primary and on a machine that follows no hub. A
+	// node keeps no records of the other machines, so these are how it
+	// reaches them, through the hub.
+	hubListed func(ctx context.Context) []fleetMachine
 	// startingUplink returns this machine's link to the hub it follows
 	// while that link is still making its first connection after the
 	// server started, or nil.
@@ -117,7 +122,9 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 	passive := b.passiveSet(ctx)
 	presence := b.hubPresence(ctx)
 	out := make([]remotepkg.LinkedDevice, 0, len(devices))
+	listed := make(map[string]bool, len(devices))
 	for _, device := range devices {
+		listed[device.ID] = true
 		if b.isSelf(device.ID) {
 			continue
 		}
@@ -127,7 +134,41 @@ func (b *deviceBackend) Devices(ctx context.Context) ([]remotepkg.LinkedDevice, 
 		}
 		out = append(out, linked)
 	}
+	for _, machine := range b.listedByHub(ctx) {
+		if !listed[machine.ID] && !b.isSelf(machine.ID) {
+			listed[machine.ID] = true
+			out = append(out, hubListedDevice(machine))
+		}
+	}
 	return out, nil
+}
+
+func (b *deviceBackend) listedByHub(ctx context.Context) []fleetMachine {
+	if b.hubListed == nil {
+		return nil
+	}
+	return b.hubListed(ctx)
+}
+
+// hubListedDevice is a machine the hub listed, as this machine reaches it:
+// through the hub, which dials it.
+func hubListedDevice(machine fleetMachine) remotepkg.LinkedDevice {
+	return remotepkg.LinkedDevice{ID: machine.ID, Name: machine.Name, Version: machine.Version, Online: machine.Online,
+		LastSeenAt: machine.LastSeenAt, ReportedAt: machine.ReportedAt, HubRole: machine.HubRole, MachineUID: machine.MachineUID}
+}
+
+// onlyListedByHub reports whether id is a machine this one knows only from
+// its hub's list, with no record of its own.
+func (b *deviceBackend) onlyListedByHub(ctx context.Context, id string) (fleetMachine, bool) {
+	if device, err := b.st.GetDevice(ctx, id); err != nil || device != nil {
+		return fleetMachine{}, false
+	}
+	for _, machine := range b.listedByHub(ctx) {
+		if machine.ID == id && !b.isSelf(id) {
+			return machine, true
+		}
+	}
+	return fleetMachine{}, false
 }
 
 func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.LinkedDevice, bool) {
@@ -135,6 +176,11 @@ func (b *deviceBackend) Device(ctx context.Context, id string) (remotepkg.Linked
 		return remotepkg.LinkedDevice{}, false
 	}
 	device, err := b.st.GetDevice(ctx, id)
+	if err == nil && device == nil {
+		if machine, ok := b.onlyListedByHub(ctx, id); ok {
+			return hubListedDevice(machine), true
+		}
+	}
 	if err != nil || device == nil {
 		return remotepkg.LinkedDevice{}, false
 	}
@@ -226,6 +272,9 @@ func (b *deviceBackend) expectingReconnect(ctx context.Context, id string) bool 
 // Remove unpairs the device and drops its connection, in that order, so a
 // node reconnecting in between is already refused.
 func (b *deviceBackend) Remove(ctx context.Context, id string) error {
+	if _, ok := b.onlyListedByHub(ctx, id); ok {
+		return errHubListedMachine
+	}
 	if err := b.st.DeleteDevice(ctx, id); err != nil {
 		return err
 	}
@@ -259,7 +308,7 @@ func (s *Server) setupLink() {
 	})
 	s.linkHub.SetUplink(s.setupHubStandby(s.mailUplink(linkpkg.NewReportHandler(reports, s.log))))
 	s.devices = &deviceBackend{st: s.st, hub: s.linkHub, push: s.push, self: s.ownDeviceIDs, hubRoles: s.deviceHubLabels,
-		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence,
+		following: func() bool { return s.node.uplink() != nil }, viaHub: s.dialViaHub, presence: s.hubPresence, hubListed: s.hubListedMachines,
 		startingUplink: func() uplinkWaiter {
 			// A nil client must not become a non-nil interface.
 			if client := s.node.startingUplink(); client != nil {

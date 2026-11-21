@@ -27,6 +27,8 @@ const (
 	fleetFetchWait   = 5 * time.Second
 	fleetSourceHub   = "hub"
 	fleetSourceLocal = "local"
+	// fleetHubID stands for a hub that has no device record of its own.
+	fleetHubID = "hub"
 )
 
 // fleetMachine is one machine as the hub sees it.
@@ -39,6 +41,9 @@ type fleetMachine struct {
 	ReportedAt *time.Time `json:"reported_at,omitempty"`
 	// HubRole is "hub" or "standby" for a hub, empty for other machines.
 	HubRole string `json:"hub_role,omitempty"`
+	// MachineUID is the computer the machine said it is, so a machine that
+	// lists the fleet can tell it from an SSH host to the same computer.
+	MachineUID string `json:"machine_uid,omitempty"`
 }
 
 // fleetView answers GET /api/v1/fleet.
@@ -83,7 +88,7 @@ func (s *Server) hubFleet(ctx context.Context, sourceID, ownerID string) ([]flee
 			continue
 		}
 		machine := fleetMachine{ID: device.ID, Name: device.Name, Version: device.Version,
-			LastSeenAt: device.LastSeenAt, HubRole: roles[device.ID]}
+			LastSeenAt: device.LastSeenAt, HubRole: roles[device.ID], MachineUID: device.MachineUID}
 		if at, ok := latest[device.ID]; ok {
 			machine.ReportedAt = &at
 		}
@@ -99,7 +104,7 @@ func (s *Server) hubFleet(ctx context.Context, sourceID, ownerID string) ([]flee
 	// asking still need to see it.
 	if !sawSelf && sourceID != "" && !self[sourceID] {
 		hostname, _ := os.Hostname()
-		machines = append(machines, fleetMachine{ID: "hub", Name: strings.TrimSuffix(hostname, ".local"),
+		machines = append(machines, fleetMachine{ID: fleetHubID, Name: strings.TrimSuffix(hostname, ".local"),
 			Version: s.version, Online: true, HubRole: "hub"})
 	}
 	return machines, nil
