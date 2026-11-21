@@ -128,20 +128,9 @@ export interface CursorUsageActionResult extends TargetMetadata {
   status: CursorUsageSourceStatus;
 }
 
-export interface MenubarSettings {
-  icon_theme: string;
-  icon_stages: string[];
-  icon_metric: string;
-  cost_thresholds: number[];
-  show_status_icon: boolean;
-  show_messages: boolean;
-  show_tokens: boolean;
-  show_cost: boolean;
-  show_cny: boolean;
+export interface UsageDisplaySettings {
   currency: "cny" | "usd";
   cny_rate: number;
-  breakdowns: string[];
-  top_n: number;
 }
 
 export interface LaunchAtLoginStatus {

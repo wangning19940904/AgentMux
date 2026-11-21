@@ -347,13 +347,6 @@
   margin-top: 6px;
 }
 
-.settings-group .menubar-preview-chip {
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  border: 0;
-  box-shadow: none;
-}
 
 .settings-group .software-update-error {
   padding: 10px 12px;

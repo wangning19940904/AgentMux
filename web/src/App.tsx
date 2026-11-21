@@ -162,7 +162,6 @@ function initialThemeMode(): ThemeMode {
 function tabFromHash(): Tab | null {
   const value = window.location.hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0];
   if (value === "tools") return "skills";
-  if (value === "menubar") return "settings";
   // Providers and routing moved to the frameworks; old links land there.
   if (value === "providers" || value === "gateway") return "frameworks";
   if (value === "connect") return "channels";

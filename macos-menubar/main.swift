@@ -1,8 +1,8 @@
 // AgentMux macOS menu bar app.
 //
-// A lightweight SwiftUI/AppKit status-bar item that polls the local
-// AgentMux daemon (http://127.0.0.1:8765/api/v1/usage) and shows today's
-// estimated token cost in the menu bar, with a dropdown breakdown. Inspired by
+// A lightweight SwiftUI/AppKit status-bar item that shows the AgentMux logo
+// and polls the local daemon (http://127.0.0.1:8765/api/v1/usage) for a
+// dropdown breakdown of recent usage. Inspired by
 // CodeBurn / cc-statistics menu bar panels, but it reads from our own daemon so
 // there is a single source of truth across CLI, WebUI and desktop.
 //
@@ -115,63 +115,6 @@ struct UsageReport: Decodable {
     }
 }
 
-// MenubarSettings mirrors the daemon's /api/v1/menubar/settings JSON. Every
-// field has a default so a partial or missing response still yields a usable
-// configuration.
-struct MenubarSettings: Decodable {
-    var icon_theme: String
-    var icon_stages: [String]
-    var icon_metric: String
-    var cost_thresholds: [Double]
-    var show_status_icon: Bool
-    var show_messages: Bool
-    var show_tokens: Bool
-    var show_cost: Bool
-    var show_cny: Bool
-    var cny_rate: Double
-    var breakdowns: [String]
-    var top_n: Int
-
-    enum CodingKeys: String, CodingKey {
-        case icon_theme, icon_stages, icon_metric, cost_thresholds
-        case show_status_icon, show_messages, show_tokens, show_cost, show_cny
-        case cny_rate, breakdowns, top_n
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let d = MenubarSettings.defaults
-        icon_theme = try c.decodeIfPresent(String.self, forKey: .icon_theme) ?? d.icon_theme
-        icon_stages = try c.decodeIfPresent([String].self, forKey: .icon_stages) ?? d.icon_stages
-        icon_metric = try c.decodeIfPresent(String.self, forKey: .icon_metric) ?? d.icon_metric
-        cost_thresholds = try c.decodeIfPresent([Double].self, forKey: .cost_thresholds) ?? d.cost_thresholds
-        show_status_icon = try c.decodeIfPresent(Bool.self, forKey: .show_status_icon) ?? d.show_status_icon
-        show_messages = try c.decodeIfPresent(Bool.self, forKey: .show_messages) ?? d.show_messages
-        show_tokens = try c.decodeIfPresent(Bool.self, forKey: .show_tokens) ?? d.show_tokens
-        show_cost = try c.decodeIfPresent(Bool.self, forKey: .show_cost) ?? d.show_cost
-        show_cny = try c.decodeIfPresent(Bool.self, forKey: .show_cny) ?? d.show_cny
-        cny_rate = try c.decodeIfPresent(Double.self, forKey: .cny_rate) ?? d.cny_rate
-        breakdowns = try c.decodeIfPresent([String].self, forKey: .breakdowns) ?? d.breakdowns
-        top_n = try c.decodeIfPresent(Int.self, forKey: .top_n) ?? d.top_n
-    }
-
-    private init(theme: String, stages: [String], metric: String, thresholds: [Double],
-                 statusIcon: Bool, messages: Bool, tokens: Bool, cost: Bool, cny: Bool,
-                 rate: Double, breakdowns: [String], topN: Int) {
-        icon_theme = theme; icon_stages = stages; icon_metric = metric
-        cost_thresholds = thresholds; show_status_icon = statusIcon
-        show_messages = messages; show_tokens = tokens
-        show_cost = cost; show_cny = cny; cny_rate = rate
-        self.breakdowns = breakdowns; top_n = topN
-    }
-
-    static let defaults = MenubarSettings(
-        theme: "flame", stages: [], metric: "cost",
-        thresholds: [0.01, 1, 10, 100],
-        statusIcon: false, messages: false, tokens: false, cost: false, cny: false,
-        rate: 7.0, breakdowns: ["model", "runtime", "date"], topN: 3)
-}
-
 // UsageClient fetches usage reports from the daemon.
 final class UsageClient {
     // fetchDays loads the report for the last `days` local days, today
@@ -205,23 +148,6 @@ final class UsageClient {
                 return
             }
             DispatchQueue.main.async { completion(report) }
-        }.resume()
-    }
-
-    // fetchSettings loads the menubar display preferences. On any failure it
-    // returns the built-in defaults so the menubar always renders.
-    func fetchSettings(completion: @escaping (MenubarSettings) -> Void) {
-        guard let url = URL(string: "\(daemonBase)/api/v1/menubar/settings") else {
-            DispatchQueue.main.async { completion(MenubarSettings.defaults) }
-            return
-        }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let data = data,
-                  let settings = try? JSONDecoder().decode(MenubarSettings.self, from: data) else {
-                DispatchQueue.main.async { completion(MenubarSettings.defaults) }
-                return
-            }
-            DispatchQueue.main.async { completion(settings) }
         }.resume()
     }
 }

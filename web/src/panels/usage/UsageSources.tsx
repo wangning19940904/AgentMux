@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Cloud, Database, PlugZap, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
-import { api, type CursorUsageSourceStatus, type MenubarSettings } from "../../api";
+import { api, type CursorUsageSourceStatus, type UsageDisplaySettings } from "../../api";
 import { confirmAction } from "../../components/ConfirmDialog";
 import { TargetBadge, targetKey } from "../../components/TargetBadge";
 import { SupportedCurrency, validCNYRate } from "../../currency";
@@ -11,17 +11,17 @@ import { formatTokens } from "./format";
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 // The currency the dashboard shows costs in, and the fixed rate it converts
-// with. Saved with the menu bar settings, which show the same figures.
+// with.
 export function UsageCurrencySettings({ settings, onSaved }: {
-  settings: MenubarSettings | null;
-  onSaved: (saved: MenubarSettings) => void;
+  settings: UsageDisplaySettings | null;
+  onSaved: (saved: UsageDisplaySettings) => void;
 }) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState<MenubarSettings | null>(settings);
+  const [draft, setDraft] = useState<UsageDisplaySettings | null>(settings);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   useEffect(() => { setDraft(settings); }, [settings]);
 
-  const update = (patch: Partial<MenubarSettings>) => {
+  const update = (patch: Partial<UsageDisplaySettings>) => {
     setDraft((current) => (current ? { ...current, ...patch } : current));
     setStatus("idle");
   };
@@ -29,7 +29,7 @@ export function UsageCurrencySettings({ settings, onSaved }: {
     if (!draft) return;
     setStatus("saving");
     try {
-      const saved = await api.saveMenubarSettings({ ...draft, cny_rate: validCNYRate(draft.cny_rate) });
+      const saved = await api.saveUsageDisplaySettings({ ...draft, cny_rate: validCNYRate(draft.cny_rate) });
       setDraft(saved);
       onSaved(saved);
       setStatus("saved");
@@ -62,8 +62,8 @@ export function UsageCurrencySettings({ settings, onSaved }: {
       <button className="ghost-action" type="button" disabled={!draft || status === "saving"} onClick={() => void save()}>
         {status === "saving" ? "…" : t("common.save")}
       </button>
-      {status === "saved" && <span className="muted">{t("menubar.saved")}</span>}
-      {status === "error" && <span className="error">{t("menubar.saveError")}</span>}
+      {status === "saved" && <span className="muted">{t("usage.displaySaved")}</span>}
+      {status === "error" && <span className="error">{t("usage.displaySaveError")}</span>}
     </div>
   );
 }

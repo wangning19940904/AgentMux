@@ -5,7 +5,7 @@ import { SlidingSelection } from "../components/SlidingSelection";
 import { KeepAwakeControl } from "../KeepAwakeControl";
 import { useI18n, type Language, type ThemeMode } from "../i18n";
 import { NotificationSettings } from "../pwa/NotificationSettings";
-import { AboutSettings, MenuBarPanel } from "./MenuBarPanel";
+import { AboutSettings } from "./AboutSettings";
 import { DiagnosticsSettings } from "./DiagnosticsSettings";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../settingsNavigation";
 
@@ -64,7 +64,6 @@ export function SettingsPanel({
         return (
           <div key={item.id} className="settings-section" hidden={!active} aria-label={t(item.labelKey)}>
             {item.id === "general" && <GeneralSettings {...preferences} />}
-            {item.id === "menubar" && <MenuBarPanel />}
             {item.id === "notifications" && <NotificationSettings />}
             {item.id === "about" && <div className="settings-stack"><AboutSettings /><DiagnosticsSettings /></div>}
           </div>

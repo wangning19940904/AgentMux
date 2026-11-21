@@ -2,7 +2,7 @@ import {
   Activity, Bot, Brain, Clock3, FolderGit2, Gauge, MonitorDot, RefreshCw,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { api, type MenubarSettings, type SuperAgent, type UsageReport, type UsageTotals } from "../api";
+import { api, type SuperAgent, type UsageDisplaySettings, type UsageReport, type UsageTotals } from "../api";
 import { CatalogPagination, useCatalogPagination } from "../components/CatalogPagination";
 import { BrandIcon } from "../components/BrandIcon";
 import { SlidingSelection } from "../components/SlidingSelection";
@@ -93,8 +93,8 @@ export function UsagePanel() {
   }, []);
   usePolling(followDate, LIVE_REFRESH_MS);
 
-  const settings = useCachedResource<MenubarSettings>("menubarSettings", () => api.menubarSettings(), 60_000);
-  const [savedSettings, setSavedSettings] = useState<MenubarSettings | null>(null);
+  const settings = useCachedResource<UsageDisplaySettings>("usageDisplaySettings", () => api.usageDisplaySettings(), 60_000);
+  const [savedSettings, setSavedSettings] = useState<UsageDisplaySettings | null>(null);
   const preferences = savedSettings ?? settings.data;
   const cnyRate = validCNYRate(preferences?.cny_rate ?? 7);
   const currency = preferences?.currency ?? "cny";
