@@ -50,7 +50,10 @@ type codexAgent struct {
 	env                       map[string]string
 	singleAgent               bool
 	// healthCheck starts throwaway threads that Codex does not save.
-	healthCheck     bool
+	healthCheck bool
+	// keepTurns runs turns on a detached app-server, so they outlive this
+	// process and can be rejoined.
+	keepTurns       bool
 	desktopMode     bool
 	desktopThreadID string
 	clientMu        sync.Mutex
@@ -64,6 +67,7 @@ func newCodexAgent(cfg map[string]any) *codexAgent {
 	a.desktopMode, _ = cfg["desktop_mode"].(bool)
 	a.singleAgent, _ = cfg["single_agent"].(bool)
 	a.healthCheck, _ = cfg[core.AgentConfigHealthCheck].(bool)
+	a.keepTurns, _ = cfg[core.AgentConfigKeepTurns].(bool)
 	if value, ok := cfg["desktop_thread_id"].(string); ok {
 		a.desktopThreadID = strings.TrimSpace(value)
 	}
@@ -328,7 +332,16 @@ func (a *codexAgent) appClient(ctx context.Context, workDir string) (*codexAppCl
 	if a.client != nil && !a.client.isClosed() {
 		return a.client, nil
 	}
-	client, err := newCodexAppClient(ctx, a, workDir)
+	var client *codexAppClient
+	var err error
+	if a.detachedServer() {
+		var sock string
+		if sock, err = acquireCodexServer(ctx, a.serverSpec(ctx)); err == nil {
+			client, err = newCodexSocketClient(ctx, sock)
+		}
+	} else {
+		client, err = newCodexAppClient(ctx, a, workDir)
+	}
 	if err != nil {
 		a.client = nil
 		a.capabilityState = "unavailable"
@@ -339,6 +352,71 @@ func (a *codexAgent) appClient(ctx context.Context, workDir string) (*codexAppCl
 	a.capabilityState = "ready"
 	a.capabilityError = ""
 	return client, nil
+}
+
+// detachedServer reports whether this Agent's turns run on a detached
+// app-server. Codex Desktop threads and Trae keep their own app-servers.
+func (a *codexAgent) detachedServer() bool {
+	return a.keepTurns && codexDetachSupported && !a.desktopMode && a.Name() == "codex"
+}
+
+func (a *codexAgent) serverSpec(ctx context.Context) codexServerSpec {
+	name := a.binary
+	if name == "" {
+		name = "codex"
+	}
+	if path, err := exec.LookPath(name); err == nil {
+		name = path
+	}
+	return codexServerSpec{binary: name, args: append(codexTelemetryArgs(ctx), "app-server"), env: a.env}
+}
+
+func (a *codexAgent) useClient(client *codexAppClient) {
+	a.clientMu.Lock()
+	previous := a.client
+	a.client = client
+	a.capabilityState, a.capabilityError = "ready", ""
+	a.clientMu.Unlock()
+	if previous != nil && previous != client {
+		_ = previous.close()
+	}
+}
+
+// RejoinTurn follows a turn that a detached app-server kept running after the
+// AgentMux process that started it went away. A turn that finished meanwhile
+// gives its answer; one that was interrupted, failed or is unknown is gone.
+func (a *codexAgent) RejoinTurn(ctx context.Context, workDir string, ref core.AgentTurnRef) (core.AgentSession, <-chan *core.Event, error) {
+	ref.SessionID, ref.TurnID = strings.TrimSpace(ref.SessionID), strings.TrimSpace(ref.TurnID)
+	if !a.detachedServer() || ref.SessionID == "" || ref.TurnID == "" {
+		return nil, nil, fmt.Errorf("%w: codex runs this agent's turns in its own process", core.ErrInvocationTurnGone)
+	}
+	spec := a.serverSpec(ctx)
+	sock, err := findCodexServerWithThread(ctx, spec, ref.SessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	running := sock != ""
+	if !running {
+		// No live app-server has the thread, so its turn is not running. It
+		// may have finished while AgentMux was away: its record says.
+		if sock, err = acquireCodexServer(ctx, spec); err != nil {
+			return nil, nil, err
+		}
+	}
+	client, err := newCodexSocketClient(ctx, sock)
+	if err != nil {
+		return nil, nil, err
+	}
+	a.useClient(client)
+	s := newCodexSessionState(a, workDir)
+	s.client = client
+	s.threadID = ref.SessionID
+	events, err := s.rejoinTurn(ctx, ref.TurnID, running)
+	if err != nil {
+		_ = s.Close(context.Background())
+		return nil, nil, err
+	}
+	return s, events, nil
 }
 
 type codexSession struct {
@@ -378,10 +456,24 @@ type codexSession struct {
 }
 
 func newCodexSession(ctx context.Context, agent *codexAgent, workDir, resumeID string) (*codexSession, error) {
+	s := newCodexSessionState(agent, workDir)
+	client, err := agent.appClient(ctx, s.workDir)
+	if err != nil {
+		return nil, err
+	}
+	s.client = client
+	if err := s.startShared(ctx, resumeID); err != nil {
+		_ = s.Close(context.Background())
+		return nil, err
+	}
+	return s, nil
+}
+
+func newCodexSessionState(agent *codexAgent, workDir string) *codexSession {
 	if workDir == "" {
 		workDir, _ = os.Getwd()
 	}
-	s := &codexSession{
+	return &codexSession{
 		agent:                     agent,
 		workDir:                   workDir,
 		defaultModel:              agent.defaultModel,
@@ -395,16 +487,6 @@ func newCodexSession(ctx context.Context, agent *codexAgent, workDir, resumeID s
 		pendingInteractions:       map[string]codexPendingInteraction{},
 		interactionPrefix:         core.NewChannelControlID("app"),
 	}
-	client, err := agent.appClient(ctx, workDir)
-	if err != nil {
-		return nil, err
-	}
-	s.client = client
-	if err := s.startShared(ctx, resumeID); err != nil {
-		_ = s.Close(context.Background())
-		return nil, err
-	}
-	return s, nil
 }
 
 func (s *codexSession) ID() string { return s.NativeSessionID() }
@@ -648,6 +730,10 @@ func (s *codexSession) threadResumeParams(threadID string) map[string]any {
 }
 
 func codexAppServerArgs(ctx context.Context) []string {
+	return append(codexTelemetryArgs(ctx), "app-server", "--listen", "stdio://")
+}
+
+func codexTelemetryArgs(ctx context.Context) []string {
 	telemetry := core.ObservationChildTelemetryFromContext(ctx)
 	args := []string{}
 	if telemetry.Endpoint != "" && telemetry.Token != "" {
@@ -663,7 +749,7 @@ func codexAppServerArgs(ctx context.Context) []string {
 			"-c", `otel.span_attributes={"agentmux.runtime"="codex"}`,
 		)
 	}
-	return append(args, "app-server", "--listen", "stdio://")
+	return args
 }
 
 // unavailableCodexThreadError identifies the one app-server resume failure
@@ -813,19 +899,7 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 	defer close(out)
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
-	emit := func(event *core.Event) bool {
-		select {
-		case out <- event:
-			return true
-		default:
-		}
-		select {
-		case out <- event:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
+	emit := turnEmitter(ctx, out)
 
 	s.mu.Lock()
 	if s.closed || ctx.Err() != nil {
@@ -843,17 +917,7 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 	s.activeTurnID = ""
 	threadID := s.threadID
 	s.mu.Unlock()
-	defer func() {
-		if ctx.Err() != nil {
-			s.interruptTurn(threadID)
-		}
-		s.mu.Lock()
-		s.activeTurn = false
-		s.activeTurnID = ""
-		s.inbox = nil
-		s.pendingInteractions = map[string]codexPendingInteraction{}
-		s.mu.Unlock()
-	}()
+	defer s.endTurn(ctx, threadID)
 	params := s.turnStartParamsInput(threadID, input)
 	result, err := s.call(ctx, "turn/start", params)
 	if err != nil {
@@ -869,6 +933,7 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 		resolvedModel:  requestedModel,
 		lastUsage:      s.usageTotal,
 		itemStarted:    map[string]int64{},
+		keptTurn:       s.client.detached(),
 	}
 	defer func() { s.usageTotal = mapper.lastUsage }()
 	turn := nestedMap(result, "turn")
@@ -882,6 +947,127 @@ func (s *codexSession) runTurn(ctx context.Context, input core.AgentTurnInput, o
 		}
 	}
 	s.nameFreshThread(ctx, input.Text)
+	s.pumpTurn(ctx, threadID, inbox, mapper, emit)
+}
+
+// turnEmitter sends a turn's events to out, giving up when ctx ends.
+func turnEmitter(ctx context.Context, out chan<- *core.Event) func(*core.Event) bool {
+	return func(event *core.Event) bool {
+		select {
+		case out <- event:
+			return true
+		default:
+		}
+		select {
+		case out <- event:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// endTurn clears the turn's state. A turn whose context ended is interrupted,
+// unless it runs on a detached app-server and this process is shutting down:
+// then it keeps running for the next process to rejoin.
+func (s *codexSession) endTurn(ctx context.Context, threadID string) {
+	if ctx.Err() != nil && !(s.client != nil && s.client.detached() && core.TurnOwnerEnded(ctx)) {
+		s.interruptTurn(threadID)
+	}
+	s.mu.Lock()
+	s.activeTurn = false
+	s.activeTurnID = ""
+	s.inbox = nil
+	s.pendingInteractions = map[string]codexPendingInteraction{}
+	s.mu.Unlock()
+}
+
+// rejoinTurn follows turnID of this session's thread from where it is now.
+// loaded says whether the app-server already had the thread; if not, nothing
+// runs the turn, whatever the record of an app-server that died says.
+func (s *codexSession) rejoinTurn(ctx context.Context, turnID string, loaded bool) (<-chan *core.Event, error) {
+	s.turnMu.Lock()
+	inbox := newCodexInbox()
+	s.mu.Lock()
+	s.inbox = inbox
+	s.activeTurn = true
+	s.activeTurnID = turnID
+	threadID := s.threadID
+	s.mu.Unlock()
+	// Registered before resuming, so no notification after it is lost.
+	if err := s.client.register(threadID, s); err != nil {
+		s.endTurn(context.Background(), threadID)
+		s.turnMu.Unlock()
+		return nil, err
+	}
+	result, err := s.call(ctx, "thread/resume", map[string]any{"threadId": threadID})
+	if err != nil {
+		s.endTurn(context.Background(), threadID)
+		s.turnMu.Unlock()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: resume codex thread: %w", core.ErrInvocationTurnGone, err)
+	}
+	var turn map[string]any
+	turns, _ := nestedMap(result, "thread")["turns"].([]any)
+	for _, raw := range turns {
+		if candidate, _ := raw.(map[string]any); firstString(candidate, "id") == turnID {
+			turn = candidate
+		}
+	}
+	status := firstString(turn, "status")
+	if status != "completed" && (status != "inProgress" || !loaded) {
+		s.endTurn(context.Background(), threadID)
+		s.turnMu.Unlock()
+		if status == "" {
+			status = "unknown"
+		}
+		return nil, fmt.Errorf("%w: codex turn %s is %s", core.ErrInvocationTurnGone, turnID, status)
+	}
+	mapper := &codexEventMapper{
+		runtimeID: s.agent.Name(), threadID: threadID, turnID: turnID,
+		answer: codexTurnAnswer(turn), itemStarted: map[string]int64{},
+		keptTurn: true, requestEmitted: true, retryAttempt: 1,
+	}
+	out := make(chan *core.Event, 128)
+	go func() {
+		defer close(out)
+		defer s.turnMu.Unlock()
+		defer s.endTurn(ctx, threadID)
+		defer func() { s.usageTotal = mapper.lastUsage }()
+		emit := turnEmitter(ctx, out)
+		if status == "completed" {
+			// It finished while AgentMux was away.
+			emit(&core.Event{
+				Type: core.EventFinal, EventID: lifecycleEventID(turnID, "final"), TurnID: turnID,
+				Text: mapper.answer, Final: true, Status: status, DurationMs: codexInt64(turn["durationMs"]),
+				Metadata: mapper.metadata("completed"),
+			})
+			return
+		}
+		s.pumpTurn(ctx, threadID, inbox, mapper, emit)
+	}()
+	return out, nil
+}
+
+// codexTurnAnswer is the last agent message of a turn record.
+func codexTurnAnswer(turn map[string]any) string {
+	answer := ""
+	items, _ := turn["items"].([]any)
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		if firstString(item, "type") == "agentMessage" {
+			if text := firstString(item, "text"); text != "" {
+				answer = text
+			}
+		}
+	}
+	return answer
+}
+
+// pumpTurn maps the turn's notifications to events until it completes.
+func (s *codexSession) pumpTurn(ctx context.Context, threadID string, inbox *codexInbox, mapper *codexEventMapper, emit func(*core.Event) bool) {
 	for {
 		var message map[string]any
 		select {
@@ -1376,6 +1562,8 @@ type codexEventMapper struct {
 	retryAttempt   int
 	lastUsage      codexTokenUsage
 	itemStarted    map[string]int64
+	// keptTurn marks a turn on a detached app-server, which can be rejoined.
+	keptTurn bool
 }
 
 func (m *codexEventMapper) mapNotification(method string, params map[string]any) ([]*core.Event, bool, error) {
@@ -1610,6 +1798,9 @@ func (m *codexEventMapper) metadata(lifecycle string) map[string]string {
 	}
 	if m.threadID != "" {
 		metadata["thread_id"] = m.threadID
+	}
+	if m.keptTurn {
+		metadata[core.EventMetadataKeptTurn] = "true"
 	}
 	return metadata
 }

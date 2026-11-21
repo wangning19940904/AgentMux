@@ -57,8 +57,14 @@ func RelayAllowed(method, path string) bool {
 		"POST /api/v1/invocations/stream":
 		return true
 	}
+	// A detached invocation is rejoined and cancelled by its id.
+	if id, rest, ok := strings.Cut(strings.TrimPrefix(path, invocationsPrefix), "/"); ok && strings.HasPrefix(path, invocationsPrefix) && id != "" && !strings.Contains(id, "/") {
+		return (method == http.MethodGet && rest == "events") || (method == http.MethodPost && rest == "cancel")
+	}
 	return false
 }
+
+const invocationsPrefix = "/api/v1/invocations/"
 
 type relayCache struct {
 	mu      sync.Mutex
