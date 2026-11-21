@@ -305,6 +305,10 @@ paths:
         Runs a configured Agent and returns its final answer. agent_id is
         required. Request body limit is 1 MiB. A
         concurrent call with the same target and conversation_id returns 409.
+        The turn is admitted on its framework account as interactive; a caller
+        running automated work may lower it with X-AgentMux-Turn-Class.
+      parameters:
+        - $ref: "#/components/parameters/TurnClassHeader"
       requestBody:
         required: true
         content:
@@ -342,6 +346,8 @@ paths:
       tags: [invocations]
       operationId: invokeStream
       summary: Run an Agent with Server-Sent Events
+      parameters:
+        - $ref: "#/components/parameters/TurnClassHeader"
       description: >
         Same request body as /api/v1/invocations. The response is an SSE
         stream of InvocationStreamEvent payloads. Event types include started,
@@ -876,6 +882,54 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/frameworks/scheduling:
+    get:
+      tags: [frameworks]
+      operationId: getTurnScheduling
+      summary: Turn scheduling on this machine's framework accounts
+      description: >
+        The settings and, per framework account in use (a framework kind, plus
+        a profile hash when an Agent's env selects another sign-in), its
+        running turns by class, its waiting turns and any usage-limit hold.
+        See docs/architecture/usage-aware-scheduling.md.
+      x-stability: beta
+      responses:
+        "200":
+          description: Scheduler state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnScheduling"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/frameworks/scheduling/settings:
+    put:
+      tags: [frameworks]
+      operationId: setTurnSchedulingSettings
+      summary: Turn usage-aware turn scheduling on or off
+      description: >
+        Saved per machine (setting `turn_scheduler_v1`). Waiting turns the new
+        settings allow start at once.
+      x-stability: beta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TurnSchedulingSettings"
+      responses:
+        "200":
+          description: The saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnSchedulingSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/super-agents/plans:
     get:
       tags: [agent-plans]
@@ -1271,6 +1325,18 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
 components:
+  parameters:
+    TurnClassHeader:
+      name: X-AgentMux-Turn-Class
+      in: header
+      required: false
+      description: >
+        The turn's priority class on its framework account: ticket, scheduled
+        or background. It can only lower a turn from the default, interactive;
+        other values are ignored.
+      schema:
+        type: string
+        enum: [interactive, ticket, scheduled, background]
   securitySchemes:
     bridgeToken:
       type: http
@@ -1798,6 +1864,61 @@ components:
         consecutive_failures: { type: integer, description: "Failing or usage_limit records in a row" }
         last_ok_at: { type: string, format: date-time }
 
+    TurnSchedulingSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          default: false
+          description: >
+            Limits and usage-limit holds. Off by default; off, every turn starts
+            at once and running turns are only counted.
+        max_concurrent:
+          type: integer
+          minimum: 0
+          maximum: 64
+          default: 2
+          description: Most turns running at once per account, except interactive ones. 0 means no limit.
+        interactive_headroom:
+          type: integer
+          minimum: 0
+          maximum: 16
+          default: 1
+          description: Places beyond max_concurrent that only interactive turns may take.
+    TurnScheduling:
+      type: object
+      required: [settings, accounts]
+      properties:
+        settings:
+          $ref: "#/components/schemas/TurnSchedulingSettings"
+        accounts:
+          type: array
+          items:
+            type: object
+            required: [account, runtime_id, limit, running, queued]
+            properties:
+              account: {type: string}
+              runtime_id: {type: string}
+              profile: {type: string}
+              limit: {type: integer, description: The limit for non-interactive turns; 0 is none.}
+              running: {type: integer}
+              running_by_class:
+                type: object
+                additionalProperties: {type: integer}
+              held_until: {type: string, format: date-time}
+              hold_reason: {type: string}
+              queued:
+                type: array
+                items:
+                  type: object
+                  required: [class, waiting_since]
+                  properties:
+                    class: {type: string, enum: [interactive, ticket, scheduled, background]}
+                    awaited: {type: boolean}
+                    agent_id: {type: string}
+                    conversation_id: {type: string}
+                    waiting_since: {type: string, format: date-time}
+                    held: {type: boolean}
     FrameworkHealthSettings:
       type: object
       properties:

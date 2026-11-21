@@ -250,7 +250,26 @@ func (e *Engine) observeSendInput(ctx context.Context, sess AgentSession, input 
 	})
 }
 
+// observeSendWith admits the turn on its framework account (see
+// turn_scheduler.go), then sends it. The place is held until the turn's
+// events end.
 func (e *Engine) observeSendWith(ctx context.Context, sess AgentSession, text string, data map[string]string, send func(context.Context) (<-chan *Event, error)) (<-chan *Event, error) {
+	lease, err := e.currentTurnScheduler().Admit(ctx, turnRequestFor(ctx, data))
+	if err != nil {
+		return nil, err
+	}
+	events, err := e.observeAdmittedSend(ctx, sess, text, data, send)
+	if lease == nil {
+		return events, err
+	}
+	if err != nil {
+		lease.Done(err.Error())
+		return nil, err
+	}
+	return lease.watch(ctx, events), nil
+}
+
+func (e *Engine) observeAdmittedSend(ctx context.Context, sess AgentSession, text string, data map[string]string, send func(context.Context) (<-chan *Event, error)) (<-chan *Event, error) {
 	bus, _ := e.observationBackends()
 	if bus == nil {
 		return send(ctx)

@@ -153,6 +153,10 @@ func (s *Service) route(ctx context.Context, agent core.SuperAgent, trigger core
 		ConversationID: routerConversationID(trigger),
 		Input:          routerPrompt(agent, trigger, view.Statuses, view),
 	}
+	// The brain decides for every Ticket of its agent, and a worker on the
+	// same account can depend on it, so its turn never waits for a place a
+	// worker holds. maxRouterEvals bounds how many run at once.
+	routerCtx = core.WithAwaitedTurn(core.WithTurnClass(routerCtx, routerTurnClass(trigger)))
 	var result core.InvocationResult
 	var err error
 	if streaming, ok := s.invoker.(core.StreamingInvoker); ok {
@@ -187,6 +191,22 @@ var (
 	errRouterTimeout = fmt.Errorf("the router did not answer within %d minutes", int(routerTimeout.Minutes()))
 	errRouterStalled = fmt.Errorf("the router produced no output for %d minutes", int(routerIdleTimeout.Minutes()))
 )
+
+// routerTurnClass is the priority of a router turn on its framework account:
+// a person's message or plan decision first, then what Tickets and other
+// agents report, then timers and supervision.
+func routerTurnClass(trigger core.SuperAgentTrigger) core.TurnClass {
+	switch trigger.Kind {
+	case core.SuperAgentTriggerTicketUpdate:
+		return core.TurnTicket
+	case core.SuperAgentTriggerTimer, core.SuperAgentTriggerSupervision:
+		return core.TurnScheduled
+	}
+	if trigger.SourceKind == core.SuperAgentSourceMailbox {
+		return core.TurnTicket
+	}
+	return core.TurnInteractive
+}
 
 // routerConversationID gives each thread its own conversation, so the router
 // remembers what was said on it. What should outlive a thread belongs in the

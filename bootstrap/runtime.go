@@ -143,6 +143,9 @@ func NewRuntime(parent context.Context, log *slog.Logger, cfg *config.Config, st
 	// Failures of real runs feed framework health (only while its periodic
 	// checks are on).
 	engine.SubscribeEventSink(srv.FrameworkHealth().EngineSink())
+	// Every turn is admitted on its framework account by priority; off by
+	// default, when it only counts running turns.
+	engine.SetTurnScheduler(srv.TurnScheduler())
 	feishuAPI := &superagent.FeishuAPI{Channels: st.GetChannel, Grants: st}
 	// Push notifications: agents waiting for a person, and Tickets that
 	// finished or failed. A nil push service passes both through unchanged.

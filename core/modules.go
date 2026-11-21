@@ -88,8 +88,11 @@ type WorkspaceInitOptions struct {
 	MCPServers        []string        `json:"mcp_servers,omitempty"`
 	MCPDefinitions    []MCPServer     `json:"-"`
 	RuntimeDefaults   RuntimeSettings `json:"runtime_defaults,omitempty"`
-	PrivateChatMode   string          `json:"private_chat_mode,omitempty"`
-	GroupChatMode     string          `json:"group_chat_mode,omitempty"`
+	// AccountProfile is AccountProfile of the Agent's env: which sign-in of
+	// RuntimeID its turns spend. Never serialized.
+	AccountProfile  string `json:"-"`
+	PrivateChatMode string `json:"private_chat_mode,omitempty"`
+	GroupChatMode   string `json:"group_chat_mode,omitempty"`
 }
 
 // WorkspaceInitResult reports what the initializer created or warned about.

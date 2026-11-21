@@ -267,6 +267,7 @@ func (s *Service) run(ctx context.Context, id string) {
 			go func() {
 				taskCtx, cancel := context.WithTimeout(ctx, taskTTL)
 				defer cancel()
+				taskCtx = core.WithTurnClass(taskCtx, core.TurnTicket)
 				result, invokeErr := s.invoker.Invoke(taskCtx, core.InvocationRequest{
 					AgentID: copy.AgentID, Input: input, ConversationID: "orchestration:" + id + ":" + copy.ID,
 				})

@@ -89,6 +89,7 @@ type Server struct {
 	hubHA              *hubStandby
 	superAgents        *superagent.Service
 	frameworkHealth    *health.Service
+	turnScheduler      *core.TurnScheduler
 	mail               *mailbox.Service
 	feishuDirectory    superagent.FeishuDirectory
 	feishuUser         superagent.FeishuUserDirectory
@@ -213,6 +214,7 @@ func New(deps Dependencies) *Server {
 		s.meetingPeers = peer
 	}
 	s.frameworkHealth = newFrameworkHealth(s)
+	s.turnScheduler = newTurnScheduler(s)
 	s.setupPush(deps.PushSender)
 	s.setupLink()
 	s.setupMailbox()

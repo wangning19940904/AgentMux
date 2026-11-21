@@ -126,6 +126,7 @@ func (e *Engine) ExecuteTrigger(ctx context.Context, tr Trigger, fallbackAgent A
 	data["session_id"] = sessionObservationID(sess)
 	if sessionGeneration != nil {
 		data["runtime_id"] = sessionGeneration.workspace.RuntimeID
+		setAccountProfile(data, sessionGeneration.workspace)
 		data["memory_scope"] = sessionGeneration.workspace.MemoryScope
 		if sessionGeneration.agent != nil {
 			data["agent_name"] = sessionGeneration.agent.Name()

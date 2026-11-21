@@ -473,6 +473,7 @@ func (c *ConnectService) resolveAgentWith(ctx context.Context, agentID string, e
 		Skills:          append([]string(nil), inst.Skills...),
 		MCPServers:      append([]string(nil), inst.MCPServers...),
 		RuntimeDefaults: runtimeDefaults,
+		AccountProfile:  AccountProfile(inst.Env),
 		PrivateChatMode: inst.PrivateChatMode,
 		GroupChatMode:   inst.GroupChatMode,
 	}

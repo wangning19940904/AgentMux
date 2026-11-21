@@ -279,6 +279,7 @@ func (e *Engine) SendToConversation(ctx context.Context, channelID, conversation
 	defer releaseSession()
 	data["agent_id"] = generation.workspace.AgentID
 	data["runtime_id"] = generation.workspace.RuntimeID
+	setAccountProfile(data, generation.workspace)
 	if generation.agent != nil {
 		data["agent_name"] = generation.agent.Name()
 	}
