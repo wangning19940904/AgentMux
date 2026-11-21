@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -67,8 +68,13 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	agentNames := map[string]string{}
+	var superAgents []core.SuperAgent
 	if !healthView {
 		agentNames = s.agentNames(r.Context())
+		if s.superAgents != nil {
+			// Best effort: without them a channel only shows its own agent_id.
+			superAgents, _ = s.superAgents.List(r.Context())
+		}
 	}
 	out := make([]apiChannel, 0, len(channels))
 	for _, ch := range channels {
@@ -81,7 +87,7 @@ func (s *Server) handleChannelsList(w http.ResponseWriter, r *http.Request) {
 		} else {
 			botInfo := s.lookupChannelBotInfo(r.Context(), ch)
 			item.Config = redactStringMap(ch.Config)
-			item.AgentName = agentNames[ch.AgentID]
+			item.AgentName = channelAgentName(ch, agentNames, superAgents)
 			item.DefaultMessagePrompt = core.ChannelDefaultMessagePrompt(ch)
 			if s.connect != nil {
 				if capability, ok := s.connect.ChannelCodexControlCapability(ch.ID); ok {
@@ -935,6 +941,33 @@ func (s *Server) agentNames(ctx context.Context) map[string]string {
 		names[item.ID] = item.Name
 	}
 	return names
+}
+
+// channelAgentName names the agents that answer through a channel. A Super
+// Agent links a channel from its own sources (config channel_id), not through
+// the channel's agent_id, so those count as well. Its listed sources include
+// the channels bound to its router, so such a channel shows the Super Agent
+// rather than its router.
+func channelAgentName(ch core.Channel, agentNames map[string]string, superAgents []core.SuperAgent) string {
+	var names []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	for _, agent := range superAgents {
+		for _, source := range agent.Sources {
+			if strings.TrimSpace(source.Config["channel_id"]) == ch.ID {
+				add(agent.Name)
+				break
+			}
+		}
+	}
+	if len(names) == 0 {
+		add(agentNames[ch.AgentID])
+	}
+	return strings.Join(names, ", ")
 }
 
 func knownPlatformType(typ string) bool {
