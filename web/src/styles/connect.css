@@ -1124,6 +1124,18 @@
   max-width: 100%;
 }
 
+/* Super Agent triggers follow the webhooks in the Triggers page's inbound list. */
+.trigger-subheading {
+  margin: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.agent-trigger-row .agent-list-main > .ghost-action {
+  margin-left: auto;
+}
+
 .catalog-table {
   min-width: 880px;
   table-layout: fixed;

@@ -4,14 +4,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "../../i18n";
 import {
-  EventSubscriptionsPanel,
+  EventSubscriptionsSection,
   splitEventValues,
 } from "./EventSubscriptionsPanel";
-import { api, baseMachineScope, setMachineOverride } from "../../api";
+import { api, baseMachineScope, withMachineScope } from "../../api";
 
+// Records which machine each subscription request went to.
+const routed: Array<[string, string]> = [];
 vi.mock("../../api", () => ({
   baseMachineScope: vi.fn(() => "local"),
-  setMachineOverride: vi.fn(),
+  withMachineScope: vi.fn((_target: string, fn: () => unknown) => fn()),
   api: {
     fleetTargets: vi.fn(async () => [
       { id: "local", name: "Local" },
@@ -27,7 +29,12 @@ vi.mock("../../api", () => ({
         ingestion: { failures: 0 },
       },
     ]),
-    eventSubscriptions: vi.fn(async () => []),
+    eventSubscriptions: vi.fn(async () => {
+      const calls = vi.mocked(withMachineScope).mock.calls;
+      const call = calls[calls.length - 1];
+      routed.push(["subscriptions", call ? call[0] : "base"]);
+      return [];
+    }),
     eventDeliveries: vi.fn(async () => ({ items: [], has_more: false })),
     saveEventSubscription: vi.fn(async () => ({
       subscription: { id: "sub" },
@@ -41,18 +48,18 @@ afterEach(async () => {
   root = undefined;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  routed.length = 0;
   vi.mocked(baseMachineScope).mockReturnValue("local");
   document.body.replaceChildren();
 });
-it("opens local subscriptions in fleet mode and routes a selected machine before loading", async () => {
+it("opens local subscriptions in fleet mode and routes only its own requests to a selected machine", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(baseMachineScope).mockReturnValue("all");
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  await act(async () => root!.render(<I18nProvider language="zh"><EventSubscriptionsPanel /></I18nProvider>));
-  expect(setMachineOverride).toHaveBeenCalledWith("local");
-  expect(api.eventSubscriptions).toHaveBeenCalled();
+  await act(async () => root!.render(<I18nProvider language="zh"><EventSubscriptionsSection /></I18nProvider>));
+  expect(routed).toEqual([["subscriptions", "local"]]);
   expect(container.textContent).toContain("新建订阅");
   const picker = container.querySelector("select")!;
   expect(picker.textContent).toContain("Remote machine");
@@ -60,11 +67,18 @@ it("opens local subscriptions in fleet mode and routes a selected machine before
     picker.value = "remote-1";
     picker.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  expect(setMachineOverride).toHaveBeenLastCalledWith("remote-1");
+  expect(routed).toEqual([["subscriptions", "local"], ["subscriptions", "remote-1"]]);
   expect(api.eventSubscriptions).toHaveBeenCalledTimes(2);
-  await act(async () => root!.unmount());
-  root = undefined;
-  expect(setMachineOverride).toHaveBeenLastCalledWith(null);
+});
+
+it("does not route requests when the page already shows one machine", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<I18nProvider language="zh"><EventSubscriptionsSection /></I18nProvider>));
+  expect(withMachineScope).not.toHaveBeenCalled();
+  expect(container.querySelector(".subscription-machine-picker")).toBeNull();
 });
 
 it("shows local-save limitations and only transiently displays the secret", async () => {
@@ -75,7 +89,7 @@ it("shows local-save limitations and only transiently displays the secret", asyn
   await act(async () =>
     root!.render(
       <I18nProvider language="zh">
-        <EventSubscriptionsPanel />
+        <EventSubscriptionsSection />
       </I18nProvider>,
     ),
   );

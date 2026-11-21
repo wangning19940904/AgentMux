@@ -39,7 +39,7 @@ import { SETTINGS_SECTIONS, settingsSectionFromHash, type SettingsSection } from
 import { MobileDrawer, MobileTabBar, mobileTabItems } from "./MobileNavigation";
 import { ConnectionBanner } from "./pwa/ConnectionBanner";
 
-const EventSubscriptionsPanel = lazy(() => import("./panels/connect/EventSubscriptionsPanel").then((m) => ({ default: m.EventSubscriptionsPanel })));
+const TriggersPanel = lazy(() => import("./panels/connect/TriggersPanel").then((m) => ({ default: m.TriggersPanel })));
 const ConnectPanel = lazy(() => import("./panels/ConnectPanel").then((m) => ({ default: m.ConnectPanel })));
 const SettingsPanel = lazy(() => import("./panels/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
 const RemoteHostsPanel = lazy(() => import("./panels/RemoteHostsPanel").then((m) => ({ default: m.RemoteHostsPanel })));
@@ -114,7 +114,6 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "channels", labelKey: "nav.channels", icon: Cable },
       { id: "schedules", labelKey: "nav.schedules", icon: CalendarClock },
       { id: "triggers", labelKey: "nav.triggers", icon: Zap },
-      { id: "subscriptions", labelKey: "nav.subscriptions", icon: Cable },
       { id: "meetings", labelKey: "nav.meetings", icon: Video },
     ],
   },
@@ -166,6 +165,8 @@ function tabFromHash(): Tab | null {
   // Providers and routing moved to the frameworks; old links land there.
   if (value === "providers" || value === "gateway") return "frameworks";
   if (value === "connect") return "channels";
+  // Event subscriptions joined the Triggers page as its outbound part.
+  if (value === "subscriptions") return "triggers";
   // Tenants are gone; account management took their place.
   if (value === "tenants") return "accounts";
   // The Overview page became the Usage and Health dashboards.
@@ -791,8 +792,7 @@ function Shell({
 				  />
 				  {visibleTab === "channels" && <ConnectPanel view="channels" />}
 				  {visibleTab === "schedules" && <ConnectPanel view="schedules" />}
-				  {visibleTab === "triggers" && <ConnectPanel view="triggers" />}
-                  {visibleTab === "subscriptions" && <EventSubscriptionsPanel />}
+				  {visibleTab === "triggers" && <TriggersPanel />}
 				  {visibleTab === "machines" && <RemoteHostsPanel />}
                 </>
               )}
