@@ -88,6 +88,20 @@ func defaultCostTier(runtime, model string) string {
 	return core.CostTierMedium
 }
 
+// effortTier moves a profile's tier one step for its reasoning effort: the
+// most thinking costs more on any model, and the least costs less.
+func effortTier(tier, effort string) string {
+	tiers := []string{core.CostTierLow, core.CostTierMedium, core.CostTierHigh}
+	rank := tierRank(tier) - 1
+	switch strings.ToLower(effort) {
+	case "high", "xhigh", "max", "ultra":
+		rank++
+	case "none", "minimal", "low":
+		rank--
+	}
+	return tiers[max(0, min(rank, len(tiers)-1))]
+}
+
 // placeTier is a roster entry's cost tier.
 func (s *Service) placeTier(ctx context.Context, agent core.SuperAgent, place workerPlace) string {
 	if place.Roster {
@@ -104,13 +118,20 @@ func (s *Service) placeTier(ctx context.Context, agent core.SuperAgent, place wo
 		return defaultCostTier(place.Runtime, model)
 	}
 	model := ""
+	profile, profiled := workerProfile(agent, place.Runtime, place.Profile)
+	if profiled && profile.CostTier != "" {
+		return profile.CostTier
+	}
+	if profiled {
+		model = profile.Model
+	}
 	// A worker of the router's own framework on this machine uses its model.
-	if place.HostID == "" {
+	if model == "" && place.HostID == "" {
 		if router, err := s.store.GetAgentInstance(ctx, agent.RouterAgentID); err == nil && router != nil && router.RuntimeID == place.Runtime {
 			model = router.DefaultModel
 		}
 	}
-	return defaultCostTier(place.Runtime, model)
+	return effortTier(defaultCostTier(place.Runtime, model), profile.ReasoningEffort)
 }
 
 // rosterTiers are the cost tiers of every roster entry, by roster id.
@@ -127,9 +148,11 @@ func (s *Service) rosterTiers(ctx context.Context, agent core.SuperAgent, status
 		return tiers
 	}
 	for _, runtimeID := range agent.WorkerRuntimes {
-		tiers[autoWorkerRosterID(runtimeID)] = s.placeTier(ctx, agent, workerPlace{Runtime: runtimeID})
-		for _, machine := range agent.WorkerMachines {
-			tiers[machineWorkerRosterID(runtimeID, machinePathID(machine))] = s.placeTier(ctx, agent, workerPlace{Runtime: runtimeID, HostID: machine.HostID})
+		for _, profile := range runtimeVariants(agent, runtimeID) {
+			tiers[autoRosterID(runtimeID, profile, "")] = s.placeTier(ctx, agent, workerPlace{Runtime: runtimeID, Profile: profile})
+			for _, machine := range agent.WorkerMachines {
+				tiers[autoRosterID(runtimeID, profile, machinePathID(machine))] = s.placeTier(ctx, agent, workerPlace{Runtime: runtimeID, Profile: profile, HostID: machine.HostID})
+			}
 		}
 	}
 	return tiers

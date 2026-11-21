@@ -231,7 +231,7 @@ func TestOnlyRouterAgentsCanBeChosen(t *testing.T) {
 		t.Fatalf("switching to another ordinary Agent: err = %v", err)
 	}
 	stored, _ := h.store.GetSuperAgent(ctx, legacy.ID)
-	worker, err := h.service.launchAutoWorker(ctx, *stored, "dsh")
+	worker, err := h.service.launchAutoWorker(ctx, *stored, "dsh", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -146,6 +146,13 @@ type SuperAgent struct {
 	// other machines. Like the rest of the auto worker settings they are the
 	// operator's: a router decision picks among them and cannot add one.
 	WorkerMachines []SuperAgentMachine `json:"worker_machines,omitempty"`
+	// WorkerProfiles are the operator's model settings for auto workers of
+	// one framework, such as a strong model at high effort for hard work and
+	// a small one at low effort for simple work. Each adds roster entries
+	// auto:<framework>/<profile> wherever that framework's auto workers can
+	// run, so the router matches the profile to the work. A decision picks
+	// among them and cannot set a model or effort itself.
+	WorkerProfiles []SuperAgentWorkerProfile `json:"worker_profiles,omitempty"`
 	// ReviewRuntime names a framework whose fresh worker reviews the change
 	// of a local worker in a git worktree after each finished turn, before the
 	// brain hears about it. Empty turns independent review off.
@@ -268,6 +275,21 @@ type SuperAgentMachine struct {
 	Capabilities string `json:"capabilities,omitempty"`
 }
 
+// SuperAgentWorkerProfile is one model setting for auto workers of a
+// framework. ID names it on the roster, as auto:<framework>/<id>. An empty
+// Model, ReasoningEffort or ServiceTier is what the framework's plain auto
+// worker uses. Use tells the router what work the profile is for, and
+// CostTier overrides the tier derived from its model.
+type SuperAgentWorkerProfile struct {
+	ID              string `json:"id"`
+	RuntimeID       string `json:"runtime_id"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ServiceTier     string `json:"service_tier,omitempty"`
+	Use             string `json:"use,omitempty"`
+	CostTier        string `json:"cost_tier,omitempty"`
+}
+
 // SuperAgentMachineStatus is what an agent's machine can run right now.
 type SuperAgentMachineStatus struct {
 	HostID    string   `json:"host_id"`
@@ -294,6 +316,13 @@ type HostedWorkerRequest struct {
 	RuntimeID    string `json:"runtime_id"`
 	Dir          string `json:"dir,omitempty"`
 	ApprovalMode string `json:"approval_mode,omitempty"`
+	// Profile names the agent's worker profile, and Model, ReasoningEffort
+	// and ServiceTier are its settings; the machine keeps one worker per
+	// profile. An empty Profile is the framework's plain worker.
+	Profile         string `json:"profile,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ServiceTier     string `json:"service_tier,omitempty"`
 }
 
 // HostedWorker is the Agent a machine keeps for a HostedWorkerRequest.
@@ -302,6 +331,9 @@ type HostedWorker struct {
 	Name          string `json:"name"`
 	WorkDir       string `json:"work_dir"`
 	WorkspaceMode string `json:"workspace_mode"`
+	// Profile repeats the request's profile. A machine too old for profiles
+	// leaves it empty, having launched the plain worker instead.
+	Profile string `json:"profile,omitempty"`
 }
 
 // SuperAgentSource is one event stream. AllowedActors is the fail-closed list,

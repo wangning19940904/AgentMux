@@ -232,9 +232,11 @@ func dispatchWorkerIDs(agent core.SuperAgent) []string {
 	}
 	if agent.AutoWorkers {
 		for _, runtimeID := range agent.WorkerRuntimes {
-			ids = append(ids, autoWorkerID+":"+runtimeID)
-			for _, machine := range agent.WorkerMachines {
-				ids = append(ids, machineWorkerRosterID(runtimeID, machinePathID(machine)))
+			for _, profile := range runtimeVariants(agent, runtimeID) {
+				ids = append(ids, autoRosterID(runtimeID, profile, ""))
+				for _, machine := range agent.WorkerMachines {
+					ids = append(ids, autoRosterID(runtimeID, profile, machinePathID(machine)))
+				}
 			}
 		}
 	}

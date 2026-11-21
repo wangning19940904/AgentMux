@@ -1676,6 +1676,19 @@ export interface SuperAgentGitHubSetup {
   api_protected: boolean;
 }
 
+// One model setting for auto workers of a framework. Empty model, effort or
+// service tier keep what the framework's plain worker uses; use tells the
+// router what work it is for.
+export interface SuperAgentWorkerProfile {
+  id: string;
+  runtime_id: string;
+  model?: string;
+  reasoning_effort?: string;
+  service_tier?: string;
+  use?: string;
+  cost_tier?: "" | "low" | "medium" | "high";
+}
+
 // An agent. AgentMux has one kind: router_agent_id is its brain, the Agent
 // instance whose framework, model and approval mode answer. An agent made as
 // one shares its id with its brain.
@@ -1698,6 +1711,10 @@ export interface SuperAgent extends TargetMetadata {
   auto_worker_dir?: string;
   auto_worker_approval_mode?: string;
   worker_machines?: SuperAgentMachine[];
+  // The operator's model settings for auto workers of a framework. Each adds
+  // roster entries auto:<framework>/<id>, so the router matches the model and
+  // effort to the work.
+  worker_profiles?: SuperAgentWorkerProfile[];
   // A framework whose fresh worker reviews each finished turn of a local
   // worker in a git worktree; empty is off.
   review_runtime?: string;

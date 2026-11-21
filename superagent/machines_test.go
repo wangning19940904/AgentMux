@@ -26,6 +26,8 @@ type machineStub struct {
 	launchErr error
 	steered   []string
 	steerErr  error
+	// noProfiles plays a machine too old for worker profiles.
+	noProfiles bool
 }
 
 func (m *machineStub) MachineName(hostID string) (string, bool) {
@@ -49,7 +51,10 @@ func (m *machineStub) Launch(_ context.Context, hostID string, request core.Host
 		return core.HostedWorker{}, m.launchErr
 	}
 	m.launches, m.launchOn = append(m.launches, request), append(m.launchOn, hostID)
-	return core.HostedWorker{AgentID: hostedWorkerAgentID(request.OwnerID, request.RuntimeID, request.PathID), Name: request.OwnerName + " worker"}, nil
+	if m.noProfiles {
+		return core.HostedWorker{AgentID: hostedWorkerAgentID(request.OwnerID, request.RuntimeID, request.PathID), Name: request.OwnerName + " worker"}, nil
+	}
+	return core.HostedWorker{AgentID: withProfile(hostedWorkerAgentID(request.OwnerID, request.RuntimeID, request.PathID), request.Profile), Name: request.OwnerName + " worker", Profile: request.Profile}, nil
 }
 
 func (m *machineStub) Release(_ context.Context, hostID, ownerID string) error {

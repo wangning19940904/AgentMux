@@ -9,6 +9,7 @@ import { confirmAction } from "../../components/ConfirmDialog";
 import { SourceEditor } from "../superAgentSetup";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { SuperAgentPrompts, promptProblems } from "./SuperAgentPrompts";
+import { WorkerProfiles } from "./WorkerProfiles";
 import { agentChannels, workDirErrorMessage } from "./agentUtils";
 import { AvatarPicker } from "./AvatarPicker";
 import { ModelPicker } from "../superAgentModelPicker";
@@ -369,6 +370,10 @@ export function SuperAgentDrawer({ draft, notice, busy, machine = "local", machi
               </select>
               <small>{t("superAgents.autoWorkerApprovalHelp")}</small>
             </label>
+            {draft.auto_workers && (
+              <WorkerProfiles runtimes={workerFrameworks.filter((item) => workerRuntimes.includes(item.kind))}
+                value={draft.worker_profiles ?? []} onChange={(worker_profiles) => onChange({ ...draft, worker_profiles })} />
+            )}
             {draft.workers.length > 0 && (
               <div className="field">
                 <span>{t("superAgentForm.legacyWorkers")}</span>

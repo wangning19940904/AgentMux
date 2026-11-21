@@ -744,9 +744,9 @@ func (s *Service) preflight(ctx context.Context, agent core.SuperAgent, trigger 
 
 // checkWorker is assignedWorker without launching anything.
 func (s *Service) checkWorker(agent core.SuperAgent, workerID string) error {
-	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
+	if runtimeID, profile, pathID, ok := parseAutoWorker(workerID); ok {
 		if pathID != "" {
-			return checkMachineWorker(agent, workerID, runtimeID, pathID)
+			return checkMachineWorker(agent, workerID, runtimeID, profile, pathID)
 		}
 		if !agent.AutoWorkers {
 			return errors.New("this Super Agent cannot launch workers; choose one from the roster")
@@ -754,7 +754,7 @@ func (s *Service) checkWorker(agent core.SuperAgent, workerID string) error {
 		if !slices.Contains(agent.WorkerRuntimes, runtimeID) {
 			return fmt.Errorf("worker %q is not on the roster", workerID)
 		}
-		return nil
+		return checkProfile(agent, workerID, runtimeID, profile)
 	}
 	if !slices.ContainsFunc(agent.Workers, func(worker core.SuperAgentWorker) bool { return worker.ID == workerID }) {
 		return fmt.Errorf("worker %q is not on the roster", workerID)
@@ -1011,11 +1011,11 @@ func (s *Service) assignedWorker(ctx context.Context, agent core.SuperAgent, wor
 // launchAssigned is assignedWorker that also says, for a worker launched on
 // another machine, how that machine isolates its conversations.
 func (s *Service) launchAssigned(ctx context.Context, agent core.SuperAgent, workerID string) (core.SuperAgentWorker, string, error) {
-	if runtimeID, pathID, ok := parseAutoWorkerID(workerID); ok {
+	if runtimeID, profile, pathID, ok := parseAutoWorker(workerID); ok {
 		if pathID != "" {
-			return s.launchMachineWorkerMode(ctx, agent, runtimeID, pathID)
+			return s.launchMachineWorkerMode(ctx, agent, runtimeID, profile, pathID)
 		}
-		worker, err := s.launchAutoWorker(ctx, agent, runtimeID)
+		worker, err := s.launchAutoWorker(ctx, agent, runtimeID, profile)
 		return worker, "", err
 	}
 	worker, err := s.rosterWorker(agent, workerID)

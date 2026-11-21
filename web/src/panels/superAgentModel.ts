@@ -1,4 +1,4 @@
-import type { SuperAgent, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker } from "../api";
+import type { SuperAgent, SuperAgentRouter, SuperAgentSource, SuperAgentSourceKind, SuperAgentWorker, SuperAgentWorkerProfile } from "../api";
 
 export type SourceField = {
   key: string;
@@ -66,8 +66,21 @@ export function newSuperAgent(): SuperAgent {
 }
 
 // Auto workers are on exactly when at least one worker framework is chosen.
+// A profile goes with its framework.
 export function withWorkerRuntimes(agent: SuperAgent, runtimes: string[]): SuperAgent {
-  return { ...agent, worker_runtimes: runtimes, auto_workers: runtimes.length > 0 };
+  const profiles = agent.worker_profiles?.filter((profile) => runtimes.includes(profile.runtime_id));
+  return { ...agent, worker_runtimes: runtimes, auto_workers: runtimes.length > 0, ...(profiles ? { worker_profiles: profiles } : {}) };
+}
+
+// A profile id names it on the roster as auto:<framework>/<id>.
+export const PROFILE_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+// profileProblem says what keeps a worker profile from being saved, or "".
+export function profileProblem(profile: SuperAgentWorkerProfile, all: SuperAgentWorkerProfile[]): string {
+  if (!PROFILE_ID.test(profile.id)) return "superAgents.problem.profileID";
+  if (all.filter((other) => other.runtime_id === profile.runtime_id && other.id === profile.id).length > 1) return "superAgents.problem.profileDuplicate";
+  if (!profile.model?.trim() && !profile.reasoning_effort?.trim()) return "superAgents.problem.profileEmpty";
+  return "";
 }
 
 // The router select's value for creating a router agent instead of choosing one.
@@ -158,6 +171,13 @@ export function superAgentProblems(agent: SuperAgent, routerDraft?: SuperAgentRo
   if (!canStartWorkers(agent) && !ownsBrain(agent)) problems.push("superAgents.problem.noWorkers");
   if (agent.workers.some((worker) => !worker.agent_id)) problems.push("superAgents.problem.worker");
   if (agent.auto_workers && (agent.worker_machines ?? []).some((path) => !path.host_id && !path.dir?.trim())) problems.push("superAgents.problem.localPath");
+  if (agent.auto_workers) {
+    const profiles = agent.worker_profiles ?? [];
+    for (const profile of profiles) {
+      const problem = profileProblem(profile, profiles);
+      if (problem) problems.push(problem);
+    }
+  }
   for (const source of agent.sources.filter((item) => !isChannelSource(item))) {
     if (source.enabled && source.allowed_actors.length === 0) problems.push("superAgents.problem.actors");
     if (source.allowed_actors.includes("*") && source.kind !== "feishu_message") problems.push("superAgents.problem.wildcard");
