@@ -3,11 +3,14 @@
 
 Meego tells a person about work through its own bot, which no other bot can
 read. This script reads the same list instead, the signed-in person's to-dos,
-and posts each new one to a Super Agent's custom callback trigger:
+and posts what is new to a Super Agent's custom callback trigger:
 
-- "assigned": a node the person owns appeared, but its turn has not come yet.
 - "started": a node the person owns is now in progress.
+- "assigned" (only with announce_assigned): a node the person owns appeared,
+  but its turn has not come yet.
 
+A new work item puts most of its nodes on its owner's list at once, so one run
+sends at most one request per work item, naming every node that is news.
 The first run only records what is already there, so old to-dos start nothing.
 Run it every couple of minutes (see README.md). Python 3.9+, standard library.
 """
@@ -42,6 +45,7 @@ def load_config(path):
         if not str(config.get(key, "")).strip():
             raise SystemExit(f"{path}: {key} is required")
     config.setdefault("actor", "meego")
+    config.setdefault("announce_assigned", False)
     config.setdefault("bytedcli", "bytedcli")
     config.setdefault("site", "https://meego.larkoffice.com")
     config.setdefault("max_events_per_run", 10)
@@ -83,30 +87,61 @@ def todo_key(item):
     return ":".join(parts)
 
 
-def describe(config, item, event):
-    work = item.get("work_item_info") or {}
+def work_item_of(item):
+    return item.get("project_key", ""), str((item.get("work_item_info") or {}).get("work_item_id", ""))
+
+
+def node_line(item):
     node = item.get("node_info") or {}
     sub = item.get("sub_task_info") or {}
     schedule = item.get("schedule") or {}
+    line = f"- {node.get('node_name') or '(unnamed)'} (node_state_key {node.get('node_state_key', '')})"
+    if sub.get("id"):
+        line += f", subtask {sub.get('name') or '(unnamed)'} (id {sub['id']})"
+    if schedule.get("start_time") or schedule.get("end_time"):
+        line += f", scheduled {schedule.get('start_time') or '?'} to {schedule.get('end_time') or '?'}"
+    return line
+
+
+def describe(config, events):
+    """Title and text of one request about one work item's news.
+
+    events are (key, event, item) for nodes of the same work item."""
+    item = events[0][2]
+    work = item.get("work_item_info") or {}
     kind = work.get("work_item_type_key") or "story"
     url = f"{config['site'].rstrip('/')}/{item.get('project_key', '')}/{kind}/detail/{work.get('work_item_id', '')}"
-    headline = {
-        "assigned": "A Meego work item now has a node assigned to you. Its turn has not come yet.",
-        "started": "A Meego node assigned to you is now in progress.",
-    }[event]
+    started = [item for _, event, item in events if event == "started"]
+    assigned = [item for _, event, item in events if event == "assigned"]
+    if started:
+        headline = ("A node you own on this Meego work item is now in progress." if len(started) == 1
+                    else f"{len(started)} nodes you own on this Meego work item are now in progress.")
+    else:
+        headline = "This Meego work item now has nodes assigned to you. Their turn has not come yet."
     lines = [
         headline,
         f"Work item: {work.get('work_item_name', '')}",
         f"URL: {url}",
         f"Space: {item.get('project_name', '')} (project_key {item.get('project_key', '')})",
         f"Type: {kind}, work_item_id {work.get('work_item_id', '')}",
-        f"Node: {node.get('node_name') or '(unnamed)'} (node_state_key {node.get('node_state_key', '')})",
     ]
-    if sub.get("id"):
-        lines.append(f"Subtask: {sub.get('name') or '(unnamed)'} (id {sub['id']})")
-    if schedule.get("start_time") or schedule.get("end_time"):
-        lines.append(f"Schedule: {schedule.get('start_time') or '?'} to {schedule.get('end_time') or '?'}")
+    if started:
+        lines.append("In progress now:")
+        lines += [node_line(item) for item in started]
+    if assigned:
+        lines.append("Assigned to you, not started yet:")
+        lines += [node_line(item) for item in assigned]
     return work.get("work_item_name", ""), "\n".join(lines)
+
+
+def group(events):
+    """events grouped by work item, those with a started node first."""
+    groups = {}
+    for event in events:
+        groups.setdefault(work_item_of(event[2]), []).append(event)
+    ordered = list(groups.values())
+    ordered.sort(key=lambda batch: not any(event == "started" for _, event, _ in batch))
+    return ordered
 
 
 def post(config, payload):
@@ -136,10 +171,11 @@ def save_state(path, state):
     os.replace(temporary, path)
 
 
-def plan(state, current, now):
+def plan(state, current, now, announce_assigned=True):
     """Update state["todos"] from the current lists and return the events due.
 
-    current maps key -> (scope, item). An event is (key, event, item)."""
+    current maps key -> (scope, item). An event is (key, event, item). Without
+    announce_assigned a node waiting for its turn is news only once it starts."""
     todos = state["todos"]
     events = []
     for key, (scope, item) in current.items():
@@ -147,8 +183,10 @@ def plan(state, current, now):
         if known is None:
             # Before the baseline everything counts as already announced.
             todos[key] = {"scope": scope, "since": now, "missing": 0, "sent": None if state["baseline"] else scope}
-            if state["baseline"]:
-                events.append((key, "started" if scope == "in_progress" else "assigned", item))
+            if state["baseline"] and scope == "in_progress":
+                events.append((key, "started", item))
+            elif state["baseline"] and announce_assigned:
+                events.append((key, "assigned", item))
             continue
         known["missing"] = 0
         if known["scope"] != scope:
@@ -159,7 +197,7 @@ def plan(state, current, now):
         # A node whose turn came after it was announced as assigned is news too.
         if scope == "in_progress" and known.get("sent") != "in_progress":
             events.append((key, "started", item))
-        elif known.get("sent") is None:
+        elif known.get("sent") is None and announce_assigned:
             events.append((key, "assigned", item))
     for key in [key for key in todos if key not in current]:
         todos[key]["missing"] = todos[key].get("missing", 0) + 1
@@ -196,33 +234,39 @@ def run(config, dry_run=False):
         return 1
     state["failures"] = 0
     first_run = not state["baseline"]
-    events = plan(state, current, now)
+    events = plan(state, current, now, bool(config.get("announce_assigned")))
     state["baseline"] = True
     if first_run:
         log(f"first run: recorded {len(current)} existing to-dos, nothing sent")
+    batches = group(events)
     sent = 0
-    for key, event, item in events:
+    for batch in batches:
         if sent >= int(config["max_events_per_run"]):
-            log(f"{len(events) - sent} more events wait for the next run")
+            log(f"{len(batches) - sent} more work items wait for the next run")
             break
-        title, text = describe(config, item, event)
-        work_id = (item.get("work_item_info") or {}).get("work_item_id", "")
-        entry = state["todos"][key]
+        title, text = describe(config, batch)
+        project_key, work_id = work_item_of(batch[0][2])
+        event = "started" if any(event == "started" for _, event, _ in batch) else "assigned"
+        # The same news gets the same id, so a retry after a lost answer is
+        # dropped by the trigger as a duplicate.
+        news = sorted(f"{key}:{kind}:{state['todos'][key]['since']}" for key, kind, _ in batch)
+        digest = hashlib.sha256("\n".join(news).encode("utf-8")).hexdigest()[:16]
         payload = {
-            "id": f"{key}:{event}:{entry['since']}", "thread": f"{item.get('project_key', '')}:{work_id}",
+            "id": f"{project_key}:{work_id}:{event}:{digest}", "thread": f"{project_key}:{work_id}",
             "actor": config["actor"], "title": title, "text": text,
         }
         if dry_run:
-            log(f"would send {event}: {title} [{payload['id']}]")
+            log(f"would send {event} ({len(batch)} nodes): {title} [{payload['id']}]")
             continue
         try:
             answer = post(config, payload)
         except (urllib.error.URLError, OSError, ValueError) as error:
             log(f"callback failed, will retry next run: {error}")
             break
-        entry["sent"] = entry["scope"]
+        for key, _, _ in batch:
+            state["todos"][key]["sent"] = state["todos"][key]["scope"]
         sent += 1
-        log(f"sent {event}: {title} [{payload['id']}] accepted={answer.get('accepted')}")
+        log(f"sent {event} ({len(batch)} nodes): {title} [{payload['id']}] accepted={answer.get('accepted')}")
     if not dry_run:
         save_state(config["state"], state)
     return 0

@@ -8,9 +8,15 @@ Each new to-do becomes one request to a Super Agent's
 
 | Event | When |
 | --- | --- |
-| `assigned` | A node you own appears in the list, and its turn has not come yet. |
 | `started` | A node you own is now in progress, whether or not it was announced as assigned. |
+| `assigned` | Only with `announce_assigned`: a node you own appears in the list, and its turn has not come yet. |
 
+- A new work item puts most of its nodes on its owner's list at once. One run
+  sends at most one request per work item, naming every node of it that is
+  news, so a new story with ten nodes is one request, not ten.
+- By default a node waiting for its turn is news only once it starts. Set
+  `announce_assigned` to hear about it as soon as it reaches your list; its
+  nodes are then listed in the same request.
 - The first run records what is already in the list and sends nothing.
 - All events about one work item share a thread, so the agent sees its earlier
   Tickets for it.
@@ -39,8 +45,8 @@ Each new to-do becomes one request to a Super Agent's
    ```
 
    Optional keys: `actor` (`meego`), `site` (`https://meego.larkoffice.com`),
-   `state` (`state.json` beside the config), `max_events_per_run` (10),
-   `report_failures_after` (5).
+   `state` (`state.json` beside the config), `announce_assigned` (false),
+   `max_events_per_run` (10 work items), `report_failures_after` (5).
 4. Check what it would do, then let it take the baseline:
 
    ```sh
