@@ -44,8 +44,13 @@ var (
 	codexMCPHeader   = regexp.MustCompile(`(?m)^\s*\[mcp_servers\.("?)([^\]"]+)("?)\]`)
 )
 
-// browserCleanupNote asks a worker to leave the browser as it found it.
-const browserCleanupNote = "Before you end a turn, close the browser tabs and windows you opened and any browser you started, and leave the ones you did not open: nothing else closes them, and they pile up on this machine."
+// browserCleanupNote asks a worker to leave the browser as it found it. A
+// browser tool attached to the operator's browser (Playwright MCP's extension
+// mode) opens a tab of its own, in its own tab group, each time it connects,
+// and every worker turn connects anew. The worker did not open that tab, so it
+// is named here: told only to close what it opened, a worker left one blank
+// group behind per turn.
+const browserCleanupNote = "Before you end a turn, close the browser tabs and windows you opened, any browser you started, and the tab your browser tool opened when it connected (often a blank tab in a group named after the tool), even when it is the last tab you have; leave the tabs that were open before you started. Nothing else closes them, and they pile up on this machine."
 
 // browserCLIs drive a browser from a shell, which every framework's worker
 // has, so finding one gives every framework the browser tool.
@@ -174,7 +179,8 @@ func desktopSession() bool {
 // toolNotesLine tells a worker which tools its machine gives it and how to
 // reach them, or "" when it has none. Nothing closes what a worker opens in a
 // browser once its turn ends: a browser tool attached to the operator's own
-// browser leaves its tabs there by design, so the worker is asked to.
+// browser leaves its tabs there by design, so the worker is asked to (see
+// browserCleanupNote).
 func toolNotesLine(notes map[string]string) string {
 	if len(notes) == 0 {
 		return ""
