@@ -410,7 +410,7 @@ func TestSuperAgentWorkRouteListsNothingOnAFreshMachine(t *testing.T) {
 	s, st := newTestServer(t)
 	s.SetSuperAgents(superagent.New(superagent.Options{Store: &agentRecords{Store: st, agents: map[string]core.SuperAgent{}}}), nil)
 	rec := doJSON(t, s, http.MethodGet, "/api/v1/super-agents/work", nil)
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"routing":[],"tickets":[],"timers":[]}` {
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"routing":[],"tickets":[],"timers":[],"events":[]}` {
 		t.Fatalf("code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }

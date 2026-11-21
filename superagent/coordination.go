@@ -615,7 +615,7 @@ func (s *Service) insertAgentMuxEvent(ctx context.Context, agent core.SuperAgent
 		ID: "sat_" + uuid.NewString(), SuperAgentID: agent.ID, SourceID: ticket.SourceID, SourceKind: ticket.SourceKind,
 		DedupeKey: dedupeKey, ThreadKey: ticket.ThreadKey,
 		Actor: "agentmux", ActorName: "AgentMux", Addressed: true, Kind: kind,
-		TicketID: ticket.ID, Title: title, Text: text, Reply: replyTo,
+		TicketID: ticket.ID, SubjectTicketID: ticket.ID, Title: title, Text: text, Reply: replyTo,
 		Disposition: core.SuperAgentDispositionPending, ReceivedAt: now, UpdatedAt: now,
 	}
 	if _, err := s.store.InsertSuperAgentTrigger(ctx, trigger); err != nil {

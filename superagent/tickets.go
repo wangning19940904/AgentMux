@@ -28,6 +28,13 @@ type TicketSummary struct {
 	// it, where they are still known. Only the work overview fills them.
 	Request       string `json:"request,omitempty"`
 	RequesterName string `json:"requester_name,omitempty"`
+	// OriginKind is the kind of the event the Ticket was started from, when
+	// AgentMux raised it: another Ticket's update or a follow-up that came
+	// due. OriginTicketID is the Ticket that event was about and OriginTimerID
+	// the follow-up. Only the work overview fills them.
+	OriginKind     string `json:"origin_kind,omitempty"`
+	OriginTicketID string `json:"origin_ticket_id,omitempty"`
+	OriginTimerID  string `json:"origin_timer_id,omitempty"`
 }
 
 // Tickets lists the newest Tickets of every agent on this machine.

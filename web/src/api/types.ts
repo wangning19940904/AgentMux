@@ -1917,6 +1917,9 @@ export interface SuperAgentTicket {
   workspace?: { host_id?: string; dir?: string; isolated?: boolean; held_since?: string };
   // Sub-tasks its worker handed to other workers, oldest first.
   helpers?: SuperAgentHelper[];
+  // Tickets it waits for, and the one whose last commit its worktree starts from.
+  depends_on?: string[];
+  base_ticket?: string;
   created_at?: string;
   started_at?: string;
   finished_at?: string;
@@ -2140,6 +2143,23 @@ export interface SuperAgentWork {
   routing: SuperAgentRoutingItem[];
   tickets: SuperAgentWorkTicket[];
   timers: SuperAgentWorkTimer[];
+  // Absent from a machine on a build that does not send them yet.
+  events?: SuperAgentWorkEvent[];
+}
+
+// An event a router delivered to a Ticket that was already there: a later
+// message for its worker, or the result of the Ticket from_ticket_id names.
+export interface SuperAgentWorkEvent {
+  id: string;
+  super_agent_id: string;
+  source_kind: string;
+  kind?: string;
+  thread_key: string;
+  actor_name?: string;
+  text: string;
+  ticket_id: string;
+  from_ticket_id?: string;
+  received_at: string;
 }
 
 // An event a router has yet to decide on; routing is true while the router
@@ -2169,12 +2189,19 @@ export interface SuperAgentWorkTicket extends SuperAgentTicket {
   // The message the Ticket came from and who sent it, where still known.
   request?: string;
   requester_name?: string;
+  // Set when an event from AgentMux started the Ticket: the event's kind,
+  // the Ticket it was about and the follow-up that came due.
+  origin_kind?: string;
+  origin_ticket_id?: string;
+  origin_timer_id?: string;
 }
 
 export interface SuperAgentWorkTimer extends SuperAgentTimer {
   super_agent_id: string;
   super_agent_name: string;
   ticket_title?: string;
+  // The Ticket the router was handling when it set a follow-up that names none.
+  from_ticket_id?: string;
 }
 
 // One machine's answer for the work page: its work, or why it has none.
