@@ -92,7 +92,7 @@ import type {
   MemoryEntry,
   HistorySearchRequest,
   HistorySearchResult,
-  MenubarSettings,
+  UsageDisplaySettings,
   MeetingInvitation,
 	MeetingDetail,
   MeetingJoinResult,
@@ -697,9 +697,9 @@ export const api = {
     }
     return postChecked<CursorUsageActionResult>(path, {});
   },
-  menubarSettings: () => getLocal<MenubarSettings>("/api/v1/menubar/settings"),
-  saveMenubarSettings: (settings: MenubarSettings) =>
-    putLocal<MenubarSettings>("/api/v1/menubar/settings", settings),
+  usageDisplaySettings: () => getLocal<UsageDisplaySettings>("/api/v1/usage/display-settings"),
+  saveUsageDisplaySettings: (settings: UsageDisplaySettings) =>
+    putLocal<UsageDisplaySettings>("/api/v1/usage/display-settings", settings),
 
   // AgentMux Observability
   observationOverview: () => activeMachineScope() === "all"

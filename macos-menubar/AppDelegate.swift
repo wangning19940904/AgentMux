@@ -11,7 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Daily buckets of the most recent days, for the "By date" breakdown.
     private var recentDays: [UsageBucket] = []
     private var parentTimer: Timer?
-    private var settings = MenubarSettings.defaults
+    // The dropdown lists these groups, each limited to its top rows.
+    private let breakdowns = ["model", "runtime", "date"]
+    private let topN = 3
     private let parentPID: pid_t? = {
         guard let raw = ProcessInfo.processInfo.environment["AMUX_PARENT_PID"],
               let value = Int32(raw) else {
@@ -42,8 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func configureStatusButton() {
         guard let button = statusItem.button else { return }
-        // The app logo is the only default menu-bar content. Optional status
-        // details are appended as a title after the user enables them.
+        // The app logo is the only menu-bar content; figures live in the menu.
         button.image = appIcon()
         button.imagePosition = .imageOnly
         button.imageHugsTitle = true
@@ -51,8 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.toolTip = "AgentMux"
     }
 
-    // appIcon loads the AgentMux bundle icon scaled to the status-bar height
-    // so it sits next to the emoji. Returns nil (icon-less) if unavailable.
+    // appIcon loads the AgentMux bundle icon scaled to the status-bar height.
+    // Returns nil (icon-less) if unavailable.
     private func appIcon() -> NSImage? {
         guard let bundlePath = ProcessInfo.processInfo.environment["AMUX_APP_BUNDLE"] else {
             return nil
@@ -67,106 +68,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refresh() {
-        // Pull the latest preferences first so the icon and menu honor the
-        // user's choices, then fetch the usage report.
-        client.fetchSettings { [weak self] settings in
+        client.fetchDays(1) { [weak self] report in
             guard let self = self else { return }
-            self.settings = settings
-            self.client.fetchDays(1) { [weak self] report in
-                guard let self = self else { return }
-                guard let report = report else {
-                    self.applyStatusTitle(self.hasStatusContent ? "⚠️" : "")
-                    self.rebuildMenu(report: nil)
-                    return
-                }
-                self.applyStatusTitle(self.statusTitle(report: report))
-                self.rebuildMenu(report: report)
-                // "By date" lists the most recent days, which today's report
-                // does not hold.
-                guard settings.breakdowns.contains("date"), settings.top_n > 1 else { return }
-                self.client.fetchDays(settings.top_n) { [weak self] recent in
-                    guard let self = self, let recent = recent else { return }
-                    self.recentDays = recent.buckets
-                    self.rebuildMenu(report: report)
-                }
+            guard let report = report else {
+                self.rebuildMenu(report: nil)
+                return
             }
-        }
-    }
-
-    private var hasStatusContent: Bool {
-        settings.show_status_icon || settings.show_cost || settings.show_tokens || settings.show_messages
-    }
-
-    private func applyStatusTitle(_ title: String) {
-        guard let button = statusItem.button else { return }
-        button.title = title
-        button.imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-    }
-
-    // statusTitle builds only the optional content that follows the app logo.
-    private func statusTitle(report: UsageReport) -> String {
-        let t = report.totals
-        var parts: [String] = []
-        if settings.show_status_icon {
-            parts.append(iconFor(report: report))
-        }
-        if settings.show_cost {
-            parts.append(fmtCostShort(t.cost_usd))
-        }
-        if settings.show_tokens {
-            parts.append("\(fmtTokens(t.input_tokens))/\(fmtTokens(t.output_tokens))")
-        }
-        if settings.show_messages {
-            parts.append("\(t.records)")
-        }
-        return parts.joined(separator: " ")
-    }
-
-    // iconFor maps the configured metric onto a 5-step emoji ladder using the
-    // cost thresholds, then picks the flame/drop/custom glyph for that stage.
-    private func iconFor(report: UsageReport) -> String {
-        let value: Double
-        switch settings.icon_metric {
-        case "tokens":
-            value = Double(report.totals.input_tokens + report.totals.output_tokens)
-        case "messages":
-            value = Double(report.totals.records)
-        default:
-            value = report.totals.cost_usd
-        }
-        let thresholds = iconThresholds()
-        var stage = 0
-        for th in thresholds where value >= th {
-            stage += 1
-        }
-        stage = min(stage, 4)
-        return iconStages()[stage]
-    }
-
-    // iconThresholds returns four ascending boundaries. For cost the configured
-    // USD thresholds are used directly; other metrics are scaled so the ladder
-    // still spans a useful range.
-    private func iconThresholds() -> [Double] {
-        let base = settings.cost_thresholds.isEmpty ? [0.01, 1, 10, 100] : settings.cost_thresholds
-        switch settings.icon_metric {
-        case "tokens":
-            return [1_000, 100_000, 1_000_000, 10_000_000]
-        case "messages":
-            return [1, 10, 50, 200]
-        default:
-            return base
-        }
-    }
-
-    private func iconStages() -> [String] {
-        switch settings.icon_theme {
-        case "drop":
-            return ["💧", "💦", "⛲", "🌊", "☔"]
-        case "custom":
-            if settings.icon_stages.count == 5 { return settings.icon_stages }
-            return ["💤", "✨", "🔥", "🔥", "🔥"]
-        default: // flame
-            return ["💤", "✨", "🔥", "🔥", "🔥"]
+            self.rebuildMenu(report: report)
+            // "By date" lists the most recent days, which today's report
+            // does not hold.
+            self.client.fetchDays(self.topN) { [weak self] recent in
+                guard let self = self, let recent = recent else { return }
+                self.recentDays = recent.buckets
+                self.rebuildMenu(report: report)
+            }
         }
     }
 
@@ -174,20 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         if let report = report {
-            let t = report.totals
-            if settings.show_cost {
-                menu.addItem(NSMenuItem(title: "Today: \(fmtCost(t.cost_usd))",
-                                        action: nil, keyEquivalent: ""))
-            }
-            if settings.show_tokens {
-                menu.addItem(NSMenuItem(title: "Tokens in/out: \(fmtTokens(t.input_tokens))/\(fmtTokens(t.output_tokens))",
-                                        action: nil, keyEquivalent: ""))
-            }
-            if settings.show_messages {
-                menu.addItem(NSMenuItem(title: "Messages: \(t.records)",
-                                        action: nil, keyEquivalent: ""))
-            }
-            for dimension in settings.breakdowns {
+            for dimension in breakdowns {
                 addBreakdown(to: menu, dimension: dimension, report: report)
             }
         } else {
@@ -204,9 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // addBreakdown appends one grouped section (by model / runtime / date),
-    // each limited to the configured Top N rows and sorted by cost.
+    // each limited to the top rows and sorted by cost.
     private func addBreakdown(to menu: NSMenu, dimension: String, report: UsageReport) {
-        let topN = max(settings.top_n, 1)
         var rows: [(label: String, tokens: Int, records: Int, cost: Double)] = []
         var title = ""
         switch dimension {
@@ -250,22 +151,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return "\(n)"
     }
 
-    // fmtCost renders a USD amount with grouping and, when enabled, the CNY
-    // equivalent at the fixed configured rate: "$18,019.74 · ¥129,742".
+    // fmtCost renders a USD amount with grouping: "$18,019.74".
     private func fmtCost(_ usd: Double) -> String {
-        var out = "$" + grouped(usd, fraction: 2)
-        if settings.show_cny {
-            out += " · ¥" + grouped(usd * settings.cny_rate, fraction: 0)
-        }
-        return out
-    }
-
-    // fmtCostShort is the compact menu-bar variant: large amounts collapse to
-    // $18.0K / $1.2M so the status item stays narrow.
-    private func fmtCostShort(_ usd: Double) -> String {
-        if usd >= 1e6 { return String(format: "$%.1fM", usd / 1e6) }
-        if usd >= 1e3 { return String(format: "$%.1fK", usd / 1e3) }
-        return String(format: "$%.2f", usd)
+        "$" + grouped(usd, fraction: 2)
     }
 
     private func grouped(_ value: Double, fraction: Int) -> String {

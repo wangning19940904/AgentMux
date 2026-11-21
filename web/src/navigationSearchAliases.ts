@@ -115,9 +115,9 @@ export const NAVIGATION_SEARCH_ALIASES = {
     "password", "sign in", "login", "my devices",
   ],
   settings: [
-    "设置", "偏好设置", "配置", "系统设置", "菜单栏", "开机启动", "保持唤醒",
+    "设置", "偏好设置", "配置", "系统设置", "开机启动", "保持唤醒",
     "shezhi", "she zhi", "sz", "peizhi", "pei zhi", "pz",
-    "settings", "setting", "preferences", "preference", "config", "configuration", "menu bar", "menubar",
+    "settings", "setting", "preferences", "preference", "config", "configuration",
     "launch at login", "keep awake",
   ],
 } as const;

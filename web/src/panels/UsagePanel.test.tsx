@@ -19,8 +19,8 @@ vi.mock("../api", async () => {
       usageTargets: vi.fn(),
       usageFromTarget: vi.fn(),
       usageSources: vi.fn(),
-      menubarSettings: vi.fn(),
-      saveMenubarSettings: vi.fn(),
+      usageDisplaySettings: vi.fn(),
+      saveUsageDisplaySettings: vi.fn(),
       agentInstances: vi.fn(),
       superAgents: vi.fn(),
       channels: vi.fn(),
@@ -59,7 +59,7 @@ beforeEach(() => {
   resetSeriesSlots();
   window.location.hash = "#usage";
   vi.mocked(api.usage).mockResolvedValue(report(100));
-  vi.mocked(api.menubarSettings).mockResolvedValue({ cny_rate: 7, currency: "cny" } as Awaited<ReturnType<typeof api.menubarSettings>>);
+  vi.mocked(api.usageDisplaySettings).mockResolvedValue({ cny_rate: 7, currency: "cny" } as Awaited<ReturnType<typeof api.usageDisplaySettings>>);
   vi.mocked(api.usageSources).mockResolvedValue([]);
   vi.mocked(api.agentInstances).mockResolvedValue([{ id: "a1", name: "Reviewer" }] as Awaited<ReturnType<typeof api.agentInstances>>);
   vi.mocked(api.superAgents).mockResolvedValue([]);
@@ -104,7 +104,7 @@ describe("usage dashboard", () => {
     const usage = report(100);
     Object.assign(usage.totals, { output_tokens: 20, cache_read_tokens: 3000, cache_write_tokens: 400, cost_usd: 10 });
     vi.mocked(api.usage).mockResolvedValue(usage);
-    vi.mocked(api.menubarSettings).mockResolvedValue({ cny_rate: 6.7249, currency: "cny" } as Awaited<ReturnType<typeof api.menubarSettings>>);
+    vi.mocked(api.usageDisplaySettings).mockResolvedValue({ cny_rate: 6.7249, currency: "cny" } as Awaited<ReturnType<typeof api.usageDisplaySettings>>);
     await mount();
     const summary = container.querySelector(".usage-summary-card")!;
     expect(summary.querySelectorAll(".usage-summary-metric")).toHaveLength(4);

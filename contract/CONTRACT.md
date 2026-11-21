@@ -110,10 +110,10 @@ SDK 报告 `incompatible` 状态并拒绝继续。
 ### internal — 不对外承诺，随时可变
 
 其余全部 `/api/v1/*` 路由（observability、remote proxy、tools、
-frameworks（上表的健康端点除外）、sessions、meetings、setup 自动化、tts、menubar、memory、skills、
+frameworks（上表的健康端点除外）、sessions、meetings、setup 自动化、tts、memory、skills、
 mcp、guard、devices、accounts 等）是 Console 专用管理面。第三方
 **不应**依赖它们；如确有需要，请提 issue 将其提升到 beta/stable。
-`/api/v1/usage/sources*` 同样属于 Console internal API，不出现在公开 OpenAPI。
+`/api/v1/usage/sources*` 与 `/api/v1/usage/display-settings` 同样属于 Console internal API，不出现在公开 OpenAPI。
 
 第三方使用 bridge token，等同管理员。
 
