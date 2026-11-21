@@ -260,8 +260,13 @@ type SuperAgentTrigger struct {
 	Disposition string          `json:"disposition"`
 	Reason      string          `json:"reason,omitempty"`
 	TicketID    string          `json:"ticket_id,omitempty"`
-	ReceivedAt  time.Time       `json:"received_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// SubjectTicketID is the Ticket an event from AgentMux itself is about,
+	// and TimerID the follow-up that came due. They stay as written, while
+	// TicketID moves to the Ticket the router acted on.
+	SubjectTicketID string    `json:"subject_ticket_id,omitempty"`
+	TimerID         string    `json:"timer_id,omitempty"`
+	ReceivedAt      time.Time `json:"received_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 	// Answer is what the agent said back to the thread about this event: its
 	// reply and any notice AgentMux added. Empty when it said nothing.
 	Answer string `json:"answer,omitempty"`

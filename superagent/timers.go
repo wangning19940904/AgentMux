@@ -341,7 +341,8 @@ func (s *Service) fireTimer(ctx context.Context, id string, now time.Time) (bool
 		ID: "sat_" + uuid.NewString(), SuperAgentID: timer.SuperAgentID, SourceID: timer.SourceID, SourceKind: timer.SourceKind,
 		DedupeKey: fmt.Sprintf("timer:%s:%d", timer.ID, timer.DueAt.Unix()), ThreadKey: timer.ThreadKey,
 		Actor: "agentmux", ActorName: "AgentMux", Addressed: true, Kind: core.SuperAgentTriggerTimer,
-		TicketID: timer.TicketID, Title: "Follow-up due", Text: text.String(), Reply: timer.Reply,
+		TicketID: timer.TicketID, SubjectTicketID: timer.TicketID, TimerID: timer.ID,
+		Title: "Follow-up due", Text: text.String(), Reply: timer.Reply,
 		Disposition: core.SuperAgentDispositionPending, ReceivedAt: at, UpdatedAt: at,
 	}
 	if _, err := s.store.InsertSuperAgentTrigger(ctx, trigger); err != nil {
